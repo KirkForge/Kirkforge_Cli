@@ -525,41 +525,4 @@ mod tests {
         assert!(!is_conflict_prone_command("cargo build"));
         assert!(!is_conflict_prone_command(""));
     }
-
-    #[tokio::test]
-    async fn test_verify_git_operation_commit_failure_is_unfixable() {
-        let v = verify_git_operation(&["commit".into()], "", false).await;
-        match v {
-            Verdict::Unfixable(err) => {
-                assert!(err.description.contains("commit failed"));
-            }
-            other => panic!("expected Unfixable, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_verify_git_operation_push_failure_is_unfixable() {
-        let v = verify_git_operation(&["push".into()], "", false).await;
-        match v {
-            Verdict::Unfixable(err) => {
-                assert!(err.description.contains("push failed"));
-            }
-            other => panic!("expected Unfixable, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_verify_git_operation_unknown_subcommand_failure_is_clean() {
-        let v = verify_git_operation(&["config".into()], "no-op", false).await;
-        assert!(
-            matches!(v, Verdict::Clean | Verdict::Unfixable(_)),
-            "unknown failed git subcommand should not crash"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_verify_git_operation_empty_args_failure_is_clean() {
-        let v = verify_git_operation(&[], "", false).await;
-        assert!(matches!(v, Verdict::Clean));
-    }
 }

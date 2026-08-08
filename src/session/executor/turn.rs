@@ -88,7 +88,7 @@ impl Executor {
         let should_extract = self.turn_count % EXTRACT_EVERY_N_TURNS == 0
             || crate::session::memory::extract::is_preference_like(user_input);
 
-        if should_extract {
+        if should_extract && read_shared_config(&self.config).tools.memory_auto_populate {
             if let Some(ref store) = self.memory_store {
                 let history = self.conversation.all();
                 let last_user = history.iter().rev().find(|m| matches!(m.role, Role::User));

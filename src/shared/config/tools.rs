@@ -48,6 +48,10 @@ fn default_budget_approaching_ratio() -> f64 {
     0.8
 }
 
+fn default_memory_auto_populate() -> bool {
+    true
+}
+
 fn default_plugin_sources() -> HashMap<String, PathBuf> {
     let mut sources = HashMap::new();
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -117,6 +121,8 @@ pub struct ToolConfig {
     pub budget_ceiling: usize,
     #[serde(default = "default_budget_approaching_ratio")]
     pub budget_approaching_ratio: f64,
+    #[serde(default = "default_memory_auto_populate")]
+    pub memory_auto_populate: bool,
 }
 
 fn default_plugin_signature_validation() -> bool {
@@ -155,6 +161,7 @@ impl Default for ToolConfig {
             stratum_mode: None,
             budget_ceiling: default_budget_ceiling(),
             budget_approaching_ratio: default_budget_approaching_ratio(),
+            memory_auto_populate: true,
         }
     }
 }

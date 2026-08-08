@@ -297,6 +297,12 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     // KF_CODE_MEMORY_ENABLED
     env_bool!("KF_CODE_MEMORY_ENABLED", cfg.display.memory_enabled);
 
+    // KF_CODE_MEMORY_AUTO_POPULATE
+    env_bool!(
+        "KF_CODE_MEMORY_AUTO_POPULATE",
+        cfg.tools.memory_auto_populate
+    );
+
     // KF_CODE_MEMORY_MAX_TOKENS
     if let Ok(val) = std::env::var("KF_CODE_MEMORY_MAX_TOKENS") {
         if let Ok(n) = val.parse::<usize>() {

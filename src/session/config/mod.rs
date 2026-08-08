@@ -34,6 +34,7 @@
 /// - `KF_CODE_MEMORY_ENABLED` — "true"/"false" to enable or disable memory injection
 /// - `KF_CODE_MEMORY_MAX_TOKENS` — token budget for injected memory facts
 /// - `KF_CODE_MEMORY_TOP_N` — maximum number of facts to consider per turn
+/// - `KF_CODE_MEMORY_AUTO_POPULATE` — "true"/"false" to enable or disable memory auto-extraction
 /// - `KF_CODE_REQUEST_TIMEOUT_SECS` — model request timeout (clamped to ≥1 s)
 /// - `KF_CODE_TOOL_TIMEOUT_SECS` — per-tool hard timeout (clamped to [1, 3600])
 /// - `KF_CODE_CHECKPOINT_INTERVAL_MESSAGES` — write a checkpoint every N messages
@@ -456,6 +457,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::Integer(v)) = table.get("memory_top_n") {
         cfg.display.memory_top_n = (*v).max(1) as usize;
+    }
+    if let Some(Value::Boolean(v)) = table.get("memory_auto_populate") {
+        cfg.tools.memory_auto_populate = *v;
     }
     if let Some(Value::Integer(v)) = table.get("checkpoint_interval_messages") {
         cfg.session.checkpoint_interval_messages = (*v).max(0) as usize;
@@ -1911,10 +1915,10 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=30, SecurityConfig=18, ToolConfig=25,
+        // ModelConfig=30, SecurityConfig=18, ToolConfig=26,
         // SessionConfig=8, DisplayConfig=3
         assert_eq!(
-            CONFIG_FIELD_COUNT, 85,
+            CONFIG_FIELD_COUNT, 86,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -1968,6 +1972,7 @@ mod tests {
             memory_enabled = true
             memory_max_tokens = 999
             memory_top_n = 999
+            memory_auto_populate = true
             checkpoint_interval_messages = 999
             anthropic_provider = "x"
             aws_region = "x"
@@ -2009,8 +2014,8 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 66 top-level leaf keys + 7 computer_use sub-keys = 73
-        const MERGE_TOML_EXPECTED: usize = 73;
+        // 67 top-level leaf keys + 7 computer_use sub-keys = 74
+        const MERGE_TOML_EXPECTED: usize = 74;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2019,9 +2024,9 @@ mod tests {
         // ── 3. apply_env_overrides field coverage ─────────────────
         // Count KF_CODE_* env var checks in apply_env_overrides.
         // This must stay in sync with env_overrides.rs.
-        const ENV_OVERRIDE_EXPECTED: usize = 69;
+        const ENV_OVERRIDE_EXPECTED: usize = 70;
         assert_eq!(
-            ENV_OVERRIDE_EXPECTED, 69,
+            ENV_OVERRIDE_EXPECTED, 70,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
         );
 

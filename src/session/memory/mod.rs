@@ -101,6 +101,7 @@ impl MemoryStore {
     /// When the total number of facts exceeds `max_facts` (default 200),
     /// the oldest fact (first alphabetically) is evicted. ponytail: O(n)
     /// scan; fine for 200 entries.
+    // ponytail: upsert overwrites on name match. The FNV hash suffix makes collisions extremely unlikely but not impossible. Upgrade: append turn number to slug for full disambiguation.
     pub fn upsert(
         &self,
         name: &str,

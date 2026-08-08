@@ -29,7 +29,7 @@ pub(super) fn spawn_stderr_drain(
                             if !buf.is_empty() {
                                 let line = buf.trim_end_matches('\n').trim_end_matches('\r');
                                 if !line.is_empty() {
-                                    tracing::debug!(target: "mcp_stderr", "{}", line);
+                                    tracing::trace!(target: "mcp_stderr", "{}", line);
                                 }
                             }
                         }

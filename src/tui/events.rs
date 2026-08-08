@@ -299,39 +299,19 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
     }
 }
 
-/// Local best-effort token estimate for a message list. Mirrors the
-/// logic in `session::prompt::estimate_tokens` (B1.6): content
-/// counted as bytes/4, tool_calls JSON-serialised and divided by 4.
-///
-/// ponytail: bytes/4 is not a tokenizer. It overestimates for English
-/// (real ratio ~3-4 chars/token) and underestimates for CJK/emoji
-/// (~1-2 chars/token). `tiktoken-rs` would give per-model-accurate
-/// counts but is not a dep; the error is bounded and the next
-/// `TurnEvent::CostStats` provides the canonical value.
-///
-/// Falls back to a small per-call constant if serialisation fails
-/// (which would be a `serde_json` bug, but never panic in TUI code).
-///
-/// This is intentionally a local helper rather than importing the
-/// closure from `prompt::build_messages` — the closure is local to
-/// that function and exposing it as `pub` would leak prompt-builder
-/// internals to every consumer. The values agree to within rounding
-/// (both use the same 4-chars-per-token heuristic), and the next
-/// `TurnEvent::CostStats` always provides the canonical value.
+/// BPE-based token estimate for a message list. Uses the same
+/// cl100k_base tokenizer as `session::prompt::count_tokens`.
 fn estimate_messages_tokens(messages: &[crate::shared::Message]) -> usize {
     messages
         .iter()
         .map(|m| {
-            let content_tokens = m.content.len() / 4;
+            let content_tokens = kf_budget_core::estimate_tokens(&m.content);
             let tool_call_tokens = m
                 .tool_calls
                 .as_ref()
                 .map(|calls| {
                     let json = serde_json::to_string(calls).unwrap_or_default();
-                    let json_tokens = json.len() / 4;
-                    // Add at least 8 tokens per call as a baseline
-                    // for the model to "see" the call even if the
-                    // serialised JSON is empty for some reason.
+                    let json_tokens = kf_budget_core::estimate_tokens(&json);
                     json_tokens.max(calls.len() * 8)
                 })
                 .unwrap_or(0);

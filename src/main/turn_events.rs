@@ -48,7 +48,7 @@ pub(super) fn emit_turn_events(
                 if output == kf_code::shared::OutputFormat::Text {
                     print!("{t}");
                     if let Err(e) = std::io::stdout().flush() {
-                        tracing::debug!(error = %e, "failed to flush stdout token");
+                        tracing::warn!(error = %e, "failed to flush stdout token");
                     }
                 } else if output == kf_code::shared::OutputFormat::StreamJson {
                     let line = serde_json::json!({"type": "token", "content": t});

@@ -75,14 +75,14 @@ pub(crate) struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if let Err(e) = disable_raw_mode() {
-            tracing::debug!(error = %e, "failed to disable raw mode in terminal guard");
+            tracing::warn!(error = %e, "failed to disable raw mode in terminal guard");
         }
         let mut stdout = io::stdout();
         if let Err(e) = execute!(stdout, DisableMouseCapture) {
-            tracing::debug!(error = %e, "failed to disable mouse capture in terminal guard");
+            tracing::warn!(error = %e, "failed to disable mouse capture in terminal guard");
         }
         if let Err(e) = execute!(stdout, LeaveAlternateScreen) {
-            tracing::debug!(error = %e, "failed to leave alternate screen in terminal guard");
+            tracing::warn!(error = %e, "failed to leave alternate screen in terminal guard");
         }
     }
 }
@@ -292,13 +292,13 @@ async fn teardown(
         }
     }
     if let Err(e) = disable_raw_mode() {
-        tracing::debug!(error = %e, "failed to disable raw mode during TUI shutdown");
+        tracing::warn!(error = %e, "failed to disable raw mode during TUI shutdown");
     }
     if let Err(e) = execute!(terminal.backend_mut(), DisableMouseCapture) {
-        tracing::debug!(error = %e, "failed to disable mouse capture during TUI shutdown");
+        tracing::warn!(error = %e, "failed to disable mouse capture during TUI shutdown");
     }
     if let Err(e) = execute!(terminal.backend_mut(), LeaveAlternateScreen) {
-        tracing::debug!(error = %e, "failed to leave alternate screen during TUI shutdown");
+        tracing::warn!(error = %e, "failed to leave alternate screen during TUI shutdown");
     }
 }
 
@@ -336,16 +336,16 @@ async fn spawn_daemon_reader(state: &mut AppState) {
     state.daemon_flags = Some(daemon_flags.clone());
     match crate::tui::daemon_events::spawn_daemon_event_reader(daemon_flags).await {
         Ok(Some(handle)) => {
-            tracing::debug!("daemon instance channel connected");
+            tracing::trace!("daemon instance channel connected");
             tokio::spawn(async move {
                 let _ = handle.await;
             });
         }
         Ok(None) => {
-            tracing::debug!("daemon not running; instance channel not opened");
+            tracing::info!("daemon not running; instance channel not opened");
         }
         Err(e) => {
-            tracing::debug!(error = %e, "failed to open daemon instance channel");
+            tracing::warn!(error = %e, "failed to open daemon instance channel");
         }
     }
 }

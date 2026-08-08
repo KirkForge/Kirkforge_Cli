@@ -18,6 +18,10 @@ fn default_gcp_region() -> String {
     "us-central1".to_string()
 }
 
+fn default_max_bg_tasks() -> usize {
+    4
+}
+
 fn default_request_timeout_secs() -> u64 {
     120
 }
@@ -90,6 +94,8 @@ pub struct ModelConfig {
     pub seed: Option<u64>,
     #[serde(default)]
     pub json_mode: bool,
+    #[serde(default = "default_max_bg_tasks")]
+    pub max_concurrent_background_tasks: usize,
     /// Enable extended thinking for models that support it (e.g. Claude
     /// 3.7 Sonnet, Claude 4). When false, thinking blocks are omitted
     /// even if the model supports them.
@@ -139,6 +145,7 @@ impl Default for ModelConfig {
             cache_dir: None,
             seed: None,
             json_mode: false,
+            max_concurrent_background_tasks: default_max_bg_tasks(),
             extended_thinking: true,
             budget_tokens: default_budget_tokens(),
             max_tokens: default_max_tokens(),

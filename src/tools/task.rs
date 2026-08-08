@@ -24,6 +24,7 @@ pub struct TaskRequest {
 pub struct TaskHandle {
     pub result: Option<String>,
     pub error: Option<String>,
+    pub completed: Arc<tokio::sync::Notify>,
 }
 
 /// Trait for an object that can spawn isolated subagent tasks.
@@ -71,13 +72,19 @@ impl Default for TaskManager {
 pub struct Task {
     task_manager: Arc<Mutex<TaskManager>>,
     bg_semaphore: Arc<tokio::sync::Semaphore>,
+    max_bg: usize,
 }
 
 impl Task {
     pub fn new() -> Self {
+        Self::with_config(4)
+    }
+
+    pub fn with_config(max_bg: usize) -> Self {
         Self {
             task_manager: Arc::new(Mutex::new(TaskManager::new())),
-            bg_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+            bg_semaphore: Arc::new(tokio::sync::Semaphore::new(max_bg)),
+            max_bg,
         }
     }
 
@@ -85,6 +92,7 @@ impl Task {
         Self {
             task_manager: manager,
             bg_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+            max_bg: 4,
         }
     }
 }
@@ -182,17 +190,24 @@ impl Tool for Task {
             };
             let id = {
                 let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
-                guard.insert(TaskHandle {
+                let notify = Arc::new(tokio::sync::Notify::new());
+                let id = guard.insert(TaskHandle {
                     result: None,
                     error: None,
-                })
+                    completed: notify.clone(),
+                });
+                (id, notify)
             };
+            let id = id.0;
             let id_for_spawn = id.clone();
             let permit = match self.bg_semaphore.clone().try_acquire_owned() {
                 Ok(p) => p,
                 Err(_) => {
                     return ToolOutcome::Error {
-                        message: "Background task limit reached (4 concurrent). Wait for existing tasks to finish, or retrieve results with task_output.".to_string(),
+                        message: format!(
+                            "Background task limit reached ({} concurrent). Wait for existing tasks to finish, or retrieve results with task_output.",
+                            self.max_bg
+                        ),
                     };
                 }
             };
@@ -201,10 +216,12 @@ impl Tool for Task {
                 drop(permit);
                 let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(handle) = guard.tasks.get_mut(&id_for_spawn) {
+                    let notify = handle.completed.clone();
                     match result {
                         Ok(summary) => handle.result = Some(summary),
                         Err(err) => handle.error = Some(err),
                     }
+                    notify.notify_one();
                 }
             });
             ToolOutcome::Success {
@@ -235,6 +252,13 @@ pub struct TaskOutput {
 impl TaskOutput {
     pub fn new(task_manager: Arc<Mutex<TaskManager>>) -> Self {
         Self { task_manager }
+    }
+
+    pub fn is_completed(&self, id: &str) -> bool {
+        let guard = self.task_manager.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .get(id)
+            .is_some_and(|h| h.result.is_some() || h.error.is_some())
     }
 }
 
@@ -456,8 +480,13 @@ impl TaskSpawner for InProcessTaskSpawner {
         let prompt = build_task_prompt(&request.persona, &request.prompt);
 
         for turn_num in 0..request.max_turns {
+            let input = if turn_num == 0 {
+                prompt.as_str()
+            } else {
+                "continue"
+            };
             executor
-                .run_turn_collecting(&prompt, &approval_tx, &cancelled)
+                .run_turn_collecting(input, &approval_tx, &cancelled)
                 .await
                 .map_err(|e| format!("task turn {turn_num} failed: {e}"))?;
 
@@ -543,10 +572,12 @@ mod tests {
         let id1 = mgr.insert(TaskHandle {
             result: None,
             error: None,
+            completed: Arc::new(tokio::sync::Notify::new()),
         });
         let id2 = mgr.insert(TaskHandle {
             result: None,
             error: None,
+            completed: Arc::new(tokio::sync::Notify::new()),
         });
         assert_ne!(id1, id2);
         assert!(mgr.get(&id1).is_some());
@@ -589,6 +620,7 @@ mod tests {
             mgr.insert(TaskHandle {
                 result: Some("done".to_string()),
                 error: None,
+                completed: Arc::new(tokio::sync::Notify::new()),
             })
         };
         let tool = TaskOutput::new(manager);
@@ -700,6 +732,7 @@ mod tests {
             mgr.insert(TaskHandle {
                 result: None,
                 error: None,
+                completed: Arc::new(tokio::sync::Notify::new()),
             })
         };
         let tool = TaskOutput::new(manager);
@@ -722,6 +755,7 @@ mod tests {
             mgr.insert(TaskHandle {
                 result: None,
                 error: Some("task blew up".to_string()),
+                completed: Arc::new(tokio::sync::Notify::new()),
             })
         };
         let tool = TaskOutput::new(manager);
@@ -740,6 +774,7 @@ mod tests {
         let id = mgr.insert(TaskHandle {
             result: Some("x".to_string()),
             error: None,
+            completed: Arc::new(tokio::sync::Notify::new()),
         });
         assert!(id.starts_with("task-"));
     }
@@ -853,5 +888,22 @@ mod tests {
     fn build_task_prompt_for_plan_persona_mentions_architect() {
         let p = build_task_prompt("plan", "plan Z");
         assert!(p.contains("architect") && p.contains("Plan Complete"));
+    }
+
+    #[test]
+    fn multi_turn_prompt_uses_continue_on_subsequent_turns() {
+        let prompt = "do thing".to_string();
+        for turn_num in 0..3 {
+            let input = if turn_num == 0 {
+                prompt.as_str()
+            } else {
+                "continue"
+            };
+            if turn_num == 0 {
+                assert_eq!(input, "do thing");
+            } else {
+                assert_eq!(input, "continue");
+            }
+        }
     }
 }

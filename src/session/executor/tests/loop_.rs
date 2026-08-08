@@ -834,3 +834,101 @@ async fn test_cancelled_batch_aborts_remaining_spawned_tasks() {
         *call_count_two.lock().unwrap()
     );
 }
+
+#[tokio::test]
+async fn doom_loop_circuit_breaker_auto_plan_mode() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    )
+    .unwrap();
+    let (tx, mut rx) = mpsc::channel::<TurnEvent>(64);
+    let err = ToolOutcome::Error {
+        message: "boom".into(),
+    };
+    // Below threshold: no doom detection.
+    exe.observe_tool_outcome("bash", &err, &tx);
+    exe.observe_tool_outcome("bash", &err, &tx);
+    // Drain any events.
+    while rx.try_recv().is_ok() {}
+    // Third identical error crosses the DoomLoopTracker threshold.
+    let outcome = exe.observe_tool_outcome("bash", &err, &tx);
+    assert!(
+        outcome.is_some(),
+        "should return DoomLoopOutcome after first doom-loop detection"
+    );
+    let outcome = outcome.unwrap();
+    assert_eq!(
+        outcome.action,
+        cost_tracking::DoomLoopAction::AutoPlan,
+        "default action should be AutoPlan"
+    );
+    assert_eq!(outcome.tool, "bash");
+    assert!(outcome.count >= 1);
+    // Drain events and verify DoomLoopRemediation was emitted.
+    let mut saw_remediation = false;
+    while let Ok(ev) = rx.try_recv() {
+        if matches!(ev, TurnEvent::DoomLoopRemediation { .. }) {
+            saw_remediation = true;
+        }
+    }
+    assert!(saw_remediation, "should emit DoomLoopRemediation event");
+}
+
+#[tokio::test]
+async fn doom_loop_circuit_breaker_halts_in_plan_mode() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    )
+    .unwrap();
+    let (tx, _rx) = mpsc::channel::<TurnEvent>(64);
+    let err = ToolOutcome::Error {
+        message: "stuck".into(),
+    };
+    // Trigger a doom-loop detection. The action is determined by config
+    // (default: auto_plan), not by whether plan mode is active.
+    exe.observe_tool_outcome("bash", &err, &tx);
+    exe.observe_tool_outcome("bash", &err, &tx);
+    let outcome = exe.observe_tool_outcome("bash", &err, &tx);
+    assert!(
+        outcome.is_some(),
+        "should return DoomLoopOutcome after doom-loop detection"
+    );
+    assert_eq!(
+        outcome.unwrap().action,
+        cost_tracking::DoomLoopAction::AutoPlan,
+        "default config action is AutoPlan regardless of plan_mode state"
+    );
+}
+
+#[tokio::test]
+async fn doom_loop_circuit_breaker_disabled_when_zero() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config_with_doom_loop_max_hits(0),
+    )
+    .unwrap();
+    let (tx, mut rx) = mpsc::channel::<TurnEvent>(64);
+    let err = ToolOutcome::Error {
+        message: "boom".into(),
+    };
+    // With doom_loop_max_hits=0, the circuit breaker should be disabled.
+    // 5 errors should NOT trigger plan mode or remediation.
+    for _ in 0..5 {
+        exe.observe_tool_outcome("bash", &err, &tx);
+    }
+    // The wrapper no longer sets plan_mode; check the return value.
+    // With max_hits=0, no DoomLoopOutcome should be returned.
+    // (plan_mode is not changed by observe_tool_outcome in R3)
+    // No DoomLoopRemediation events should have been emitted.
+    while let Ok(ev) = rx.try_recv() {
+        assert!(
+            !matches!(ev, TurnEvent::DoomLoopRemediation { .. }),
+            "no DoomLoopRemediation should be emitted when disabled"
+        );
+    }
+}

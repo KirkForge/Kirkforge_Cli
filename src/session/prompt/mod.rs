@@ -210,6 +210,8 @@ impl PromptBuilder {
 
         // Inject persistent memory facts (if enabled)
         if memory_enabled {
+            content.push_str("\n\nYou have a `remember` tool to store important facts about the user's preferences, project conventions, and recurring patterns. Use it when the user explicitly states a preference or when you observe a pattern worth remembering. Stored facts are available in future sessions.");
+
             let memory_block = match crate::session::memory::MemoryStore::default_store() {
                 Ok(store) => {
                     if let Some(ctx) = memory_context.filter(|s| !s.is_empty()) {
@@ -875,6 +877,26 @@ mod tests {
         assert!(
             msg.content.contains(".gitignore"),
             "system prompt should forbid .gitignore edits"
+        );
+    }
+
+    #[test]
+    fn test_remember_instruction_injected_when_memory_enabled() {
+        let mut builder = PromptBuilder::new();
+        let msg = builder.build("test-model", false, &[], None, None, true, 500, 10);
+        assert!(
+            msg.content.contains("remember"),
+            "system prompt should include remember tool instruction when memory is enabled"
+        );
+    }
+
+    #[test]
+    fn test_remember_instruction_absent_when_memory_disabled() {
+        let mut builder = PromptBuilder::new();
+        let msg = builder.build("test-model", false, &[], None, None, false, 0, 0);
+        assert!(
+            !msg.content.contains("remember"),
+            "system prompt should not include remember tool instruction when memory is disabled"
         );
     }
 

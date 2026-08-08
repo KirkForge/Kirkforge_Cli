@@ -51,6 +51,16 @@
 # Additional due jobs are queued until a slot frees up. Default: 4.
 # max_concurrent_scheduled_jobs = 4
 
+# Maximum number of background tasks (task(background=true)) that may run
+# concurrently. Additional tasks are either queued or rejected depending on
+# task_concurrency_mode. Clamped to 1–64. Default: 4.
+# max_background_tasks = 4
+
+# Backpressure mode when max_background_tasks is reached:
+#   "queue"  — wait for a slot (default, current behavior)
+#   "reject" — return a Failure immediately with a hint to use task_output
+# task_concurrency_mode = "queue"
+
 # ---------------------------------------------------------------------------
 # Computer-use browser tool
 # ---------------------------------------------------------------------------
@@ -200,6 +210,12 @@
 # during large codebase analysis. Default: 50.
 # max_tool_calls_per_turn = 50
 
+# Maximum consecutive FinishReason::Length continuations per turn. When the
+# model hits max_tokens, the executor injects a continuation message and loops.
+# This cap limits how many times that can happen. 0 disables continuation
+# entirely (treats Length as Stop). Default: 5, max: 50.
+# max_continuation_rounds = 5
+
 # ---------------------------------------------------------------------------
 # Summarization (optional LLM-based compaction)
 # ---------------------------------------------------------------------------
@@ -347,3 +363,10 @@ enabled_plugins = ["stratum", "kf-code-plugin3", "kf-code-plugin"]
 # Fraction of the ceiling at which the "approaching" state triggers and
 # slicing begins. Default: 0.8.
 # budget_approaching_ratio = 0.8  # ratio at which "approaching" state triggers (default: 0.8)
+
+# Maximum cumulative doom-loop detections before the circuit breaker fires.
+# When hit, the executor auto-switches to plan mode (or halts if already
+# in plan mode). Set to 0 to disable the circuit breaker. Default: 1
+# (fires on the first doom-loop detection, which requires 3 identical
+# consecutive tool errors).
+# doom_loop_max_hits = 1

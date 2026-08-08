@@ -67,24 +67,51 @@ impl Default for TaskManager {
     }
 }
 
+/// Concurrency mode for background tasks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskConcurrencyMode {
+    Queue,
+    Reject,
+}
+
+impl std::fmt::Display for TaskConcurrencyMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TaskConcurrencyMode::Queue => write!(f, "queue"),
+            TaskConcurrencyMode::Reject => write!(f, "reject"),
+        }
+    }
+}
+
+impl std::str::FromStr for TaskConcurrencyMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.to_lowercase().as_str() {
+            "queue" => Ok(TaskConcurrencyMode::Queue),
+            "reject" => Ok(TaskConcurrencyMode::Reject),
+            other => Err(format!(
+                "invalid task_concurrency_mode '{other}', expected 'queue' or 'reject'"
+            )),
+        }
+    }
+}
+
 /// Built-in `task` tool: run a prompt in an isolated subagent context and
 /// return the final assistant summary.
 pub struct Task {
     task_manager: Arc<Mutex<TaskManager>>,
     bg_semaphore: Arc<tokio::sync::Semaphore>,
+    concurrency_mode: TaskConcurrencyMode,
     max_bg: usize,
 }
 
 impl Task {
     pub fn new() -> Self {
-        Self::with_config(4)
-    }
-
-    pub fn with_config(max_bg: usize) -> Self {
         Self {
             task_manager: Arc::new(Mutex::new(TaskManager::new())),
-            bg_semaphore: Arc::new(tokio::sync::Semaphore::new(max_bg)),
-            max_bg,
+            bg_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+            concurrency_mode: TaskConcurrencyMode::Queue,
+            max_bg: 4,
         }
     }
 
@@ -92,7 +119,22 @@ impl Task {
         Self {
             task_manager: manager,
             bg_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+            concurrency_mode: TaskConcurrencyMode::Queue,
             max_bg: 4,
+        }
+    }
+
+    pub fn with_config(
+        manager: Arc<Mutex<TaskManager>>,
+        max_background_tasks: usize,
+        concurrency_mode: TaskConcurrencyMode,
+    ) -> Self {
+        let permits = max_background_tasks.clamp(1, 64);
+        Self {
+            task_manager: manager,
+            bg_semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
+            concurrency_mode,
+            max_bg: permits,
         }
     }
 }
@@ -188,6 +230,25 @@ impl Tool for Task {
                 model: model.clone(),
                 max_turns,
             };
+            let max_bg = self.max_bg;
+            let permit = match self.concurrency_mode {
+                TaskConcurrencyMode::Reject => {
+                    match self.bg_semaphore.clone().try_acquire_owned() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            return ToolOutcome::Failure(ToolError::invalid_args(
+                            format!("Background task concurrency limit reached ({max_bg} running). Use `task_output` to check running tasks or increase `max_background_tasks`.")
+                        ));
+                        }
+                    }
+                }
+                TaskConcurrencyMode::Queue => {
+                    let sem = self.bg_semaphore.clone();
+                    sem.acquire_owned()
+                        .await
+                        .unwrap_or_else(|_| panic!("bg_semaphore closed unexpectedly"))
+                }
+            };
             let id = {
                 let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
                 let notify = Arc::new(tokio::sync::Notify::new());
@@ -200,17 +261,6 @@ impl Tool for Task {
             };
             let id = id.0;
             let id_for_spawn = id.clone();
-            let permit = match self.bg_semaphore.clone().try_acquire_owned() {
-                Ok(p) => p,
-                Err(_) => {
-                    return ToolOutcome::Error {
-                        message: format!(
-                            "Background task limit reached ({} concurrent). Wait for existing tasks to finish, or retrieve results with task_output.",
-                            self.max_bg
-                        ),
-                    };
-                }
-            };
             tokio::spawn(async move {
                 let result = spawner.run_task(request).await;
                 drop(permit);
@@ -402,6 +452,12 @@ impl TaskSpawner for InProcessTaskSpawner {
             docker_config: Some(cfg.security.docker.clone()),
             sandbox_config: cfg.security.sandbox.clone(),
             block_edits: cfg.security.sandbox.block_edits,
+            max_background_tasks: cfg.tools.max_background_tasks,
+            task_concurrency_mode: cfg
+                .tools
+                .task_concurrency_mode
+                .parse()
+                .unwrap_or(TaskConcurrencyMode::Queue),
         });
         let tools: Vec<Arc<dyn Tool>> = match request.persona.as_str() {
             "explore" => all
@@ -546,6 +602,7 @@ fn build_task_prompt(persona: &str, task: &str) -> String {
 mod tests {
     use super::*;
     use crate::tools::ToolContext;
+    use std::sync::atomic::Ordering;
 
     struct MockSpawner {
         result: Result<String, String>,
@@ -555,6 +612,22 @@ mod tests {
     impl TaskSpawner for MockSpawner {
         async fn run_task(&self, _request: TaskRequest) -> Result<String, String> {
             self.result.clone()
+        }
+    }
+
+    struct BlockingSpawner {
+        started: Arc<tokio::sync::Notify>,
+        finish: Arc<AtomicBool>,
+    }
+
+    #[async_trait::async_trait]
+    impl TaskSpawner for BlockingSpawner {
+        async fn run_task(&self, _request: TaskRequest) -> Result<String, String> {
+            self.started.notify_one();
+            while !self.finish.load(Ordering::Relaxed) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            Ok("done".to_string())
         }
     }
 
@@ -904,6 +977,80 @@ mod tests {
             } else {
                 assert_eq!(input, "continue");
             }
+        }
+    }
+
+    #[test]
+    fn task_concurrency_mode_from_str() {
+        assert_eq!(
+            "queue".parse::<TaskConcurrencyMode>(),
+            Ok(TaskConcurrencyMode::Queue)
+        );
+        assert_eq!(
+            "reject".parse::<TaskConcurrencyMode>(),
+            Ok(TaskConcurrencyMode::Reject)
+        );
+        assert_eq!(
+            "QUEUE".parse::<TaskConcurrencyMode>(),
+            Ok(TaskConcurrencyMode::Queue)
+        );
+        assert_eq!(
+            "Reject".parse::<TaskConcurrencyMode>(),
+            Ok(TaskConcurrencyMode::Reject)
+        );
+        assert!("invalid".parse::<TaskConcurrencyMode>().is_err());
+    }
+
+    #[test]
+    fn task_with_config_clamps_semaphore_size() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let task = Task::with_config(manager, 0, TaskConcurrencyMode::Queue);
+        assert_eq!(task.max_bg, 1);
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let task = Task::with_config(manager, 100, TaskConcurrencyMode::Queue);
+        assert_eq!(task.max_bg, 64);
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let task = Task::with_config(manager, 8, TaskConcurrencyMode::Reject);
+        assert_eq!(task.max_bg, 8);
+        assert_eq!(task.concurrency_mode, TaskConcurrencyMode::Reject);
+    }
+
+    #[tokio::test]
+    async fn task_reject_mode_returns_failure_when_semaphore_full() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let task = Task::with_config(manager, 1, TaskConcurrencyMode::Reject);
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(BlockingSpawner {
+            started: Arc::new(tokio::sync::Notify::new()),
+            finish: Arc::new(AtomicBool::new(false)),
+        });
+        let ctx = ToolContext::with_spawner(spawner.clone());
+        let outcome1 = task
+            .run(
+                &ctx,
+                serde_json::json!({"prompt": "first", "background": true}),
+            )
+            .await;
+        assert!(
+            matches!(outcome1, ToolOutcome::Success { .. }),
+            "first task should start: {outcome1:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let outcome2 = task
+            .run(
+                &ctx,
+                serde_json::json!({"prompt": "second", "background": true}),
+            )
+            .await;
+        match outcome2 {
+            ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
+                assert!(
+                    message.contains("concurrency limit"),
+                    "expected concurrency limit message, got: {message}"
+                );
+            }
+            other => panic!(
+                "expected Failure(InvalidArgs) for second task in reject mode, got {other:?}"
+            ),
         }
     }
 }

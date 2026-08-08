@@ -92,6 +92,24 @@ pub enum TurnEvent {
         tool: String,
         last_error: String,
     },
+
+    /// Emitted when the doom-loop circuit breaker fires — the
+    /// cumulative doom-loop hit count has reached `doom_loop_max_hits`.
+    /// `action` is either `"auto_plan_mode"` (switched to plan mode)
+    /// or `"halt"` (already in plan mode, turn halted).
+    DoomLoopRemediation {
+        action: String,
+        hits: usize,
+    },
+
+    /// Emitted when a `FinishReason::Length` continuation round starts.
+    /// `round` is 1-indexed (first continuation = 1), `max` is the
+    /// configured `max_continuation_rounds`. The TUI renders this as
+    /// "⟳ 3/5" in the status bar.
+    ContinuationRound {
+        round: usize,
+        max: usize,
+    },
 }
 
 #[cfg(test)]

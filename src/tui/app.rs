@@ -506,6 +506,12 @@ pub struct AppState {
     /// Jobs, Settings, Threads). `None` for Chat (no selectable rows).
     pub tab_list_state: Option<usize>,
 
+    // ── Continuation round indicator (WO 23.9-R3) ──────────────
+    /// When `Some((round, max))`, the executor is in a `FinishReason::Length`
+    /// continuation loop. The status bar renders "⟳ round/max" in Yellow.
+    /// Cleared when the turn completes normally (CostStats).
+    pub continuation: Option<(usize, usize)>,
+
     // ── Daemon push events (WO 17.2) ───────────────────────────────
     /// When true, the daemon pushed `ThreadsChanged` and the TUI should
     /// re-list recent sessions on the next draw tick instead of polling.
@@ -629,6 +635,7 @@ impl AppState {
             completion_suggestions: Vec::new(),
             active_tab: ActiveTab::default(),
             tab_list_state: None,
+            continuation: None,
             sessions_dirty: false,
             jobs_dirty: false,
             cached_jobs_output: None,

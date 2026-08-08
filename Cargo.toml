@@ -233,7 +233,8 @@ path = "tests/e2e/main.rs"
 default = ["stratum", "budget"]
 stratum = ["dep:kf-compress-core"]
 budget = ["dep:kf-budget-core"]
-pty = ["portable-pty"]
+ pty = ["portable-pty"]
+landlock = []
 # Enable OpenTelemetry span/metric export from the Rust runtime.
 otel = [
     "dep:opentelemetry",

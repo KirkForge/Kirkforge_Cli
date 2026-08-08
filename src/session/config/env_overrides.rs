@@ -216,6 +216,42 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // KF_CODE_MAX_CONTINUATION_ROUNDS
+    if let Ok(val) = std::env::var("KF_CODE_MAX_CONTINUATION_ROUNDS") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.tools.max_continuation_rounds = n.clamp(0, 50);
+        }
+    }
+
+    // KF_CODE_DOOM_LOOP_MAX_HITS
+    if let Ok(val) = std::env::var("KF_CODE_DOOM_LOOP_MAX_HITS") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.tools.doom_loop_max_hits = n;
+        }
+    }
+
+    // KF_CODE_DOOM_LOOP_ACTION
+    if let Ok(val) = std::env::var("KF_CODE_DOOM_LOOP_ACTION") {
+        if !val.is_empty() {
+            cfg.tools.doom_loop_action = val;
+        }
+    }
+
+    // KF_CODE_MAX_BACKGROUND_TASKS
+    if let Ok(val) = std::env::var("KF_CODE_MAX_BACKGROUND_TASKS") {
+        if let Ok(n) = val.parse::<usize>() {
+            cfg.tools.max_background_tasks = n.clamp(1, 64);
+        }
+    }
+
+    // KF_CODE_TASK_CONCURRENCY_MODE
+    if let Ok(val) = std::env::var("KF_CODE_TASK_CONCURRENCY_MODE") {
+        let mode = val.to_lowercase();
+        if mode == "queue" || mode == "reject" {
+            cfg.tools.task_concurrency_mode = mode;
+        }
+    }
+
     // KF_CODE_TOOL_TIMEOUT_SECS
     if let Ok(val) = std::env::var("KF_CODE_TOOL_TIMEOUT_SECS") {
         if let Ok(n) = val.parse::<u64>() {
@@ -316,6 +352,12 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
             cfg.display.memory_top_n = n.max(1);
         }
     }
+
+    // KF_CODE_MEMORY_AUTO_POPULATE
+    env_bool!(
+        "KF_CODE_MEMORY_AUTO_POPULATE",
+        cfg.display.memory_auto_populate
+    );
 
     // KF_CODE_REQUEST_TIMEOUT_SECS
     if let Ok(val) = std::env::var("KF_CODE_REQUEST_TIMEOUT_SECS") {

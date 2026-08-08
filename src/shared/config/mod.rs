@@ -20,14 +20,14 @@ use serde::{Deserialize, Serialize};
 /// If either site is missing the new field, the drift-guard test will fail.
 ///
 /// Breakdown:
-///   ModelConfig    30
-///   SecurityConfig 19  (16 direct + 3 sub-struct handles)
-///   ToolConfig     26
-///   SessionConfig   8
-///   DisplayConfig   3
+///   ModelConfig    33
+///   SecurityConfig 20  (17 direct + 3 sub-struct handles)
+///   ToolConfig     32
+///   SessionConfig   9
+///   DisplayConfig   5
 ///   Note: 1 field (seed) has #[serde(skip_serializing)], so serde
-///   produces 81 keys. The drift-guard test accounts for this.
-pub const CONFIG_FIELD_COUNT: usize = 87;
+///   produces 98 keys. The drift-guard test accounts for this.
+pub const CONFIG_FIELD_COUNT: usize = 99;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

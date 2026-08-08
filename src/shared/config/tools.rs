@@ -12,6 +12,10 @@ fn default_max_persona_turns() -> usize {
     10
 }
 
+fn default_max_continuation_rounds() -> usize {
+    5
+}
+
 fn default_tool_timeout_secs() -> Option<u64> {
     Some(30)
 }
@@ -36,6 +40,14 @@ fn default_max_concurrent_scheduled_jobs() -> usize {
     4
 }
 
+fn default_max_background_tasks() -> usize {
+    4
+}
+
+fn default_task_concurrency_mode() -> String {
+    "queue".to_string()
+}
+
 fn default_reject_on_excess_plugin_trust() -> bool {
     true
 }
@@ -50,6 +62,14 @@ fn default_budget_approaching_ratio() -> f64 {
 
 fn default_memory_auto_populate() -> bool {
     true
+}
+
+fn default_doom_loop_max_hits() -> usize {
+    1
+}
+
+fn default_doom_loop_action() -> String {
+    "auto_plan".to_string()
 }
 
 fn default_plugin_sources() -> HashMap<String, PathBuf> {
@@ -83,6 +103,8 @@ pub struct ToolConfig {
     pub max_tool_calls_per_turn: usize,
     #[serde(default = "default_max_persona_turns")]
     pub max_persona_turns: usize,
+    #[serde(default = "default_max_continuation_rounds")]
+    pub max_continuation_rounds: usize,
     #[serde(default)]
     pub dry_run: bool,
     #[serde(default)]
@@ -99,6 +121,10 @@ pub struct ToolConfig {
     pub scheduled_bash_auto_approve: bool,
     #[serde(default = "default_max_concurrent_scheduled_jobs")]
     pub max_concurrent_scheduled_jobs: usize,
+    #[serde(default = "default_max_background_tasks")]
+    pub max_background_tasks: usize,
+    #[serde(default = "default_task_concurrency_mode")]
+    pub task_concurrency_mode: String,
     #[serde(default = "default_max_plugin_trust")]
     pub max_plugin_trust: kf_plugin_sdk::TrustTier,
     #[serde(default = "default_reject_on_excess_plugin_trust")]
@@ -123,6 +149,10 @@ pub struct ToolConfig {
     pub budget_approaching_ratio: f64,
     #[serde(default = "default_memory_auto_populate")]
     pub memory_auto_populate: bool,
+    #[serde(default = "default_doom_loop_max_hits")]
+    pub doom_loop_max_hits: usize,
+    #[serde(default = "default_doom_loop_action")]
+    pub doom_loop_action: String,
 }
 
 fn default_plugin_signature_validation() -> bool {
@@ -142,6 +172,7 @@ impl Default for ToolConfig {
             tool_timeout_secs: default_tool_timeout_secs(),
             max_tool_calls_per_turn: default_max_tool_calls_per_turn(),
             max_persona_turns: default_max_persona_turns(),
+            max_continuation_rounds: default_max_continuation_rounds(),
             dry_run: false,
             hooks_dir: None,
             minify_write_side: false,
@@ -150,6 +181,8 @@ impl Default for ToolConfig {
             block_binary_reads: false,
             scheduled_bash_auto_approve: false,
             max_concurrent_scheduled_jobs: default_max_concurrent_scheduled_jobs(),
+            max_background_tasks: default_max_background_tasks(),
+            task_concurrency_mode: default_task_concurrency_mode(),
             max_plugin_trust: default_max_plugin_trust(),
             reject_on_excess_plugin_trust: default_reject_on_excess_plugin_trust(),
             plugin_signature_validation: true,
@@ -162,6 +195,8 @@ impl Default for ToolConfig {
             budget_ceiling: default_budget_ceiling(),
             budget_approaching_ratio: default_budget_approaching_ratio(),
             memory_auto_populate: true,
+            doom_loop_max_hits: default_doom_loop_max_hits(),
+            doom_loop_action: default_doom_loop_action(),
         }
     }
 }
@@ -181,6 +216,9 @@ mod tests {
             cfg.plugin_signature_validation,
             "R7: signature validation default-on"
         );
+        assert_eq!(cfg.max_continuation_rounds, 5);
+        assert_eq!(cfg.doom_loop_max_hits, 1);
+        assert_eq!(cfg.doom_loop_action, "auto_plan");
     }
 
     #[test]
@@ -190,12 +228,14 @@ stratum_mode = "lite"
 budget_ceiling = 50000
 budget_approaching_ratio = 0.9
 minify_above_bytes = 1024
+doom_loop_action = "halt"
 "#;
         let cfg: ToolConfig = toml::from_str(toml).expect("parse");
         assert_eq!(cfg.stratum_mode.as_deref(), Some("lite"));
         assert_eq!(cfg.budget_ceiling, 50_000);
         assert!((cfg.budget_approaching_ratio - 0.9).abs() < f64::EPSILON);
         assert_eq!(cfg.minify_above_bytes, 1024);
+        assert_eq!(cfg.doom_loop_action, "halt");
     }
 
     #[test]

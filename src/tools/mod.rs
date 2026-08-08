@@ -10,6 +10,7 @@ pub mod notebook_edit;
 pub mod read_file;
 pub mod read_image;
 pub mod registry;
+pub mod remember;
 pub mod task;
 pub mod todo;
 pub mod web_fetch;
@@ -186,9 +187,9 @@ pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
     use crate::tools::{
         bash::Bash, bash::BashCancel, bash::BashStatus, computer_use::ComputerUse,
         edit_file::EditFile, glob::Glob, grep::Grep, lsp_query::LspQuery,
-        notebook_edit::NotebookEdit, read_file::ReadFile, read_image::ReadImage, task::Task,
-        task::TaskOutput, todo::TodoRead, todo::TodoWrite, web_fetch::WebFetch,
-        web_search::WebSearch, workflow::WorkflowTool, write_file::WriteFile,
+        notebook_edit::NotebookEdit, read_file::ReadFile, read_image::ReadImage,
+        remember::Remember, task::Task, task::TaskOutput, todo::TodoRead, todo::TodoWrite,
+        web_fetch::WebFetch, web_search::WebSearch, workflow::WorkflowTool, write_file::WriteFile,
     };
 
     let task_manager = Arc::new(std::sync::Mutex::new(task::TaskManager::new()));
@@ -231,7 +232,11 @@ pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
     registry.register(Arc::new(Glob::new(ctx.path_guard.clone())));
     registry.register(Arc::new(WebFetch::new(ctx.deny_list.clone())));
     registry.register(Arc::new(WebSearch::new()));
-    registry.register(Arc::new(Task::with_manager(task_manager.clone())));
+    registry.register(Arc::new(Task::with_config(
+        task_manager.clone(),
+        ctx.max_background_tasks,
+        ctx.task_concurrency_mode.clone(),
+    )));
     registry.register(Arc::new(TaskOutput::new(task_manager)));
     registry.register(Arc::new(WorkflowTool::new(
         ctx.deny_list.clone(),
@@ -240,6 +245,7 @@ pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
     )));
     registry.register(Arc::new(TodoWrite::new(todo_state.clone())));
     registry.register(Arc::new(TodoRead::new(todo_state)));
+    registry.register(Arc::new(Remember::new()));
 
     // Conditionally registered tools.
     if ctx.supports_images {
@@ -318,6 +324,8 @@ mod tests {
             docker_config: None,
             sandbox_config: crate::shared::SandboxConfig::default(),
             block_edits: false,
+            max_background_tasks: 4,
+            task_concurrency_mode: task::TaskConcurrencyMode::Queue,
         };
         let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
@@ -335,6 +343,7 @@ mod tests {
             "todo_write",
             "todo_read",
             "workflow_run",
+            "remember",
         ] {
             assert!(
                 names.iter().any(|n| n == required),
@@ -369,6 +378,8 @@ mod tests {
             docker_config: None,
             sandbox_config: crate::shared::SandboxConfig::default(),
             block_edits: false,
+            max_background_tasks: 4,
+            task_concurrency_mode: task::TaskConcurrencyMode::Queue,
         };
         let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
@@ -403,6 +414,8 @@ mod tests {
             docker_config: None,
             sandbox_config: crate::shared::SandboxConfig::default(),
             block_edits: false,
+            max_background_tasks: 4,
+            task_concurrency_mode: task::TaskConcurrencyMode::Queue,
         };
         let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();

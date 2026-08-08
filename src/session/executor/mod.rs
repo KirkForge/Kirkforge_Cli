@@ -34,6 +34,7 @@ pub(crate) mod turn;
 pub(crate) mod types;
 
 pub use approval::{ApprovalRequest, ApprovalResponder, ApprovalResponse};
+pub use cost_tracking::{DoomLoopAction, DoomLoopOutcome};
 pub use loop_::{DoomHit, DoomLoopTracker};
 pub use scout::{ScoutSubagent, SCOUT_TOOLS};
 pub use types::{CompactHookStats, TurnEvent};
@@ -735,14 +736,23 @@ impl Executor {
     /// Feed a tool outcome to the doom-loop detector. If the
     /// threshold is crossed, also emit a `TurnEvent::DoomLoopDetected`
     /// on `event_tx` and a `MetricEvent::DoomLoop` to the metrics
-    /// log. Returns `Some(hint)` to inject into the conversation.
+    /// log. Returns `Some(DoomLoopOutcome)` with the hint and
+    /// the configured remediation action when the circuit breaker fires.
     pub fn observe_tool_outcome(
         &mut self,
         tool: &str,
         outcome: &crate::shared::ToolOutcome,
         event_tx: &mpsc::Sender<TurnEvent>,
-    ) -> Option<String> {
-        self.cost.observe_tool_outcome(tool, outcome, event_tx)
+    ) -> Option<DoomLoopOutcome> {
+        let cfg = crate::shared::read_shared_config(&self.config);
+        let action = cfg
+            .tools
+            .doom_loop_action
+            .parse::<DoomLoopAction>()
+            .unwrap_or(DoomLoopAction::AutoPlan);
+        let max_hits = cfg.tools.doom_loop_max_hits;
+        self.cost
+            .observe_tool_outcome(tool, outcome, event_tx, max_hits, action)
     }
 
     /// Install a full system-prompt override (e.g. from `--system`).

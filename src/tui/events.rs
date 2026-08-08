@@ -133,6 +133,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
         } => {
             state.is_generating = false;
             state.turn_tool_calls = 0; // reset for next turn
+            state.continuation = None;
             state.tokens_sent = state.tokens_sent.wrapping_add(prompt_tokens);
             state.tokens_received = state.tokens_received.wrapping_add(completion_tokens);
             state.turn_cost = turn_cost;
@@ -294,6 +295,17 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                     "🔁 Doom loop detected: {tool} has failed {count} times in a row with: {last_error}"
                 ),
             ));
+            state.mark_dirty();
+        }
+        TurnEvent::DoomLoopRemediation { action, hits } => {
+            state.messages.push_back(ConversationEntry::new(
+                "system",
+                format!("⚠️ Doom-loop circuit breaker: {action} after {hits} hits"),
+            ));
+            state.mark_dirty();
+        }
+        TurnEvent::ContinuationRound { round, max } => {
+            state.continuation = Some((round, max));
             state.mark_dirty();
         }
     }
@@ -966,5 +978,36 @@ mod tests {
         assert_eq!(dl.count, 5);
         assert_eq!(dl.tool, "grep");
         assert_eq!(dl.last_error, "still broken");
+    }
+
+    /// `ContinuationRound` sets `state.continuation` and marks dirty.
+    #[test]
+    fn continuation_round_sets_state_and_marks_dirty() {
+        let mut s = app_state();
+        s.dirty = false;
+        assert!(s.continuation.is_none());
+        dispatch_turn_event(&mut s, TurnEvent::ContinuationRound { round: 3, max: 5 });
+        assert_eq!(s.continuation, Some((3, 5)));
+        assert!(s.dirty);
+    }
+
+    /// `CostStats` clears the continuation indicator.
+    #[test]
+    fn cost_stats_clears_continuation() {
+        let mut s = app_state();
+        s.continuation = Some((3, 5));
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::CostStats {
+                prompt_tokens: 100,
+                completion_tokens: 50,
+                turn_cost: 0.001,
+                cumulative_cost: 0.001,
+            },
+        );
+        assert!(
+            s.continuation.is_none(),
+            "CostStats should clear continuation"
+        );
     }
 }

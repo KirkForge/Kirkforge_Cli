@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+use super::cost_tracking;
 use super::helpers::*;
 use super::types::{ApprovalDecision, IterationOutcome, TurnEvent, PLAN_COMPLETE_MARKER};
 use super::{ApprovalRequest, Executor};
@@ -323,6 +324,12 @@ impl Executor {
             .max_tool_calls_per_turn
             .max(1);
 
+        let max_continuation_rounds = read_shared_config(&self.config)
+            .tools
+            .max_continuation_rounds
+            .clamp(0, 50);
+        let mut continuation_count: usize = 0;
+
         for iteration in 0..max_iterations {
             if cancelled.load(Ordering::SeqCst) {
                 // The cancel watcher already emitted "Generation
@@ -349,6 +356,51 @@ impl Executor {
             match outcome {
                 IterationOutcome::Finished(finish_reason) => {
                     if finish_reason == crate::shared::FinishReason::Length {
+                        if max_continuation_rounds == 0 {
+                            record_turn_metric(
+                                &self.model_name,
+                                turn_start,
+                                tool_calls.len(),
+                                &crate::shared::FinishReason::Error,
+                            );
+                            crate::send_or_warn!(
+                                event_tx
+                                    .send(TurnEvent::Error(
+                                        "Response truncated (max tokens). Continuation disabled (max_continuation_rounds = 0).".into()
+                                    ))
+                                    .await,
+                                "TurnEvent receiver dropped; discarding event"
+                            );
+                            return Ok(());
+                        }
+                        continuation_count += 1;
+                        crate::send_or_warn!(
+                            event_tx
+                                .send(TurnEvent::ContinuationRound {
+                                    round: continuation_count,
+                                    max: max_continuation_rounds,
+                                })
+                                .await,
+                            "TurnEvent receiver dropped; discarding event"
+                        );
+                        if continuation_count > max_continuation_rounds {
+                            let msg = format!(
+                                "Max continuation rounds reached ({max_continuation_rounds}). \
+                                 The response was truncated and could not be completed within \
+                                 the allowed rounds."
+                            );
+                            crate::send_or_warn!(
+                                event_tx.send(TurnEvent::Error(msg.clone())).await,
+                                "TurnEvent receiver dropped; discarding event"
+                            );
+                            record_turn_metric(
+                                &self.model_name,
+                                turn_start,
+                                tool_calls.len(),
+                                &crate::shared::FinishReason::Error,
+                            );
+                            return Ok(());
+                        }
                         crate::send_or_warn!(
                             event_tx
                                 .send(TurnEvent::Token(
@@ -980,14 +1032,33 @@ impl Executor {
             let outcome_for_emit = outcome.clone();
             let edit_diff =
                 handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
-            if let Some(hint) = self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx) {
+            if let Some(outcome) = self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx)
+            {
                 self.conversation
                     .append_async(Message {
                         role: Role::User,
-                        content: hint,
+                        content: outcome.hint.clone(),
                         ..Default::default()
                     })
                     .await?;
+                match outcome.action {
+                    cost_tracking::DoomLoopAction::AutoPlan => {
+                        self.set_plan_mode(true);
+                        self.conversation.append_async(Message {
+                            role: Role::System,
+                            content: "[System: doom loop detected — switched to plan mode. Read-only tools only.]".into(),
+                            ..Default::default()
+                        }).await?;
+                    }
+                    cost_tracking::DoomLoopAction::Halt => {
+                        return Err(anyhow::anyhow!(
+                            "doom loop halted: '{}' failed {} times",
+                            outcome.tool,
+                            outcome.count
+                        ));
+                    }
+                    cost_tracking::DoomLoopAction::WarnOnly => {}
+                }
             }
             record(MetricEvent::ToolCall {
                 name: tc.name.clone(),
@@ -1065,14 +1136,32 @@ impl Executor {
                 None,
             );
         }
-        if let Some(hint) = self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx) {
+        if let Some(outcome) = self.observe_tool_outcome(&tc.name, &outcome_for_emit, event_tx) {
             self.conversation
                 .append_async(Message {
                     role: Role::User,
-                    content: hint,
+                    content: outcome.hint.clone(),
                     ..Default::default()
                 })
                 .await?;
+            match outcome.action {
+                cost_tracking::DoomLoopAction::AutoPlan => {
+                    self.set_plan_mode(true);
+                    self.conversation.append_async(Message {
+                        role: Role::System,
+                        content: "[System: doom loop detected — switched to plan mode. Read-only tools only.]".into(),
+                        ..Default::default()
+                    }).await?;
+                }
+                cost_tracking::DoomLoopAction::Halt => {
+                    return Err(anyhow::anyhow!(
+                        "doom loop halted: '{}' failed {} times",
+                        outcome.tool,
+                        outcome.count
+                    ));
+                }
+                cost_tracking::DoomLoopAction::WarnOnly => {}
+            }
         }
         record(MetricEvent::ToolCall {
             name: tc.name.clone(),
@@ -1526,6 +1615,7 @@ impl Executor {
             memory_enabled,
             memory_max_tokens,
             memory_top_n,
+            memory_auto_populate,
             compaction_use_heuristic,
             compaction_drop_threshold,
             stem_file_cap,
@@ -1535,6 +1625,7 @@ impl Executor {
                 cfg.display.memory_enabled,
                 cfg.display.memory_max_tokens,
                 cfg.display.memory_top_n,
+                cfg.display.memory_auto_populate,
                 cfg.session.compaction_use_heuristic,
                 cfg.session.compaction_drop_threshold,
                 cfg.session.stem_file_cap,
@@ -1543,7 +1634,8 @@ impl Executor {
 
         // Build a richer memory context from the current user turn plus
         // the most recent assistant message, if any.
-        let memory_context = {
+        // When memory_auto_populate is false, skip auto-extraction.
+        let memory_context = if memory_auto_populate {
             let history = self.conversation.all();
             let mut ctx = String::from(user_input);
             if let Some(last_assistant) = history
@@ -1559,6 +1651,8 @@ impl Executor {
             } else {
                 Some(ctx)
             }
+        } else {
+            None
         };
 
         // WO 17.5: inject top-N frequently-accessed file bodies into the

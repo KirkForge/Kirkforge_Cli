@@ -15,9 +15,40 @@ use tokio::sync::mpsc;
 
 use super::helpers::tool_outcome_success;
 
+/// Configurable doom-loop remediation action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoomLoopAction {
+    AutoPlan,
+    Halt,
+    WarnOnly,
+}
+
+impl std::str::FromStr for DoomLoopAction {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "auto_plan" => Ok(Self::AutoPlan),
+            "halt" => Ok(Self::Halt),
+            "warn_only" => Ok(Self::WarnOnly),
+            _ => Err(format!(
+                "unknown doom_loop_action '{s}': expected 'auto_plan', 'halt', or 'warn_only'"
+            )),
+        }
+    }
+}
+
+/// Outcome returned when a doom loop is detected.
+pub struct DoomLoopOutcome {
+    pub hint: String,
+    pub action: DoomLoopAction,
+    pub count: usize,
+    pub tool: String,
+}
+
 pub(crate) struct CostTracker {
     pub(crate) usage: crate::shared::CostTracking,
     pub(crate) doom_loop_tracker: DoomLoopTracker,
+    pub(crate) doom_loop_hits: usize,
     pub(crate) cache_stem: CacheStemTracker,
     pub(crate) carryover: CarryoverProfile,
     pub(crate) carryover_enabled: bool,
@@ -34,6 +65,7 @@ impl CostTracker {
         Self {
             usage: crate::shared::CostTracking::default(),
             doom_loop_tracker: DoomLoopTracker::new(),
+            doom_loop_hits: 0,
             cache_stem: CacheStemTracker::new(),
             carryover,
             carryover_enabled,
@@ -43,14 +75,17 @@ impl CostTracker {
 
     /// Feed a tool outcome to the doom-loop detector. If the threshold is
     /// crossed, emit a `TurnEvent::DoomLoopDetected` on `event_tx` and
-    /// a `MetricEvent::DoomLoop` to the metrics log. Returns `Some(hint)`
-    /// to inject into the conversation so the model changes strategy.
+    /// a `MetricEvent::DoomLoop` to the metrics log. Returns
+    /// `Some(DoomLoopOutcome)` with the hint and requested action when
+    /// the circuit breaker fires (cumulative hits >= doom_loop_max_hits).
     pub(crate) fn observe_tool_outcome(
         &mut self,
         tool: &str,
         outcome: &ToolOutcome,
         event_tx: &mpsc::Sender<TurnEvent>,
-    ) -> Option<String> {
+        doom_loop_max_hits: usize,
+        doom_action: DoomLoopAction,
+    ) -> Option<DoomLoopOutcome> {
         let is_error = !tool_outcome_success(outcome);
         let error_text = if is_error {
             let mut s = String::new();
@@ -73,6 +108,7 @@ impl CostTracker {
         };
 
         if let Some(hit) = self.doom_loop_tracker.observe(tool, &error_text) {
+            self.doom_loop_hits += 1;
             record(MetricEvent::DoomLoop {
                 count: hit.count,
                 tool: hit.tool.clone(),
@@ -85,12 +121,38 @@ impl CostTracker {
             }) {
                 tracing::warn!(error = %e, "failed to send DoomLoopDetected to TUI");
             }
-            return Some(format!(
-                "[System: tool '{}' has failed {} times with the same error. Try a different approach or ask the user for help.]",
-                hit.tool, hit.count
-            ));
+
+            // Circuit breaker: if cumulative hits reach the configured max,
+            // emit remediation event and return DoomLoopOutcome.
+            if doom_loop_max_hits > 0 && self.doom_loop_hits >= doom_loop_max_hits {
+                let hint = format!(
+                    "[System: tool '{}' has failed {} times with the same error. Try a different approach or ask the user for help.]",
+                    hit.tool, hit.count
+                );
+                tracing::warn!(
+                    hits = self.doom_loop_hits,
+                    max = doom_loop_max_hits,
+                    action = ?doom_action,
+                    "doom-loop circuit breaker firing"
+                );
+                if let Err(e) = event_tx.try_send(TurnEvent::DoomLoopRemediation {
+                    action: format!("{doom_action:?}").to_lowercase(),
+                    hits: self.doom_loop_hits,
+                }) {
+                    tracing::warn!(error = %e, "failed to send DoomLoopRemediation to TUI");
+                }
+                return Some(DoomLoopOutcome {
+                    hint,
+                    action: doom_action,
+                    count: self.doom_loop_hits,
+                    tool: hit.tool,
+                });
+            }
+
+            None
+        } else {
+            None
         }
-        None
     }
 
     /// Flush the carryover profile to disk (if enabled) and push it to
@@ -143,5 +205,31 @@ impl CostTracker {
         for cr in crs {
             self.carryover.record_verifier_warning(&cr.message);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn doom_loop_action_from_str_valid() {
+        assert_eq!(
+            "auto_plan".parse::<DoomLoopAction>().unwrap(),
+            DoomLoopAction::AutoPlan
+        );
+        assert_eq!(
+            "halt".parse::<DoomLoopAction>().unwrap(),
+            DoomLoopAction::Halt
+        );
+        assert_eq!(
+            "warn_only".parse::<DoomLoopAction>().unwrap(),
+            DoomLoopAction::WarnOnly
+        );
+    }
+
+    #[test]
+    fn doom_loop_action_from_str_invalid() {
+        assert!("banish".parse::<DoomLoopAction>().is_err());
     }
 }

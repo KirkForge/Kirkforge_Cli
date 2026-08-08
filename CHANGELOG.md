@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- WO 23.5-R1: `remember` tool — model can now explicitly store facts via `remember({ "fact": "...", "category": "..." })`. Facts are persisted in `MemoryStore` and surfaced in future sessions. Idempotent by slug.
+- WO 23.5-R2: System-prompt instruction for `remember` tool — when memory is enabled, the system prompt now includes guidance on when to use `remember`.
+
 ### Changed
 - WO 20.2.0: `tool_choice` + `max_tokens` config + adapter trait wiring (`set_tool_choice`, `set_max_tokens`). `build_anthropic_body` is now 9-arg; extended-thinking kept separate from completion `max_tokens` (dedicated `budget_tokens` + `supports_thinking` guard). CONFIG_FIELD_COUNT 84→85. (#23)
 - WO 20.0.7: cache breakpoint cap holds at 4 with tools (CRIT-1); `store_get` resolves Stratum offload markers (CRIT-2). (#23)

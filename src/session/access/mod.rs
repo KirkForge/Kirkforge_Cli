@@ -576,21 +576,20 @@ pub fn refuse_if_unsandboxed(path_guard: &PathGuard) -> anyhow::Result<()> {
 }
 
 /// Refuse to start in production (release) mode when the path guard is
-/// unsandboxed and the operator has not acknowledged the risk.
+/// unsandboxed.
 ///
 /// This gate fires only in release builds (`cfg!(not(debug_assertions))`).
-/// In debug builds, `warn_if_unsandboxed` is used instead. The operator can
-/// suppress this with `--i-accept-unsandboxed` (WO 21.7-R5).
+/// In debug builds, `warn_if_unsandboxed` is used instead. The `--i-accept-unsandboxed`
+/// flag exists only in debug builds; release builds refuse unconditionally.
 pub fn refuse_if_production_unsandboxed(path_guard: &PathGuard) -> anyhow::Result<()> {
     if path_guard.is_sandboxed() {
         return Ok(());
     }
     anyhow::bail!(
-        "Refused to start: no `sandbox_dir` and no `allowed_write_dirs` configured, \
-         and this is a release build. Model-driven writes are not restricted. \
-         Set `sandbox_dir` in config.toml or via KF_CODE_SANDBOX_DIR, list \
-         `allowed_write_dirs` to scope writes, or pass `--i-accept-unsandboxed` \
-         to acknowledge the risk."
+        "Refused to start: no `sandbox_dir` configured and this is a release build. \
+         Model-driven writes are unrestricted. Set `sandbox_dir = \".\"` in config.toml \
+         (or KF_CODE_SANDBOX_DIR) for a minimal safe default, or list `allowed_write_dirs` \
+         to scope writes."
     );
 }
 

@@ -161,7 +161,7 @@ impl Executor {
         let (deny_list, path_guard, read_gate) = access_from_config(&cfg);
         if cfg.security.sandbox.harden {
             refuse_if_unsandboxed(&path_guard)?;
-        } else if cfg!(not(debug_assertions)) && !cfg.security.sandbox.accept_unsandboxed {
+        } else if cfg!(not(debug_assertions)) {
             refuse_if_production_unsandboxed(&path_guard)?;
         } else {
             warn_if_unsandboxed(&path_guard);

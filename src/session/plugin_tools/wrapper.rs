@@ -269,7 +269,7 @@ impl Tool for PluginToolWrapper {
         setup_process_group(&mut command);
         // WO 11.5 / H3: rlimits are always applied (the harden flag
         // controls only bash sandbox settings, not resource limits).
-        setup_rlimits(&mut command, &self.sandbox);
+        setup_rlimits(&mut command, &self.sandbox, None);
 
         for (k, v) in self.curated_env(&cfg, &args) {
             command.env(k, v);

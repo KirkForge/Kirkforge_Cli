@@ -4,7 +4,7 @@
 
 ## Branch
 
-**`wo/21-integrate`** at commit `d8c7240`. WO 21 + WO 22 series nearly complete. ~70 commits ahead of `origin/dev`.
+**`wo/21-integrate`** at commit `05eebdc`. WO 21 + WO 22 series complete. ~70 commits ahead of `origin/dev`.
 
 ## WO 22 series — nearly complete
 
@@ -22,10 +22,12 @@ All critical fixes done. Remaining items are explicitly deferred below.
 | 22.6 | R1(token estimation), R2(offload store per-session), R3(SearchState extraction), R4(PostHook split), R5(CorrectionResult file/line) | — | R6(compaction tail pinning) | deferred |
 | 22.7 | R1-R6 (all done) | — | — | DONE |
 | 22.8 | R1-R18 (all doc fixes) | — | — | DONE |
-| 22.9 | R1(moot), R3(not a bug), R5(done=22.7-R4), R6(done=22.7-R1), R7(ADR-070), R8(ADR-070) | — | R2(JSON-schema), R4(Bedrock/Vertex tests) | deferred |
+| 22.9 | R1(moot), R3(not a bug), R5(done=22.7-R4), R6(done=22.7-R1), R7(ADR-070), R8(ADR-070) | — | R4(Bedrock/Vertex tests) | deferred (R2 folded into 22.14) |
 | 22.10 | R1(Skipped→CorrectionResult), R4(=22.7-R5 done), R5(format_verdict_report documented) | — | R2(=22.6-R2 done), R3(=22.7-R3 done) | DONE |
 | 22.11 | R1-R4 (catch_unwind, Skipped, pub(crate)) | — | — | DONE |
 | 22.12 | R1 (28 ADRs updated, path literals fixed) | — | — | DONE |
+| 22.13 | R1(multi-turn prompt fix), R2(bg task Notify), R3(configurable concurrency) | — | — | DONE |
+| 22.14 | R1(ResponseFormat enum + adapters), R2(executor wiring), R3(ADR-071) | — | — | DONE |
 | 21.11-R7 | ADR-057 "unchanged" claim fixed | — | — | DONE |
 
 ### Key commits this session (WO 22)
@@ -47,6 +49,8 @@ All critical fixes done. Remaining items are explicitly deferred below.
 - `d8c7240` fix(22.6-R4): budget hook test assertions
 - `de4b5ee` fix(22.3): MCP URI validation + capabilities
 - `ce3518b` fix(22.12): ADR path literal drift
+- `4095fab` feat(22.13): multi-turn prompt loop fix + bg task notifications + configurable concurrency
+- `05eebdc` feat(22.14): JSON-schema structured output via ResponseFormat enum
 
 ## Remaining deferred items
 
@@ -60,7 +64,6 @@ All critical fixes done. Remaining items are explicitly deferred below.
 3. **21.5-R2**: Bash PTY/streaming
 4. **22.4-R2/R3**: TUI memory visibility + config flag
 5. **22.6-R6**: Verifier findings in compaction tail
-6. **22.9-R2**: JSON-schema structured output
 
 ### Low priority
 
@@ -74,7 +77,7 @@ All critical fixes done. Remaining items are explicitly deferred below.
 - `cargo fmt --check`: PASS
 - `cargo clippy --workspace -- -D warnings`: PASS
 - `cargo test -p kf-budget-core --test adr_xref_drift`: PASS
-- HEAD: `d8c7240`
+- HEAD: `05eebdc`
 
 ## Known pre-existing test failures (NOT from WO 21/22)
 

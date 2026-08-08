@@ -1,7 +1,35 @@
 use crate::session::mcp_client::McpClientManager;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
+use std::path::Path;
 use std::sync::Arc;
+
+pub fn validate_mcp_uri(uri: &str, workspace: &Path) -> Result<(), String> {
+    if let Some(path) = uri.strip_prefix("file://") {
+        let resolved = Path::new(path);
+        let canonical_workspace = workspace
+            .canonicalize()
+            .map_err(|e| format!("cannot canonicalize workspace: {e}"))?;
+        match resolved.canonicalize() {
+            Ok(canonical_path) => {
+                if !canonical_path.starts_with(&canonical_workspace) {
+                    return Err(format!("file URI '{uri}' resolves outside the workspace"));
+                }
+            }
+            Err(_) => {
+                let absolute = if resolved.is_absolute() {
+                    resolved.to_path_buf()
+                } else {
+                    workspace.join(resolved)
+                };
+                if !absolute.starts_with(&canonical_workspace) {
+                    return Err(format!("file URI '{uri}' resolves outside the workspace"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 pub struct McpResourceTool {
     manager: Arc<McpClientManager>,
@@ -104,6 +132,10 @@ impl Tool for McpResourceTool {
                         });
                     }
                 };
+                let workspace = std::env::current_dir().unwrap_or_default();
+                if let Err(e) = validate_mcp_uri(uri, &workspace) {
+                    return ToolOutcome::Failure(ToolError::InvalidArgs { message: e });
+                }
                 match self.manager.read_resource(uri).await {
                     Ok(val) => ToolOutcome::Success {
                         content: serde_json::to_string_pretty(&val).unwrap_or_default(),
@@ -399,5 +431,37 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
         assert!(names.contains(&"mcp_resource"));
         assert!(names.contains(&"mcp_prompt"));
+    }
+
+    #[test]
+    fn validate_mcp_uri_allows_https_uri() {
+        let workspace = Path::new("/tmp/workspace");
+        assert!(validate_mcp_uri("https://example.com/resource", workspace).is_ok());
+    }
+
+    #[test]
+    fn validate_mcp_uri_allows_workspace_internal_file_uri() {
+        let workspace = std::env::current_dir().unwrap();
+        let uri = format!("file://{}", workspace.join("src").display());
+        assert!(validate_mcp_uri(&uri, &workspace).is_ok());
+    }
+
+    #[test]
+    fn validate_mcp_uri_blocks_workspace_external_file_uri() {
+        let workspace = std::env::current_dir().unwrap();
+        let uri = "file:///etc/passwd";
+        let result = validate_mcp_uri(uri, &workspace);
+        assert!(result.is_err(), "expected block for external file URI");
+        assert!(
+            result.unwrap_err().contains("outside the workspace"),
+            "error should mention outside the workspace"
+        );
+    }
+
+    #[test]
+    fn validate_mcp_uri_allows_custom_scheme() {
+        let workspace = Path::new("/tmp/workspace");
+        assert!(validate_mcp_uri("custom://resource", workspace).is_ok());
+        assert!(validate_mcp_uri("mcp://server/resource", workspace).is_ok());
     }
 }

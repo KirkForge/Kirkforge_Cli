@@ -888,7 +888,7 @@ pub fn budget_hooks(budget: &SharedBudget) -> Vec<Box<dyn PostHook>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::hooks::{HookDecision, PostHook};
+    use crate::session::hooks::PostHook;
 
     fn test_stratum_store() -> Arc<kf_compress_core::store::InMemoryOffloadStore> {
         Arc::new(kf_compress_core::store::InMemoryOffloadStore::new())
@@ -1418,7 +1418,7 @@ mod tests {
             ..Default::default()
         };
         let decision = record_tool_usage(&budget, &ctx, "bash");
-        assert_eq!(decision, HookDecision::Allow);
+        assert_eq!(decision, Ok(()));
         let guard = budget.lock().expect("budget mutex poisoned");
         assert_eq!(guard.used, 0, "no result should not record usage");
     }
@@ -1434,7 +1434,7 @@ mod tests {
             ..Default::default()
         };
         let decision = record_tool_usage(&budget, &ctx, "bash");
-        assert_eq!(decision, HookDecision::Allow);
+        assert_eq!(decision, Ok(()));
         let guard = budget.lock().expect("budget mutex poisoned");
         assert_eq!(guard.used, 0, "empty result records 0 tokens");
     }
@@ -1467,7 +1467,7 @@ mod tests {
             tool_result: Some("x".repeat(400)),
             ..Default::default()
         };
-        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(hook.handle(&ctx), Ok(()));
         let budget = shared_budget();
         let guard = budget.lock().expect("budget mutex poisoned");
         assert!(guard.used > 0, "write_file hook must record usage");
@@ -1736,7 +1736,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(hook.handle(&ctx), Ok(()));
         assert_eq!(
             current_session_mode(),
             Mode::Full,
@@ -1744,7 +1744,7 @@ mod tests {
         );
         // Idempotent: a second PreCompactHook with budget still
         // Approaching must remain at Full.
-        assert_eq!(hook.handle(&ctx), HookDecision::Allow);
+        assert_eq!(hook.handle(&ctx), Ok(()));
         assert_eq!(current_session_mode(), Mode::Full);
 
         // Reset.

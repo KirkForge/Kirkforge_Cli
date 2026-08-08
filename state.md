@@ -4,93 +4,82 @@
 
 ## Branch
 
-**`wo/21-integrate`** at commit `21a2ee6`. All 11 `wo/21.*` branches merged. 34 commits ahead of `origin/dev`.
+**`wo/21-integrate`** at commit `6d6c28e`. WO 21 + WO 22 series in progress. ~50 commits ahead of `origin/dev`.
 
-## WO 21 series — completed this session
+## WO 22 series — in progress
 
-All `wo/21.*` topic branches merged into `wo/21-integrate`. Post-merge fixes and remaining R-items completed in the same session.
+Workorders 22.0–22.12 defined. Critical fixes and over-engineering cleanup underway.
 
-### Per-workorder status (verified against code, not just commit messages)
+### Per-workorder status (verified against code)
 
-| WO | Done | Partial | Not Done | Tracking |
+| WO | Done | Partial | Deferred | Tracking |
 |----|------|---------|----------|----------|
-| 21.0 overview | — | — | — | Tracking doc only |
-| 21.1 focus-scope | — | — | — | Decisions folded into 21.11-R0 (draw/video yeeted) |
-| 21.2 plugins-rust-native | — | — | — | Folded into 21.11 |
-| 21.3 stratum-compression | — | — | — | Folded into 21.11-R1/R2/R3 |
-| 21.4 adapter-gaps | — | — | — | Empty branch (0 unique commits); work in 21.5 |
-| 21.5 tools-mcp | R1,R3,R4(roots),R5,R6,R7,R8 | R4(sampling deferred) | R2(PTY),R9(Anthropic beta) | 21.0.14 |
-| 21.6 context-memory | R3(tokenizer),R4(incremental),R5(rename),R2(memory auto-populate) | — | R1(LSP federation) | 21.0.14 |
-| 21.7 sandbox-trust | R5(production refusal),R6(PathGuardTower),R7(sig default-on),R8(ponytail) | — | R1(landlock),R2(seccomp),R3(diff-review) | 21.0.14 |
-| 21.8 tui-agentloop | — | — | — | Empty branch (0 unique commits) |
-| 21.9 discipline-debt | R1,R3,R4,R6,R7,R8,R9,R10 | — | R2(coverage bump),R5(fuzzing) | R2 and R5 DONE this session |
-| 21.10 mcp-first | — | — | — | Empty branch (0 unique commits) |
-| 21.11 plugin-rebuild | R0-R8 | R9(ADR done) | — | All done |
-| 21.0.12 doc-verify | — | — | — | TECHNICAL.md rewritten, stale refs purged |
-| 21.0.14 deferred-tracker | — | — | — | 11 deferred items tracked |
+| 22.1 critical-landlock | R1 (ABI rewrite, correct struct layout, access flags, /dev//proc allow-list) | — | — | DONE |
+| 22.2 critical-plugin-defaults | R1 (stratum + kf-budget in default_enabled_plugins) | — | — | DONE (in prior session) |
+| 22.3 mcp-resource-security | R1 (URI validation, capabilities advertised) | — | — | DONE (in prior session) |
+| 22.4 memory-hardening | R1 (MAX_FACTS_PER_TURN=3, EXTRACT_EVERY_N_TURNS=3, FNV hash slugs, is_preference_like) | — | — | DONE |
+| 22.5 tui-broken-pipelines | R2 (sessions_dirty refresh) | R1(F2-F5 Enter), R3(GitOperationEvent), R4(file-tool duration) | — | PONYTAIL-DEBT |
+| 22.6 architecture-smells | R1(token estimation unified), R5(CorrectionResult file/line) | — | R2(offload store scoping), R3(AppState decomposition), R4(hook return type), R6(compaction tail) | PONYTAIL-DEBT |
+| 22.7 over-engineering | R1(kf-budget-hosts deleted), R2(ToolChoice kept — not over-engineering), R3(TruncationStrategy deleted), R4(aws_profile deleted), R5(CompactionTransform collapsed), R6(ADR-049 flipped) | — | — | DONE |
+| 22.8 doc-overhaul | R1-R18 (all doc fixes from review Part 8) | — | — | DONE |
+| 22.9 adapter-gaps | R1(moot), R3(persona.rs — not a bug) | — | R2(JSON-schema), R4(Bedrock/Vertex test), R6(keychain — depends on R1), R7(ADR-070 written), R8(ADR-070 written) | PONYTAIL-DEBT |
+| 22.10 design-flaw-fixes | R5(format_verdict_report documented) | — | R1(verifier skip→CorrectionResult), R2(=22.6-R2), R3(=22.7-R3), R4(=22.7-R5) | PONYTAIL-DEBT |
+| 22.11 verifier-hardening | R1(sync catch_unwind), R2(async catch_unwind), R3(Skipped verdict), R4(format_verdict_report pub(crate)) | — | — | DONE |
+| 22.12 adr-drift | R1(~30 ADRs updated) | — | — | DONE |
 
-### Cross-cutting work this session
+### Key commits this session (WO 22)
 
-- **Clippy**: all 8 pre-existing errors fixed, now fully green
-- **Orphan cleanup**: `kf-budget-cli/`, `kf-compress-cli/` deleted
-- **PONYTAIL-DEBT.md**: 11 entries for deleted crates removed
-- **Shell plugins yeeted**: `plugins/kf-budget/`, `plugins/kf-stratum/` deleted (code folded into Rust)
-- **kf-draw/kf-video**: fully removed from codebase and docs
-- **Plugin repos**: all 3 originals confirmed fully folded (Plugin1→kf-plugin-sdk/host, Plugin2→kf-compress-core, Plugin3→kf-budget-core)
-- **WO status lines**: all updated from "Planned" to "Partial" or "Done"
-- **ADR-068**: CLI yeet decision documented
-- **Swap**: 8GB disk swap + 8GB zram (zstd, priority 100) added to fix OOM kills
+- `1b72e69` fix(22.1): landlock ABI rewrite
+- `af7c1f6` fix(22.4+22.11): memory hardening + verifier catch_unwind
+- `4791f00` docs: WO 22 series workorders
+- `d21e450` chore(22.7-R1): delete kf-budget-hosts crate
+- `ec28bc6` refactor(22.7-R3): remove TruncationStrategy enum
+- `76fbefc` refactor(22.7-R4): remove aws_profile config field
+- `53ae5bc` refactor(22.7-R5): collapse CompactionTransform trait
+- `3e3690d` feat(22.6-R5): add file/line fields to CorrectionResult
+- `f049aef` docs(22.9-R7/R8): ADR-070 adapter-gap decisions
+- `6d6c28e` style: cargo fmt after WO 22 merges
 
-## Remaining work (WO 21.0.14 — all tracked)
+## WO 21 series — completed (prior session)
+
+All `wo/21.*` topic branches merged. See git log for details.
+
+## Remaining deferred items (all tracked in PONYTAIL-DEBT.md)
 
 ### High priority (security/correctness)
 
-1. **21.7-R1**: Default OS sandbox — landlock on Linux (filesystem confinement + network egress block). Plan ready: ~120 lines of unsafe syscall glue in `sandbox.rs`, no new deps, runtime kernel version detection. Must allow-list Ollama/MCP server ports.
-2. **21.7-R3**: Diff-review-before-apply — every file-modifying tool presents real diff for y/n before write. Plan ready: `DiffReviewGate` callback in `ToolContext`, `DiffReviewPolicy` enum (Off/Always/UntrustedOnly), reuse existing `diff_preview.rs` + `approval.rs` TUI components.
+1. **21.7-R1**: Landlock — DONE in WO 22.1
+2. **21.7-R3**: Diff-review-before-apply
 
 ### Medium priority (functionality gaps)
 
-3. **21.6-R1**: LSP federation — augment context-index call-graph resolution with rust-analyzer go-to-definition results. Plan ready: `enrich_via_lsp()` method on `ContextIndex`, optional `kf-lsp` dep, async bridge.
-4. **21.5-R2**: Bash PTY/streaming — `portable-pty` behind feature flag for interactive commands. Adds ~2MB to binary.
-5. **21.5-R4 (sampling)**: MCP sampling/createMessage — server-initiated reverse LLM call. Security surface needs approval UX.
+3. **21.6-R1**: LSP federation
+4. **21.5-R2**: Bash PTY/streaming
+5. **22.5-R1**: F2-F5 TUI Enter handlers
+6. **22.6-R2**: Per-session offload store (OnceLock → session-scoped + LRU cap)
 
 ### Low priority (defer with reason)
 
-6. **21.7-R2**: seccomp syscall filter — ADR-054 says libseccomp breaks static binary. Needs formal close with updated evidence.
-7. **21.5-R9**: Anthropic computer-use beta — local headless-Chrome tool already works with any model. Anthropic's server-side computer_use is redundant.
-
-## Plugin architecture
-
-Two-path dispatch (ADR-050). Folded plugins (stratum, kf-budget) compiled-in via `stratum`/`budget` feature flags (both default-on). Shell fallbacks yeeted this session. Runtime `enabled_plugins`/`disabled_plugins` gate registration. `/plugins toggle` works for both compiled-in and shell plugins. `kf-plugin` (Node SDK) remains shell-only.
+7. **21.7-R2**: seccomp syscall filter
+8. **22.6-R3**: AppState decomposition (~55 fields → sub-structs)
+9. **22.6-R4**: Hook return type split (post-hooks don't need HookDecision)
+10. **22.9-R2**: JSON-schema structured output
+11. **22.9-R4**: Bedrock/Vertex test hardening
 
 ## Gate status
 
 - `cargo check --workspace`: PASS
 - `cargo fmt --check`: PASS
-- `cargo clippy --all-targets -- -D warnings`: PASS
-- HEAD: `21a2ee6`
+- `cargo clippy --workspace -- -D warnings`: PASS
+- `cargo test -p kf-budget-core --test adr_xref_drift`: PASS
+- HEAD: `6d6c28e`
 
-## Known pre-existing test failures (NOT from WO 21)
+## Known pre-existing test failures (NOT from WO 21/22)
 
+- `compaction_use_llm_alias_backward_compat` — test expects `compaction_use_llm` under `[session]` TOML but parser only reads it from top level
 - `bundled_node_sdk_tool_executes_via_host` (requires Node.js)
 - `adapters::m5_tests::openai_cache_mode_marks_last_two_prefix_messages` — stale vs WO 17.5
-- `tui::keys::slash_commands::tests::slash_command_table_covers_all_triggers` — drift test needs update
 - `session::plugin_tools::*` (7), `tools::bash::*` (2) — env/binary-dependent
-
-## Infra note
-
-- Machine: 15GB RAM, 16GB swap (8GB zram zstd priority 100 + 8GB disk priority -1)
-- Prior OOM kills (4 in 24h) caused by: 1.6GB opencode.db + Rust compiles exhausting 15GB RAM + 512MB swap
-- Fix: swap increased, opencode.db cleanup task ran (subagent — verify if it actually reduced size)
-- `cargo test --workspace` can still OOM — run per-module tests
-
-## Next steps (prioritized)
-
-1. **21.7-R1**: Landlock default sandbox (plan ready, execute)
-2. **21.7-R3**: Diff-review-before-apply (plan ready, execute)
-3. **21.6-R1**: LSP federation (plan ready, execute)
-4. **21.5-R2**: Bash PTY (plan ready, execute)
-5. Update `state.md` after each item
 
 ## Rust toolchain
 

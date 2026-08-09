@@ -260,16 +260,16 @@ The test files live alongside the source:
 crates/kf-budget-core/src/slicing.rs        # unit tests inline
 crates/kf-budget-core/tests/fixtures/        # input/expected pairs (TSV)
 
-crates/plugin3-hosts/src/lib.rs            # Host enum + canonical payload drift tests
-crates/plugin3-hosts/src/claude_code.rs    # stub module (future shim)
+crates/kf-budget-core/src/lib.rs            # Host enum + canonical payload drift tests
+crates/kf-budget-core/src/claude_code.rs    # stub module (future shim)
 
-crates/plugin3-cli/src/hooks/mod.rs        # all three hook handlers
-crates/plugin3-cli/tests/*_drift.rs        # per-ADR drift tests
+crates/kf-budget-core/src/hooks/mod.rs        # all three hook handlers
+crates/kf-budget-core/tests/*_drift.rs        # per-ADR drift tests
 ```
 
 ponytail: the earlier draft prescribed a separate
 `tests/property.rs`, `tests/golden.rs`, and `tests/golden/`
-directory plus `crates/plugin3-cli/tests/cli_smoke.rs` —
+directory plus `crates/kf-budget-core/tests/cli_smoke.rs` —
 the MVP inlines property tests as `mod tests` blocks in each
 source file (e.g. `slicing.rs::no_panic_on_any_input`,
 `compaction.rs::no_panic_on_any_input` use an LCG rather

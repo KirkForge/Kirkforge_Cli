@@ -142,7 +142,7 @@ ADR-0015), which is CLI-side.
 
 ```rust
 // crates/kf-budget-core/src/atomic_write.rs
-// crates/plugin3-cli/src/main.rs (save_budget / load_budget entry points)
+// crates/kf-budget-core/src/main.rs (save_budget / load_budget entry points)
 
 use std::io::Write;
 
@@ -195,7 +195,7 @@ is pinned to 32 in the CLI's `main.rs` and tested by
 `recent_bound_is_pinned_at_32`.
 
 ```rust
-// crates/plugin3-cli/src/main.rs
+// crates/kf-budget-core/src/main.rs
 
 const RECENT_BOUND: usize = 32;
 
@@ -287,7 +287,7 @@ The `paths` module lives at
 `crates/kf-budget-core/src/paths.rs`. The atomic write helper
 lives at `crates/kf-budget-core/src/atomic_write.rs`. The
 budget save/load + recent-outputs FIFO list live in
-`crates/plugin3-cli/src/main.rs` (the CLI's `main.rs`
+`crates/kf-budget-core/src/main.rs` (the CLI's `main.rs`
 because they are CLI-side concerns: precedence chain, the
 32-entry bound, and the recent-outputs wire shape).
 

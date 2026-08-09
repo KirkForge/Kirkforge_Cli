@@ -28,14 +28,14 @@ synthesis with its own architectural contributions:
 
 ## Workspace layout
 
-The workspace has one binary crate (`kf-code`) and 10 satellite crates under
+The workspace has one binary crate (`kf-code`) and 9 satellite crates under
 `crates/`. The binary is the user-facing CLI; the satellites are libraries and
 standalone binaries.
 
 ```
 kf-code (root bin)          ← the CLI the user runs
 ├── src/                       ← agent core (session, tools, TUI, adapters, verifiers)
-├── crates/                    ← 10 satellite crates
+├── crates/                    ← 9 satellite crates
 │   ├── kf-plugin-sdk     ← plugin SDK: manifest types, trust tiers
 │   ├── kf-plugin-host  ← plugin runtime: registry, dispatch, signatures
 │   ├── kf-context-index← tree-sitter symbol/import/call-graph index
@@ -50,7 +50,7 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── stratum/               ← compression plugin (5 tools, 2 hooks)
 │   └── kf-budget/     ← budget plugin (7 tools, 4 hooks)
 ├── benches/tasks/             ← 31 benchmark task definitions (TOML)
-└── docs/adr/                  ← 86 Architecture Decision Records
+└── docs/adr/                  ← 88 Architecture Decision Records
 ```
 
 The workspace has ~2,900 `#[test]` functions (~2,200 under `src/`,
@@ -173,9 +173,11 @@ agent loop and bench harness can invoke workflows via tool calls, reusing
 the same in-process `TaskSpawner` as the `task` tool. Plugin tools are
 registered alongside these at runtime.
 
-The `bash` tool has two isolation layers: Docker execution mode
-(`--docker`, ADR-036) for full container isolation, and lightweight
-rlimit hardening (`--harden`, ADR-054) for the non-Docker path. The
+The `bash` tool has three isolation layers: Docker execution mode
+(`--docker`, ADR-036) for full container isolation, lightweight
+rlimit hardening (`--harden`, ADR-054) for the non-Docker path, and an
+optional Linux landlock syscall filter (WO 22.1, feature-gated behind
+`landlock` — NOT default-on; opt in via `--features landlock`). The
 `--harden` flag applies `RLIMIT_CPU` / `RLIMIT_AS` / `RLIMIT_FSIZE` to
 the child shell in a `pre_exec` hook (Unix only; Windows no-op with a
 warning). It is ignored when `--docker` is set (Docker already enforces
@@ -911,7 +913,7 @@ not the root binary.
 
 ## ADRs
 
-86 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+88 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
 execution replay (039), VFS minification (053), coverage-gate threshold

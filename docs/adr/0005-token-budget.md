@@ -197,7 +197,7 @@ slice marker plus the head/tail sections.
 ### UserPromptSubmit hook flow
 
 ```rust
-// crates/plugin3-cli/src/hooks/mod.rs
+// crates/kf-budget-core/src/hooks/mod.rs
 
 pub(crate) fn user_prompt_submit() {
     let Some(payload) = read_stdin_json::<UserPromptSubmitPayload>() else {
@@ -340,7 +340,7 @@ The response is `UserPromptSubmitResponse` from
 `plugin3-hosts` (ADR-0013):
 
 ```rust
-// crates/plugin3-hosts/src/lib.rs
+// crates/kf-budget-core/src/lib.rs
 
 pub enum UserPromptSubmitResponse {
     Allow,

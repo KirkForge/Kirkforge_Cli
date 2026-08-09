@@ -7,6 +7,6 @@ tool results, enforces a per-conversation token budget, and tracks cost per turn
 
 | Metric | Value |
 |--------|-------|
-| Tests | 261 passing |
+| Tests | 635 passing |
 | Crates | `kf-budget-core` |
 | ADRs | 0017 (build features), 0016 (test strategy), 0015 (CLI design) |

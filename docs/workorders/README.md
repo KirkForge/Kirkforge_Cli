@@ -436,6 +436,53 @@ leverage item: **21.9-R4** (test deadlock fix → re-enables CI, which gates
 honest verification of everything else). Full ordering/dependencies and the
 global done/fail + defer-disclosure rule are in [WO 21.0](21.0-wo21-overview.md).
 
+### Series 25 — Test Infrastructure + Deferred Work Closure
+
+Series 25 has two axes. **25.1-25.8** is the test-infrastructure series: split
+the gate, speed the suite, ship `kf-testdoctor` optimizations, add `cargo
+llvm-cov` coverage baseline + regression gate, fix stale plugin3/stratum/kfd
+script refs, lift the deadlock quarantine, fix the benchmark source-of-truth,
+and clean historical residue. **25.9-25.18** closes deferred work + newly-
+uncovered audit findings: dead code behind `#[allow(dead_code)]`, stale
+binary/path refs in user-facing config, TUI metrics + daemon push gaps,
+AppState decomposition, process-global state scoping, verifier finding
+location data, MCP protocol consistency, the `src/session` coverage push
+(carry-forward of WO 24.6), persona Bedrock/Vertex plumbing + the landlock
+default-on decision, and a backlog of smaller deferred capabilities. The
+master overview is [WO 25.0](25.0-wo25-test-infra-overview.md); every item
+carries success AND failure criteria per AGENTS.md rule #11 (no silent
+deferral).
+
+| # | Workorder | Status | Priority | Depends on |
+|---|---|---|---|---|
+| 25.0 | [WO 25 Series Overview](25.0-wo25-test-infra-overview.md) | Planned | — | — |
+| 25.1 | [Fast test gate split](25.1-fast-test-gate.md) | Planned | P0 | — |
+| 25.2 | [Test speed optimization](25.2-test-speed-optimization.md) | Planned | P1 | 25.1 |
+| 25.3 | [kf-testdoctor optimization](25.3-testdoctor-optimization.md) | Planned | P1 | — |
+| 25.4 | [Coverage baseline tooling](25.4-coverage-baseline.md) | Planned | P2 | 25.1 |
+| 25.5 | [Release/install/CI script hygiene](25.5-release-hygiene.md) | Planned | P0 | — |
+| 25.6 | [Deadlock quarantine lift](25.6-deadlock-quarantine-lift.md) | Planned | P1 | — |
+| 25.7 | [Benchmark source of truth](25.7-benchmark-hygiene.md) | Planned | P1 | — |
+| 25.8 | [Historical residue cleanup](25.8-historical-residue-cleanup.md) | Planned | P2 | 25.5 |
+| 25.9 | [Dead code & non-Rust lint stub cleanup](25.9-dead-code-and-lint-stubs.md) | Planned | P1 | — |
+| 25.10 | [Stale binary/path refs + ADR path-literal enforcement](25.10-stale-refs-and-adr-path-enforcement.md) | Planned | P0 | 25.5 (coordinate) |
+| 25.11 | [TUI metrics & daemon push gaps](25.11-tui-metrics-and-daemon-push.md) | Planned | P1 | — |
+| 25.12 | [AppState decomposition + cached_tokens fork-reset](25.12-appstate-decomposition.md) | Planned | P2 | — |
+| 25.13 | [Process-global state scoping](25.13-process-global-state-scoping.md) | Planned | P2 | — |
+| 25.14 | [Verifier finding location data](25.14-verifier-finding-location.md) | Planned | P1 | — |
+| 25.15 | [MCP protocol consistency: roots + sampling](25.15-mcp-protocol-consistency.md) | Planned | P1 | — |
+| 25.16 | [Coverage push: src/session >75%](25.16-session-coverage-75.md) | Planned | P2 | 25.4 |
+| 25.17 | [Persona adapter Bedrock/Vertex + landlock default-on decision](25.17-persona-adapter-and-landlock.md) | Planned | P1 | — |
+| 25.18 | [Deferred capability carry-forward](25.18-deferred-capability-carryforward.md) | Planned | P2/P3 | — |
+| 25.19 | [AGENTS.md multistep workflow upgrade](25.19-agents-md-multistep-workflow.md) | Planned | P1 | — |
+
+**19 sub-workorders** (8 test-infra + 10 deferred/audit + 1 process). Highest-leverage P0s:
+**25.5** (broken release/install scripts) and **25.10** (config.toml.example
+ghost plugins + ADR path-literal enforcement). Highest-leverage P1 audit
+findings: **25.17** (persona Bedrock/Vertex — prior review's "fixed" claim was
+false) and **25.15** (MCP `sampling/createMessage` security surface). Full
+ordering/dependencies in [WO 25.0](25.0-wo25-test-infra-overview.md).
+
 ## Conventions
 
 - Each workorder is a single markdown file named `<number>-<slug>.md`.

@@ -32,7 +32,7 @@ table in `~/.claude/settings.json` (or equivalent).
 ### Hook registry
 
 ```rust
-// crates/plugin3-cli/src/hooks/mod.rs
+// crates/kf-budget-core/src/hooks/mod.rs
 
 pub fn register_hooks(host: Host) -> HookConfig {
     match host {
@@ -100,7 +100,7 @@ settings file.
 ### PostToolUse flow
 
 ```rust
-// crates/plugin3-cli/src/hooks/mod.rs
+// crates/kf-budget-core/src/hooks/mod.rs
 
 pub(crate) fn post_tool_use() {
     let _host = current_host();
@@ -174,7 +174,7 @@ pub(crate) fn post_tool_use() {
 ### UserPromptSubmit flow
 
 ```rust
-// crates/plugin3-cli/src/hooks/mod.rs
+// crates/kf-budget-core/src/hooks/mod.rs
 
 pub(crate) fn user_prompt_submit() {
     let Some(payload) = read_stdin_json::<UserPromptSubmitPayload>() else {
@@ -210,7 +210,7 @@ pub(crate) fn user_prompt_submit() {
 ### PreCompact flow
 
 ```rust
-// crates/plugin3-cli/src/hooks/mod.rs
+// crates/kf-budget-core/src/hooks/mod.rs
 
 pub(crate) fn pre_compact() {
     let Some(payload) = read_stdin_json::<PreCompactPayload>() else {
@@ -331,7 +331,7 @@ Positive:
 
 ## Implementation notes
 
-The hook handlers live at `crates/plugin3-cli/src/hooks/`.
+The hook handlers live at `crates/kf-budget-core/src/hooks/`.
 Each handler is a function that takes a typed payload and
 returns a typed response. The host shim (ADR-0013) translates
 the host's payload format to the typed payload.

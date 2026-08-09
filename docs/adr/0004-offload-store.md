@@ -116,7 +116,7 @@ re-pastes the SQLite backend surfaces here.
 ### Marker format
 
 ```rust
-pub const SLICE_MARKER_PREFIX: &str = "<<plugin3:slice:";
+pub const SLICE_MARKER_PREFIX: &str = "<<kf-budget:slice:";
 pub const SLICE_MARKER_SUFFIX: &str = ">>";
 
 pub fn format_slice_marker(key: &str) -> String {
@@ -129,7 +129,7 @@ pub fn parse_slice_marker(s: &str) -> Option<&str> {
 }
 ```
 
-The marker is human-greppable: `grep -F '<<plugin3:slice:'` finds
+The marker is human-greppable: `grep -F '<<kf-budget:slice:'` finds
 all slice markers in a session log.
 
 ### Loud failure on init
@@ -138,7 +138,7 @@ A `FileOffloadStore` whose directory cannot be created returns
 `StoreError::Backend` and aborts startup at the store-open call
 itself — the backend does not silently truncate the data or
 return a partial store. The CLI's `open_store` helper (the
-sole caller today, in `crates/plugin3-cli/src/main.rs`) catches
+sole caller today, in `crates/kf-budget-core/src/main.rs`) catches
 that error, prints a one-line warning to stderr, and falls
 back to an `InMemoryOffloadStore` so the host hook does not
 crash on a transient permission error (ADR-0009 § Error

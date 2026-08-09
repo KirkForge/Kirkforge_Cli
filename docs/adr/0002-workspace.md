@@ -26,9 +26,11 @@ isolation. The workspace layout must:
 [workspace]
 resolver = "2"
 members = [
+    # Note: plugin3-cli and plugin3-hosts were removed in the ADR-047
+    # fold-in; only kf-budget-core survived (now a member of the main
+    # KirkForge workspace). The crate-layout tree below reflects the
+    # original standalone plugin3 design.
     "crates/kf-budget-core",
-    "crates/plugin3-cli",
-    "crates/plugin3-hosts",
 ]
 
 [workspace.package]
@@ -47,7 +49,6 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 # Internal
 kf-budget-core = { path = "crates/kf-budget-core", version = "0.1.0" }
-plugin3-hosts = { path = "crates/plugin3-hosts", version = "0.1.0" }
 
 # External — lean MVP set, no optionals wired (see ADR-0017).
 serde = { version = "1", features = ["derive"] }

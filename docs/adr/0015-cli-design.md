@@ -23,7 +23,7 @@ Plugin3 does not (`init`, `mode`, `rules`, `debt`).
 ### Top-level structure
 
 ```rust
-// crates/plugin3-cli/src/main.rs
+// crates/kf-budget-core/src/main.rs
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -158,7 +158,7 @@ single-line help table.
 ### Precedence chain (CLI > env > file > default)
 
 ```rust
-// crates/plugin3-cli/src/precedence.rs
+// crates/kf-budget-core/src/precedence.rs
 
 pub(crate) fn resolve_config_path(
     cli_config: Option<&std::path::Path>,
@@ -180,7 +180,7 @@ memorises one chain has memorised both.
 ### `--json` for every subcommand
 
 ```rust
-// crates/plugin3-cli/src/commands/budget.rs
+// crates/kf-budget-core/src/commands/budget.rs
 
 pub(crate) fn status(as_json: bool) {
     let b = load_budget();
@@ -219,7 +219,7 @@ clap renders `global = true` flags in every subcommand's help.
 | 130 | `SIGINT` (default) |
 
 ```rust
-// crates/plugin3-cli/src/exit.rs
+// crates/kf-budget-core/src/exit.rs
 
 pub fn exit_config_err(msg: &str) -> ! {
     eprintln!("plugin3: {}", msg);
@@ -297,11 +297,11 @@ Positive:
 
 ## Implementation notes
 
-The CLI lives at `crates/plugin3-cli/src/`. Subcommand
+The CLI lives at `crates/kf-budget-core/src/`. Subcommand
 implementations live in submodules:
 
 ```
-crates/plugin3-cli/src/
+crates/kf-budget-core/src/
 ├── main.rs
 ├── precedence.rs
 ├── exit.rs

@@ -85,7 +85,7 @@ ponytail: the earlier draft omitted the `LocalSummaryCompactor`
 struct and the `Turn` /
 `CompactedOutput` supporting types. The MVP ships all of
 them — the `PreCompact` hook handler in
-`crates/plugin3-cli/src/hooks/mod.rs` runs the compactor
+`crates/kf-budget-core/src/hooks/mod.rs` runs the compactor
 over the per-turn previews before emitting the hint, so the
 host's compactor has a head-start. The default
 `max_output_bytes: 8192` is pinned by the in-file test
@@ -155,7 +155,7 @@ only knows token counts.
 ### Compact subcommand
 
 ```rust
-// crates/plugin3-cli/src/main.rs
+// crates/kf-budget-core/src/main.rs
 
 #[derive(Parser, Debug)]
 #[command(about = "Inspect or set the token budget.")]

@@ -30,7 +30,7 @@ reserved for a future ADR when a second host is supported.
 ### Host enum
 
 ```rust
-// crates/plugin3-hosts/src/lib.rs
+// crates/kf-budget-core/src/lib.rs
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -83,7 +83,7 @@ pub fn detect_host_with(env: &dyn EnvSource) -> Host {
 ### Canonical payloads
 
 ```rust
-// crates/plugin3-hosts/src/canonical.rs
+// crates/kf-budget-core/src/canonical.rs
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PostToolUsePayload {
@@ -163,7 +163,7 @@ second host is supported, with the dispatch wired from
 
 ponytail: the Claude Code shim is a stub today. The real
 Claude Code payload handling lives in
-`crates/plugin3-cli/src/hooks/mod.rs`, which:
+`crates/kf-budget-core/src/hooks/mod.rs`, which:
 
 - parses the host envelope into `PostToolUsePayload` /
   `UserPromptSubmitPayload` via `read_stdin_json`,
@@ -180,7 +180,7 @@ that wrap the canonical types and forward to the core logic.
 ### Cursor shim
 
 ponytail: the Cursor shim is a stub today — the file
-`crates/plugin3-hosts/src/cursor.rs` exists with a
+`crates/kf-budget-core/src/cursor.rs` exists with a
 `stub_present` test but no real handler. The MVP does not
 route Cursor anywhere because the dispatch entry point was
 removed (B3); a future ADR will wire the stub.
@@ -189,7 +189,7 @@ When a user reports a need, the stub graduates to a real
 shim using the translation sketched below:
 
 ```rust
-// crates/plugin3-hosts/src/cursor.rs (future)
+// crates/kf-budget-core/src/cursor.rs (future)
 
 pub fn handle_post_tool_use(payload: Value) -> Value {
     // Cursor's PostToolUse payload has the tool result under
@@ -221,7 +221,7 @@ pub fn handle_post_tool_use(payload: Value) -> Value {
 
 ponytail: the Aider shim is a stub today for the same
 reason as Cursor — the file
-`crates/plugin3-hosts/src/aider.rs` exists with a
+`crates/kf-budget-core/src/aider.rs` exists with a
 `stub_present` test but no real handler. Aider uses
 environment variables, not JSON envelopes, so the shim
 will be different from Claude Code's. The MVP leaves it
@@ -231,7 +231,7 @@ unwired; a future ADR will route here.
 
 ponytail: the KirkForge shim is a stub today for the same
 reason as Cursor and Aider — the file
-`crates/plugin3-hosts/src/kirkforge.rs` exists with a
+`crates/kf-budget-core/src/kirkforge.rs` exists with a
 `stub_present` test but no real handler. KirkForge-Cli is the
 sibling host in the same plugin ecosystem; its hook model is
 assumed to emit the same canonical events as Claude Code,
@@ -242,7 +242,7 @@ here once the KirkForge hook contract is written.
 The sketched future shape:
 
 ```rust
-// crates/plugin3-hosts/src/kirkforge.rs (future)
+// crates/kf-budget-core/src/kirkforge.rs (future)
 
 pub fn handle_post_tool_use(payload: Value) -> Value {
     // KirkForge-Cli is expected to pipe the same canonical
@@ -262,7 +262,7 @@ pub fn handle_post_tool_use(payload: Value) -> Value {
 ```
 
 ```rust
-// crates/plugin3-hosts/src/aider.rs (future)
+// crates/kf-budget-core/src/aider.rs (future)
 
 pub fn handle_post_tool_use(payload: Value) -> Value {
     // Aider pipes tool results via stdin; the shim reads
@@ -286,7 +286,7 @@ pub fn handle_post_tool_use(payload: Value) -> Value {
 
 Drift tests pin the host enum and canonical payload shapes.
 The Host enum tests live in
-`crates/plugin3-hosts/src/lib.rs::tests` and assert:
+`crates/kf-budget-core/src/lib.rs::tests` and assert:
 
 - the variants serialize to kebab-case,
 - `UserPromptSubmitResponse` keeps its four tagged-enum
@@ -327,9 +327,9 @@ Positive:
 ## Implementation notes
 
 The canonical payload definitions live at
-`crates/plugin3-hosts/src/canonical.rs` and are re-exported
+`crates/kf-budget-core/src/canonical.rs` and are re-exported
 from the crate root. Host detection lives in
-`crates/plugin3-hosts/src/lib.rs`.
+`crates/kf-budget-core/src/lib.rs`.
 
 The host detection is a one-time cost at CLI startup. The
 detected host is cached in the plugin's state file

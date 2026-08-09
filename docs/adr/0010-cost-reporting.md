@@ -167,15 +167,17 @@ pub(crate) fn emit_usage_at(record: &UsageRecord, path: &std::path::Path) {
 }
 ```
 
-ponytail: the earlier draft specified `tracing::error!` on
-serialise failure and `tracing::warn!` on file-open failure.
-The MVP does **not** depend on `tracing` (ADR-0017 § Workspace
-Cargo.toml) — both error paths emit one `eprintln!` line tagged
-`plugin3:` to stderr and return early (losing one record is
-not load-bearing). The drift test
-`cost_reporting_spec_drift::adr_0010_emission_site_uses_eprintln_not_tracing`
-pins the no-`tracing` shape so a contributor who re-pastes the
-older tracing-heavy example surfaces here.
+ponytail: the earlier draft specified `eprintln!` on both
+serialise and file-open failure and claimed the MVP did not
+depend on `tracing`. The impl migrated to `tracing::warn!`
+when `kf-budget-core` added tracing support — both error paths
+emit one `tracing::warn!` line tagged `kf-budget:` and return
+early (losing one record is not load-bearing). The drift test
+`cost_reporting_spec_drift::adr_0010_emission_site_uses_tracing_not_eprintln`
+pins the `tracing::warn!` + `kf-budget:` shape (the emission
+block must NOT contain `eprintln!` or the old `plugin3:` prefix)
+so a contributor who re-pastes the older eprintln example
+surfaces here.
 
 The `// ponytail: this exists` comment is deliberate — losing
 usage records is not load-bearing for the MVP. A future
@@ -211,7 +213,7 @@ resolved `PathBuf` and don't reach for the crate directly.
 ### Report subcommand
 
 ```rust
-// crates/plugin3-cli/src/commands/report.rs
+// crates/kf-budget-core/src/report.rs
 
 #[derive(Parser, Debug)]
 pub struct ReportArgs {

@@ -25,9 +25,9 @@ one delta: Plugin3 does not ship a `yaml` feature gate
 [workspace]
 resolver = "2"
 members = [
+    # plugin3-hosts and plugin3-cli were removed in the ADR-047 fold-in;
+    # only kf-budget-core survived (now in the main KirkForge workspace).
     "crates/kf-budget-core",
-    "crates/plugin3-hosts",
-    "crates/plugin3-cli",
 ]
 
 [workspace.package]
@@ -43,7 +43,6 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 # Internal
 kf-budget-core = { path = "crates/kf-budget-core", version = "0.1.0" }
-plugin3-hosts = { path = "crates/plugin3-hosts", version = "0.1.0" }
 
 # External
 serde = { version = "1", features = ["derive"] }

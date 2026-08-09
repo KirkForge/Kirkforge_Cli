@@ -7,7 +7,7 @@ set -euo pipefail
 
 source "$(dirname "$0")/common.sh"
 
-CLI_JS="$(find_cli)" || die "Kf-Code CLI not found. Ensure the bundled npm/kf-code-plugin tree is installed next to the plugins directory or set KF_CODE_CLI_JS."
+CLI_JS="$(find_cli)" || die "Kf-Code CLI not found. Ensure the bundled npm/kf-plugin tree is installed next to the plugins directory or set KF_CODE_CLI_JS."
 require_node
 
 PRETTY_FLAG=$(node_json_arg "pretty" "false")

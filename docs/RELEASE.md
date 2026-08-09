@@ -70,14 +70,13 @@ following targets and attaches the archives to a GitHub release:
 1. Wait for the `Release` workflow to finish.
 2. Run the install-script smoke test on a clean Linux/macOS machine:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/KirkForge/Kirkforge_Cli/main/scripts/install.sh | sh
-   kirkforge --version
+   curl -fsSL https://raw.githubusercontent.com/KirkForge/KirkForge-Cli/main/scripts/install.sh | sh
+   kf-code --version
    ```
-   Expected output: the released version (e.g., `kirkforge 0.2.0`).
-3. Verify Windows artifacts exist on the release page and contain the five
-   binaries (`kirkforge.exe`, `kfd.exe`, `plugin3.exe`, `stratum.exe`,
-   `kirkforge-video.exe`), the bundled `plugins/`, and the Node SDK under
-   `npm/kirkforge-plugin/`.
+   Expected output: the released version (e.g., `kf-code 0.2.0`).
+ 3. Verify Windows artifacts exist on the release page and contain the
+   binary (`kf-code.exe`), the bundled `plugins/`, and the Node SDK under
+   `npm/kf-plugin/`.
 4. If anything fails, delete the release and tag, fix `main`, and start over.
 
 ## Changelog enforcement in CI

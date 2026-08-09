@@ -2,10 +2,10 @@
 name = "kf-code"
 version = "0.3.6"
 edition = "2021"
-description = "Native Ollama CLI coding agent — static binary, TUI, potato hardware"
+description = "Provider-agnostic, verification-first coding agent"
 repository = "https://github.com/KirkForge/KirkForge-Cli"
 license = "MIT"
-keywords = ["ai", "cli", "coding-agent", "ollama", "tui"]
+keywords = ["ai", "coding-agent", "llm", "tui", "developer-tools"]
 categories = ["command-line-utilities", "development-tools"]
 
 [workspace]

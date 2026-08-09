@@ -102,6 +102,12 @@ pub struct BudgetSlicedEvent {
 /// replacement; `None` leaves it unchanged.
 pub type BudgetSlicedListener = Arc<dyn Fn(BudgetSlicedEvent) -> Option<String> + Send + Sync>;
 
+// ceiling: append-only, no bounded eviction. Safe because dispatch
+// uses "first-returns-Some wins" semantics — stale listeners after a
+// plugin reload are unreachable dead code, not duplicate dispatches.
+// Upgrade path: if reload-heavy sessions leak meaningful memory, scope
+// into SessionStores or add a generation counter that invalidates stale
+// entries on the next push.
 static SLICED_LISTENERS: OnceLock<Mutex<Vec<BudgetSlicedListener>>> = OnceLock::new();
 
 fn sliced_listeners() -> &'static Mutex<Vec<BudgetSlicedListener>> {
@@ -112,6 +118,11 @@ fn sliced_listeners() -> &'static Mutex<Vec<BudgetSlicedListener>> {
 /// for the Stratum compression hook. The listener is invoked
 /// synchronously from `apply_budget_slice` after the slice decision
 /// is made but before the post-coordination `used` adjustment.
+///
+/// Listeners accumulate across plugin reloads (append-only). The
+/// dispatch loop short-circuits on the first `Some` return, so
+/// earlier listeners shadow later ones — duplicate registrations
+/// are harmless but waste an `Arc` allocation per reload.
 pub fn register_sliced_listener(listener: BudgetSlicedListener) {
     let mut guard = sliced_listeners()
         .lock()
@@ -1750,5 +1761,50 @@ mod tests {
         // Reset.
         set_session_mode(Mode::Full);
         reset_shared_budget(200_000, 0);
+    }
+
+    // ponytail: pinned invariant — listeners accumulate but only the
+    // first Some-returning listener is called. This tests the safety
+    // property that allows append-only SLICED_LISTENERS to be
+    // acceptable without bounded eviction.
+    #[tokio::test]
+    async fn test_sliced_listeners_duplicate_registration_is_safe() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let _guard = shared_budget_test_lock().lock().await;
+        clear_sliced_listeners();
+
+        let call_count = Arc::new(AtomicU64::new(0));
+        register_sliced_listener(Arc::new({
+            let cc = call_count.clone();
+            move |_event: BudgetSlicedEvent| {
+                cc.fetch_add(1, Ordering::Relaxed);
+                Some("winner".to_string())
+            }
+        }));
+        // Duplicate the same logical listener — simulates a plugin reload.
+        register_sliced_listener(Arc::new({
+            let cc = call_count.clone();
+            move |_event: BudgetSlicedEvent| {
+                cc.fetch_add(1, Ordering::Relaxed);
+                Some("shadowed".to_string())
+            }
+        }));
+
+        let event = BudgetSlicedEvent {
+            original_size: 100,
+            sliced_size: 50,
+            key: "k".into(),
+            sliced_display: "d".into(),
+        };
+        let result = dispatch_sliced(event);
+        assert_eq!(result.as_deref(), Some("winner"));
+        assert_eq!(
+            call_count.load(Ordering::Relaxed),
+            1,
+            "only the first listener must fire; duplicates are shadowed"
+        );
+
+        clear_sliced_listeners();
     }
 }

@@ -4,7 +4,7 @@
 
 ## Branch
 
-**`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 series merged. See commit log for details.
+**`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 series merged. See commit log for details.
 
 ## Completed workorders
 
@@ -66,11 +66,30 @@
 | 24.7 | DONE | R1-R4: fuzz targets for SSE/NDJSON/Bedrock/JS/CSS |
 | 24.8 | DONE | R1: 23 tracing::debug! → warn!/info!/trace!, zero debug! remaining |
 
-### WO 25 series (1 done)
+### WO 25 series (11 done, 8 deferred/pending)
 
 | WO | Status | Items |
 |----|--------|-------|
+| 25.5 | DONE | R1-R5: fix stale plugin3/stratum/kfd refs in install.sh, build-all.sh, ci-local.sh, release.yml, README |
+| 25.6 | DONE | R1-R3: verify 4 deadlock tests pass, remove CI quarantine comment block |
+| 25.7 | DONE | R1-R2: fix benchmark link in README, correct task count to 30 |
+| 25.9 | DONE | R1: remove 6 dead-code items (ToolChoice::Specific, set_tool_choice, format_verdict_report, classify, PersonaHandle fields, estimate_tokens_heuristic) — -408 lines |
+| 25.10 | DONE (R4 deferred) | R1: fix config.toml.example ghost plugins; R2: add ADR path-literal enforcement test; R3: audit clean |
+| 25.11 | DONE (R2 deferred) | R1: pass real duration_ms through file-tool metric branch |
+| 25.14 | DONE | R1-R4: add line field to FixSuggestion/VerificationError, populate from clippy/build spans, propagate into CorrectionResult, 2 tests |
+| 25.15 | DONE (R2+R3 deferred) | R1: advertise roots capability in MCP init handshake |
 | 25.17 | DONE (R1 deferred, R2 opt-in) | R1: persona Anthropic-direct limitation documented + deferred; R2: landlock opt-in documented honestly |
+| 25.0-R3 | DONE | rename misleading doom-loop test + correct CHANGELOG halt claim |
+| 25.1 | PENDING | fast test gate split (scripts/test-fast.sh) |
+| 25.2 | PENDING | test speed optimization |
+| 25.3 | PENDING | testdoctor optimization |
+| 25.4 | PENDING | coverage baseline tooling |
+| 25.8 | PENDING | historical residue cleanup |
+| 25.12 | PENDING | AppState decomposition + cached_tokens fork-reset |
+| 25.13 | PENDING | process-global state scoping |
+| 25.16 | PENDING | session coverage 75% (dep: 25.4) |
+| 25.18 | PENDING | deferred capability carry-forward |
+| 25.19 | PENDING | AGENTS.md multistep workflow upgrade |
 
 ## Deferred items (explicitly tracked)
 
@@ -79,16 +98,16 @@
 0. **24.6-R1..R5**: Raise `src/session` coverage above 75%. Requires `cargo llvm-cov` (not installed). Remaining: R1 baseline measurement, R2 executor loop tests (6 scenarios), R3 budget slicing tests (4), R4 compaction tests (5), R5 verifier bus tests (4). Tracked in WO 24.6.
 
 1. **21.5-R2-R3**: Stream partial bash output to TUI via TurnEvent::BashPartialOutput. UX polish only — non-PTY path unchanged. Remaining: add TurnEvent variant, forward PTY output through event_tx, render streaming indicator in TUI tool-result card.
-2. **21.5-R4**: MCP sampling/createMessage + roots/list. Sampling has a real security surface (server requests model completion). Remaining: implement sampling handler with user approval gate; roots/list (read-only, lower risk) should ship first.
+2. **21.5-R4**: MCP sampling/createMessage. R1 (roots/list capability) DONE in WO 25.15. Remaining: implement sampling handler with user approval gate + headless policy + ADR. Tracked in WO 25.15.
 3. **21.5-R9**: Anthropic computer_use beta (coordinate-vision model). Local headless-Chrome tool is the real differentiator. Remaining: opt-in beta path routed to Anthropic model, gated behind feature flag.
 4. **22.4-R2/R3**: TUI memory visibility + config flag. Remaining: memory indicator widget in status bar; config flag to toggle memory display.
 8. **25.17-R1-remaining**: Persona adapter Bedrock/Vertex plumbing. `adapter_for` hardcodes Anthropic-direct; needs signature extension + Config ref at all call sites. Remaining: extend `adapter_for` with Bedrock/Vertex params, update persona.rs call site, add integration test. Tracked in WO 25.17.
 
 ### Low priority
 
-5. **22.5-R4**: File-tool duration tracking per tool invocation. Remaining: add elapsed_ms to ToolOutcome or a sidecar timing map.
+5. **22.5-R4**: RESOLVED by WO 25.11-R1 — duration_ms now passes through file-tool branch.
 6. **22.9-R4**: Bedrock/Vertex test hardening. Integration tests need live provider credentials. Remaining: mock provider adapters for CI.
-7. **adr_xref_drift path-literal check**: Extend ADR drift test to verify `crates/X` and `src/X` path literals in ADR prose reference actual directories. Ponytail note added (tests/adr_xref_drift.rs:258); needs markdown parsing + filesystem probing.
+7. **adr_xref_drift path-literal check**: DONE in WO 25.10-R2 — `adr_path_literals_reference_existing_crates` test now enforces path existence.
 
 ## Gate status
 

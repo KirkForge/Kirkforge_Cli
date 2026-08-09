@@ -66,29 +66,30 @@
 | 24.7 | DONE | R1-R4: fuzz targets for SSE/NDJSON/Bedrock/JS/CSS |
 | 24.8 | DONE | R1: 23 tracing::debug! → warn!/info!/trace!, zero debug! remaining |
 
-### WO 25 series (16 done, 4 pending)
+### WO 25 series (18 done, 2 pending)
 
 | WO | Status | Items |
 |----|--------|-------|
 | 25.0-R3 | DONE | rename misleading doom-loop test + correct CHANGELOG halt claim |
 | 25.1 | DONE | R1-R3: create scripts/test-fast.sh + test-full.sh, update AGENTS.md tiered gate |
-| 25.5 | DONE | R1-R5: fix stale plugin3/stratum/kfd refs in install.sh, build-all.sh, ci-local.sh, release.yml, README |
-| 25.6 | DONE | R1-R3: verify 4 deadlock tests pass, remove CI quarantine comment block |
-| 25.7 | DONE | R1-R2: fix benchmark link in README, correct task count to 30 |
-| 25.8 | DONE (R4 deferred) | R1-R3: audit clean (zero active residue); R5: archive editors/vscode/ |
-| 25.9 | DONE | R1: remove 6 dead-code items — -408 lines |
-| 25.10 | DONE (R4 deferred) | R1: fix config.toml.example ghost plugins; R2: add ADR path-literal enforcement test |
-| 25.11 | DONE (R2 deferred) | R1: pass real duration_ms through file-tool metric branch |
-| 25.12 | DONE (R1 deferred) | R2: fix cached_tokens fork-reset; R3: add pinning test |
-| 25.13 | DONE | R1: SLICED_LISTENERS append-only leak documented safe (ceiling: note); R2: SESSION_MODE process-global documented intentional; test added |
-| 25.14 | DONE | R1-R4: add line field to verifier types, populate from clippy/build spans, propagate into CorrectionResult |
-| 25.15 | DONE (R2+R3 deferred) | R1: advertise roots capability in MCP init handshake |
-| 25.17 | DONE (R1 deferred, R2 opt-in) | persona Anthropic-direct documented; landlock opt-in documented |
-| 25.19 | DONE | R1-R3: add phased multistep workflow to AGENTS.md, upgrade subagent decision tree, cross-layer grep |
-| 25.2 | PENDING | test speed optimization (R1: #[ignore] broken tests; R2-R4: speed fixes) |
-| 25.3 | PENDING | testdoctor optimization |
-| 25.4 | PENDING | coverage baseline tooling |
+| 25.2 | DONE (R2+R4 deferred) | R1: #[ignore] 29 known-broken tests; R3: tokio flavor audit (no single_thread found) |
+| 25.3 | DONE (R3+R4 deferred) | R1+R2: testdoctor 2.9s→1.8s via single-pass scan merge |
+| 25.4 | DONE (R3 deferred) | R1+R2: coverage CI job + baseline placeholder |
+| 25.5 | DONE | R1-R5: fix stale plugin3/stratum/kfd refs in 5 scripts |
+| 25.6 | DONE | R1-R3: lift deadlock CI quarantine |
+| 25.7 | DONE | R1-R2: benchmark link + task count fix |
+| 25.8 | DONE (R4 deferred) | R1-R3: audit clean; R5: archive editors/vscode/ |
+| 25.9 | DONE | remove 6 dead-code items — -408 lines |
+| 25.10 | DONE (R4 deferred) | fix config.toml.example + ADR path-literal enforcement |
+| 25.11 | DONE (R2 deferred) | fix file-tool duration_ms:0 bug |
+| 25.12 | DONE (R1 deferred) | fix cached_tokens fork-reset + pinning test |
+| 25.13 | DONE | document SLICED_LISTENERS safe + SESSION_MODE global |
+| 25.14 | DONE | add line field to verifier types + propagate |
+| 25.15 | DONE (R2+R3 deferred) | advertise roots in MCP init handshake |
 | 25.16 | PENDING | session coverage 75% (dep: 25.4) |
+| 25.17 | DONE (R1 deferred) | persona Anthropic-direct documented; landlock opt-in |
+| 25.18 | DEFERRED | carry-forward: bash streaming, computer_use, memory widget, Bedrock/Vertex mocks |
+| 25.19 | DONE | phased multistep workflow in AGENTS.md |
 
 ## Deferred items (explicitly tracked)
 

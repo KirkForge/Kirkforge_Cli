@@ -4,7 +4,7 @@
 - **Date:** 2026-06-24
 
 > **Rejected 2026-07-17:** deferred since 2026-06-24 with zero implementation
-> (no prediction pipeline, no priming code in `crates/plugin3-*`). Per the B10
+> (no prediction pipeline, no priming code in `plugin3-*`). Per the B10
 > review, a deferred-with-no-code ADR is not live architecture. The plugin3 MVP
 > is reactive only; speculative priming was never pursued. Retained as a
 > rejected design sketch; it does not describe any shipped behaviour.

@@ -26,4 +26,4 @@ The standalone `kfd` binary remains for interactive TUI use.
 
 ## Implementation notes
 
-- Draw crate (`crates/kf-draw-core`) and `kfd` binary removed in 21.11-R0.
+- Draw crate (`kf-draw-core`) and `kfd` binary removed in 21.11-R0.

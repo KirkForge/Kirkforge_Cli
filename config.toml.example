@@ -333,19 +333,17 @@
 # Workspace plugin sources
 # ---------------------------------------------------------------------------
 #
-# The CLI ships with three built-in plugin sources under the `plugins/` directory.
-# They are enabled by default (in the order below) when the directories exist.
-# Disable individual plugins at runtime with `/plugins toggle <name>` or remove
-# them from `enabled_plugins`. Relative paths resolve against the current working
-# directory; in an installed release the bundled plugins are looked up under
+# The CLI ships with a built-in plugin source under the `plugins/` directory.
+# It is enabled by default when the directory exists.
+# Disable it at runtime with `/plugins toggle <name>` or remove it from
+# `enabled_plugins`. Relative paths resolve against the current working
+# directory; in an installed release the bundled plugin is looked up under
 # `~/.local/share/kf-code/plugins/<name>`.
 #
 # [plugin_sources]
-# stratum = "plugins/stratum"
-# kf-code-plugin3 = "plugins/kf-code-plugin3"
-# kf-code-plugin = "plugins/kf-code-plugin"
+# kf-plugin = "plugins/kf-plugin"
 #
-enabled_plugins = ["stratum", "kf-code-plugin3", "kf-code-plugin"]
+enabled_plugins = ["kf-plugin"]
 
 # ---------------------------------------------------------------------------
 # Stratum compression and token budget

@@ -38,9 +38,9 @@ Requires a running Ollama server (or set provider config for cloud models).
 - **Plugin system** — kf-compress-core and kf-budget-core are compiled-in
   behind feature flags (or shell fallbacks). External plugins via
   `kf-code.toml` manifests with trust tiers and signature verification.
-- **Benchmarked** — 31 coding tasks organized against the
-  [KIRK-BENCH](docs/adr/066-kirk-bench-spec.md) spec (leaderboard at
-  [docs/bench/leaderboard.md](docs/bench/leaderboard.md)), including the
+- **Benchmarked** — <!-- regenerate: ls benches/tasks/*.toml | wc -l -->
+  30 coding tasks organized against the
+  [Benchmarks](docs/TECHNICAL.md#benchmarks) spec, including the
   signature Token Budget Challenge that showcases the tree-sitter + compress
   + budget architecture.
 

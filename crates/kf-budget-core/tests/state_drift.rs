@@ -34,11 +34,11 @@ fn derived_paths_match_adr_directory_layout() {
     //
     // Skip if the env override is set so we don't depend on a
     // developer's shell state.
-    if std::env::var("PLUGIN3_CONFIG_DIR").is_ok()
-        || std::env::var("PLUGIN3_DATA_DIR").is_ok()
-        || std::env::var("PLUGIN3_RUNTIME_DIR").is_ok()
+    if std::env::var("KF_BUDGET_CONFIG_DIR").is_ok()
+        || std::env::var("KF_BUDGET_DATA_DIR").is_ok()
+        || std::env::var("KF_BUDGET_RUNTIME_DIR").is_ok()
     {
-        eprintln!("skipping: PLUGIN3_*_DIR set in this environment");
+        eprintln!("skipping: KF_BUDGET_*_DIR set in this environment");
         return;
     }
 
@@ -55,24 +55,24 @@ fn derived_paths_match_adr_directory_layout() {
 
 #[test]
 fn env_overrides_take_precedence_over_xdg_defaults() {
-    // ponytail: ADR-0014 § Path resolution says PLUGIN3_*_DIR
+    // ponytail: ADR-0014 § Path resolution says KF_BUDGET_*_DIR
     // wins over the directories-crate defaults. The inline test
     // in `paths.rs` uses `set_var`/`remove_var` directly; this
     // integration test composes with `Paths::resolve()` so the
     // precedence path is exercised end-to-end. EnvGuard holds the
     // global env-test mutex and restores prior values on drop, so a
     // panicking assertion cannot leak overrides into later tests.
-    if std::env::var("PLUGIN3_CONFIG_DIR").is_ok()
-        || std::env::var("PLUGIN3_DATA_DIR").is_ok()
-        || std::env::var("PLUGIN3_RUNTIME_DIR").is_ok()
+    if std::env::var("KF_BUDGET_CONFIG_DIR").is_ok()
+        || std::env::var("KF_BUDGET_DATA_DIR").is_ok()
+        || std::env::var("KF_BUDGET_RUNTIME_DIR").is_ok()
     {
-        eprintln!("skipping: PLUGIN3_*_DIR set in this environment");
+        eprintln!("skipping: KF_BUDGET_*_DIR set in this environment");
         return;
     }
 
-    let _g_cfg = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/p3-cfg");
-    let _g_data = EnvGuard::set("PLUGIN3_DATA_DIR", "/tmp/p3-data");
-    let _g_run = EnvGuard::set("PLUGIN3_RUNTIME_DIR", "/tmp/p3-run");
+    let _g_cfg = EnvGuard::set("KF_BUDGET_CONFIG_DIR", "/tmp/p3-cfg");
+    let _g_data = EnvGuard::set("KF_BUDGET_DATA_DIR", "/tmp/p3-data");
+    let _g_run = EnvGuard::set("KF_BUDGET_RUNTIME_DIR", "/tmp/p3-run");
     let p = Paths::resolve();
     assert_eq!(p.config_dir, PathBuf::from("/tmp/p3-cfg"));
     assert_eq!(p.data_dir, PathBuf::from("/tmp/p3-data"));

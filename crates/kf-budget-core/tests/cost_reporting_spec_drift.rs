@@ -286,7 +286,7 @@ fn adr_0010_emission_site_block_passes_record_by_reference() {
 
 // ponytail: pin the § File location example's path
 // resolution. The MVP delegates to `Paths::resolve().usage_log()`
-// (ADR-0014) — no inline `std::env::var("PLUGIN3_DATA_DIR")`
+// (ADR-0014) — no inline `std::env::var("KF_BUDGET_DATA_DIR")`
 // + `directories::ProjectDirs` chain. A contributor who
 // re-pastes the older inline-resolution form documents a
 // path-resolution code path that doesn't match `Paths::resolve`.
@@ -303,7 +303,7 @@ fn adr_0010_file_location_block_delegates_to_paths_resolve() {
          An inline resolution chain documents a path-resolution \
          code path that diverges from `Paths::resolve`.",
     );
-    // Negative: the inline `std::env::var("PLUGIN3_DATA_DIR")`
+    // Negative: the inline `std::env::var("KF_BUDGET_DATA_DIR")`
     // + `directories::ProjectDirs` chain must not appear in the
     // § File location example. The `directories` crate IS wired
     // (ADR-0017 § Workspace Cargo.toml: `directories = "5"`) and
@@ -322,9 +322,9 @@ fn adr_0010_file_location_block_delegates_to_paths_resolve() {
          that drifts when ADR-0014's chain changes.",
     );
     assert!(
-        !block.contains("std::env::var(\"PLUGIN3_DATA_DIR\")"),
+        !block.contains("std::env::var(\"KF_BUDGET_DATA_DIR\")"),
         "ADR-0010 § File location example must not inline the \
-         `PLUGIN3_DATA_DIR` env-var lookup — `Paths::resolve` \
+         `KF_BUDGET_DATA_DIR` env-var lookup — `Paths::resolve` \
          owns the precedence chain (ADR-0014). Inline lookups \
          create drift when ADR-0014's chain changes.",
     );

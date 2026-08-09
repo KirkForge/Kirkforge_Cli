@@ -21,9 +21,12 @@ impl Paths {
             None => (PathBuf::from("."), PathBuf::from("."), PathBuf::from(".")),
         };
         Self {
-            config_dir: std::env::var("PLUGIN3_CONFIG_DIR").map_or(cfg_default, PathBuf::from),
-            data_dir: std::env::var("PLUGIN3_DATA_DIR").map_or(data_default, PathBuf::from),
-            runtime_dir: std::env::var("PLUGIN3_RUNTIME_DIR").map_or(run_default, PathBuf::from),
+            // Previously KF_BUDGET_CONFIG_DIR; renamed for kf-budget-core namespace consistency.
+            config_dir: std::env::var("KF_BUDGET_CONFIG_DIR").map_or(cfg_default, PathBuf::from),
+            // Previously KF_BUDGET_DATA_DIR; renamed for kf-budget-core namespace consistency.
+            data_dir: std::env::var("KF_BUDGET_DATA_DIR").map_or(data_default, PathBuf::from),
+            // Previously KF_BUDGET_RUNTIME_DIR; renamed for kf-budget-core namespace consistency.
+            runtime_dir: std::env::var("KF_BUDGET_RUNTIME_DIR").map_or(run_default, PathBuf::from),
         }
     }
 
@@ -79,22 +82,22 @@ mod tests {
     // pattern as `cost.rs::tests::EnvGuard`.
     //
     // The skip-if-conflict precondition still stands: if a developer
-    // has PLUGIN3_*_DIR set in their shell, the test cannot
+    // has KF_BUDGET_*_DIR set in their shell, the test cannot
     // distinguish "test override" from "shell override" and we skip
     // rather than corrupt the developer's environment. Parallel
     // tests that don't touch these env vars are unaffected.
     #[test]
     fn env_overrides_take_precedence_over_xdg() {
-        if std::env::var("PLUGIN3_CONFIG_DIR").is_ok()
-            || std::env::var("PLUGIN3_DATA_DIR").is_ok()
-            || std::env::var("PLUGIN3_RUNTIME_DIR").is_ok()
+        if std::env::var("KF_BUDGET_CONFIG_DIR").is_ok()
+            || std::env::var("KF_BUDGET_DATA_DIR").is_ok()
+            || std::env::var("KF_BUDGET_RUNTIME_DIR").is_ok()
         {
-            eprintln!("skipping: PLUGIN3_*_DIR already set in this environment");
+            eprintln!("skipping: KF_BUDGET_*_DIR already set in this environment");
             return;
         }
-        let _g_cfg = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/cfg");
-        let _g_data = EnvGuard::set("PLUGIN3_DATA_DIR", "/tmp/data");
-        let _g_run = EnvGuard::set("PLUGIN3_RUNTIME_DIR", "/tmp/run");
+        let _g_cfg = EnvGuard::set("KF_BUDGET_CONFIG_DIR", "/tmp/cfg");
+        let _g_data = EnvGuard::set("KF_BUDGET_DATA_DIR", "/tmp/data");
+        let _g_run = EnvGuard::set("KF_BUDGET_RUNTIME_DIR", "/tmp/run");
         let p = Paths::resolve();
         assert_eq!(p.config_dir, PathBuf::from("/tmp/cfg"));
         assert_eq!(p.data_dir, PathBuf::from("/tmp/data"));
@@ -103,14 +106,14 @@ mod tests {
         // assertion above panicked.
     }
 
-    // ponytail: each PLUGIN3_*_DIR var is read independently
+    // ponytail: each KF_BUDGET_*_DIR var is read independently
     // (paths.rs:23-25). The `env_overrides_take_precedence_over_xdg`
     // test above sets all three at once; nothing pins the partial
     // case where a host or developer overrides one var but not the
     // others. A contributor who collapses the three lookups into a
     // shared "all-or-nothing" helper (e.g. reads each into an Option,
     // then requires all-or-none) would silently break partial
-    // overrides — a user who exports only PLUGIN3_DATA_DIR would get
+    // overrides — a user who exports only KF_BUDGET_DATA_DIR would get
     // the XDG default for data_dir too.
     //
     // Sequential single-test layout (not three separate `#[test]`
@@ -122,33 +125,33 @@ mod tests {
     // function, three assertions — same code path, no race.
     #[test]
     fn partial_env_override_takes_effect_independently_per_var() {
-        if std::env::var("PLUGIN3_CONFIG_DIR").is_ok()
-            || std::env::var("PLUGIN3_DATA_DIR").is_ok()
-            || std::env::var("PLUGIN3_RUNTIME_DIR").is_ok()
+        if std::env::var("KF_BUDGET_CONFIG_DIR").is_ok()
+            || std::env::var("KF_BUDGET_DATA_DIR").is_ok()
+            || std::env::var("KF_BUDGET_RUNTIME_DIR").is_ok()
         {
-            eprintln!("skipping: PLUGIN3_*_DIR already set in this environment");
+            eprintln!("skipping: KF_BUDGET_*_DIR already set in this environment");
             return;
         }
 
         // 1) Only CONFIG_DIR set.
-        let g1 = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/cfg-only");
+        let g1 = EnvGuard::set("KF_BUDGET_CONFIG_DIR", "/tmp/cfg-only");
         let p1 = Paths::resolve();
         assert_eq!(
             p1.config_dir,
             PathBuf::from("/tmp/cfg-only"),
-            "PLUGIN3_CONFIG_DIR alone must override config_dir"
+            "KF_BUDGET_CONFIG_DIR alone must override config_dir"
         );
         assert_ne!(
             p1.data_dir,
             PathBuf::from("/tmp/cfg-only"),
-            "with PLUGIN3_DATA_DIR unset, data_dir must NOT collapse to the \
+            "with KF_BUDGET_DATA_DIR unset, data_dir must NOT collapse to the \
              config_dir override — it must come from the XDG default; got {:?}",
             p1.data_dir
         );
         assert_ne!(
             p1.runtime_dir,
             PathBuf::from("/tmp/cfg-only"),
-            "with PLUGIN3_RUNTIME_DIR unset, runtime_dir must NOT collapse to the \
+            "with KF_BUDGET_RUNTIME_DIR unset, runtime_dir must NOT collapse to the \
              config_dir override; got {:?}",
             p1.runtime_dir
         );
@@ -157,12 +160,12 @@ mod tests {
         // 2) Only DATA_DIR set. Derived data paths must track the
         // override; budget_file does NOT (it is session-local under
         // runtime_dir per B2).
-        let g2 = EnvGuard::set("PLUGIN3_DATA_DIR", "/tmp/data-only");
+        let g2 = EnvGuard::set("KF_BUDGET_DATA_DIR", "/tmp/data-only");
         let p2 = Paths::resolve();
         assert_eq!(
             p2.data_dir,
             PathBuf::from("/tmp/data-only"),
-            "PLUGIN3_DATA_DIR alone must override data_dir"
+            "KF_BUDGET_DATA_DIR alone must override data_dir"
         );
         // slices_dir, usage_log, and recent_outputs sit under data_dir.
         assert_eq!(p2.slices_dir(), PathBuf::from("/tmp/data-only/slices"));
@@ -191,12 +194,12 @@ mod tests {
 
         // 3) Only RUNTIME_DIR set. Derived runtime paths (budget_file)
         // must track the override.
-        let _g3 = EnvGuard::set("PLUGIN3_RUNTIME_DIR", "/tmp/run-only");
+        let _g3 = EnvGuard::set("KF_BUDGET_RUNTIME_DIR", "/tmp/run-only");
         let p3 = Paths::resolve();
         assert_eq!(
             p3.runtime_dir,
             PathBuf::from("/tmp/run-only"),
-            "PLUGIN3_RUNTIME_DIR alone must override runtime_dir"
+            "KF_BUDGET_RUNTIME_DIR alone must override runtime_dir"
         );
         assert_eq!(
             p3.budget_file(),
@@ -206,14 +209,14 @@ mod tests {
         assert_ne!(
             p3.data_dir,
             PathBuf::from("/tmp/run-only"),
-            "with PLUGIN3_DATA_DIR unset, data_dir must NOT pick up the \
+            "with KF_BUDGET_DATA_DIR unset, data_dir must NOT pick up the \
              runtime_dir override; got {:?}",
             p3.data_dir
         );
         assert_ne!(
             p3.config_dir,
             PathBuf::from("/tmp/run-only"),
-            "with PLUGIN3_CONFIG_DIR unset, config_dir must NOT pick up the \
+            "with KF_BUDGET_CONFIG_DIR unset, config_dir must NOT pick up the \
              runtime_dir override; got {:?}",
             p3.config_dir
         );
@@ -222,7 +225,7 @@ mod tests {
 
     // ponytail: env-var guard lives in `crate::test_support` now.
     // It uses a process-global reentrant mutex so parallel tests that
-    // touch PLUGIN3_*_DIR cannot race, and nested guards in the same
+    // touch KF_BUDGET_*_DIR cannot race, and nested guards in the same
     // thread do not deadlock. See test_support.rs for the
     // `ReentrantMutex` implementation and the B8 fix note.
 
@@ -259,19 +262,19 @@ mod tests {
     #[test]
     fn env_guard_restores_prior_value_on_panic() {
         // Hold the env mutex for the whole test so a parallel test cannot
-        // mutate PLUGIN3_CONFIG_DIR between the inner guard's Drop and the
+        // mutate KF_BUDGET_CONFIG_DIR between the inner guard's Drop and the
         // assertion. The reentrant mutex allows this outer guard and the
         // inner guard to coexist on the same thread.
         let outer_prior = "/tmp/cfg-outer-panic";
-        let _g_outer = EnvGuard::set("PLUGIN3_CONFIG_DIR", outer_prior);
+        let _g_outer = EnvGuard::set("KF_BUDGET_CONFIG_DIR", outer_prior);
 
         // Inner closure sets a nested override, then panics. The
         // EnvGuard's Drop runs during the unwind and restores to outer_prior.
         let result = std::panic::catch_unwind(|| {
-            let _g = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/cfg-from-guard");
+            let _g = EnvGuard::set("KF_BUDGET_CONFIG_DIR", "/tmp/cfg-from-guard");
             // While the guard is live, the env var must be set.
             assert_eq!(
-                std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
+                std::env::var("KF_BUDGET_CONFIG_DIR").as_deref(),
                 Ok("/tmp/cfg-from-guard"),
                 "guard must set the env var while it is alive",
             );
@@ -281,7 +284,7 @@ mod tests {
         // After the unwind completes and the inner guard's Drop ran, the
         // env var must be restored to the outer guard's value. The whole
         // point of the guard: no leak, even across a panic.
-        let now = std::env::var("PLUGIN3_CONFIG_DIR").ok();
+        let now = std::env::var("KF_BUDGET_CONFIG_DIR").ok();
         assert_eq!(
             now,
             Some(outer_prior.to_string()),
@@ -312,19 +315,19 @@ mod tests {
     // the outer guard is still held, so it is race-free.
     #[test]
     fn env_guard_restores_prior_value_some_branch() {
-        if std::env::var("PLUGIN3_CONFIG_DIR").is_ok() {
-            eprintln!("skipping: PLUGIN3_CONFIG_DIR already set in this environment");
+        if std::env::var("KF_BUDGET_CONFIG_DIR").is_ok() {
+            eprintln!("skipping: KF_BUDGET_CONFIG_DIR already set in this environment");
             return;
         }
-        // First guard: seed PLUGIN3_CONFIG_DIR with a known prior
+        // First guard: seed KF_BUDGET_CONFIG_DIR with a known prior
         // value. The seed guard's prior is None, so its Drop must
         // remove_var. Pin that contract via prior() — NOT a re-read
         // of the env var after the lock is released (racy on Windows).
         {
-            let g_seed = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/cfg-seed");
+            let g_seed = EnvGuard::set("KF_BUDGET_CONFIG_DIR", "/tmp/cfg-seed");
             assert_eq!(g_seed.prior(), None, "seed guard must have prior=None");
             assert_eq!(
-                std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
+                std::env::var("KF_BUDGET_CONFIG_DIR").as_deref(),
                 Ok("/tmp/cfg-seed"),
             );
         }
@@ -337,24 +340,24 @@ mod tests {
         // /tmp/cfg-prior (not unset).
         let outer_prior = "/tmp/cfg-prior";
         {
-            let g_outer = EnvGuard::set("PLUGIN3_CONFIG_DIR", outer_prior);
+            let g_outer = EnvGuard::set("KF_BUDGET_CONFIG_DIR", outer_prior);
             assert_eq!(g_outer.prior(), None, "outer guard must have prior=None");
             assert_eq!(
-                std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
+                std::env::var("KF_BUDGET_CONFIG_DIR").as_deref(),
                 Ok(outer_prior),
             );
             // Inner guard: prior is now Some(outer_prior). Drop it,
             // and the env var must come back to outer_prior — not
             // be removed.
             {
-                let g_inner = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/cfg-inner");
+                let g_inner = EnvGuard::set("KF_BUDGET_CONFIG_DIR", "/tmp/cfg-inner");
                 assert_eq!(
                     g_inner.prior(),
                     Some(outer_prior),
                     "inner guard must have prior=Some(outer_prior)",
                 );
                 assert_eq!(
-                    std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
+                    std::env::var("KF_BUDGET_CONFIG_DIR").as_deref(),
                     Ok("/tmp/cfg-inner"),
                 );
             }
@@ -362,11 +365,11 @@ mod tests {
             // so the env var must be restored to outer_prior. The
             // outer guard is still held, so this read is race-free.
             assert_eq!(
-                std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
+                std::env::var("KF_BUDGET_CONFIG_DIR").as_deref(),
                 Ok(outer_prior),
                 "EnvGuard Drop with prior=Some(v) must call set_var(key, v), \
                  NOT remove_var(key). Got {:?}, expected {:?}",
-                std::env::var("PLUGIN3_CONFIG_DIR").ok(),
+                std::env::var("KF_BUDGET_CONFIG_DIR").ok(),
                 Some(outer_prior),
             );
             // Outer guard's prior is None → its Drop must remove_var.

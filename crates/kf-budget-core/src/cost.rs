@@ -238,7 +238,7 @@ mod tests {
     }
 
     // ponytail: all `emit_*` integration tests live in ONE
-    // sequential test. The env writes (PLUGIN3_CONFIG_DIR) are
+    // sequential test. The env writes (KF_BUDGET_CONFIG_DIR) are
     // process-global; parallel `#[test]` runs read each other's
     // config_file paths and produce false positives (the
     // disabled-config test reads a neighbour's empty config,
@@ -248,8 +248,8 @@ mod tests {
     // dropped at end of each block.
     #[test]
     fn emit_usage_at_writes_appends_and_respects_privacy_gate() {
-        if std::env::var("PLUGIN3_CONFIG_DIR").is_ok() {
-            eprintln!("skipping: PLUGIN3_CONFIG_DIR already set in this environment");
+        if std::env::var("KF_BUDGET_CONFIG_DIR").is_ok() {
+            eprintln!("skipping: KF_BUDGET_CONFIG_DIR already set in this environment");
             return;
         }
 
@@ -259,7 +259,7 @@ mod tests {
             let cfg = tempfile::tempdir().expect("cfg tempdir");
             let dir = tempfile::tempdir().expect("data tempdir");
             let path = dir.path().join("logs/usage.jsonl");
-            let _guard = EnvGuard::set("PLUGIN3_CONFIG_DIR", cfg.path());
+            let _guard = EnvGuard::set("KF_BUDGET_CONFIG_DIR", cfg.path());
 
             let r = UsageRecord {
                 ts: chrono::DateTime::parse_from_rfc3339("2026-06-27T00:00:00Z")
@@ -299,7 +299,7 @@ mod tests {
             let cfg = tempfile::tempdir().expect("cfg tempdir");
             let dir = tempfile::tempdir().expect("data tempdir");
             let path = dir.path().join("logs/usage.jsonl");
-            let _guard = EnvGuard::set("PLUGIN3_CONFIG_DIR", cfg.path());
+            let _guard = EnvGuard::set("KF_BUDGET_CONFIG_DIR", cfg.path());
 
             let mk = |kind: UsageKind, session: &str| UsageRecord {
                 ts: chrono::DateTime::parse_from_rfc3339("2026-06-27T00:00:00Z")
@@ -358,11 +358,11 @@ mod tests {
             std::fs::write(&cfg_path, "[usage]\nenabled = false\n").unwrap();
             let dir = tempfile::tempdir().expect("data tempdir");
             let path = dir.path().join("logs/usage.jsonl");
-            // PLUGIN3_CONFIG_DIR points at the directory; Paths::resolve
+            // KF_BUDGET_CONFIG_DIR points at the directory; Paths::resolve
             // reads config_dir, then config_file() joins "config.toml"
             // under it. Setting the env var to the file path would
             // make config_file() return "<file>/config.toml" — broken.
-            let _guard = EnvGuard::set("PLUGIN3_CONFIG_DIR", cfg.path());
+            let _guard = EnvGuard::set("KF_BUDGET_CONFIG_DIR", cfg.path());
 
             let r = UsageRecord {
                 ts: chrono::DateTime::parse_from_rfc3339("2026-06-27T00:00:00Z")
@@ -492,12 +492,12 @@ mod tests {
     // ---- ADR-0010 § Tests #1: emit writes a JSONL line. ----
     // Moved into `emit_usage_at_writes_appends_and_respects_privacy_gate`
     // above (Scenario 1). The single-emit case races with its
-    // siblings on PLUGIN3_CONFIG_DIR when run in parallel — see
+    // siblings on KF_BUDGET_CONFIG_DIR when run in parallel — see
     // that test's comment for the consolidation rationale.
 
     // ponytail: env-var guard lives in `crate::test_support` now.
     // It uses a process-global reentrant mutex so parallel tests that
-    // touch PLUGIN3_*_DIR cannot race, and nested guards in the same
+    // touch KF_BUDGET_*_DIR cannot race, and nested guards in the same
     // thread do not deadlock. See test_support.rs for the
     // `ReentrantMutex` implementation and the B8 fix note.
 
@@ -520,8 +520,8 @@ mod tests {
     // the outer guard is still held, so it is race-free.
     #[test]
     fn env_guard_restores_prior_value_some_branch() {
-        if std::env::var("PLUGIN3_CONFIG_DIR").is_ok() {
-            eprintln!("skipping: PLUGIN3_CONFIG_DIR already set in this environment");
+        if std::env::var("KF_BUDGET_CONFIG_DIR").is_ok() {
+            eprintln!("skipping: KF_BUDGET_CONFIG_DIR already set in this environment");
             return;
         }
         // Seed round-trip: prior=None → unset on drop. The contract
@@ -530,10 +530,10 @@ mod tests {
         // the env var here: the lock is released after Drop, and
         // another test thread can re-set the var before this read.
         {
-            let g_seed = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/cfg-seed");
+            let g_seed = EnvGuard::set("KF_BUDGET_CONFIG_DIR", "/tmp/cfg-seed");
             assert_eq!(g_seed.prior(), None, "seed guard must have prior=None");
             assert_eq!(
-                std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
+                std::env::var("KF_BUDGET_CONFIG_DIR").as_deref(),
                 Ok("/tmp/cfg-seed"),
             );
         }
@@ -547,21 +547,21 @@ mod tests {
         // we pin that contract via prior(), not a racy post-drop read.
         let outer_prior = "/tmp/cfg-prior";
         {
-            let g_outer = EnvGuard::set("PLUGIN3_CONFIG_DIR", outer_prior);
+            let g_outer = EnvGuard::set("KF_BUDGET_CONFIG_DIR", outer_prior);
             assert_eq!(g_outer.prior(), None, "outer guard must have prior=None");
             assert_eq!(
-                std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
+                std::env::var("KF_BUDGET_CONFIG_DIR").as_deref(),
                 Ok(outer_prior),
             );
             {
-                let g_inner = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/cfg-inner");
+                let g_inner = EnvGuard::set("KF_BUDGET_CONFIG_DIR", "/tmp/cfg-inner");
                 assert_eq!(
                     g_inner.prior(),
                     Some(outer_prior),
                     "inner guard must have prior=Some(outer_prior)",
                 );
                 assert_eq!(
-                    std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
+                    std::env::var("KF_BUDGET_CONFIG_DIR").as_deref(),
                     Ok("/tmp/cfg-inner"),
                 );
             }
@@ -569,11 +569,11 @@ mod tests {
             // so the env var must be restored to outer_prior. The
             // outer guard is still held, so this read is race-free.
             assert_eq!(
-                std::env::var("PLUGIN3_CONFIG_DIR").as_deref(),
+                std::env::var("KF_BUDGET_CONFIG_DIR").as_deref(),
                 Ok(outer_prior),
                 "EnvGuard Drop with prior=Some(v) must call set_var(key, v), \
                  NOT remove_var(key). Got {:?}, expected {:?}",
-                std::env::var("PLUGIN3_CONFIG_DIR").ok(),
+                std::env::var("KF_BUDGET_CONFIG_DIR").ok(),
                 Some(outer_prior),
             );
             // Outer guard's prior is None → its Drop must remove_var.

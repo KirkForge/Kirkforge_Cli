@@ -99,18 +99,18 @@ impl Paths {
             ),
         };
         Self {
-            config_dir: std::env::var("PLUGIN3_CONFIG_DIR")
+            config_dir: std::env::var("KF_BUDGET_CONFIG_DIR")
                 .map_or(cfg_default, std::path::PathBuf::from),
-            data_dir: std::env::var("PLUGIN3_DATA_DIR")
+            data_dir: std::env::var("KF_BUDGET_DATA_DIR")
                 .map_or(data_default, std::path::PathBuf::from),
-            runtime_dir: std::env::var("PLUGIN3_RUNTIME_DIR")
+            runtime_dir: std::env::var("KF_BUDGET_RUNTIME_DIR")
                 .map_or(run_default, std::path::PathBuf::from),
         }
     }
 }
 ```
 
-The `PLUGIN3_*_DIR` env vars override the XDG defaults
+The `KF_BUDGET_*_DIR` env vars override the XDG defaults
 returned by `directories::ProjectDirs`. There are no
 path-override clap flags — the env vars are the only
 override surface (an earlier draft specified three clap
@@ -216,7 +216,7 @@ fn append_recent(key: &str, size: usize) {
 // ponytail: path-parameterised so the in-file tests
 // (`recent_bound_is_pinned_at_32`, `fifo_eviction_at_boundary`,
 // `per_line_wire_shape_is_key_and_size`) can point at a
-// tempdir without mutating the process-wide `PLUGIN3_*_DIR`
+// tempdir without mutating the process-wide `KF_BUDGET_*_DIR`
 // env vars — the public `append_recent` is the production
 // entry point.
 fn append_recent_at(path: &std::path::Path, key: &str, size: usize) {

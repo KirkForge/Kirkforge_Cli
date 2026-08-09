@@ -193,18 +193,18 @@ fn usage_path() -> std::path::PathBuf {
 ```
 
 The path comes from `Paths::resolve()` (ADR-0014 § Path
-resolver). On Linux without `PLUGIN3_DATA_DIR`, the resolved
+resolver). On Linux without `KF_BUDGET_DATA_DIR`, the resolved
 path is `~/.local/share/plugin3/logs/usage.jsonl` — the `logs`
 subdir is auto-created on first emit (see
 `create_dir_all(parent)` in `emit_usage_at`). A user who sets
-`PLUGIN3_DATA_DIR=/tmp/p3` gets `/tmp/p3/logs/usage.jsonl`.
+`KF_BUDGET_DATA_DIR=/tmp/p3` gets `/tmp/p3/logs/usage.jsonl`.
 
 ponytail: the earlier draft specified an inline
-`std::env::var("PLUGIN3_DATA_DIR")` +
+`std::env::var("KF_BUDGET_DATA_DIR")` +
 `directories::ProjectDirs` fallback chain inside `cost.rs`.
 The MVP delegates to `Paths::resolve()` (ADR-0014) so the
 env-var handling lives in exactly one place — `cost.rs`
-does not duplicate the `PLUGIN3_DATA_DIR` / XDG precedence
+does not duplicate the `KF_BUDGET_DATA_DIR` / XDG precedence
 chain. The `directories` crate is wired (ADR-0017 § Workspace
 Cargo.toml: `directories = "5"`) but only consumed by
 `Paths::resolve()`; the file-IO modules in `cost.rs` see a

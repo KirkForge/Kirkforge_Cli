@@ -5,7 +5,7 @@
 //! for test code only; production code should not rely on it. It
 //! centralises patterns that previously had to be copy-pasted into
 //! every test module, most notably the `EnvGuard` used to temporarily
-//! override `PLUGIN3_*_DIR` environment variables.
+//! override `KF_BUDGET_*_DIR` environment variables.
 
 use std::ffi::OsStr;
 use std::sync::{Mutex, MutexGuard};
@@ -112,7 +112,7 @@ impl Drop for ReentrantMutexGuard<'_> {
 ///
 /// The guard serialises with every other `EnvGuard` in the process,
 /// including nested guards in the same thread, so parallel tests that
-/// touch `PLUGIN3_*_DIR` do not race. All mutation of the process env
+/// touch `KF_BUDGET_*_DIR` do not race. All mutation of the process env
 /// happens while the guard's lock is held; the prior value is restored
 /// before the lock is released, so a panicking or failing test cannot
 /// leak its override into a neighbour.

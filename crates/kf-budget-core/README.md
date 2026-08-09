@@ -1,4 +1,4 @@
-# Plugin3 — Output-side token budget + slicing
+# kf-budget-core — Output-side token budget + slicing
 
 Output-side sibling of the Stratum input-compression plugin. Slices oversized
 tool results, enforces a per-conversation token budget, and tracks cost per turn.

@@ -505,7 +505,7 @@ fn adr_0014_path_resolution_block_uses_graceful_fallback() {
 // the `--config-dir` / `--data-dir` / `--runtime-dir`
 // clap-flag override claim. The MVP's `Cli` struct (ADR-0015)
 // ships only `json: bool` as a global clap flag; the three
-// `PLUGIN3_*_DIR` env vars are read directly by
+// `KF_BUDGET_*_DIR` env vars are read directly by
 // `Paths::resolve()` without clap indirection. The drift
 // test `cli_design_spec_drift.rs::adr_0015_top_level_block_
 // has_no_phantom_clap_flags` pins the same claim at the
@@ -526,7 +526,7 @@ fn adr_0014_path_resolution_prose_has_no_clap_path_flags() {
             "ADR-0014 § Path resolution prose references phantom clap \
              flag `{phantom}` — the impl's `Cli` struct (ADR-0015) \
              carries only `json: bool` as a global clap flag. The \
-             `PLUGIN3_*_DIR` env vars are read directly by \
+             `KF_BUDGET_*_DIR` env vars are read directly by \
              `Paths::resolve()` without clap indirection.",
         );
     }
@@ -565,7 +565,7 @@ fn adr_0014_recent_outputs_block_uses_typed_entry_struct() {
 // `fifo_eviction_at_boundary`,
 // `per_line_wire_shape_is_key_and_size`) all point at
 // tempdirs via this seam — without it, the tests would
-// have to mutate process-wide `PLUGIN3_*_DIR` env vars
+// have to mutate process-wide `KF_BUDGET_*_DIR` env vars
 // and race with parallel tests.
 #[test]
 fn adr_0014_recent_outputs_block_uses_path_parameterised_seam() {

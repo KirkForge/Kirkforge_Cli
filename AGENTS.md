@@ -20,10 +20,44 @@ This repo is a Rust CLI coding agent (`kf-code`). It uses `tokio`, `ratatui`, `c
 - Check `workplan.md` before implementation. Check `lessons.md` for lessons from prior sessions. Check `state.md` for current repo state.
 - If the task is unclear, say so in `workplan.md` and escalate — do not guess.
 
+## Phased workflow
+
+**Fast-path exemption:** changes under 5 lines in a single file skip to Phase A + D + E only.
+
+### Phase A — Comprehension (no edits)
+- Read every file the task touches. Trace the flow end-to-end.
+- Grep for cross-layer references (scripts, configs, docs).
+- Gate: `workplan.md` exists with file list + root cause.
+
+### Phase B — Impact analysis (mandatory for non-trivial changes)
+- Run `gitnexus impact` on every symbol to be edited.
+- Warn on HIGH/CRITICAL risk before proceeding.
+- Gate: impact results summarized in `workplan.md`.
+
+### Phase C — Verification
+- Dispatch verification subagents for uncertain assumptions.
+- Cross-layer grep before any rename/delete/API change:
+  `grep -rn 'SYMBOL' src/ scripts/ .github/ docs/ *.toml crates/*/`
+  Every reference must be updated in same commit or explicitly deferred.
+- Gate: assumptions verified or marked "unverified — proceeding at risk."
+
+### Phase D — Implementation
+- Per-file edits with per-edit compile check.
+- Commit after every task. Worktree discipline. Scope discipline.
+- Gate: each edit compiles, each task is a gated commit.
+
+### Phase E — Review + synthesis
+- Run `detect_changes()`. Update `state.md`, `lessons.md`, `CHANGELOG.md`.
+- Gate: clean tree, green gates, docs updated, deferred work disclosed.
+
 ## 2. Subagent strategy
-- For complex multi-step tasks, break them into subtasks and dispatch subagents.
-- Each subtask must have a clear scope (files to touch), a gate (command to run), and a done-condition.
-- Do not dispatch a subagent for a task you can do in <5 minutes yourself.
+Decision tree:
+- **<5 min?** → do it yourself.
+- **Read-only verification?** → dispatch explore subagents in parallel.
+- **Multi-file write with independent files?** → dispatch general subagents in parallel.
+- **Uncertain?** → verify first (Phase C), then implement (Phase D).
+- **HIGH/CRITICAL risk?** → review subagent after implementation.
+- Each subtask: clear scope (files), a gate (command), a done-condition.
 
 ## 3. Self-improving loop
 - At session end, write `lessons.md` (gitignored) with: what you learned about this codebase (conventions, gotchas, patterns), what you tried that didn't work and why, what you'd do differently next time.

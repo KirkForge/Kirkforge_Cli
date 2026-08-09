@@ -32,11 +32,17 @@ This repo is a Rust CLI coding agent (`kf-code`). It uses `tokio`, `ratatui`, `c
 
 ## 4. Verification
 - Run the gates before every commit. Paste the actual output (not paraphrased). A green claim requires the pasted output + the head SHA. "It passed" is not evidence.
-- Gates for this repo:
-  - Test: `cargo test --locked --workspace --no-fail-fast`
-  - Lint: `cargo clippy --all-targets -- -D warnings`
-  - Fmt: `cargo fmt --check`
-  - Typecheck: `cargo check --workspace --all-targets`
+- **Local gate (fast)** — run before every commit:
+  - `scripts/test-fast.sh` (unit/lib/bins only, skips integration tests)
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo fmt --check`
+  - `cargo check --workspace --all-targets`
+- **Pre-merge gate (full)** — required before pushing to `dev`:
+  - `scripts/test-full.sh` (all workspace tests)
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo fmt --check`
+  - `cargo check --workspace --all-targets`
+  - `cargo test -p kf-budget-core --test adr_xref_drift`
 - Integration tests (`scripts/run-integration-tests.sh`) need a live Ollama + `qwen2.5:0.5b`; they are NOT part of the default gate. Note if you ran them.
 - Do not rewrite tests to make them pass. Fix the root cause.
 - Do not add `|| true`, `|| echo "non-fatal"`, `#[ignore]` to make red go green.

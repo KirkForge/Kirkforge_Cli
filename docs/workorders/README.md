@@ -472,7 +472,7 @@ deferral).
 | 25.14 | [Verifier finding location data](25.14-verifier-finding-location.md) | Planned | P1 | — |
 | 25.15 | [MCP protocol consistency: roots + sampling](25.15-mcp-protocol-consistency.md) | Planned | P1 | — |
 | 25.16 | [Coverage push: src/session >75%](25.16-session-coverage-75.md) | Planned | P2 | 25.4 |
-| 25.17 | [Persona adapter Bedrock/Vertex + landlock default-on decision](25.17-persona-adapter-and-landlock.md) | Planned | P1 | — |
+| 25.17 | [Persona adapter Bedrock/Vertex + landlock default-on decision](25.17-persona-adapter-and-landlock.md) | DONE (R1 deferred, R2 opt-in) | P1 | — |
 | 25.18 | [Deferred capability carry-forward](25.18-deferred-capability-carryforward.md) | Planned | P2/P3 | — |
 | 25.19 | [AGENTS.md multistep workflow upgrade](25.19-agents-md-multistep-workflow.md) | Planned | P1 | — |
 

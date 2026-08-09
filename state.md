@@ -66,6 +66,12 @@
 | 24.7 | DONE | R1-R4: fuzz targets for SSE/NDJSON/Bedrock/JS/CSS |
 | 24.8 | DONE | R1: 23 tracing::debug! → warn!/info!/trace!, zero debug! remaining |
 
+### WO 25 series (1 done)
+
+| WO | Status | Items |
+|----|--------|-------|
+| 25.17 | DONE (R1 deferred, R2 opt-in) | R1: persona Anthropic-direct limitation documented + deferred; R2: landlock opt-in documented honestly |
+
 ## Deferred items (explicitly tracked)
 
 ### Medium priority
@@ -76,6 +82,7 @@
 2. **21.5-R4**: MCP sampling/createMessage + roots/list. Sampling has a real security surface (server requests model completion). Remaining: implement sampling handler with user approval gate; roots/list (read-only, lower risk) should ship first.
 3. **21.5-R9**: Anthropic computer_use beta (coordinate-vision model). Local headless-Chrome tool is the real differentiator. Remaining: opt-in beta path routed to Anthropic model, gated behind feature flag.
 4. **22.4-R2/R3**: TUI memory visibility + config flag. Remaining: memory indicator widget in status bar; config flag to toggle memory display.
+8. **25.17-R1-remaining**: Persona adapter Bedrock/Vertex plumbing. `adapter_for` hardcodes Anthropic-direct; needs signature extension + Config ref at all call sites. Remaining: extend `adapter_for` with Bedrock/Vertex params, update persona.rs call site, add integration test. Tracked in WO 25.17.
 
 ### Low priority
 

@@ -57,6 +57,9 @@ jobs:
           print("benches/tasks/: all TOML files parse OK")
           PY
 
+      - name: Check artifact/install/release consistency
+        run: bash scripts/check-artifact-consistency.sh
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:

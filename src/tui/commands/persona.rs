@@ -49,11 +49,7 @@ impl std::fmt::Display for PersonaKind {
 /// Handle to a persona currently running in the background.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct PersonaHandle {
-    pub kind: PersonaKind,
-    pub task: String,
-    pub fork_id: String,
-}
+pub struct PersonaHandle {}
 
 /// Outcome of a completed persona run, sent back to the TUI event loop.
 #[derive(Debug, Clone)]
@@ -375,7 +371,6 @@ pub async fn start_persona(
     };
 
     let fork_path = fork.path.clone();
-    let fork_id = fork.id.clone();
     let task_owned = task.to_string();
 
     let cfg = read_shared_config(&state.config).clone();
@@ -418,11 +413,7 @@ pub async fn start_persona(
         );
     });
 
-    state.persona_in_progress = Some(PersonaHandle {
-        kind,
-        task: task.to_string(),
-        fork_id,
-    });
+    state.persona_in_progress = Some(PersonaHandle {});
     state.is_generating = true;
 
     format!("🚀 Started {kind} persona for: {task}")

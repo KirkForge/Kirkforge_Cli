@@ -436,10 +436,6 @@ impl ModelAdapter for OpenAiCompatAdapter {
         self.seed = seed;
     }
 
-    fn set_tool_choice(&mut self, choice: Option<crate::shared::ToolChoice>) {
-        self.tool_choice = choice;
-    }
-
     async fn stream(
         &self,
         messages: &[Message],

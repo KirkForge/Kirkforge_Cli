@@ -351,9 +351,6 @@ pub trait ModelAdapter: Send + Sync {
     /// Set max_tokens for completions. Default no-op (wo/20.2.0).
     fn set_max_tokens(&mut self, _max_tokens: u32) {}
 
-    /// Set tool_choice. Default no-op (wo/20.2.0).
-    fn set_tool_choice(&mut self, _choice: Option<crate::shared::ToolChoice>) {}
-
     async fn stream(
         &self,
         messages: &[crate::shared::Message],
@@ -790,18 +787,8 @@ fn build_openai_compat_body(
         _ => {}
     }
 
-    if let Some(tc) = tool_choice {
-        match tc {
-            crate::shared::ToolChoice::Auto => {
-                body["tool_choice"] = serde_json::json!("auto");
-            }
-            crate::shared::ToolChoice::Specific(name) => {
-                body["tool_choice"] = serde_json::json!({
-                    "type": "function",
-                    "function": {"name": name}
-                });
-            }
-        }
+    if tool_choice.is_some() {
+        body["tool_choice"] = serde_json::json!("auto");
     }
 
     // Deterministic mode: pin temperature=0 and set seed.

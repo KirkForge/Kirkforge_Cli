@@ -201,7 +201,6 @@ pub enum ToolCallStyle {
 pub enum ToolChoice {
     #[default]
     Auto,
-    Specific(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

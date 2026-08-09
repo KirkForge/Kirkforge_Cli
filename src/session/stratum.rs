@@ -83,6 +83,11 @@ pub fn compress_with_store(content: &str, mode: Mode, store: &InMemoryOffloadSto
 /// current session and can be mutated by the budget's auto-escalation
 /// path. The config-derived mode is read-only; the session mode wins
 /// when both are consulted.
+///
+/// ceiling: process-global OnceLock. Intentional for env-driven config:
+/// a single CLI process has one active session, and auto-escalation
+/// must outlive `StratumSessionStartHook`. Multi-session support would
+/// require scoping into SessionStores.
 static SESSION_MODE: OnceLock<Mutex<Mode>> = OnceLock::new();
 
 fn session_mode() -> &'static Mutex<Mode> {

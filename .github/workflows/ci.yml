@@ -82,37 +82,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-nextest
-        # NO `cargo test` fallback. If nextest is unavailable the job FAILS
-        # rather than re-running the suite under plain `cargo test`, which
-        # has no per-test timeout and re-triggers the deadlock that
-        # disabled this workflow (see the quarantine comment below).
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
 
       - name: Run tests (nextest; PR=lib fast suite, push=full workspace)
-        # ----------------------------------------------------------------
-        # QUARANTINED TESTS — tracked debt, NOT a permanent skip.
-        # Four tests in src/tui/approval_keys.rs deadlock on
-        # std::sync::RwLock: handle_approval_key() acquires a WRITE guard
-        # via write_shared_config() (line ~205), then acquires a READ
-        # guard via read_shared_config() (line ~207) on the SAME lock
-        # without dropping the write guard first. std::sync::RwLock is
-        # non-reentrant, so the second acquire blocks forever. Under
-        # plain `cargo test` they spin ~777s (killed only by a global
-        # timeout); nextest's 60s per-test timeout converts that into a
-        # fast failure, but we still skip them so the gate stays green
-        # until the source is fixed.
-        #   - test_always_approves_saves_permission_rule
-        #   - test_always_approves_edit_file_uses_path_key
-        #   - test_always_approves_dedups_repeated_calls
-        #   - test_always_approves_does_not_overwrite_existing_deny
-        # Root-cause fix: insert `drop(cfg);` between the write-guard
-        # mutation (line ~206) and the read_shared_config() call (line
-        # ~207) in handle_approval_key().
-        # TODO: file an issue, fix the source, then REMOVE this filter.
-        # Tracked: "latent test deadlock" finding from the CI review.
-        # ----------------------------------------------------------------
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -160,10 +134,7 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - name: Run tests on Windows (nextest; same quarantine + 60s timeout)
-        # No `cargo test` fallback here either. The old windows job ran
-        # `cargo test --workspace` with no per-test timeout, so the same
-        # deadlock would have hung it for 6h.
+      - name: Run tests on Windows (nextest; 60s per-test timeout)
         shell: bash
         run: |
           cargo nextest run --locked --workspace --no-fail-fast \

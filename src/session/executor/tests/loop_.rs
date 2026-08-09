@@ -877,7 +877,7 @@ async fn doom_loop_circuit_breaker_auto_plan_mode() {
 }
 
 #[tokio::test]
-async fn doom_loop_circuit_breaker_halts_in_plan_mode() {
+async fn doom_loop_circuit_breaker_default_action_is_auto_plan() {
     let mut exe = make_executor(
         Box::new(MockAdapter::new(vec![], make_info())),
         vec![],

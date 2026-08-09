@@ -7,7 +7,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - WO 23.8-R1: Doom-loop circuit breaker — auto-switches to plan mode after `doom_loop_max_hits` cumulative detections (default: 1). New `TurnEvent::DoomLoopRemediation` event. Config: `doom_loop_max_hits` / `KF_CODE_DOOM_LOOP_MAX_HITS`. Set to 0 to disable.
-- WO 23.8-R2: Hard halt when circuit breaker fires while already in plan mode — turn stops with clear error message.
+- WO 23.8-R2: Doom-loop circuit breaker auto-switches to plan mode. Note: no hard halt when already in plan mode — this was planned but not implemented; see WO 25.0-R3.
 - WO 23.5-R1: `remember` tool — model can now explicitly store facts via `remember({ "fact": "...", "category": "..." })`. Facts are persisted in `MemoryStore` and surfaced in future sessions. Idempotent by slug.
 - WO 23.5-R2: System-prompt instruction for `remember` tool — when memory is enabled, the system prompt now includes guidance on when to use `remember`.
 

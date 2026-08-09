@@ -1063,7 +1063,7 @@ impl Executor {
             record(MetricEvent::ToolCall {
                 name: tc.name.clone(),
                 success: tool_outcome_success(&outcome_for_emit),
-                duration_ms: 0,
+                duration_ms,
                 error_kind: tool_error_kind(&outcome_for_emit).map(String::from),
             });
 

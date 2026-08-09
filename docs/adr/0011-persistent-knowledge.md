@@ -4,7 +4,7 @@
 - **Date:** 2026-06-24
 
 > **Rejected 2026-07-17:** deferred since 2026-06-24 with zero implementation
-> (no stub code, no `knowledge` feature gate in `crates/plugin3-*`). Per the
+> (no stub code, no `knowledge` feature gate in `plugin3-*`). Per the
 > B10 review, a deferred-with-no-code ADR is not live architecture — it is
 > speculative design. The plugin3 MVP shipped slicing + budget only; persistent
 > knowledge was never pursued. Retained as a rejected design sketch for a future

@@ -5,7 +5,7 @@
 
 ## Context
 
-Plugin3 (`crates/kf-budget-core`, formerly `crates/plugin3-core`) is the token-budget guard. It is invoked via shell scripts in `plugins/kf-plugin/tools/` with only environment variables, not full event context. Without the fold-in, the budget system cannot see real `post-tool-bash` results or `pre-compact` history — it only receives the tool name and output size via env vars, then emits canned JSON responses.
+Plugin3 (`crates/kf-budget-core`, formerly `plugin3-core`) is the token-budget guard. It is invoked via shell scripts in `plugins/kf-plugin/tools/` with only environment variables, not full event context. Without the fold-in, the budget system cannot see real `post-tool-bash` results or `pre-compact` history — it only receives the tool name and output size via env vars, then emits canned JSON responses.
 
 The same fold-in pattern established by ADR-046 (Stratum) applies: link the crate as an optional dependency and register its tools as direct Rust calls behind a feature flag. In addition, the 4 hooks are converted to in-process handlers that receive the full event context, eliminating the lossy shim.
 

@@ -260,8 +260,79 @@ fn deferred_adrs_consistent_between_index_and_files() {
 // ponytail: WO 22.12 requested extending this test to assert that every
 // crates/X path literal in ADR prose references an actual directory. The
 // ADR prose was fixed (28 files, commit ce3518b) but the path-literal check
-// itself was never implemented. The existing tests (header/index/status drift)
-// catch the majority of ADR drift. A path-literal check would need markdown
-// parsing + filesystem probing and would be fragile across worktrees.
-// Upgrade: add `include_dir!("docs/adr")` + a regex for `crates/\w+` +
-// `src/\w+` that checks Path::exists() for each match.
+// itself was never implemented. Implemented in WO 25.10 (R2) below.
+
+/// Extract unique `crates/X` crate-dir references from a line of ADR prose.
+/// Only captures the first path segment after `crates/` (i.e. the crate name).
+/// Skips lines inside code fences (tracked by the `in_fence` parameter).
+fn extract_crate_refs(line: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = line;
+    while let Some(idx) = rest.find("crates/") {
+        let after = &rest[idx + 7..];
+        let name: &str = after.split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_').next().unwrap_or("");
+        if !name.is_empty() && !out.contains(&name) {
+            out.push(name);
+        }
+        rest = after;
+    }
+    out
+}
+
+/// Strip code-fenced blocks (triple backtick) from ADR body, returning
+/// only the prose lines. ceiling: code-fenced examples may reference
+/// hypothetical or future paths that don't yet exist on disk; skipping
+/// them avoids false positives from aspirational ADR sections.
+/// Upgrade: if we want to validate fenced paths too, gate them behind
+/// a status check (only enforce for "Accepted" ADRs).
+fn prose_lines(body: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut in_fence = false;
+    for line in body.lines() {
+        if line.trim().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if !in_fence {
+            lines.push(line);
+        }
+    }
+    lines
+}
+
+#[test]
+fn adr_path_literals_reference_existing_crates() {
+    // WO 25.10 R2: every `crates/X` reference in ADR prose (outside code
+    // fences) must point to a directory that exists under `crates/`.
+    let dir = adr_dir();
+    let entries = std::fs::read_dir(&dir).expect("docs/adr/ readable");
+    let crates_dir = repo_root().join("crates");
+    let mut failures = Vec::new();
+
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let file = p.file_name().unwrap().to_string_lossy().to_string();
+        if file == "README.md" {
+            continue;
+        }
+        let body = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("ADR {file} readable: {e}"));
+        for line in prose_lines(&body) {
+            for crate_name in extract_crate_refs(line) {
+                let crate_path = crates_dir.join(crate_name);
+                if !crate_path.is_dir() {
+                    failures.push(format!("{file}: crates/{crate_name} (dir does not exist)"));
+                }
+            }
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "ADR path-literal violations:\n{}",
+            failures.join("\n")
+        );
+    }
+}

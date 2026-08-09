@@ -163,78 +163,6 @@ pub fn classify_local(message: &str) -> RouteResult {
     }
 }
 
-/// Classify a user message using an LLM router model.
-///
-/// Sends the message to the configured router model for classification.
-/// Falls back to local heuristics on error or timeout. The returned
-/// `suggested_model` is the tier name (`simple`/`medium`/`complex`).
-pub async fn classify_with_llm(
-    message: &str,
-    router_model: &str,
-    ollama_host: &str,
-) -> RouteResult {
-    let prompt = format!(
-        "Classify this developer task as simple, medium, or complex. \
-         Reply with only one word (simple/medium/complex).\n\n\
-         Task: {message}"
-    );
-
-    let body = serde_json::json!({
-        "model": router_model,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": false,
-        "options": {"num_predict": 5, "temperature": 0.1}
-    });
-
-    let url = format!("{}/api/chat", ollama_host.trim_end_matches('/'));
-
-    match crate::shared::build_reqwest_client(Some(std::time::Duration::from_secs(10)))
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(resp) => match resp.json::<serde_json::Value>().await {
-            Ok(json) => {
-                let answer = json
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .trim()
-                    .to_lowercase();
-
-                let tier = if answer.contains("simple") {
-                    ComplexityTier::Simple
-                } else if answer.contains("complex") {
-                    ComplexityTier::Complex
-                } else {
-                    ComplexityTier::Medium
-                };
-
-                return RouteResult {
-                    tier,
-                    confidence: 0.85,
-                    method: RouteMethod::Llm,
-                    suggested_model: tier.to_string(),
-                };
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to parse LLM routing response; falling back to local heuristics");
-            }
-        },
-        Err(e) => {
-            tracing::warn!(error = %e, "LLM routing request failed; falling back to local heuristics");
-        }
-    }
-
-    // Fallback: use local heuristics. The local result already carries
-    // the tier name as the suggested model.
-    let mut result = classify_local(message);
-    result.confidence *= 0.7; // downgrade confidence since LLM failed
-    result
-}
-
 /// Resolve a tier name to a concrete model using the configured map.
 ///
 /// Returns `None` when neither `routing_model_map` nor
@@ -255,15 +183,6 @@ pub fn resolve_tier_model(config: &crate::shared::Config, tier: &str) -> Option<
         None
     } else {
         Some(config.model.default_model.clone())
-    }
-}
-
-/// Convenience: classify with LLM if router_model is set, otherwise local.
-pub async fn classify(message: &str, config: &RouterConfig, ollama_host: &str) -> RouteResult {
-    if config.enabled && !config.router_model.is_empty() {
-        classify_with_llm(message, &config.router_model, ollama_host).await
-    } else {
-        classify_local(message)
     }
 }
 
@@ -474,48 +393,6 @@ mod tests {
         let cfg = RouterConfig::default();
         assert!(!cfg.enabled);
         assert!(cfg.router_model.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_classify_disabled_uses_local() {
-        let cfg = RouterConfig {
-            enabled: false,
-            router_model: "ignored".into(),
-        };
-        let result = classify("what is rust?", &cfg, "http://localhost:11434").await;
-        assert_eq!(result.tier, ComplexityTier::Simple);
-        assert!(matches!(result.method, RouteMethod::Local));
-    }
-
-    #[tokio::test]
-    async fn test_classify_enabled_but_no_router_model_uses_local() {
-        let cfg = RouterConfig {
-            enabled: true,
-            router_model: String::new(),
-        };
-        let result = classify("what is rust?", &cfg, "http://localhost:11434").await;
-        assert_eq!(result.tier, ComplexityTier::Simple);
-        assert!(matches!(result.method, RouteMethod::Local));
-    }
-
-    #[tokio::test]
-    async fn test_classify_with_llm_falls_back_on_unreachable_host() {
-        let cfg = RouterConfig {
-            enabled: true,
-            router_model: "test-router-model".into(),
-        };
-        let result = classify("what is rust?", &cfg, "http://127.0.0.1:1/").await;
-        assert!(
-            matches!(result.method, RouteMethod::Local),
-            "unreachable host should fall back to Local, got {:?}",
-            result.method
-        );
-        assert_eq!(result.tier, ComplexityTier::Simple);
-        assert!(
-            result.confidence < 0.6,
-            "fallback path should downgrade confidence, got {}",
-            result.confidence
-        );
     }
 
     #[test]

@@ -200,19 +200,6 @@ pub fn estimate_tokens(s: &str) -> usize {
     tiktoken_count(s)
 }
 
-/// Heuristic bytes/4 fallback — kept for call sites that explicitly want
-/// the cheap estimate without BPE encoding overhead.
-#[deprecated(since = "TBD", note = "use estimate_tokens for BPE-based counting")]
-#[must_use]
-pub fn estimate_tokens_heuristic(s: &str) -> usize {
-    let bytes = s.len();
-    let trimmed = s.trim_start();
-    if trimmed.starts_with('{') || trimmed.starts_with('[') || trimmed.starts_with("fn ") {
-        bytes / 3
-    } else {
-        bytes / 4
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -475,14 +462,6 @@ mod tests {
             estimate_tokens("hello world"),
             tiktoken_count("hello world"),
         );
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn estimator_heuristic_retains_bytes_division() {
-        assert_eq!(estimate_tokens_heuristic(r#"{"k":"v"}"#), 3);
-        assert_eq!(estimate_tokens_heuristic("hello world"), 2);
-        assert_eq!(estimate_tokens_heuristic("fn hello() {}"), 4);
     }
 
     #[test]

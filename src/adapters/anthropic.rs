@@ -99,10 +99,6 @@ impl ModelAdapter for AnthropicAdapter {
         self.max_tokens = max_tokens;
     }
 
-    fn set_tool_choice(&mut self, choice: Option<crate::shared::ToolChoice>) {
-        self.tool_choice = choice;
-    }
-
     async fn stream(
         &self,
         messages: &[Message],
@@ -320,15 +316,8 @@ pub(crate) fn build_anthropic_body(
         body["tools"] = serde_json::Value::Array(tool_defs);
     }
 
-    if let Some(tc) = tool_choice {
-        match tc {
-            crate::shared::ToolChoice::Auto => {
-                body["tool_choice"] = serde_json::json!({"type": "auto"});
-            }
-            crate::shared::ToolChoice::Specific(name) => {
-                body["tool_choice"] = serde_json::json!({"type": "tool", "name": name});
-            }
-        }
+    if tool_choice.is_some() {
+        body["tool_choice"] = serde_json::json!({"type": "auto"});
     }
 
     match response_format {

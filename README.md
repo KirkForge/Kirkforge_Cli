@@ -33,15 +33,15 @@ Requires a running Ollama server (or set provider config for cloud models).
 - **Provider-agnostic** — six providers behind one trait. No vendor lock-in.
 - **Semantic code understanding** — tree-sitter symbol/import/call-graph index
   for Rust, TypeScript, Python, and Go.
-- **Cost-aware** — Stratum compresses bloated inputs; Plugin3 guards token
-  spend on outputs.
-- **Plugin system** — Stratum and Plugin3 are compiled-in
+- **Cost-aware** — kf-compress-core compresses bloated inputs; kf-budget-core
+  guards token spend on outputs.
+- **Plugin system** — kf-compress-core and kf-budget-core are compiled-in
   behind feature flags (or shell fallbacks). External plugins via
   `kf-code.toml` manifests with trust tiers and signature verification.
 - **Benchmarked** — 31 coding tasks organized against the
   [KIRK-BENCH](docs/adr/066-kirk-bench-spec.md) spec (leaderboard at
   [docs/bench/leaderboard.md](docs/bench/leaderboard.md)), including the
-  signature Token Budget Challenge that showcases the tree-sitter + Stratum
+  signature Token Budget Challenge that showcases the tree-sitter + compress
   + budget architecture.
 
 ## Documentation

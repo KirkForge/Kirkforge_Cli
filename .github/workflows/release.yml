@@ -171,7 +171,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          bins=(kf-code plugin3 stratum)
+          bins=(kf-code)
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             ext=".exe"
           else
@@ -185,7 +185,7 @@ jobs:
           cp -R -P npm/kf-plugin dist/npm/kf-plugin
           archive="kf-code-${{ matrix.target }}.${{ matrix.archive_ext }}"
           if [ "${{ matrix.archive_ext }}" = "zip" ]; then
-            powershell -Command "Compress-Archive -Path 'dist\kf-code.exe','dist\plugin3.exe','dist\stratum.exe','dist\plugins','dist\npm' -DestinationPath 'dist\\$archive'"
+            powershell -Command "Compress-Archive -Path 'dist\kf-code.exe','dist\plugins','dist\npm' -DestinationPath 'dist\\$archive'"
           else
             tar -czf "dist/${archive}" -C dist $(for b in "${bins[@]}"; do echo "${b}${ext}"; done) plugins npm
           fi

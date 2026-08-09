@@ -89,7 +89,7 @@ echo "Verified checksum for $archive."
 tar -xzf "$tmpdir/$archive" -C "$tmpdir"
 
 mkdir -p "$BIN_DIR"
-for bin in kf-code kfd plugin3 stratum kf-code-video; do
+for bin in kf-code; do
     cp "$tmpdir/$bin" "$BIN_DIR/$bin"
     chmod +x "$BIN_DIR/$bin"
 done
@@ -114,7 +114,7 @@ if [ -d "$tmpdir/npm" ]; then
     echo "Installed bundled Node SDK to $NPM_DIR"
 
     if ! command -v node >/dev/null 2>&1; then
-        echo "Warning: node was not found on PATH. The kf-code-plugin Node SDK tools require Node.js (>=20)." >&2
+        echo "Warning: node was not found on PATH. The kf-plugin Node SDK tools require Node.js (>=20)." >&2
         echo "Install Node.js and ensure 'node' is on PATH before using those tools." >&2
     else
         node_version=$(node --version 2>/dev/null | sed 's/^v//')
@@ -131,7 +131,7 @@ if [ -d "$tmpdir/npm" ]; then
     fi
 fi
 
-echo "Installed binaries to $BIN_DIR: kf-code kfd plugin3 stratum kf-code-video"
+echo "Installed kf-code to $BIN_DIR"
 
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
     echo "Warning: $BIN_DIR is not on your PATH. Add it to your shell profile:"

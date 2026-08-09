@@ -20,8 +20,8 @@ pub mod test_support;
 
 pub use atomic_write::atomic_write_text;
 pub use budget::{
-    decide, estimate_tokens, BudgetConfig, BudgetState, ConfigFile,
-    Intervention, TokenBudget, UsageConfig,
+    decide, estimate_tokens, BudgetConfig, BudgetState, ConfigFile, Intervention, TokenBudget,
+    UsageConfig,
 };
 pub use compaction::{
     build_hint, local_summarise, CompactHint, CompactedOutput, LocalSummaryCompactor, Turn,

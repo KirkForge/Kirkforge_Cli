@@ -270,7 +270,10 @@ fn extract_crate_refs(line: &str) -> Vec<&str> {
     let mut rest = line;
     while let Some(idx) = rest.find("crates/") {
         let after = &rest[idx + 7..];
-        let name: &str = after.split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_').next().unwrap_or("");
+        let name: &str = after
+            .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+            .next()
+            .unwrap_or("");
         if !name.is_empty() && !out.contains(&name) {
             out.push(name);
         }
@@ -318,7 +321,8 @@ fn adr_path_literals_reference_existing_crates() {
         if file == "README.md" {
             continue;
         }
-        let body = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("ADR {file} readable: {e}"));
+        let body =
+            std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("ADR {file} readable: {e}"));
         for line in prose_lines(&body) {
             for crate_name in extract_crate_refs(line) {
                 let crate_path = crates_dir.join(crate_name);
@@ -330,9 +334,6 @@ fn adr_path_literals_reference_existing_crates() {
     }
 
     if !failures.is_empty() {
-        panic!(
-            "ADR path-literal violations:\n{}",
-            failures.join("\n")
-        );
+        panic!("ADR path-literal violations:\n{}", failures.join("\n"));
     }
 }

@@ -217,7 +217,6 @@ impl VerifierBus {
     }
 }
 
-
 impl Default for VerifierBus {
     fn default() -> Self {
         Self::new()

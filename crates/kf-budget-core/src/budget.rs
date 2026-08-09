@@ -200,7 +200,6 @@ pub fn estimate_tokens(s: &str) -> usize {
     tiktoken_count(s)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -255,8 +255,14 @@ mod tests {
         let _msg = resume_conversation_log(new_log, &mut state, &tx).await;
 
         assert_eq!(state.tokens_sent, 0, "tokens_sent must reset on fork");
-        assert_eq!(state.tokens_received, 0, "tokens_received must reset on fork");
-        assert_eq!(state.cumulative_cost, 0.0, "cumulative_cost must reset on fork");
+        assert_eq!(
+            state.tokens_received, 0,
+            "tokens_received must reset on fork"
+        );
+        assert_eq!(
+            state.cumulative_cost, 0.0,
+            "cumulative_cost must reset on fork"
+        );
         assert_eq!(state.turn_cost, 0.0, "turn_cost must reset on fork");
         assert_eq!(state.cached_tokens, 0, "cached_tokens must reset on fork");
         assert_eq!(

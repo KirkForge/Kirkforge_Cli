@@ -125,6 +125,10 @@ fn collect_rs_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
+            let name = path.file_name();
+            if name.map(|n| n == "target").unwrap_or(false) {
+                continue;
+            }
             collect_rs_files_recursive(&path, files)?;
         } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
             files.push(path);
@@ -140,10 +144,8 @@ fn analyze_file(path: &Path, root: &Path) -> Option<FileDiagnosis> {
         return None;
     }
 
-    let (pub_items, impl_methods) = count_api_items(&text);
+    let (pub_items, impl_methods, test_count) = count_api_and_tests(&text);
     let api_surface = pub_items + impl_methods;
-    let test_count = count_tests(&text);
-    // Use api_surface for density if non-zero, otherwise fall back to lines.
     let test_density = if api_surface > 0 {
         test_count as f64 / api_surface as f64 * 100.0
     } else if lines > 0 {
@@ -152,8 +154,6 @@ fn analyze_file(path: &Path, root: &Path) -> Option<FileDiagnosis> {
         0.0
     };
 
-    // ROI = api_surface × (1 - test_density/100) — higher for files
-    // with many public APIs and few tests.
     let roi = if api_surface > 0 {
         api_surface as f64 * (1.0 - test_density / 100.0)
     } else {
@@ -180,6 +180,7 @@ fn analyze_file(path: &Path, root: &Path) -> Option<FileDiagnosis> {
 /// Count top-level pub items and impl methods in a single pass.
 /// Returns (pub_items, impl_methods) where pub_items excludes methods
 /// inside `impl` blocks (to avoid double-counting).
+#[cfg(test)]
 fn count_api_items(text: &str) -> (usize, usize) {
     let mut pub_items = 0;
     let mut impl_methods = 0;
@@ -250,12 +251,91 @@ fn count_api_items(text: &str) -> (usize, usize) {
     (pub_items, impl_methods)
 }
 
+/// Single-pass: counts pub items, impl methods, and test attributes
+/// in one line iteration. Returns (pub_items, impl_methods, test_count).
+fn count_api_and_tests(text: &str) -> (usize, usize, usize) {
+    let mut pub_items = 0;
+    let mut impl_methods = 0;
+    let mut test_count = 0;
+    let mut in_impl = false;
+    let mut brace_depth: i32 = 0;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+
+        if trimmed == "#[test]"
+            || trimmed == "#[tokio::test]"
+            || trimmed.starts_with("#[tokio::test(")
+        {
+            test_count += 1;
+        }
+
+        if trimmed.starts_with("pub(crate)") || trimmed.starts_with("pub(super)") {
+            if in_impl {
+                for ch in trimmed.chars() {
+                    match ch {
+                        '{' => brace_depth += 1,
+                        '}' => {
+                            brace_depth -= 1;
+                            if brace_depth <= 0 {
+                                in_impl = false;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            continue;
+        }
+        if !in_impl {
+            if trimmed.starts_with("impl ") && trimmed.contains('{') {
+                in_impl = true;
+                for ch in trimmed.chars() {
+                    match ch {
+                        '{' => brace_depth += 1,
+                        '}' => brace_depth -= 1,
+                        _ => {}
+                    }
+                }
+                if brace_depth == 0 {
+                    in_impl = false;
+                }
+            } else if trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("pub async fn ")
+                || trimmed.starts_with("pub struct ")
+                || trimmed.starts_with("pub enum ")
+                || trimmed.starts_with("pub trait ")
+            {
+                pub_items += 1;
+            }
+        } else {
+            if trimmed.starts_with("pub fn ") || trimmed.starts_with("pub async fn ") {
+                impl_methods += 1;
+            }
+            for ch in trimmed.chars() {
+                match ch {
+                    '{' => brace_depth += 1,
+                    '}' => {
+                        brace_depth -= 1;
+                        if brace_depth <= 0 {
+                            in_impl = false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    (pub_items, impl_methods, test_count)
+}
+
 /// Shorthand for just the pub_items count (top-level only).
 #[cfg(test)]
 fn count_pub_items(text: &str) -> usize {
     count_api_items(text).0
 }
 
+#[cfg(test)]
 fn count_tests(text: &str) -> usize {
     text.lines()
         .filter(|l| {

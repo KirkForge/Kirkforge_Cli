@@ -51,6 +51,7 @@ async fn test_fixable_verdict_collects_all_findings() {
                 replacement: "let _x = 1;".into(),
                 severity: "warning".into(),
                 command: None,
+                line: None,
             }),
         }))
         .unwrap();
@@ -62,6 +63,7 @@ async fn test_fixable_verdict_collects_all_findings() {
                 description: "dangerous".into(),
                 file: None,
                 details: "hardcoded password".into(),
+                line: None,
             }),
         }))
         .unwrap();
@@ -86,6 +88,7 @@ async fn test_unfixable_is_most_severe() {
                 description: "API key exposed".into(),
                 file: Some(PathBuf::from("config.rs")),
                 details: "found sk-... pattern".into(),
+                line: None,
             }),
         }))
         .unwrap();
@@ -161,6 +164,7 @@ async fn test_duplicate_registration_rejected() {
             replacement: "b".into(),
             severity: "error".into(),
             command: None,
+            line: None,
         }),
     }));
     assert!(err.is_err(), "Should reject duplicate verifier name");
@@ -185,6 +189,7 @@ async fn test_correction_loop_returns_suggestion_when_no_fix_available() {
                 replacement: "".into(),
                 severity: "warning".into(),
                 command: None,
+                line: None,
             }),
         }))
         .unwrap();
@@ -232,6 +237,7 @@ async fn test_correction_loop_runs_command_fix() {
                 replacement: "".into(),
                 severity: "warning".into(),
                 command: Some("true".into()),
+                line: None,
             })
         }
     }
@@ -291,6 +297,7 @@ async fn test_correction_loop_stops_at_max_iterations() {
                 replacement: "".into(),
                 severity: "warning".into(),
                 command: Some("true".into()),
+                line: None,
             })
         }
     }
@@ -352,6 +359,7 @@ async fn test_correction_loop_unfixable_stops() {
                 description: "secret found".into(),
                 file: None,
                 details: "sk-...".into(),
+                line: None,
             }),
         }))
         .unwrap();
@@ -382,6 +390,7 @@ async fn test_verifier_handler_drain_corrections() {
                 replacement: "b".into(),
                 severity: "warning".into(),
                 command: None,
+                line: None,
             }),
         }))
         .unwrap();
@@ -427,6 +436,7 @@ impl Verifier for OnceVerifier {
                     replacement: self.replacement.clone(),
                     severity: "warning".into(),
                     command: None,
+                    line: None,
                 });
             }
         }
@@ -505,6 +515,7 @@ async fn handler_verify_event_fixable_verdict() {
             replacement: "".into(),
             severity: "low".into(),
             command: None,
+            line: None,
         }),
     }));
     let slots = Arc::new(std::sync::RwLock::new(s));
@@ -526,6 +537,7 @@ async fn handler_verify_event_unfixable_verdict() {
             description: "syntax error".into(),
             file: None,
             details: "missing semicolon".into(),
+            line: None,
         }),
     }));
     let slots = Arc::new(std::sync::RwLock::new(s));
@@ -565,6 +577,7 @@ async fn handler_tool_error_event_short_circuits_without_fanout() {
             description: "should not run".into(),
             file: None,
             details: "ToolError must short-circuit before the fan-out".into(),
+            line: None,
         }),
     }));
     let slots = Arc::new(std::sync::RwLock::new(s));
@@ -597,6 +610,7 @@ async fn handler_drain_corrections_returns_fixable() {
             replacement: "".into(),
             severity: "low".into(),
             command: None,
+            line: None,
         }),
     }));
     let slots = Arc::new(std::sync::RwLock::new(s));
@@ -622,6 +636,7 @@ async fn handler_drain_corrections_empty_after_drain() {
             replacement: "".into(),
             severity: "low".into(),
             command: None,
+            line: None,
         }),
     }));
     let slots = Arc::new(std::sync::RwLock::new(s));

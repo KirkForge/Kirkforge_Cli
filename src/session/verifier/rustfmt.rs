@@ -46,6 +46,7 @@ pub async fn verify_rustfmt(event: &BusEvent) -> Verdict {
         replacement: String::new(),
         severity: "warning".into(),
         command: Some("rustfmt".into()),
+        line: None,
     })
 }
 

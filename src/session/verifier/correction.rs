@@ -116,13 +116,14 @@ impl CorrectionLoop {
                         };
 
                     let file = fix.file.clone();
+                    let line = fix.line;
                     results.push(CorrectionResult {
                         verifier: decisive_name.clone(),
                         success: applied,
                         message,
                         fix: Some(fix),
                         file: Some(file),
-                        line: None,
+                        line,
                     });
                     if !applied || is_suggestion {
                         break; // can't fix, or suggestion only → stop looping
@@ -138,7 +139,7 @@ impl CorrectionLoop {
                         ),
                         fix: None,
                         file: err.file.clone(),
-                        line: None,
+                        line: err.line,
                     });
                     break; // unfixable → stop
                 }
@@ -315,6 +316,7 @@ mod tests {
             replacement: "let _x = 1;".into(),
             severity: "warning".into(),
             command: None,
+            line: None,
         };
 
         assert!(apply_text_fix(&fix, &crate::session::access::PathGuard::default()).await);
@@ -332,6 +334,7 @@ mod tests {
             replacement: "new".into(),
             severity: "warning".into(),
             command: None,
+            line: None,
         };
         assert!(!apply_text_fix(&fix, &crate::session::access::PathGuard::default(),).await);
     }
@@ -349,6 +352,7 @@ mod tests {
             replacement: "replacement".into(),
             severity: "error".into(),
             command: None,
+            line: None,
         };
         assert!(!apply_text_fix(&fix, &crate::session::access::PathGuard::default()).await);
         remove_test_file(&path);
@@ -371,6 +375,7 @@ mod tests {
             replacement: "public".into(),
             severity: "warning".into(),
             command: None,
+            line: None,
         };
         assert!(!apply_text_fix(&fix, &guard).await);
         remove_test_file(&path);
@@ -389,6 +394,7 @@ mod tests {
             replacement: "".into(),
             severity: "warning".into(),
             command: None,
+            line: None,
         };
         assert!(apply_text_fix(&fix, &crate::session::access::PathGuard::default(),).await);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn main() {}\n");
@@ -404,6 +410,7 @@ mod tests {
             replacement: "new".into(),
             severity: "warning".into(),
             command: None,
+            line: None,
         };
         assert!(!apply_text_fix(&fix, &crate::session::access::PathGuard::default(),).await);
     }
@@ -546,6 +553,7 @@ mod tests {
             replacement: "b".into(),
             severity: "warning".into(),
             command: None,
+            line: None,
         };
         let cr = CorrectionResult {
             verifier: "v".into(),
@@ -585,6 +593,7 @@ mod tests {
                     replacement: "".into(),
                     severity: "warning".into(),
                     command: None,
+                    line: None,
                 })
             }
         }
@@ -657,5 +666,102 @@ mod tests {
         assert!(results[0].fix.is_none());
         assert!(results[0].file.is_none());
         assert!(results[0].line.is_none());
+    }
+
+    /// WO 25.14-R4: line from FixSuggestion propagates into CorrectionResult.
+    #[tokio::test]
+    async fn correction_loop_propagates_line_from_fix_suggestion() {
+        use super::super::types::{Verdict, Verifier};
+        struct StubLineVerifier;
+        #[async_trait::async_trait]
+        impl Verifier for StubLineVerifier {
+            fn name(&self) -> &str {
+                "lint"
+            }
+            fn priority(&self) -> u8 {
+                1
+            }
+            async fn verify(&self, _event: &BusEvent) -> Verdict {
+                Verdict::Fixable(FixSuggestion {
+                    description: "unused import".into(),
+                    file: PathBuf::from("/tmp/none.rs"),
+                    original: "use foo;".into(),
+                    replacement: "".into(),
+                    severity: "warning".into(),
+                    command: None,
+                    line: Some(42),
+                })
+            }
+        }
+        let mut slots_inner = super::super::slots::VerifierSlots::new();
+        slots_inner
+            .register(std::sync::Arc::new(StubLineVerifier))
+            .unwrap();
+        let slots = std::sync::Arc::new(std::sync::RwLock::new(slots_inner));
+        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
+            slots,
+            crate::session::access::PathGuard::default(),
+        ));
+        let loop_ = CorrectionLoop::new(handler).with_max_iterations(1);
+        let event = crate::session::verifier::types::BusEvent::Edit(
+            crate::session::verifier::types::EditEvent {
+                path: PathBuf::from("/tmp/none.rs"),
+                diff: "@@ -1 +1 @@\n-use foo;\n+".into(),
+            },
+        );
+        let results = loop_.run(&event).await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].line,
+            Some(42),
+            "line from FixSuggestion must propagate into CorrectionResult"
+        );
+    }
+
+    /// WO 25.14-R4: line from VerificationError propagates into CorrectionResult.
+    #[tokio::test]
+    async fn correction_loop_propagates_line_from_verification_error() {
+        use super::super::types::{Verdict, VerificationError, Verifier};
+        struct StubErrLineVerifier;
+        #[async_trait::async_trait]
+        impl Verifier for StubErrLineVerifier {
+            fn name(&self) -> &str {
+                "build"
+            }
+            fn priority(&self) -> u8 {
+                1
+            }
+            async fn verify(&self, _event: &BusEvent) -> Verdict {
+                Verdict::Unfixable(VerificationError {
+                    description: "build error".into(),
+                    file: Some(PathBuf::from("/tmp/x.rs")),
+                    details: "oops".into(),
+                    line: Some(7),
+                })
+            }
+        }
+        let mut slots_inner = super::super::slots::VerifierSlots::new();
+        slots_inner
+            .register(std::sync::Arc::new(StubErrLineVerifier))
+            .unwrap();
+        let slots = std::sync::Arc::new(std::sync::RwLock::new(slots_inner));
+        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
+            slots,
+            crate::session::access::PathGuard::default(),
+        ));
+        let loop_ = CorrectionLoop::new(handler).with_max_iterations(1);
+        let event = crate::session::verifier::types::BusEvent::Edit(
+            crate::session::verifier::types::EditEvent {
+                path: PathBuf::from("/tmp/x.rs"),
+                diff: "@@ -1 +1 @@".into(),
+            },
+        );
+        let results = loop_.run(&event).await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].line,
+            Some(7),
+            "line from VerificationError must propagate into CorrectionResult"
+        );
     }
 }

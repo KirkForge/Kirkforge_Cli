@@ -187,6 +187,7 @@ pub async fn resume_conversation_log(
     state.tokens_received = 0;
     state.cumulative_cost = 0.0;
     state.turn_cost = 0.0;
+    state.cached_tokens = 0;
 
     // Update session identity to the new log path. We keep the original
     // session_id as a parent marker so forks created from this resumed
@@ -231,6 +232,37 @@ mod tests {
             &log_path,
         ));
         state
+    }
+
+    #[tokio::test]
+    async fn fork_reset_clears_cumulative_budget_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_log_path = tmp.path().join("old-session.conv.ndjson");
+        let new_log_path = tmp.path().join("new-session.conv.ndjson");
+
+        let _ = ConversationLog::open(old_log_path.clone()).unwrap();
+        let (new_log, _) = ConversationLog::open(new_log_path.clone()).unwrap();
+
+        let (tx, _rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let mut state = test_state_with_log(old_log_path);
+        state.tokens_sent = 500;
+        state.tokens_received = 300;
+        state.cumulative_cost = 0.05;
+        state.turn_cost = 0.01;
+        state.cached_tokens = 200;
+        state.last_turn_prompt_tokens = 100;
+
+        let _msg = resume_conversation_log(new_log, &mut state, &tx).await;
+
+        assert_eq!(state.tokens_sent, 0, "tokens_sent must reset on fork");
+        assert_eq!(state.tokens_received, 0, "tokens_received must reset on fork");
+        assert_eq!(state.cumulative_cost, 0.0, "cumulative_cost must reset on fork");
+        assert_eq!(state.turn_cost, 0.0, "turn_cost must reset on fork");
+        assert_eq!(state.cached_tokens, 0, "cached_tokens must reset on fork");
+        assert_eq!(
+            state.last_turn_prompt_tokens, 0,
+            "last_turn_prompt_tokens must reset on fork"
+        );
     }
 
     #[tokio::test]

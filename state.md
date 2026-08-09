@@ -95,19 +95,26 @@
 
 ### Medium priority
 
-0. **24.6-R1..R5**: Raise `src/session` coverage above 75%. Requires `cargo llvm-cov` (not installed). Remaining: R1 baseline measurement, R2 executor loop tests (6 scenarios), R3 budget slicing tests (4), R4 compaction tests (5), R5 verifier bus tests (4). Tracked in WO 24.6.
-
-1. **21.5-R2-R3**: Stream partial bash output to TUI via TurnEvent::BashPartialOutput. UX polish only — non-PTY path unchanged. Remaining: add TurnEvent variant, forward PTY output through event_tx, render streaming indicator in TUI tool-result card.
-2. **21.5-R4**: MCP sampling/createMessage. R1 (roots/list capability) DONE in WO 25.15. Remaining: implement sampling handler with user approval gate + headless policy + ADR. Tracked in WO 25.15.
-3. **21.5-R9**: Anthropic computer_use beta (coordinate-vision model). Local headless-Chrome tool is the real differentiator. Remaining: opt-in beta path routed to Anthropic model, gated behind feature flag.
-4. **22.4-R2/R3**: TUI memory visibility + config flag. Remaining: memory indicator widget in status bar; config flag to toggle memory display.
-8. **25.17-R1-remaining**: Persona adapter Bedrock/Vertex plumbing. `adapter_for` hardcodes Anthropic-direct; needs signature extension + Config ref at all call sites. Remaining: extend `adapter_for` with Bedrock/Vertex params, update persona.rs call site, add integration test. Tracked in WO 25.17.
+0. **24.6-R1..R5 / 25.16**: Raise `src/session` coverage above 75%. CI coverage job added in WO 25.4-R1. Remaining: R1 fill baseline from first CI run, R2 executor loop tests (6), R3 budget slicing tests (4), R4 compaction tests (5), R5 verifier bus tests (4). Tracked in WO 25.16.
+1. **21.5-R2-R3 / 25.18-R1**: Stream partial bash output to TUI via TurnEvent::BashPartialOutput. UX polish only — non-PTY path unchanged. Remaining: add TurnEvent variant, forward PTY output through event_tx, render streaming indicator in TUI tool-result card.
+2. **21.5-R4 / 25.15-R2+R3**: MCP sampling/createMessage. R1 (roots/list capability) DONE in WO 25.15. Remaining: implement sampling handler with user approval gate + headless policy + ADR. Tracked in WO 25.15.
+3. **21.5-R9 / 25.18-R2**: Anthropic computer_use beta (coordinate-vision model). Local headless-Chrome tool is the real differentiator. Remaining: opt-in beta path routed to Anthropic model, gated behind feature flag.
+4. **22.4-R2/R3 / 25.18-R3**: TUI memory visibility + config flag. Remaining: memory indicator widget in status bar; config flag to toggle memory display.
+5. **25.11-R2**: Daemon sessions-list refresh on dirty. `sessions_dirty` flag set but no refresh path — daemon clients show stale session state. Remaining: add sessions-list refresh equivalent to jobs_dirty refresh, triggered by sessions_dirty.
+6. **25.12-R1**: AppState decomposition — 68-field struct into ≤12 sub-struct fields. R2 (cached_tokens fork-reset bug) DONE. Remaining: group fields by concern (ConversationState, BudgetState, etc.), add accessors/Deref shims, preserve TUI public API. High-touch refactor.
+7. **25.17-R1-remaining**: Persona adapter Bedrock/Vertex plumbing. `adapter_for` hardcodes Anthropic-direct; needs signature extension + Config ref at all call sites. Remaining: extend `adapter_for` with Bedrock/Vertex params, update persona.rs call site, add integration test. Tracked in WO 25.17.
 
 ### Low priority
 
-5. **22.5-R4**: RESOLVED by WO 25.11-R1 — duration_ms now passes through file-tool branch.
-6. **22.9-R4**: Bedrock/Vertex test hardening. Integration tests need live provider credentials. Remaining: mock provider adapters for CI.
-7. **adr_xref_drift path-literal check**: DONE in WO 25.10-R2 — `adr_path_literals_reference_existing_crates` test now enforces path existence.
+8. **25.2-R2**: Top-10 slowest individual test fix. Per-test timing data needed. Remaining: identify top-10 slowest, replace std::thread::sleep with tokio::time::advance, reduce fixture sizes, move genuinely slow tests behind feature flag.
+9. **25.2-R4**: Split slow integration tests behind a feature flag or `tests/` directory separation. Fast gate should not run integration tests. Remaining: identify integration tests, gate behind `#[cfg(feature = "integration-tests")]` or move to dedicated `tests/`.
+10. **25.3-R3**: testdoctor parallel directory scanning. Current runtime 1.8s. Remaining: use `std::thread::scope` for parallel dir scan (no new deps).
+11. **25.3-R4**: testdoctor result caching. File-content-hash cache for unchanged files, target: second run <1s. Remaining: hash (size + mtime), store in `target/.testdoctor-cache`, invalidate on `cargo clean`.
+12. **25.4-R3**: Coverage regression gate. Baseline placeholder exists but no enforcement. Remaining: `scripts/check-cov-regression.sh`, CI step comparing per-crate coverage against baseline - 1% tolerance.
+13. **25.7-R3**: Benchmark manifest validation. CI step verifying bench/tasks/*.toml count matches README. Remaining: generate count from source in CI.
+14. **25.8-R4 / 25.10-R4**: CI enforcement gate for dead crate/binary refs. `scripts/check-artifact-consistency.sh` covers this partially. Remaining: extend to also grep active source (src/, crates/) for `plugin3`, `kfd`, `kf-code-video` as identifiers (not historical prose), fail CI on hit.
+15. **22.9-R4 / 25.18-R4**: Bedrock/Vertex test hardening. Integration tests need live provider credentials. Remaining: mock provider adapters for CI.
+16. **Plugin3 env var backward compat**: PLUGIN3_* env vars renamed to KF_BUDGET_* in kf-budget-core (WO review-fix). Users who set the old env vars will break. Remaining: add a one-release backward-compat shim that checks PLUGIN3_* and warns, or document the breaking change in CHANGELOG + migration guide.
 
 ## Gate status
 
@@ -119,10 +126,7 @@
 
 ## Known pre-existing test failures (NOT from WO 21/22)
 
-- `compaction_use_llm_alias_backward_compat` — parser reads from top level, test expects `[session]`
-- `bundled_node_sdk_tool_executes_via_host` — requires Node.js
-- `adapters::m5_tests::openai_cache_mode_marks_last_two_prefix_messages` — stale vs WO 17.5
-- `session::plugin_tools::*` (7), `tools::bash::*` (2) — env/binary-dependent
+All known-broken tests are now `#[ignore]`-labeled (WO 25.2-R1, 29 tests). They remain in the source as documentation of expected behavior. Run with `--ignored` to execute them.
 
 ## Rust toolchain
 

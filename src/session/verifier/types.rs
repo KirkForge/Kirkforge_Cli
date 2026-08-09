@@ -141,6 +141,7 @@ mod tests {
             replacement: "b".into(),
             severity: "low".into(),
             command: None,
+            line: None,
         });
         let cloned = fixable.clone();
         assert!(matches!(cloned, Verdict::Fixable(_)));
@@ -149,6 +150,7 @@ mod tests {
             description: "err".into(),
             file: None,
             details: "d".into(),
+            line: None,
         });
         let cloned = unfixable.clone();
         assert!(matches!(cloned, Verdict::Unfixable(_)));
@@ -303,6 +305,7 @@ pub struct FixSuggestion {
     pub replacement: String,
     pub severity: String,
     pub command: Option<String>,
+    pub line: Option<u32>,
 }
 
 /// A verification error that can't be auto-corrected.
@@ -311,6 +314,7 @@ pub struct VerificationError {
     pub description: String,
     pub file: Option<PathBuf>,
     pub details: String,
+    pub line: Option<u32>,
 }
 
 // ── Verifier trait ──────────────────────────────────────────────────────

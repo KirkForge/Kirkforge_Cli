@@ -47,6 +47,7 @@ fn parse_build_json(line: &str, target_path: &Path, cargo_root: &Path) -> Option
                 replacement: String::new(),
                 severity: level.to_string(),
                 command: None,
+                line: Some(line_start as u32),
             });
         }
     }
@@ -103,6 +104,7 @@ pub async fn verify_build(event: &BusEvent) -> Verdict {
         description: "cargo build failed".into(),
         file: Some(path),
         details,
+        line: None,
     })
 }
 

@@ -181,6 +181,7 @@ async fn check_dirty_worktree(workdir: Option<&Path>) -> Verdict {
                 dirty_count,
                 dirty.iter().take(10).copied().collect::<Vec<_>>().join("\n")
             ),
+            line: None,
         })
     }
 }
@@ -215,6 +216,7 @@ async fn check_merge_conflicts(workdir: Option<&Path>) -> Verdict {
                 .collect::<Vec<_>>()
                 .join("\n")
         ),
+        line: None,
     })
 }
 

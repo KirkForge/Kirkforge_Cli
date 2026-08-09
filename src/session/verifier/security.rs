@@ -137,6 +137,7 @@ fn scan_entropy_prefix(
                     path.display(),
                     shannon_entropy(token)
                 ),
+                line: None,
             }));
         }
     }
@@ -259,6 +260,7 @@ async fn trufflehog_scan(path: &Path) -> Option<Verdict> {
                     "trufflehog reported a finding in {}: {line}",
                     path.display()
                 ),
+                line: None,
             }));
         }
     }
@@ -309,6 +311,7 @@ pub async fn verify_security(event: &BusEvent) -> Verdict {
                     pattern,
                     path.display()
                 ),
+                line: None,
             });
         }
     }
@@ -336,6 +339,7 @@ pub async fn verify_security(event: &BusEvent) -> Verdict {
                 description: format!("Dangerous shell command: {pattern}"),
                 file: Some(path.clone()),
                 details: "This command is blocked by security policy. Remove it to proceed.".into(),
+                line: None,
             });
         }
     }

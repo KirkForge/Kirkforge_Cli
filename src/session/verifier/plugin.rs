@@ -81,6 +81,7 @@ impl Verifier for PluginVerifierAdapter {
                     ),
                     file: None,
                     details: e.to_string(),
+                    line: None,
                 });
             }
         };
@@ -93,6 +94,7 @@ impl Verifier for PluginVerifierAdapter {
                     description: format!("plugin verifier {}: task panicked", self.inner.name),
                     file: None,
                     details: e.to_string(),
+                    line: None,
                 });
             }
         };
@@ -103,11 +105,13 @@ impl Verifier for PluginVerifierAdapter {
                 description: format!("plugin verifier {}: {}", self.inner.name, message),
                 file: None,
                 details: message,
+                line: None,
             }),
             Err(e) => Verdict::Unfixable(VerificationError {
                 description: format!("plugin verifier {}: execution failed", self.inner.name),
                 file: None,
                 details: e.to_string(),
+                line: None,
             }),
         }
     }

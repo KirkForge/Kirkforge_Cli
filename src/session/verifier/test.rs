@@ -98,6 +98,7 @@ pub async fn verify_test(event: &BusEvent) -> Verdict {
                 description: "failed to spawn cargo test".into(),
                 file: Some(path),
                 details: e.to_string(),
+                line: None,
             })
         }
     };
@@ -124,6 +125,7 @@ pub async fn verify_test(event: &BusEvent) -> Verdict {
         replacement: String::new(),
         severity: "error".to_string(),
         command: None,
+        line: None,
     })
 }
 

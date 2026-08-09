@@ -234,6 +234,7 @@ default = ["stratum", "budget"]
 stratum = ["dep:kf-compress-core"]
 budget = ["dep:kf-budget-core"]
  pty = ["portable-pty"]
+# ponytail: opt-in only — default-on requires resolving $HOME/.cargo write access in sandboxed builds (upgrade path: per-target default-features for linux + cargo dir carve-out)
 landlock = []
 # Enable OpenTelemetry span/metric export from the Rust runtime.
 otel = [

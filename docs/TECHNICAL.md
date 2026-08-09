@@ -275,6 +275,8 @@ most conservative subagent surface — same read-only tools as the `/plan`
 persona, but no `bash` (the bash sandbox adds attack surface that has not
 been independently audited).
 
+Personas currently route through Anthropic-direct only. Bedrock/Vertex-configured users should use Anthropic API keys for persona invocation.
+
 ### `shared/` — cross-cutting types
 
 `Config` (decomposed into 5 `#[serde(flatten)]` sub-structs: `ModelConfig`,

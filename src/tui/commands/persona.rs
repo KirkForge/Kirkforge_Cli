@@ -208,6 +208,7 @@ async fn run_persona_task(
     undo_stack: Option<UndoStackRef>,
     cancelled: Arc<AtomicBool>,
 ) -> PersonaResult {
+    // ponytail: personas route through Anthropic-direct only; Bedrock/Vertex plumbing deferred (WO 25.17-R1-remaining: extend adapter_for sig + pass Config ref at all call sites)
     let adapter = adapters::caching::maybe_wrap_cached(
         adapters::adapter_for(
             &model_name,

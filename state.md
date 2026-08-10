@@ -91,13 +91,19 @@
 | 25.18 | DEFERRED | carry-forward: bash streaming, computer_use, memory widget, Bedrock/Vertex mocks |
 | 25.19 | DONE | phased multistep workflow in AGENTS.md |
 
+### WO 26 series (in progress)
+
+| WO | Status | Items |
+|----|--------|-------|
+| 26.7 | R1+R2 DONE (R3,R4 pending) | R1: bash streaming TurnEvent; R2: MCP sampling/createMessage via approval bus + ADR-072 |
+
 ## Deferred items (explicitly tracked)
 
 ### Medium priority
 
 0. **24.6-R1..R5 / 25.16**: Raise `src/session` coverage above 75%. CI coverage job added in WO 25.4-R1. Remaining: R1 fill baseline from first CI run, R2 executor loop tests (6), R3 budget slicing tests (4), R4 compaction tests (5), R5 verifier bus tests (4). Tracked in WO 25.16.
 1. **21.5-R2-R3 / 25.18-R1**: Stream partial bash output to TUI via TurnEvent::BashPartialOutput. UX polish only — non-PTY path unchanged. Remaining: add TurnEvent variant, forward PTY output through event_tx, render streaming indicator in TUI tool-result card.
-2. **21.5-R4 / 25.15-R2+R3**: MCP sampling/createMessage. R1 (roots/list capability) DONE in WO 25.15. Remaining: implement sampling handler with user approval gate + headless policy + ADR. Tracked in WO 25.15.
+2. **21.5-R4 / 25.15-R2+R3**: MCP sampling/createMessage. R1 (roots/list capability) DONE in WO 25.15. R2 (approval-gated handler + headless policy + ADR-072) DONE in WO 26.7-R2. Resolved — sampling routes through the approval bus with default-deny headless policy.
 3. **21.5-R9 / 25.18-R2**: Anthropic computer_use beta (coordinate-vision model). Local headless-Chrome tool is the real differentiator. Remaining: opt-in beta path routed to Anthropic model, gated behind feature flag.
 4. **22.4-R2/R3 / 25.18-R3**: TUI memory visibility + config flag. Remaining: memory indicator widget in status bar; config flag to toggle memory display.
 5. **25.11-R2**: Daemon sessions-list refresh on dirty. `sessions_dirty` flag set but no refresh path — daemon clients show stale session state. Remaining: add sessions-list refresh equivalent to jobs_dirty refresh, triggered by sessions_dirty.

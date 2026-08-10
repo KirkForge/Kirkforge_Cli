@@ -278,6 +278,12 @@
 # args = ["-y", "@modelcontextprotocol/server-fetch"]
 # [mcp_servers.env_vars]
 # LOG_LEVEL = "warn"
+#
+# Sampling (ADR-072): when an MCP server calls `sampling/createMessage`, the
+# request is routed through the same approval prompt as tool calls. In headless
+# / non-interactive mode it is DENIED by default. Set this to true to
+# auto-approve sampling from trusted servers (explicit trust decision).
+# allow_sampling_unattended = false
 
 # ---------------------------------------------------------------------------
 # LSP servers (optional — gives the model symbol-aware code navigation)

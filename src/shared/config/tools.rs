@@ -64,6 +64,10 @@ fn default_memory_auto_populate() -> bool {
     true
 }
 
+fn default_allow_sampling_unattended() -> bool {
+    false
+}
+
 fn default_doom_loop_max_hits() -> usize {
     1
 }
@@ -149,6 +153,8 @@ pub struct ToolConfig {
     pub budget_approaching_ratio: f64,
     #[serde(default = "default_memory_auto_populate")]
     pub memory_auto_populate: bool,
+    #[serde(default = "default_allow_sampling_unattended")]
+    pub allow_sampling_unattended: bool,
     #[serde(default = "default_doom_loop_max_hits")]
     pub doom_loop_max_hits: usize,
     #[serde(default = "default_doom_loop_action")]
@@ -195,6 +201,7 @@ impl Default for ToolConfig {
             budget_ceiling: default_budget_ceiling(),
             budget_approaching_ratio: default_budget_approaching_ratio(),
             memory_auto_populate: true,
+            allow_sampling_unattended: false,
             doom_loop_max_hits: default_doom_loop_max_hits(),
             doom_loop_action: default_doom_loop_action(),
         }
@@ -219,6 +226,10 @@ mod tests {
         assert_eq!(cfg.max_continuation_rounds, 5);
         assert_eq!(cfg.doom_loop_max_hits, 1);
         assert_eq!(cfg.doom_loop_action, "auto_plan");
+        assert!(
+            !cfg.allow_sampling_unattended,
+            "sampling must default to approval-gated (deny in headless)"
+        );
     }
 
     #[test]

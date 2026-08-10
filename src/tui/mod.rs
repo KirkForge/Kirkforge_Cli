@@ -363,6 +363,7 @@ pub async fn run_tui(
     plugin_registry: &kf_plugin_host::PluginRegistry,
     context_index: Option<kf_context_index::ContextIndex>,
     trace_recorder: Option<crate::session::replay::TraceRecorder>,
+    mcp_manager: Option<std::sync::Arc<crate::session::mcp_client::McpClientManager>>,
 ) -> anyhow::Result<()> {
     // ── Terminal setup ──
     enable_raw_mode()?;
@@ -406,6 +407,17 @@ pub async fn run_tui(
     let (input_tx, input_rx) = mpsc::unbounded_channel::<String>();
     let (event_tx, mut event_rx) = mpsc::channel::<executor::TurnEvent>(10_000);
     let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+
+    // Wire the MCP sampling approval bus: incoming `sampling/createMessage`
+    // requests route through the same approval channel as tool calls.
+    if let Some(mcp_mgr) = &mcp_manager {
+        let sampling_cfg = crate::shared::read_shared_config(&shared_config).clone();
+        mcp_mgr.set_sampling(crate::session::mcp_client::SamplingContext {
+            approval_tx: approval_tx.clone(),
+            config: std::sync::Arc::new(sampling_cfg),
+        });
+    }
+
     let (cancel_tx, cancel_rx) = mpsc::unbounded_channel::<()>();
     let (resume_tx, resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
     let (compact_tx, compact_rx) = mpsc::unbounded_channel::<CompactRequest>();

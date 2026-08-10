@@ -50,6 +50,7 @@ pub(super) async fn run_line_mode(
     session_id: String,
     context_index: Option<kf_context_index::ContextIndex>,
     trace_recorder: Option<session::replay::TraceRecorder>,
+    mcp_manager: Option<std::sync::Arc<session::mcp_client::McpClientManager>>,
 ) -> anyhow::Result<()> {
     // If running in non-interactive mode (scripted), deny all approvals.
     // If running in line-mode interactive (no TUI), prompt on stderr and
@@ -84,6 +85,18 @@ pub(super) async fn run_line_mode(
 
     let (approval_tx, approval_rx) =
         mpsc::unbounded_channel::<session::executor::ApprovalRequest>();
+
+    // Wire the MCP sampling approval bus through the same channel the
+    // executor uses for tool approvals. In non-interactive mode the spawned
+    // handler below denies every request (default deny), so sampling is
+    // denied unless `tools.allow_sampling_unattended` is set.
+    if let Some(mcp_mgr) = &mcp_manager {
+        let sampling_cfg = kf_code::shared::read_shared_config(&config).clone();
+        mcp_mgr.set_sampling(session::mcp_client::SamplingContext {
+            approval_tx: approval_tx.clone(),
+            config: std::sync::Arc::new(sampling_cfg),
+        });
+    }
 
     if non_interactive {
         spawn_non_interactive_approval_handler(approval_rx);

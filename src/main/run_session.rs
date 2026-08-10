@@ -485,6 +485,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
 
     // --- MCP tools ---
     let cfg_for_mcp = kf_code::shared::read_shared_config(&shared_config).clone();
+    let mut mcp_manager: Option<std::sync::Arc<session::mcp_client::McpClientManager>> = None;
     if !cfg_for_mcp.tools.mcp_servers.is_empty() {
         let mcp_mgr =
             session::mcp_client::McpClientManager::new(&cfg_for_mcp.tools.mcp_servers).await;
@@ -503,8 +504,9 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         }
         toolset.add(Box::new(session::toolset::VecToolset::new(
             "mcp-resource",
-            session::mcp_resource_tools::all_mcp_resource_tools(mcp_mgr),
+            session::mcp_resource_tools::all_mcp_resource_tools(mcp_mgr.clone()),
         )));
+        mcp_manager = Some(mcp_mgr);
     }
 
     // ── Plugin tools ──
@@ -641,6 +643,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             &plugin_registry,
             context_index,
             trace_recorder,
+            mcp_manager,
         )
         .await
     } else {
@@ -658,6 +661,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             session_id.to_string(),
             context_index,
             trace_recorder,
+            mcp_manager,
         )
         .await
     }

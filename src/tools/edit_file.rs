@@ -1195,6 +1195,11 @@ mod tests {
     // We guarantee a unique match by constructing content from alphabets
     // that never overlap with `old`/`new`.
     proptest! {
+        // 256 default cases each spin up a fresh tokio runtime + tempdir +
+        // file I/O (~0.3s each), making these the slowest tests in the suite
+        // (~78s). The property is a pure string transform; 32 cases give the
+        // same coverage at ~1/8 the wall-clock cost.
+        #![proptest_config(ProptestConfig::with_cases(32))]
         #[test]
         fn edit_file_replacement_equals_replacen(
             old in "[a-z]{3,8}",

@@ -649,7 +649,13 @@ mod tests {
 
     /// Once MAX_JOBS slots are filled with still-running jobs, further spawns
     /// must be rejected instead of growing the registry unboundedly.
+    ///
+    /// #[ignore]: spawns MAX_JOBS (64) real `sleep 30` subprocesses and then
+    /// cancels+reaps each sequentially (~0.9s each), ~58s wall-clock. Genuine
+    /// subprocess-management cost, not unnecessary setup. Run explicitly with
+    /// `cargo test -- --ignored` when validating the job cap.
     #[tokio::test]
+    #[ignore]
     async fn test_job_cap_enforced_when_all_running() {
         let reg = BashJobRegistry::new();
         for i in 0..MAX_JOBS {

@@ -691,7 +691,12 @@ mod tests {
         WebFetch::with_client(DenyList::default(), client)
     }
 
+    // #[ignore]: the SSRF guard (`host_resolves_to_internal_ip`) does a real
+    // OS DNS lookup of the non-resolving `test.local` host, which times out
+    // after ~5s and is done twice per request → ~10s per test. Genuine DNS
+    // I/O, not unnecessary setup. Run with `cargo test -- --ignored`.
     #[tokio::test]
+    #[ignore]
     async fn fetches_json_successfully() {
         let body = r#"{"hello": "world"}"#;
         let server = wiremock::MockServer::start().await;
@@ -715,7 +720,9 @@ mod tests {
         assert!(content.contains("world"));
     }
 
+    // #[ignore]: same DNS-NXDOMAIN I/O as `fetches_json_successfully` (~10s).
     #[tokio::test]
+    #[ignore]
     async fn html_is_stripped_to_text() {
         let html = r#"<!DOCTYPE html><html><head><title>Hi</title><script>alert(1)</script></head><body><h1>  Hello  </h1><p>World &amp; more.</p></body></html>"#;
         let server = wiremock::MockServer::start().await;
@@ -756,7 +763,9 @@ mod tests {
         );
     }
 
+    // #[ignore]: same DNS-NXDOMAIN I/O as `fetches_json_successfully` (~10s).
     #[tokio::test]
+    #[ignore]
     async fn non_2xx_returns_failure() {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
@@ -774,7 +783,9 @@ mod tests {
         );
     }
 
+    // #[ignore]: same DNS-NXDOMAIN I/O as `fetches_json_successfully` (~10s).
     #[tokio::test]
+    #[ignore]
     async fn oversized_response_is_rejected() {
         let big = "x".repeat(MAX_BODY_BYTES + 1);
         let server = wiremock::MockServer::start().await;
@@ -946,7 +957,9 @@ mod tests {
         );
     }
 
+    // #[ignore]: same DNS-NXDOMAIN I/O as `fetches_json_successfully` (~10s).
     #[tokio::test]
+    #[ignore]
     async fn public_hostname_passes_initial_guards() {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))

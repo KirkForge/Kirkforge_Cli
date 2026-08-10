@@ -313,7 +313,7 @@ impl Tool for Bash {
             let timeout = args
                 .get("timeout")
                 .and_then(|t| t.as_u64())
-                .map(|t| t.min(MAX_BASH_TIMEOUT_SECS));
+                .map(|t| std::time::Duration::from_secs(t.min(MAX_BASH_TIMEOUT_SECS)));
             match registry
                 .spawn(
                     &cmd,

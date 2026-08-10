@@ -81,7 +81,7 @@ impl BashJobRegistry {
     }
 
     /// Spawn a bash command in the background and return a job ID.
-    /// Optionally accepts a working directory and timeout (seconds, 0 = no timeout).
+    /// Optionally accepts a working directory and timeout (0 = no timeout).
     ///
     /// The child process handle is stored so that cancel() can kill it.
     /// Completed/failed jobs are evicted oldest-first when the registry
@@ -90,7 +90,7 @@ impl BashJobRegistry {
         &self,
         command: &str,
         workdir: Option<&str>,
-        timeout_secs: Option<u64>,
+        timeout: Option<Duration>,
         deny_list: &DenyList,
         path_guard: &PathGuard,
         bash_sandbox_workdir: bool,
@@ -219,9 +219,9 @@ impl BashJobRegistry {
 
             // Wait with optional timeout
             let status_result: Result<std::process::ExitStatus, String> = if let Some(t) =
-                timeout_secs.filter(|t| *t > 0)
+                timeout.filter(|t| !t.is_zero())
             {
-                match tokio::time::timeout(std::time::Duration::from_secs(t), child.wait()).await {
+                match tokio::time::timeout(t, child.wait()).await {
                     Ok(Ok(status)) => Ok(status),
                     Ok(Err(e)) => Err(e.to_string()),
                     Err(_) => Err("Timed out".into()),
@@ -667,7 +667,7 @@ mod tests {
             .spawn(
                 "echo partial; sleep 30",
                 None,
-                Some(1),
+                Some(Duration::from_secs(1)),
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,

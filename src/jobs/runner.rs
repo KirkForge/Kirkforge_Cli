@@ -108,7 +108,7 @@ async fn run_bash_job(
         .spawn(
             command,
             None,
-            job.timeout.map(|d| d.as_secs()),
+            job.timeout,
             &deny_list,
             &path_guard,
             config.security.bash_sandbox_workdir,

@@ -9,6 +9,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - WO 26.4-F8: drop the job-store lock before `.await` in the scheduler daemon — no `MutexGuard` spans an await, removing a deadlock-under-load risk.
 
 ### Added
+- WO 26.6-R3: Wire eslint into CI — `npm run lint` runs in `scripts/ci-local.sh` and the `quality` CI job; removed a pre-existing unused `readFileSync` import in the Node SDK that blocked the lint gate.
 - WO 26.3: `--features landlock` now compiles — declared the previously-orphaned `landlock` module in `bash_runner/mod.rs` and fixed the `Option<&LandlockPaths>` type mismatch. Landlock tests skip cleanly on kernels/caps that can't confine (probe `restrict_self`, not just `create_ruleset`).
 - WO 25.17: Document persona Anthropic-direct limitation (ponytail comment in persona.rs, TECHNICAL.md note). Bedrock/Vertex plumbing deferred (tracked in state.md).
 - WO 25.17: Document landlock as opt-in (ponytail comment on Cargo.toml feature, TECHNICAL.md already correct).

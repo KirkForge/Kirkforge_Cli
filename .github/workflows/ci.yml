@@ -113,6 +113,13 @@ jobs:
       - name: Typecheck all targets
         run: cargo check --workspace --all-targets --locked
 
+      - name: Lint Node SDK (eslint)
+        run: |
+          set -euo pipefail
+          cd npm/kf-plugin
+          npm ci
+          npm run lint
+
   windows:
     runs-on: windows-latest
     needs: fmt

@@ -47,6 +47,7 @@ if [ -d "npm/kf-plugin" ] && [ -f "npm/kf-plugin/package.json" ]; then
     else
         run_step "Run Node SDK tests" bash -c 'cd npm/kf-plugin && npm test'
     fi
+    run_step "Lint Node SDK (eslint)" bash -c 'cd npm/kf-plugin && npm run lint'
 fi
 
 if [ "$MODE" != "quick" ]; then

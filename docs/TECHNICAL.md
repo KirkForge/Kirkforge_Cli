@@ -890,6 +890,13 @@ workorder — the remaining gap is async executor + MCP-HTTP code that
 needs integration test work, not pure-helper unit tests. The gate is a
 regression guard, not a vanity number.
 
+### Non-Rust linting (WO 26.6-R3)
+
+The tracked Node SDK (`npm/kf-plugin`) is linted with ESLint. `npm run lint`
+runs in the `quality` CI job and in `scripts/ci-local.sh` (all modes). No
+Python source is linted in-tree; the only `.py` files are test fixtures and
+a release script, so `ruff` is not wired.
+
 ---
 
 ## Feature flags

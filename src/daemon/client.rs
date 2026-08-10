@@ -13,8 +13,18 @@ mod unix_imp {
     use crate::session::session_index::SessionEntry;
     use anyhow::Context;
     use std::path::PathBuf;
+    use std::time::Duration;
     use tokio::io::{AsyncWriteExt, BufStream};
     use tokio::net::UnixStream;
+
+    /// How long a single connect attempt to the daemon socket may take.
+    /// ponytail: 5s is plenty for a local socket; raise if a slow filesystem
+    /// flakes. Tune when measurements show it's wrong.
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+    /// How long the client waits for one daemon response line. The server
+    /// already caps its own handler at 30s; this matches so a hung daemon
+    /// surfaces to the caller rather than hanging the client forever.
+    const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
     /// Client handle to the session daemon.
     pub struct DaemonClient {
@@ -31,9 +41,17 @@ mod unix_imp {
         /// Sends a version-gated Ping handshake and bails if the daemon
         /// version does not match the client version.
         pub async fn connect_at(path: PathBuf) -> anyhow::Result<Self> {
-            let stream = UnixStream::connect(&path).await.with_context(|| {
-                format!("failed to connect to daemon socket at {}", path.display())
-            })?;
+            let stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&path))
+                .await
+                .with_context(|| {
+                    format!(
+                        "timed out connecting to daemon socket at {} after {CONNECT_TIMEOUT:?}",
+                        path.display()
+                    )
+                })?
+                .with_context(|| {
+                    format!("failed to connect to daemon socket at {}", path.display())
+                })?;
             let mut client = Self {
                 stream: BufStream::new(stream),
             };
@@ -90,9 +108,11 @@ mod unix_imp {
             self.stream.flush().await.context("flush daemon request")?;
 
             let mut line = String::new();
-            let n = read_line_limited(&mut self.stream, &mut line)
-                .await
-                .context("read daemon response")?;
+            let n =
+                tokio::time::timeout(READ_TIMEOUT, read_line_limited(&mut self.stream, &mut line))
+                    .await
+                    .with_context(|| format!("daemon response timed out after {READ_TIMEOUT:?}"))?
+                    .context("read daemon response")?;
             if n == 0 {
                 anyhow::bail!("daemon closed connection before responding");
             }
@@ -375,8 +395,14 @@ mod unix_imp {
         use crate::daemon::InstanceEvent;
 
         let socket_path = paths::socket_path()?;
-        let stream = UnixStream::connect(&socket_path)
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&socket_path))
             .await
+            .with_context(|| {
+                format!(
+                    "timed out connecting to instance channel at {} after {CONNECT_TIMEOUT:?}",
+                    socket_path.display()
+                )
+            })?
             .with_context(|| format!("connect to instance channel at {}", socket_path.display()))?;
         let mut stream = BufStream::new(stream);
 
@@ -395,8 +421,9 @@ mod unix_imp {
 
         // Read handshake ack.
         let mut line = String::new();
-        let n = read_line_limited(&mut stream, &mut line)
+        let n = tokio::time::timeout(READ_TIMEOUT, read_line_limited(&mut stream, &mut line))
             .await
+            .with_context(|| format!("instance_register ack timed out after {READ_TIMEOUT:?}"))?
             .context("read instance_register ack")?;
         if n == 0 {
             anyhow::bail!("daemon closed connection during instance register handshake");

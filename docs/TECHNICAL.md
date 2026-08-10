@@ -19,7 +19,7 @@ synthesis with its own architectural contributions:
 | Provider lock-in | One `ModelAdapter` trait, six concrete providers (Ollama, OpenAI-compat, Anthropic direct, Bedrock, Vertex, OpenCode-Zen). Model-name routing heuristics pick the adapter; config overrides win. |
 | Context quality | Tree-sitter symbol/import/call-graph index (`kf-context-index`) gives the agent graph-grounded retrieval instead of plain-text search. Four languages: Rust, TypeScript, Python, Go. |
 | Context cost (input side) | Stratum compression pipeline classifies and compacts bloated tool outputs *before* they enter the context window. |
-| Context cost (output side) | Plugin3 budget guard tracks token spend against a ceiling and slices or compacts oversized tool results when the budget is approached. |
+| Context cost (output side) | Budget guard (`kf-budget-core`) tracks token spend against a ceiling and slices or compacts oversized tool results when the budget is approached. |
 | Execution reliability | A verifier bus runs build, test, lint, rustfmt, git-state, and security checks after file-modifying tool calls. A correction loop auto-applies rustfmt fixes; build/lint/test findings are fed back to the model as tool-result suggestions. |
 | Reproducibility | Enforced plan mode (`/plan` then `/implement`), per-result checkpointing mid-batch, execution replay (ADR-039), and conversation logging. |
 | Extensibility | A manifest-based plugin system (`kf-code.toml`) with trust tiers, minisign signature verification, and four capability kinds: skills, tools, hooks, verifiers. |
@@ -108,9 +108,9 @@ The largest module (~30 submodules). It owns:
 - **Verifiers** (`verifier/`): the verification bus and correction loop (see
   [Verification](#verification)).
 - **Plugin tools** (`plugin_tools/`): loads plugin manifests. External plugins
-  are wrapped in `PluginToolWrapper` (implements the `Tool` trait, spawns the
-  shell script as a subprocess). Folded plugins (Stratum, Plugin3)
-  register as direct Rust `Tool` impls when their feature is on (ADR-050).
+   are wrapped in `PluginToolWrapper` (implements the `Tool` trait, spawns the
+   shell script as a subprocess). Folded plugins (Stratum, Budget)
+   register as direct Rust `Tool` impls when their feature is on (ADR-050).
 - **Plugin ops** (`plugin_ops.rs`): shared plugin-ops layer used by both the
   TUI `/plugins` slash-command family and the `kf-code plugin` CLI
   subcommand (`list`, `enable`, `disable`, `toggle`, `validate`, `reload`,
@@ -430,12 +430,12 @@ content and applies size-based truncation with optional offload storage.
 // Upgrade path: query-based relevance scoring, per-content-type stages.
 
 Stratum ships as a compiled-in module (when the `stratum` feature is on,
-ADR-046) or as a standalone `stratum` binary (feature off, shell fallback).
+ADR-046) or as a shell fallback (feature off).
 The `session-start` hook emits the active ruleset so the model knows the
 compression contract; the `pre-tool-bash` hook validates config to surface
 drift early. Both hooks are in-process Rust handlers when compiled in.
 
-Stratum also coordinates with the Plugin3 budget guard (Workorder 8.6,
+Stratum also coordinates with the budget guard (`kf-budget-core`, Workorder 8.6,
 ADR-051): when the budget slices a tool result, a registered Stratum listener
 compresses the sliced display so the model sees a single coordinated
 post-compression size, and the Stratum session mode auto-escalates `Lite →
@@ -445,9 +445,9 @@ is itself sync.
 
 ---
 
-## Token budget (Plugin3)
+## Token budget (kf-budget-core)
 
-Plugin3 is the **output-side** context cost system. It tracks token spend
+The budget guard is the **output-side** context cost system. It tracks token spend
 against a configurable ceiling (default 200K) and intervenes when the budget is
 approached or exceeded:
 
@@ -459,13 +459,13 @@ approached or exceeded:
 
 The orchestrator (`SlicingOrchestrator`) classifies tool outputs, slices
 oversized ones with head/tail markers, and offloads the full content to a store.
-Cost reporting tracks per-turn usage. Plugin3 ships as a compiled-in module
+Cost reporting tracks per-turn usage. The budget guard ships as a compiled-in module
 (when the `budget` feature is on, ADR-047) or as a standalone `kf-budget` binary
 (feature off, shell fallback).
 
 The 4 in-process hooks receive full `HookContext` with real tool result content
-and compact metadata — the lossy canned-JSON shim that existed when Plugin3 ran
-as a shell plugin is eliminated (ADR-047). The hooks observe and report budget
+ and compact metadata — the lossy canned-JSON shim that existed when the budget
+ guard ran as a shell plugin is eliminated (ADR-047). The hooks observe and report budget
 usage; active slicing of tool results before they enter the conversation shipped
 in Workorder 7.1 (`check_and_slice` in `src/session/budget.rs`).
 
@@ -491,7 +491,7 @@ dispatch paths (ADR-050):
    builds without a feature still gets the plugin via the shell plugin if its
    dir and satellite binary are available, at the cost of subprocess overhead.
 
-The two folded plugins (Stratum, Plugin3) use this two-path
+The two folded plugins (Stratum, Budget) use this two-path
 dispatch. A single toggle — `enabled_plugins` in `ToolConfig` — controls both
 paths: a folded plugin name enables the compiled-in path (feature on) or the
 shell path (feature off). As of WO 15.7 (item 5.1), the runtime toggle also
@@ -802,7 +802,7 @@ JSON and markdown.
 The signature benchmark. It runs the same task 5× under descending context
 budgets (128k → 64k → 32k → 16k → 8k) and records six metrics per ceiling:
 success, prompt tokens, completion tokens, compression passes, cost. This
-showcases the tree-sitter context index, Stratum compression, and the Plugin3
+showcases the tree-sitter context index, Stratum compression, and the budget
 budget guard under progressively tighter budgets — the architectural
 differentiator vs Claude Code / Vix / opencode.
 
@@ -828,7 +828,7 @@ differentiator vs Claude Code / Vix / opencode.
   `cfg.tools.budget_ceiling`; `init_from_config` applies it to the shared
   `TokenBudget`. No new budget code — reuses ADR-0005 / WO 7.5 / WO 8.6.
 
-A `bench` CI job runs all tasks on Ollama with `qwen2.5:0.5b` on every push/PR.
+A `bench` workflow runs all tasks on Ollama with `qwen2.5:0.5b` on push to main (bench-baseline.yml, currently disabled).
 It posts a delta summary as a PR comment comparing against the `main` baseline
 (ADR-045). A nightly `bench-baseline` workflow on `main` stores the
 canonical baseline report as a workflow artifact.
@@ -870,25 +870,11 @@ comparison.
 
 ### Coverage gate (WO 12.9, ADR-065)
 
-The `coverage` CI job runs `cargo tarpaulin --out Xml --locked --lib
---timeout 120 -- --skip test_build_fork_tree_nests_children`. `--lib`
-instruments unit tests only (integration tests in `tests/` spawn
-ollama/cargo subprocesses and are excluded from coverage), and the
-`--skip` is belt-and-suspenders against the WO 12.0 tarpaulin flake
-(root cause fixed; the skip stays pending a verified flake-free run).
-
-A Python gate parses the Cobertura XML and fails the job when any of the
-three gated `src/` prefixes drops below its threshold: `src/session`
-(68.5), `src/tools` (76.0), `src/adapters` (75.0). The thresholds are
-set at or just below the *measured* coverage (the headroom policy,
-ADR-065): zero headroom at first catches regressions immediately,
-relaxing by at most 2 points only if a one-line flake fails CI
-repeatedly. The 12-series target was 75% on all three. `src/tools`
-(≈76.5%) and `src/adapters` (≈84%) clear it and their floors are at/above
-75; `src/session` (~68.6%) is honestly deferred to a follow-up
-workorder — the remaining gap is async executor + MCP-HTTP code that
-needs integration test work, not pure-helper unit tests. The gate is a
-regression guard, not a vanity number.
+The `coverage` job (when enabled) runs `cargo llvm-cov --workspace --lcov
+--output-path lcov.info`. A regression gate compares per-crate coverage
+against a baseline threshold. `src/tools` (≈76.5%) and `src/adapters`
+(≈84%) clear the 75% floor; `src/session` (~68.6%) is honestly deferred
+to WO 25.16. The gate is a regression guard, not a vanity number.
 
 ---
 
@@ -898,8 +884,8 @@ The root `Cargo.toml` exposes these features:
 
 - `stratum` (default) — folds the Stratum context-compression plugin in as
   direct Rust calls (ADR-046).
-- `budget` (default) — folds the Plugin3 token-budget guard in as direct
-  Rust calls with full in-process event context (ADR-047).
+- `budget` (default) — folds the token-budget guard in as direct
+   Rust calls with full in-process event context (ADR-047).
 - `otel` (non-default) — OpenTelemetry export.
 
 Two plugins are feature-gated compiled-in modules, served as

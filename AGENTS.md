@@ -105,13 +105,11 @@ Decision tree:
 - When adding serialization to a crate that already depends on `serde`, just add `serde_json` to the crate's `Cargo.toml` — don't introduce new serialization libraries.
 - The `ContextIndex` struct has a private `symbols` field. When creating a cache format, use a separate struct (`CachedIndex`) that includes both the symbols and metadata (like git HEAD). Don't make the internal field public just for serialization.
 - **ADR status is a two-source-of-truth system**: ADR file headers (`Status: ...`) AND the index table in `docs/adr/README.md` must agree. The `adr_xref_drift` test (`kf-budget-core`) will catch mismatches. When changing an ADR status, update BOTH the file header and the index table row. If you use a compound status like "Accepted (partially implemented)", it must appear identically in both places.
-- **CI is not optional**: `adr_xref_drift` runs in CI (the `quality` job). A passing local gate (`cargo test`) does NOT mean CI will pass — you must also check that `kf-budget-core`'s drift tests pass. Run `cargo test -p kf-budget-core --test adr_xref_drift` as part of your gate if you touched any ADR or `docs/adr/README.md`.
-- **Check CI after every push**: `gh run list --limit 3` and `gh run watch <id>` are your friends. Do not declare a task done until CI is green on the commit you just pushed. A local green is necessary but not sufficient.
+- **CI is disabled.** No GitHub Actions CI runs on this repo. Run gates locally before committing.
 - **`headless_chrome::Tab` does NOT hold a strong ref to `Browser`**: The `Tab` handle is a weak reference. If you drop the `Browser`, the `Tab` becomes invalid. Always keep `Browser` alive alongside `Tab` — e.g., store both in an owning struct (`BrowserSessionOwner { _browser: Browser, tab: Tab }`).
 - **Stale cleanup items are a real risk**: Before starting work on a "cleanup" or "missing feature" item from state.md or a workorder, grep the codebase first. Multiple items listed as "open" (persist plugin state, agent steps limit) turned out to be already shipped. Thirty seconds of `grep` saves an hour of duplicate work.
 - **`lessons.md` is gitignored**: If you need it tracked, use `git add -f`. Otherwise, fold permanent lessons into `AGENTS.md` at session close and let `lessons.md` stay scratch-only.
 - **`cargo clippy --all-targets` can be slow** (3-4 min on this repo). Budget time for full gate runs. Consider running just the failing test first to verify the fix, then run the full gate.
-- **Ollama model pull fails intermittently in CI**: The `integration` job sometimes fails at "Pull test model" with `realm host "ollama.com" does not match original host "registry.ollama.ai"`. This is an external service issue, not a code regression. Re-running the workflow typically succeeds. Do not mark CI as red for this reason alone.
 
 ## Task management
 1. **Plan**: write `workplan.md` (gitignored) with files to touch + root cause + gate.

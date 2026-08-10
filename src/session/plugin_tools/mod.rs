@@ -8,7 +8,7 @@
 //!
 //! ## Two-path dispatch (ADR-050)
 //!
-//! Folded plugins (Stratum, Budget, Draw, Video) have two possible dispatch
+//! Folded plugins (Stratum, Budget) have two possible dispatch
 //! paths:
 //! - **Compiled-in** (feature on): tools register as direct Rust calls in
 //!   `main/mod.rs`; the shell plugin dir is skipped by the loader.

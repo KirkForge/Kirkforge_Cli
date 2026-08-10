@@ -66,9 +66,10 @@ you'll have something more compelling than 'we support more providers.'"
 
 ## Consequences
 
-- `KIRK-BENCH.md` is the durable spec artifact; the task
-  implementations come after. This WO builds the signature one +
-  maps the existing 31.
+- This ADR is the durable spec artifact; the task
+  implementations live in `benches/tasks/*.toml`. A standalone
+  `KIRK-BENCH.md` may be extracted later; until then, the ADR +
+  TOML files are canonical.
 - `BenchTask` gains a serde-optional `budget_ceiling` field; existing
   task TOML files parse unchanged (default `None`).
 - `TaskResult` gains a serde-optional `compression_passes` field

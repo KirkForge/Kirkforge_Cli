@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/KirkForge/KirkForge-Cli"
-description = "Core data model and persistence for the Plugin3 budget assistant"
+description = "Output-side token budget, slicing, and cost tracking"
 
 [dependencies]
 serde.workspace = true

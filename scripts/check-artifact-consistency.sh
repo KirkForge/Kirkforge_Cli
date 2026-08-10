@@ -74,6 +74,22 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# 8. installer platform mappings match release matrix
+RELEASE_TARGETS=$(grep -oP 'target:\s*\K[^\s]+' .github/workflows/release.yml | sort)
+INSTALLER_TARGETS=$(grep -oP 'target="[^"]*"' scripts/install.sh | sed 's/target="//;s/"//' | sort)
+MISSING=0
+for t in $INSTALLER_TARGETS; do
+  if ! echo "$RELEASE_TARGETS" | grep -qx "$t"; then
+    echo "✗ installer maps to '$t' but no release artifact exists"
+    FAIL=$((FAIL+1))
+    MISSING=1
+  fi
+done
+if [ "$MISSING" -eq 0 ]; then
+  echo "✓ all installer targets exist in release matrix"
+  PASS=$((PASS+1))
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 if [ "$FAIL" -gt 0 ]; then

@@ -26,7 +26,7 @@ case "$arch" in
         if [ "$os" = "darwin" ]; then
             target="aarch64-apple-darwin"
         else
-            target="aarch64-unknown-linux-gnu"
+            target="aarch64-unknown-linux-musl"
         fi
         ;;
     *)

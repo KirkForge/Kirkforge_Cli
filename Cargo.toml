@@ -209,7 +209,7 @@ percent-encoding = "2"
 # Cache serialization uses serde_json (already a dependency) instead of
 # the unmaintained bincode crate.
 # Temp directory creation for benchmark harness.
-# Plugin3 budget guard (optional — feature-gated behind "budget").
+# Budget guard (optional — feature-gated behind "budget").
 kf-budget-core = { workspace = true, optional = true }
 tempfile.workspace = true
 

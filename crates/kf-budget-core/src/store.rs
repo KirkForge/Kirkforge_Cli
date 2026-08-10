@@ -255,7 +255,7 @@ mod tests {
 
     // ponytail: pin the literal wire-format strings. ADR-0004 §
     // Key format claims the marker is byte-compatible with
-    // Stratum's, so a Plugin3 slice marker must round-trip in
+    // Stratum's, so a budget slice marker must round-trip in
     // `stratum cat <marker>`. The grep-friendly `<<kf-budget:slice:`
     // prefix is a load-bearing tool contract (the README points
     // users at `grep -F '<<kf-budget:slice:'`). A contributor who

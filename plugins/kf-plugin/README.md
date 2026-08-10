@@ -13,9 +13,9 @@ cp -r plugins/kf-plugin ~/.local/share/kf-code/plugins/kf-plugin/
 
 The tool scripts locate the CLI entry point in the following order:
 
-1. `npm/kf-plugin/apps/cli/dist/index.js` — when running inside this workspace.
-2. `~/.local/share/kf-code/plugins/kf-plugin/apps/cli/dist/index.js` — when the whole plugin directory is copied.
-3. `kirkforge` on `PATH` — if the CLI binary/executable is installed globally.
+1. `$KF_CODE_CLI_JS` — explicit override.
+2. `npm/kf-plugin/apps/cli/dist/index.js` — when running inside this workspace.
+3. `$(npm root -g)/@kf-code/cli/dist/index.js` — global npm install.
 
 After restarting kf-code, the plugin's tools and skill become available.
 

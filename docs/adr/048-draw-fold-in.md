@@ -6,13 +6,11 @@ Superseded (draw removed from workspace in 21.11-R0)
 
 ## Context
 
-Draw (terminal diagram model) is invoked via shell scripts calling the `kfd` binary. The `draw_render` tool and `post-turn` hook add subprocess overhead.
+Draw (terminal diagram model) was invoked via shell scripts calling the `kfd` binary. The `draw_render` tool and `post-turn` hook added subprocess overhead. Both were removed in 21.11-R0.
 
 ## Decision
 
 Draw was removed from the workspace (YEETED in 21.11-R0). This ADR described the original fold-in plan; it is superseded by the removal decision.
-
-The standalone `kfd` binary remains for interactive TUI use.
 
 ## Consequences
 

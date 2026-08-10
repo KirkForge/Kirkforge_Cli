@@ -64,7 +64,7 @@ pub fn render_approval_dialog(
 
     // Side-by-side diff: available whenever the terminal is at least 80
     // cols. The full-width panel makes this practical on most terminals.
-    let use_side_by_side = state.approval_diff_side_by_side && area.width >= 80;
+    let use_side_by_side = state.approval.approval_diff_side_by_side && area.width >= 80;
 
     // Build the full flat line list of the preview. For
     // `edit_file` / `write_file` approvals we append a unified
@@ -174,8 +174,8 @@ pub fn render_approval_dialog(
 
     // Clamp scroll and compute visible window + overflow indicator.
     let max_scroll = all_lines.len().saturating_sub(args_window_height.max(1));
-    state.approval_max_scroll = max_scroll;
-    let scroll = state.approval_scroll.min(max_scroll);
+    state.approval.approval_max_scroll = max_scroll;
+    let scroll = state.approval.approval_scroll.min(max_scroll);
 
     let visible: Vec<Line> = visible_lines
         .iter()

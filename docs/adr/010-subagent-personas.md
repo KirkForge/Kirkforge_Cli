@@ -77,7 +77,7 @@ Config field `max_persona_turns` (default 10) guards against runaway subagent lo
 
 - `src/tui/commands/persona.rs` — `PersonaKind`, `PersonaHandle`, `PersonaResult`, `tools_for_persona`, `run_persona_task`, `start_persona`.
 - `src/tui/commands/mod.rs` — module export.
-- `src/tui/app.rs` — `persona_in_progress`, `persona_cancel` fields in `AppState`.
+- `src/tui/app.rs` — `persona_in_progress`, `persona_cancel` fields in `AppState::generation`.
 - `src/tui/keys.rs` — `/explore`, `/plan`, `/coder` dispatch and Ctrl+C cancellation.
 - `src/tui/mod.rs` — `persona_tx`/`persona_rx` channels, `handle_persona_complete`.
 - `src/shared/mod.rs` — `max_persona_turns: usize` config field with serde default 10.

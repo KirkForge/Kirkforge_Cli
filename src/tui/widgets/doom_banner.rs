@@ -167,7 +167,7 @@ pub fn render_doom_banner(
 /// present, `count >= THRESHOLD`, not acknowledged). Returns true if
 /// the banner was drawn so the caller knows to skip other overlays.
 pub fn render_if_active(f: &mut Frame, area: Rect, app_state: &AppState) -> bool {
-    if let Some(ref dl) = app_state.doom_loop {
+    if let Some(ref dl) = app_state.doom.doom_loop {
         if dl.count >= crate::session::executor::DoomLoopTracker::THRESHOLD && !dl.acknowledged {
             render_doom_banner(f, area, dl, DoomLoopSelection { index: 0 });
             return true;

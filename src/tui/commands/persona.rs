@@ -368,12 +368,12 @@ pub async fn start_persona(
         return format!("Usage: /{kind} <task description> — start a fork-isolated {kind} persona");
     }
 
-    let fm = match state.fork_manager.as_mut() {
+    let fm = match state.session.fork_manager.as_mut() {
         Some(fm) => fm,
         None => return "No fork manager available (session not initialized).".into(),
     };
 
-    let parent_log_path = match state.log_path.clone() {
+    let parent_log_path = match state.session.log_path.clone() {
         Some(p) => p,
         None => return "No session log path. Cannot fork for persona.".into(),
     };
@@ -396,25 +396,27 @@ pub async fn start_persona(
     let fork_path = fork.path.clone();
     let task_owned = task.to_string();
 
-    let cfg = read_shared_config(&state.config).clone();
+    let cfg = read_shared_config(&state.services.config).clone();
     let max_turns = cfg.tools.max_persona_turns;
     let model_name = state
+        .provider
         .model_info
         .as_ref()
         .map(|m| m.name.clone())
         .unwrap_or_else(|| cfg.model.default_model.clone());
     let ollama_host = cfg.model.ollama_host.clone();
     let supports_images = state
+        .provider
         .model_info
         .as_ref()
         .map(|m| m.supports_images)
         .unwrap_or(false);
-    let undo_stack = state.undo_stack.clone();
+    let undo_stack = state.session.undo_stack.clone();
 
     // Per-persona cancel flag. The TUI can set this from Ctrl+C when a
     // persona is running; the task polls it between internal turns.
     let cancelled = Arc::new(AtomicBool::new(false));
-    state.persona_cancel = Some(cancelled.clone());
+    state.generation.persona_cancel = Some(cancelled.clone());
 
     tokio::spawn(async move {
         let result = run_persona_task(
@@ -436,8 +438,8 @@ pub async fn start_persona(
         );
     });
 
-    state.persona_in_progress = Some(PersonaHandle {});
-    state.is_generating = true;
+    state.generation.persona_in_progress = Some(PersonaHandle {});
+    state.generation.is_generating = true;
 
     format!("🚀 Started {kind} persona for: {task}")
 }

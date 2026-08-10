@@ -91,7 +91,10 @@ pub async fn handle_model_command(
         }
         AdapterKind::Ollama => {
             let client = crate::shared::build_reqwest_client(None);
-            let ollama_host = read_shared_config(&state.config).model.ollama_host.clone();
+            let ollama_host = read_shared_config(&state.services.config)
+                .model
+                .ollama_host
+                .clone();
             let validation = validate_ollama_model(&client, &ollama_host, name).await;
             match validation {
                 ModelValidation::Valid => match model_tx.send(name.to_string()) {

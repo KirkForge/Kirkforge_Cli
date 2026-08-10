@@ -25,15 +25,15 @@ use lines::{build_chat_lines, progress_line, render_entry_lines};
 pub fn scroll_offset_for_search_match(state: &mut AppState, content_width: usize) -> Option<usize> {
     let (msg_idx, _byte_offset, source) = state.search.matches.get(state.search.match_idx)?;
     let msg_idx = *msg_idx;
-    if msg_idx >= state.messages.len() {
+    if msg_idx >= state.conversation.messages.len() {
         return None;
     }
 
     // Expand the tool card when the match lives in the hidden body.
     if *source == crate::tui::search::SearchSource::ToolOutput {
-        let entry = &state.messages[msg_idx];
+        let entry = &state.conversation.messages[msg_idx];
         if entry.role == "tool" && entry.tool_output.is_some() {
-            state.expanded_tools.insert(msg_idx);
+            state.conversation.expanded_tools.insert(msg_idx);
         }
     }
 
@@ -57,7 +57,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Sandbox posture banner (always visible if unsandboxed).
-    if state.unsandboxed {
+    if state.provider.unsandboxed {
         lines.push(Line::from(vec![
             Span::styled(
                 " ⚠️  Unsandboxed ",
@@ -75,7 +75,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
 
     // Connection banner at top (only when not connected, so the first
     // message starts at the top of the panel once we're online).
-    match &state.connection {
+    match &state.provider.connection {
         ConnectionState::Connected { .. } | ConnectionState::Connecting => {}
         ConnectionState::Disconnected => {
             lines.push(Line::from(vec![
@@ -103,7 +103,9 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     }
 
     // Loading indicator: show a dim spinner when waiting for first token
-    if state.is_generating && state.messages.back().map(|m| m.role.as_str()) != Some("assistant") {
+    if state.generation.is_generating
+        && state.conversation.messages.back().map(|m| m.role.as_str()) != Some("assistant")
+    {
         lines.push(Line::from(vec![Span::styled(
             format!(" ⏳ {} ", state.spinner_char()),
             Style::default()
@@ -115,44 +117,46 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
 
     // Pull-progress bar (gap #22): rendered above the conversation so
     // it is always visible while a model is being downloaded.
-    if let Some(ref p) = state.pull_progress {
+    if let Some(ref p) = state.provider.pull_progress {
         lines.push(progress_line(p));
         lines.push(Line::from(""));
     }
 
     // Conversation messages
     let content_width = (area.width as usize).saturating_sub(4);
-    state.last_content_width = content_width;
-    let last_idx = state.messages.len().saturating_sub(1);
+    state.conversation.last_content_width = content_width;
+    let last_idx = state.conversation.messages.len().saturating_sub(1);
 
     // Invalidate the render cache when any rendering parameter changed.
-    if !state.chat_render_cache.params_match(
+    if !state.conversation.chat_render_cache.params_match(
         content_width,
         &state.search.query,
-        state.tool_collapsed,
-        &state.expanded_tools,
-        &state.collapsed_messages,
+        state.conversation.tool_collapsed,
+        &state.conversation.expanded_tools,
+        &state.conversation.collapsed_messages,
     ) {
-        state.chat_render_cache.clear_entries();
-        state.chat_render_cache.snapshot_params(
+        state.conversation.chat_render_cache.clear_entries();
+        state.conversation.chat_render_cache.snapshot_params(
             content_width,
             &state.search.query,
-            state.tool_collapsed,
-            &state.expanded_tools,
-            &state.collapsed_messages,
+            state.conversation.tool_collapsed,
+            &state.conversation.expanded_tools,
+            &state.conversation.collapsed_messages,
         );
     }
 
     // Grow/shrink the cache vector to match the current message list.
     state
+        .conversation
         .chat_render_cache
         .entries
-        .resize_with(state.messages.len(), || None);
+        .resize_with(state.conversation.messages.len(), || None);
 
     let mut prev_entry: Option<&ConversationEntry> = None;
 
-    for (idx, entry) in state.messages.iter().enumerate() {
-        let is_streaming_last = idx == last_idx && state.is_generating && entry.role == "assistant";
+    for (idx, entry) in state.conversation.messages.iter().enumerate() {
+        let is_streaming_last =
+            idx == last_idx && state.generation.is_generating && entry.role == "assistant";
         let is_streaming_tool = entry.role == "tool" && entry.streaming;
         let collapsed = if is_streaming_last {
             // The message currently being streamed must stay expanded
@@ -170,6 +174,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
             None
         } else {
             state
+                .conversation
                 .chat_render_cache
                 .entries
                 .get(idx)
@@ -190,7 +195,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 collapsed,
                 state.spinner_char(),
             );
-            if let Some(slot) = state.chat_render_cache.entries.get_mut(idx) {
+            if let Some(slot) = state.conversation.chat_render_cache.entries.get_mut(idx) {
                 *slot = Some((entry.version, lines.clone()));
             }
             lines
@@ -205,8 +210,8 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     // The old bottom thinking panel is replaced with this compact,
     // context-attached block so reasoning is visible next to the turn
     // that produced it.
-    if !state.thinking_buffer.is_empty() {
-        if state.thinking_panel_visible {
+    if !state.generation.thinking_buffer.is_empty() {
+        if state.generation.thinking_panel_visible {
             let content_width = (area.width as usize).saturating_sub(8);
             let border_style = Style::default()
                 .fg(Color::Magenta)
@@ -226,7 +231,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 Span::styled("  · Esc to hide", border_style),
             ]));
 
-            for t in &state.thinking_buffer {
+            for t in &state.generation.thinking_buffer {
                 for line in textwrap::fill(t, content_width).lines() {
                     lines.push(Line::from(vec![
                         Span::styled("    │ ", border_style),
@@ -265,24 +270,24 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
 
     // Publish max_scroll to AppState so key handlers (PgUp/PgDn) can
     // clamp immediately without waiting for the next render.
-    state.max_scroll = max_scroll;
+    state.conversation.max_scroll = max_scroll;
 
     // Auto-scroll: if enabled, pin to the bottom (latest messages).
-    if state.auto_scroll {
-        state.scroll_offset = max_scroll;
-    } else if state.scroll_offset >= max_scroll {
+    if state.conversation.auto_scroll {
+        state.conversation.scroll_offset = max_scroll;
+    } else if state.conversation.scroll_offset >= max_scroll {
         // User scrolled all the way back to the bottom — re-enable auto-scroll
-        state.auto_scroll = true;
-        state.scroll_offset = max_scroll;
+        state.conversation.auto_scroll = true;
+        state.conversation.scroll_offset = max_scroll;
     }
 
     // Clamp: if content shrunk (e.g. cleared), snap back
-    if state.scroll_offset > max_scroll {
-        state.scroll_offset = max_scroll;
+    if state.conversation.scroll_offset > max_scroll {
+        state.conversation.scroll_offset = max_scroll;
     }
 
     // Only show scroll indicator when content is hidden below the viewport
-    let lines_remaining = max_scroll.saturating_sub(state.scroll_offset);
+    let lines_remaining = max_scroll.saturating_sub(state.conversation.scroll_offset);
     if lines_remaining > 0 {
         lines.push(Line::from(vec![Span::styled(
             format!(
@@ -303,7 +308,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     let paragraph = Paragraph::new(text)
         .block(block)
         .wrap(Wrap { trim: false })
-        .scroll((state.scroll_offset as u16, 0));
+        .scroll((state.conversation.scroll_offset as u16, 0));
 
     f.render_widget(paragraph, area);
 }
@@ -319,8 +324,8 @@ mod tests {
 
     fn make_state(connection: ConnectionState) -> AppState {
         let mut state = app_state();
-        state.connection = connection;
-        state.unsandboxed = false;
+        state.provider.connection = connection;
+        state.provider.unsandboxed = false;
         state
     }
 
@@ -513,23 +518,31 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.tool_collapsed = true;
-        state.last_content_width = 80;
-        state
-            .messages
-            .push_back(entry_at("assistant", "check the tool output", 9, 14));
-        state
-            .messages
-            .push_back(tool_entry("tool summary", "hidden needle value", 9, 14));
+        state.conversation.tool_collapsed = true;
+        state.conversation.last_content_width = 80;
+        state.conversation.messages.push_back(entry_at(
+            "assistant",
+            "check the tool output",
+            9,
+            14,
+        ));
+        state.conversation.messages.push_back(tool_entry(
+            "tool summary",
+            "hidden needle value",
+            9,
+            14,
+        ));
         state.search.query = "needle".into();
-        state.search.matches =
-            crate::tui::search::compute_matches(state.messages.make_contiguous(), "needle");
+        state.search.matches = crate::tui::search::compute_matches(
+            state.conversation.messages.make_contiguous(),
+            "needle",
+        );
         state.search.match_idx = 0;
 
         let offset = scroll_offset_for_search_match(&mut state, 80).expect("match exists");
 
         assert!(
-            state.expanded_tools.contains(&1),
+            state.conversation.expanded_tools.contains(&1),
             "tool card at message 1 should be expanded for a ToolOutput match"
         );
         // The assistant message contributes a header + wrapped body + blank,
@@ -547,20 +560,23 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.tool_collapsed = true;
-        state.last_content_width = 80;
+        state.conversation.tool_collapsed = true;
+        state.conversation.last_content_width = 80;
         state
+            .conversation
             .messages
             .push_back(tool_entry("needle summary", "hidden body", 9, 14));
         state.search.query = "needle".into();
-        state.search.matches =
-            crate::tui::search::compute_matches(state.messages.make_contiguous(), "needle");
+        state.search.matches = crate::tui::search::compute_matches(
+            state.conversation.messages.make_contiguous(),
+            "needle",
+        );
         state.search.match_idx = 0;
 
         let offset = scroll_offset_for_search_match(&mut state, 80).expect("match exists");
 
         assert!(
-            !state.expanded_tools.contains(&0),
+            !state.conversation.expanded_tools.contains(&0),
             "content match should not force tool expansion"
         );
         assert_eq!(offset, 0, "first message starts at line 0 without banners");
@@ -572,7 +588,7 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.last_content_width = 80;
+        state.conversation.last_content_width = 80;
         state.search.matches.clear();
         state.search.match_idx = 0;
         assert_eq!(scroll_offset_for_search_match(&mut state, 80), None);
@@ -585,6 +601,7 @@ mod tests {
             since: std::time::Instant::now(),
         });
         state
+            .conversation
             .messages
             .push_back(entry_at("assistant", "hello", 9, 14));
 
@@ -604,6 +621,7 @@ mod tests {
     fn disconnected_state_shows_banner() {
         let mut state = make_state(ConnectionState::Disconnected);
         state
+            .conversation
             .messages
             .push_back(entry_at("assistant", "hello", 9, 14));
 
@@ -637,9 +655,15 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push_back(entry_at("user", "hi", 9, 14));
-        state.messages.push_back(entry_at("assistant", "he", 9, 14));
-        state.is_generating = true;
+        state
+            .conversation
+            .messages
+            .push_back(entry_at("user", "hi", 9, 14));
+        state
+            .conversation
+            .messages
+            .push_back(entry_at("assistant", "he", 9, 14));
+        state.generation.is_generating = true;
 
         // First render — primes the cache for the completed user message.
         // Layout inside the bordered chat panel:
@@ -656,7 +680,7 @@ mod tests {
         );
 
         // Simulate a streaming token appended to the last assistant message.
-        let entry = state.messages.back_mut().unwrap();
+        let entry = state.conversation.messages.back_mut().unwrap();
         entry.content.push_str("llo");
         entry.bump_version();
 
@@ -675,9 +699,13 @@ mod tests {
             since: std::time::Instant::now(),
         });
         state
+            .conversation
             .messages
             .push_back(entry_at("user", "word ".repeat(20).trim(), 9, 14));
-        state.messages.push_back(entry_at("assistant", "ok", 9, 14));
+        state
+            .conversation
+            .messages
+            .push_back(entry_at("assistant", "ok", 9, 14));
 
         // Count rows between the user header and the assistant header
         // that contain the repeated "word" content.
@@ -727,7 +755,7 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.pull_progress = Some(crate::tui::app::PullProgress {
+        state.provider.pull_progress = Some(crate::tui::app::PullProgress {
             status: "downloading".into(),
             completed: Some(128 * 1024 * 1024),
             total: Some(512 * 1024 * 1024),
@@ -763,7 +791,7 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.pull_progress = Some(crate::tui::app::PullProgress {
+        state.provider.pull_progress = Some(crate::tui::app::PullProgress {
             status: "pulling manifest".into(),
             completed: None,
             total: None,
@@ -784,9 +812,13 @@ mod tests {
             since: std::time::Instant::now(),
         });
         state
+            .conversation
             .messages
             .push_back(entry_at("user", "needle in haystack", 9, 14));
-        state.messages.push_back(entry_at("assistant", "ok", 9, 14));
+        state
+            .conversation
+            .messages
+            .push_back(entry_at("assistant", "ok", 9, 14));
 
         // Render without query first.
         render_state(&mut state, 80, 10);
@@ -816,6 +848,7 @@ mod tests {
             since: std::time::Instant::now(),
         });
         state
+            .conversation
             .messages
             .push_back(ConversationEntry::tool("git status", "line1\nline2"));
 
@@ -834,7 +867,7 @@ mod tests {
         );
 
         // Expand it.
-        state.expanded_tools.insert(0);
+        state.conversation.expanded_tools.insert(0);
         let buffer_expanded = render_state(&mut state, 40, 10);
         let mut expanded_rows = 0;
         for row in 1..buffer_expanded.area.height - 1 {
@@ -856,9 +889,10 @@ mod tests {
             since: std::time::Instant::now(),
         });
         state
+            .conversation
             .messages
             .push_back(entry_at("assistant", "this is a long reply", 9, 14));
-        state.collapsed_messages.insert(0);
+        state.conversation.collapsed_messages.insert(0);
 
         let buffer = render_state(&mut state, 40, 10);
         let header = buffer_cell_text(&buffer, 1);
@@ -887,9 +921,10 @@ mod tests {
             since: std::time::Instant::now(),
         });
         state
+            .conversation
             .messages
             .push_back(entry_at("user", "a very long user question", 9, 14));
-        state.collapsed_messages.insert(0);
+        state.conversation.collapsed_messages.insert(0);
 
         let buffer = render_state(&mut state, 40, 10);
         let header = buffer_cell_text(&buffer, 1);
@@ -914,14 +949,18 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push_back(entry_at("user", "hi", 9, 14));
         state
+            .conversation
+            .messages
+            .push_back(entry_at("user", "hi", 9, 14));
+        state
+            .conversation
             .messages
             .push_back(entry_at("assistant", "typing", 9, 14));
-        state.is_generating = true;
+        state.generation.is_generating = true;
         // Even if the user collapsed the last assistant message while it
         // is streaming, it must stay expanded so tokens remain visible.
-        state.collapsed_messages.insert(1);
+        state.conversation.collapsed_messages.insert(1);
 
         let buffer = render_state(&mut state, 40, 10);
         let mut found_body = false;
@@ -943,8 +982,11 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push_back(entry_at("assistant", "hi", 9, 14));
-        state.thinking_buffer.push("step 1".to_string());
+        state
+            .conversation
+            .messages
+            .push_back(entry_at("assistant", "hi", 9, 14));
+        state.generation.thinking_buffer.push("step 1".to_string());
         // thinking_panel_visible defaults to false — should show
         // [thinking hidden] marker, NOT the full thinking content.
 
@@ -972,9 +1014,12 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push_back(entry_at("assistant", "hi", 9, 14));
-        state.thinking_buffer.push("step 1".to_string());
-        state.thinking_panel_visible = true;
+        state
+            .conversation
+            .messages
+            .push_back(entry_at("assistant", "hi", 9, 14));
+        state.generation.thinking_buffer.push("step 1".to_string());
+        state.generation.thinking_panel_visible = true;
 
         let buffer = render_state(&mut state, 40, 10);
         let mut found_header = false;
@@ -998,10 +1043,16 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push_back(entry_at("user", "hello", 9, 14));
-        state.messages.push_back(entry_at("assistant", "hi", 9, 14));
-        state.thinking_buffer.push("step 1".to_string());
-        state.thinking_panel_visible = true;
+        state
+            .conversation
+            .messages
+            .push_back(entry_at("user", "hello", 9, 14));
+        state
+            .conversation
+            .messages
+            .push_back(entry_at("assistant", "hi", 9, 14));
+        state.generation.thinking_buffer.push("step 1".to_string());
+        state.generation.thinking_panel_visible = true;
 
         let buffer = render_state(&mut state, 40, 12);
         // Find the assistant content row and the first THINKING row; the
@@ -1033,7 +1084,10 @@ mod tests {
             model: "test".into(),
             since: std::time::Instant::now(),
         });
-        state.messages.push_back(entry_at("assistant", "hi", 9, 14));
+        state
+            .conversation
+            .messages
+            .push_back(entry_at("assistant", "hi", 9, 14));
         // thinking_buffer is empty (default) — no marker should appear.
 
         let buffer = render_state(&mut state, 40, 10);

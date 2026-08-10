@@ -135,25 +135,25 @@ async fn init_app_state(
     undo_stack: &Option<crate::tools::UndoStackRef>,
 ) -> AppState {
     let mut state = AppState::new(shared_config.clone());
-    state.undo_stack = undo_stack.clone();
-    state.session_started = Instant::now();
-    state.log_path = Some(conversation_log_path.to_path_buf());
-    state.session_id = conversation_log_path
+    state.session.undo_stack = undo_stack.clone();
+    state.session.session_started = Instant::now();
+    state.session.log_path = Some(conversation_log_path.to_path_buf());
+    state.session.session_id = conversation_log_path
         .file_stem()
         .and_then(|f| f.to_str())
         .map(|s| s.trim_end_matches(".conv").to_string())
         .unwrap_or_else(|| "unknown-session".to_string());
-    state.fork_manager = Some(crate::session::session_fork::ForkManager::new(
-        &state.session_id,
+    state.session.fork_manager = Some(crate::session::session_fork::ForkManager::new(
+        &state.session.session_id,
         conversation_log_path,
     ));
-    state.connection = probe_ollama_connection(cfg, active_model).await;
+    state.provider.connection = probe_ollama_connection(cfg, active_model).await;
     {
         let (_, path_guard, _) = crate::session::access::access_from_config(cfg);
-        state.unsandboxed = !path_guard.is_sandboxed();
+        state.provider.unsandboxed = !path_guard.is_sandboxed();
     }
-    if state.unsandboxed {
-        state.messages.push_back(ConversationEntry::new(
+    if state.provider.unsandboxed {
+        state.conversation.messages.push_back(ConversationEntry::new(
             "system",
             "⚠️  PathGuard is unsandboxed: no `sandbox_dir` or `allowed_write_dirs` configured. \
              Model-driven writes are not restricted to a directory tree. Set `sandbox_dir` in config.toml or via KF_CODE_SANDBOX_DIR, or list `allowed_write_dirs`.",
@@ -333,7 +333,7 @@ async fn spawn_daemon_reader(state: &mut AppState) {
     let daemon_flags = std::sync::Arc::new(std::sync::Mutex::new(
         crate::tui::daemon_events::DaemonEventFlags::default(),
     ));
-    state.daemon_flags = Some(daemon_flags.clone());
+    state.session.daemon_flags = Some(daemon_flags.clone());
     match crate::tui::daemon_events::spawn_daemon_event_reader(daemon_flags).await {
         Ok(Some(handle)) => {
             tracing::trace!("daemon instance channel connected");
@@ -387,14 +387,21 @@ pub async fn run_tui(
     .await;
 
     let max_trust = cfg_for_startup.tools.max_plugin_trust;
-    state.skill_registry.set_max_plugin_trust(max_trust);
-    if let Err(e) = state.skill_registry.scan_and_load(&cfg_for_startup) {
+    state
+        .services
+        .skill_registry
+        .set_max_plugin_trust(max_trust);
+    if let Err(e) = state
+        .services
+        .skill_registry
+        .scan_and_load(&cfg_for_startup)
+    {
         tracing::warn!("Skill scan error: {}", e);
     }
     for skill in crate::session::skills::builtin_skills() {
-        state.skill_registry.register(skill);
+        state.services.skill_registry.register(skill);
     }
-    state.plugin_status = state.skill_registry.plugin_status_summary();
+    state.provider.plugin_status = state.services.skill_registry.plugin_status_summary();
 
     let carryover_target: Option<Arc<Mutex<CarryoverProfile>>> =
         if cfg_for_startup.session.carryover_enabled {
@@ -570,7 +577,7 @@ fn spawn_executor(
     // JoinHandle<()>, so we expect() here instead of propagating. Upgrade path:
     // change spawn_executor to return Result<JoinHandle<()>> and propagate
     // through run_tui (the audit's X1/X4 sandbox refusal surface).
-    exe.set_session_id(state.session_id.clone());
+    exe.set_session_id(state.session.session_id.clone());
     exe.set_system_override(system);
     if let Some(idx) = context_index {
         exe.set_context_index(idx);
@@ -628,7 +635,7 @@ async fn run_event_loop(
     // One-shot shutdown signal. Fired by:
     //   - the SIGHUP handler (Unix, pty-close)
     //   - the kb-reader thread (crossterm `event::read()` Err)
-    // When the loop observes it, it sets `state.should_exit = true`
+    // When the loop observes it, it sets `state.session.should_exit = true`
     // and falls through to the standard exit path (terminal mode
     // restored, executor dropped, carryover profile saved).
     shutdown: &Arc<Notify>,
@@ -649,7 +656,7 @@ async fn run_event_loop(
 
     loop {
         // Check for exit signal
-        if state.should_exit {
+        if state.session.should_exit {
             break Ok(());
         }
 
@@ -685,7 +692,7 @@ async fn run_event_loop(
         let mut had_approval_event = false;
         let mut persona_result: Option<PersonaResult> = None;
         let mut had_approval_pending =
-            state.pending_approval.is_some() || state.pending_bang.is_some();
+            state.approval.pending_approval.is_some() || state.approval.pending_bang.is_some();
         let mut dirty_from_tick = false;
         let mut new_connection_state: Option<ConnectionState> = None;
 
@@ -728,7 +735,7 @@ async fn run_event_loop(
             // the slow path (no SIGHUP) the notified future is
             // cheap to poll — Notify uses a futex internally.
             _ = shutdown.notified() => {
-                state.should_exit = true;
+                state.session.should_exit = true;
             }
             _ = slow_tick.tick() => {
                 dirty_from_tick = true;
@@ -756,8 +763,8 @@ async fn run_event_loop(
         if let Some(new_state) = new_connection_state {
             // Only redraw when the status actually changes so a
             // stable connection does not waste frames.
-            if state.connection != new_state {
-                state.connection = new_state;
+            if state.provider.connection != new_state {
+                state.provider.connection = new_state;
                 state.mark_dirty();
             }
         }
@@ -767,15 +774,15 @@ async fn run_event_loop(
         // kb event we just got. If nothing happened, none of this
         // marks the state dirty.
         drain_daemon_flags(state);
-        if state.sessions_dirty {
-            state.sessions_dirty = false;
+        if state.session.sessions_dirty {
+            state.session.sessions_dirty = false;
             crate::tui::commands::refresh_sessions(state).await;
             state.mark_dirty();
         }
-        if state.jobs_dirty {
-            state.jobs_dirty = false;
+        if state.session.jobs_dirty {
+            state.session.jobs_dirty = false;
             let out = crate::tui::commands::refresh_jobs_output(state).await;
-            state.cached_jobs_output = Some(out);
+            state.session.cached_jobs_output = Some(out);
             state.mark_dirty();
         }
         if notify_completed_jobs(state).await {
@@ -788,12 +795,12 @@ async fn run_event_loop(
         dispatch_kb_events(state, &key_ctx, kb_event, kb_rx).await?;
 
         // ── Approval dialog appeared mid-iteration ─────────────
-        // The drain functions above set `state.pending_approval` /
-        // `state.pending_bang` if a new approval arrived. Track
+        // The drain functions above set `state.approval.pending_approval` /
+        // `state.approval.pending_bang` if a new approval arrived. Track
         // this so the next render (even if it would otherwise be
         // skipped) draws the dialog. Mirrors the v1 behavior of
         // always rendering so the dialog appears immediately.
-        if state.pending_approval.is_some() || state.pending_bang.is_some() {
+        if state.approval.pending_approval.is_some() || state.approval.pending_bang.is_some() {
             had_approval_pending = true;
         }
         if had_approval_pending {
@@ -806,15 +813,16 @@ async fn run_event_loop(
         // spinner. Gating on `is_generating && spinner_visible` keeps idle CPU
         // near zero instead of waking the render path at 4 Hz.
         if dirty_from_tick {
-            let spinner_visible = state.is_generating
-                && state.messages.back().map(|m| m.role.as_str()) != Some("assistant");
+            let spinner_visible = state.generation.is_generating
+                && state.conversation.messages.back().map(|m| m.role.as_str()) != Some("assistant");
             let tool_streaming = state
+                .conversation
                 .messages
                 .back()
                 .map(|m| m.role == "tool" && m.streaming)
                 .unwrap_or(false);
             if spinner_visible || tool_streaming {
-                state.spinner_tick = state.spinner_tick.wrapping_add(1);
+                state.generation.spinner_tick = state.generation.spinner_tick.wrapping_add(1);
                 state.mark_dirty();
             }
         }
@@ -844,9 +852,9 @@ async fn dispatch_kb_events<'a>(
         key: event::KeyEvent,
         key_ctx: &keys::HandleInputContext<'a>,
     ) -> anyhow::Result<()> {
-        if state.pending_bang.is_some() {
+        if state.approval.pending_bang.is_some() {
             approval_keys::handle_bang_approval_key(key, state).await;
-        } else if state.pending_approval.is_some() {
+        } else if state.approval.pending_approval.is_some() {
             approval_keys::handle_approval_key(key, state);
         } else {
             keys::handle_input_key(key, state, key_ctx).await?;
@@ -858,11 +866,13 @@ async fn dispatch_kb_events<'a>(
         use crossterm::event::MouseEventKind;
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                state.auto_scroll = false;
-                state.scroll_offset = state.scroll_offset.saturating_sub(3);
+                state.conversation.auto_scroll = false;
+                state.conversation.scroll_offset =
+                    state.conversation.scroll_offset.saturating_sub(3);
             }
             MouseEventKind::ScrollDown => {
-                state.scroll_offset = (state.scroll_offset + 3).min(state.max_scroll);
+                state.conversation.scroll_offset =
+                    (state.conversation.scroll_offset + 3).min(state.conversation.max_scroll);
             }
             _ => {}
         }
@@ -894,7 +904,7 @@ fn drain_daemon_flags(state: &mut AppState) {
     // Drain the shared flags set by the daemon event reader into
     // the local AppState. The reader sets the flags; we clear
     // them after mirroring so we never miss an event.
-    let (sessions_flag, jobs_flag) = if let Some(ref flags) = state.daemon_flags {
+    let (sessions_flag, jobs_flag) = if let Some(ref flags) = state.session.daemon_flags {
         if let Ok(mut f) = flags.lock() {
             let s = f.sessions_dirty;
             let j = f.jobs_dirty;
@@ -908,11 +918,11 @@ fn drain_daemon_flags(state: &mut AppState) {
         (false, false)
     };
     if sessions_flag {
-        state.sessions_dirty = true;
+        state.session.sessions_dirty = true;
         state.mark_dirty();
     }
     if jobs_flag {
-        state.jobs_dirty = true;
+        state.session.jobs_dirty = true;
         state.mark_dirty();
     }
 }
@@ -944,10 +954,10 @@ fn render_frame(
         // Chat (F1) shows the conversation; other tabs show their
         // own panel content in the same area.
         use crate::tui::app::ActiveTab;
-        match state.active_tab {
+        match state.ui.active_tab {
             ActiveTab::Chat => {
                 // Welcome screen when no messages and no input
-                if state.messages.is_empty() && state.input.is_empty() {
+                if state.conversation.messages.is_empty() && state.conversation.input.is_empty() {
                     crate::tui::widgets::welcome::render_welcome(f, chunks[1], state);
                 } else {
                     render_chat(f, chunks[1], state);
@@ -971,12 +981,12 @@ fn render_frame(
         }
 
         // ── Slash menu popup (above input) ──
-        if let Some(ref menu) = state.slash_menu {
+        if let Some(ref menu) = state.ui.slash_menu {
             crate::tui::widgets::slash_menu::render_slash_menu(f, chunks[2], menu);
         }
 
         // ── File completer popup (above input) ──
-        if let Some(ref completer) = state.file_completer {
+        if let Some(ref completer) = state.ui.file_completer {
             crate::tui::widgets::file_completer::render_file_completer(f, chunks[2], completer);
         }
 
@@ -990,8 +1000,8 @@ fn render_frame(
         // before the main event loop. The approval dialog takes
         // precedence if both are somehow active — approvals are
         // system-initiated and require immediate attention.
-        if state.pending_approval.is_none() && state.pending_bang.is_none() {
-            if let Some(ref picker) = state.session_picker {
+        if state.approval.pending_approval.is_none() && state.approval.pending_bang.is_none() {
+            if let Some(ref picker) = state.session.session_picker {
                 picker.render(f, size);
             }
         }
@@ -1004,9 +1014,9 @@ fn render_frame(
         //
         // `render_approval_dialog` needs both a `&PendingApproval` (to
         // display the args preview) and `&mut state` (to clamp
-        // `state.approval_scroll` / `state.approval_max_scroll`). We
+        // `state.approval.approval_scroll` / `state.approval.approval_max_scroll`). We
         // can't hold both borrows simultaneously because the immutable
-        // borrow of `state.pending_approval` would extend through the
+        // borrow of `state.approval.pending_approval` would extend through the
         // call site and conflict with the mutable borrow.
         //
         // The fix is `std::mem::take`: swap the `Option<PendingApproval>`
@@ -1027,10 +1037,10 @@ fn render_frame(
         // the same dialog shape via `pending_bang`. We render it
         // identically — only the key handler knows the difference
         // (see `approval_keys::handle_bang_approval_key`).
-        let pending_taken = state.pending_approval.take();
+        let pending_taken = state.approval.pending_approval.take();
         if let Some(ref approval) = pending_taken {
             render_approval_dialog(f, size, approval, state);
-        } else if let Some(ref bang) = state.pending_bang {
+        } else if let Some(ref bang) = state.approval.pending_bang {
             // Synthesize a transient `PendingApproval` view of the
             // bang command so the dialog renders the same way. The
             // `responder` is `None` because bang is a local flow
@@ -1042,7 +1052,7 @@ fn render_frame(
             };
             render_approval_dialog(f, size, &synthetic, state);
         }
-        state.pending_approval = pending_taken;
+        state.approval.pending_approval = pending_taken;
 
         // Doom-loop warning banner. Renders last so it sits on top
         // of any other overlay. Skipped when acknowledged or when
@@ -1067,43 +1077,50 @@ async fn handle_persona_complete(
     resume_tx: &mpsc::UnboundedSender<ConversationLog>,
     plan_tx: &mpsc::UnboundedSender<bool>,
 ) {
-    state.is_generating = false;
-    state.persona_in_progress = None;
-    state.persona_cancel = None;
+    state.generation.is_generating = false;
+    state.generation.persona_in_progress = None;
+    state.generation.persona_cancel = None;
 
     if result.task.starts_with("workflow ") {
-        state.workflow_in_progress = None;
-        state.workflow_cancel = None;
+        state.generation.workflow_in_progress = None;
+        state.generation.workflow_cancel = None;
         let msg = if result.success {
             result.summary
         } else {
             format!("Workflow failed: {}", result.error.unwrap_or_default())
         };
         state
+            .conversation
             .messages
             .push_back(ConversationEntry::new("system", msg));
         return;
     }
 
     if !result.success {
-        state.messages.push_back(ConversationEntry::new(
-            "system",
-            format!(
-                "{} persona failed: {}",
-                result.kind,
-                result.error.unwrap_or_default()
-            ),
-        ));
+        state
+            .conversation
+            .messages
+            .push_back(ConversationEntry::new(
+                "system",
+                format!(
+                    "{} persona failed: {}",
+                    result.kind,
+                    result.error.unwrap_or_default()
+                ),
+            ));
         return;
     }
 
-    let parent_path = match state.log_path.clone() {
+    let parent_path = match state.session.log_path.clone() {
         Some(p) => p,
         None => {
-            state.messages.push_back(ConversationEntry::new(
-                "system",
-                "Cannot merge persona result: no session log path.".to_string(),
-            ));
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new(
+                    "system",
+                    "Cannot merge persona result: no session log path.".to_string(),
+                ));
             return;
         }
     };
@@ -1111,10 +1128,13 @@ async fn handle_persona_complete(
     let mut parent_log = match ConversationLog::open(parent_path.clone()) {
         Ok((l, _outcome)) => l,
         Err(e) => {
-            state.messages.push_back(ConversationEntry::new(
-                "system",
-                format!("Cannot open session log: {e}"),
-            ));
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new(
+                    "system",
+                    format!("Cannot open session log: {e}"),
+                ));
             return;
         }
     };
@@ -1128,29 +1148,38 @@ async fn handle_persona_complete(
         content: marker,
         ..Default::default()
     }) {
-        state.messages.push_back(ConversationEntry::new(
-            "system",
-            format!("Failed to merge persona: {e}"),
-        ));
+        state
+            .conversation
+            .messages
+            .push_back(ConversationEntry::new(
+                "system",
+                format!("Failed to merge persona: {e}"),
+            ));
         return;
     }
 
-    state.messages = messages_to_entries(parent_log.all());
+    state.conversation.messages = messages_to_entries(parent_log.all());
 
     if resume_tx.send(parent_log).is_err() {
-        state.messages.push_back(ConversationEntry::new(
-            "system",
-            "Executor gone; persona result saved to log only.".to_string(),
-        ));
+        state
+            .conversation
+            .messages
+            .push_back(ConversationEntry::new(
+                "system",
+                "Executor gone; persona result saved to log only.".to_string(),
+            ));
         return;
     }
 
     if result.kind == PersonaKind::Plan {
         crate::send_or_warn!(plan_tx.send(true), "plan-mode channel receiver dropped");
-        state.messages.push_back(ConversationEntry::new(
-            "system",
-            "📐 Plan complete. Type /implement to allow edits and continue.".to_string(),
-        ));
+        state
+            .conversation
+            .messages
+            .push_back(ConversationEntry::new(
+                "system",
+                "📐 Plan complete. Type /implement to allow edits and continue.".to_string(),
+            ));
     }
 }
 
@@ -1182,7 +1211,7 @@ mod tests {
     //
     // 2026-06-12 fix: the TUI event loop now observes a `Notify` so
     // SIGHUP and kb-reader-thread EOF can both wake the loop and
-    // set `state.should_exit = true`. This test pins the
+    // set `state.session.should_exit = true`. This test pins the
     // `Notify` + `select!` wiring: a future refactor that breaks
     // the shutdown arm — by removing it from the `select!`, by
     // holding the only `Arc` reference inside a function that
@@ -1260,7 +1289,7 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        state.messages = messages_to_entries(parent.all());
+        state.conversation.messages = messages_to_entries(parent.all());
 
         let (resume_tx, mut resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
         let (plan_tx, _plan_rx) = mpsc::unbounded_channel::<bool>();
@@ -1284,8 +1313,10 @@ mod tests {
         assert!(merged.content.contains("auth is in src/auth.rs"));
 
         // TUI message list mirrors the persisted log.
-        assert_eq!(state.messages.len(), 2);
-        assert!(state.messages[1].content.contains("explore persona result"));
+        assert_eq!(state.conversation.messages.len(), 2);
+        assert!(state.conversation.messages[1]
+            .content
+            .contains("explore persona result"));
 
         // Resume channel forwarded the updated log.
         assert!(resume_rx.try_recv().is_ok());
@@ -1313,6 +1344,7 @@ mod tests {
         // Plan persona flips plan mode on and prompts for /implement.
         assert_eq!(plan_rx.try_recv(), Ok(true));
         assert!(state
+            .conversation
             .messages
             .iter()
             .any(|m| m.content.contains("/implement")));
@@ -1336,7 +1368,7 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        state.messages = messages_to_entries(parent.all());
+        state.conversation.messages = messages_to_entries(parent.all());
 
         let (resume_tx, mut resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
         let (plan_tx, mut plan_rx) = mpsc::unbounded_channel::<bool>();
@@ -1357,6 +1389,7 @@ mod tests {
 
         // UI shows the error, not a merged summary.
         assert!(state
+            .conversation
             .messages
             .back()
             .unwrap()

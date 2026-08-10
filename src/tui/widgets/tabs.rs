@@ -22,7 +22,7 @@ pub fn render_tab_bar(f: &mut Frame, area: Rect, state: &AppState) {
             spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
         }
         let label = tab.label();
-        let is_active = tab == &state.active_tab;
+        let is_active = tab == &state.ui.active_tab;
         let style = if is_active {
             Style::default()
                 .fg(Color::Yellow)
@@ -37,7 +37,7 @@ pub fn render_tab_bar(f: &mut Frame, area: Rect, state: &AppState) {
 }
 
 /// Render a List widget from lines with optional interactive selection.
-/// When `state.tab_list_state` is `Some(idx)`, the list is rendered with
+/// When `state.ui.tab_list_state` is `Some(idx)`, the list is rendered with
 /// a highlight on the selected row; ↑/↓ navigation and Enter/Space
 /// invocation are handled by the key handler in `keys/mod.rs`.
 fn render_interactive(f: &mut Frame, area: Rect, lines: Vec<Line<'_>>, state: &AppState) {
@@ -49,7 +49,7 @@ fn render_interactive(f: &mut Frame, area: Rect, lines: Vec<Line<'_>>, state: &A
             .add_modifier(Modifier::BOLD),
     );
     let mut list_state = ListState::default();
-    if let Some(sel) = state.tab_list_state {
+    if let Some(sel) = state.ui.tab_list_state {
         list_state.select(Some(sel.min(count.saturating_sub(1))));
     }
     f.render_stateful_widget(list, area, &mut list_state);
@@ -73,13 +73,13 @@ pub fn render_models(f: &mut Frame, area: Rect, state: &AppState) {
     lines.push(Line::from(""));
 
     // Connection info
-    match &state.connection {
+    match &state.provider.connection {
         crate::tui::app::ConnectionState::Connected { model, since } => {
             lines.push(Line::from(Span::styled(
                 format!(" ● Connected: {model}"),
                 Style::default().fg(Color::Green),
             )));
-            let elapsed = state.session_started.elapsed().as_secs_f64();
+            let elapsed = state.session.session_started.elapsed().as_secs_f64();
             let duration = crate::tui::rendering::format_duration(elapsed);
             lines.push(Line::from(Span::raw(format!("   Uptime: {duration}"))));
             let _ = since; // suppress unused warning
@@ -101,7 +101,7 @@ pub fn render_models(f: &mut Frame, area: Rect, state: &AppState) {
     lines.push(Line::from(""));
 
     // Model info
-    if let Some(ref info) = state.model_info {
+    if let Some(ref info) = state.provider.model_info {
         lines.push(Line::from(Span::styled(
             " Model Info",
             Style::default()
@@ -117,7 +117,7 @@ pub fn render_models(f: &mut Frame, area: Rect, state: &AppState) {
     }
 
     // Adapter routing
-    let config = crate::shared::read_shared_config(&state.config);
+    let config = crate::shared::read_shared_config(&state.services.config);
     let routing = &config.model.adapter_routing;
     if routing.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -146,16 +146,16 @@ pub fn render_models(f: &mut Frame, area: Rect, state: &AppState) {
     )));
     lines.push(Line::from(format!(
         "   Sent:     {}",
-        crate::tui::rendering::format_token_count(state.tokens_sent)
+        crate::tui::rendering::format_token_count(state.budget.tokens_sent)
     )));
     lines.push(Line::from(format!(
         "   Received: {}",
-        crate::tui::rendering::format_token_count(state.tokens_received)
+        crate::tui::rendering::format_token_count(state.budget.tokens_received)
     )));
-    if state.cumulative_cost > 0.001 {
+    if state.budget.cumulative_cost > 0.001 {
         lines.push(Line::from(format!(
             "   Cost:     ${:.4}",
-            state.cumulative_cost
+            state.budget.cumulative_cost
         )));
     }
 
@@ -177,7 +177,7 @@ pub fn render_plugins(f: &mut Frame, area: Rect, state: &AppState) {
     )));
     lines.push(Line::from(""));
 
-    let config = crate::shared::read_shared_config(&state.config);
+    let config = crate::shared::read_shared_config(&state.services.config);
     let sources = &config.tools.plugin_sources;
     let enabled = &config.tools.enabled_plugins;
     let disabled = &config.tools.disabled_plugins;
@@ -230,7 +230,7 @@ pub fn render_jobs(f: &mut Frame, area: Rect, state: &AppState) {
     )));
     lines.push(Line::from(""));
 
-    if let Some(ref cached) = state.cached_jobs_output {
+    if let Some(ref cached) = state.session.cached_jobs_output {
         for line in cached.lines() {
             lines.push(Line::from(Span::raw(format!(" {line}"))));
         }
@@ -265,7 +265,7 @@ pub fn render_settings(f: &mut Frame, area: Rect, state: &AppState) {
     )));
     lines.push(Line::from(""));
 
-    let config = crate::shared::read_shared_config(&state.config);
+    let config = crate::shared::read_shared_config(&state.services.config);
 
     // Model settings
     lines.push(Line::from(Span::styled(
@@ -379,7 +379,7 @@ pub fn render_threads(f: &mut Frame, area: Rect, state: &AppState) {
     lines.push(Line::from(""));
 
     // Session list from the session picker data
-    if let Some(ref picker) = state.session_picker {
+    if let Some(ref picker) = state.session.session_picker {
         let count = picker.len();
         if count == 0 {
             lines.push(Line::from(Span::styled(

@@ -40,7 +40,7 @@ pub enum SearchSource {
     ToolOutput,
 }
 
-/// One match location: which message in `state.messages`, the byte
+/// One match location: which message in `state.conversation.messages`, the byte
 /// offset of the match's first character within that source, and
 /// which source the match came from.
 pub type MatchPos = (usize, usize, SearchSource);

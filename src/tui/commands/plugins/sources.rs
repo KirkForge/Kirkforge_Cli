@@ -17,7 +17,7 @@ pub(super) async fn setup_plugin_sources(
     state: &AppState,
     _plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
 ) -> String {
-    let cfg = read_shared_config(&state.config);
+    let cfg = read_shared_config(&state.services.config);
     let mut lines = vec![
         "Workspace plugin source setup:".to_string(),
         "  /plugins add <name> <path>   — register a plugin directory".to_string(),
@@ -48,13 +48,13 @@ pub(super) async fn setup_plugin_sources(
 
 /// `sources` — list configured workspace plugin sources and their enabled state.
 pub(super) fn list_sources(state: &AppState) -> String {
-    let cfg = read_shared_config(&state.config);
+    let cfg = read_shared_config(&state.services.config);
     if cfg.tools.plugin_sources.is_empty() {
         return "No workspace plugin sources configured. Use /plugins add <name> <path>."
             .to_string();
     }
 
-    let active = active_plugin_names(&state.plugin_registry);
+    let active = active_plugin_names(&state.provider.plugin_registry);
     let mut lines = Vec::new();
     lines.push(format!(
         "Workspace plugin sources ({}):",
@@ -94,7 +94,7 @@ pub(super) async fn add_source(
     }
 
     {
-        let mut cfg = write_shared_config(&state.config);
+        let mut cfg = write_shared_config(&state.services.config);
         cfg.tools
             .plugin_sources
             .insert(name.to_string(), resolved.clone());
@@ -113,7 +113,7 @@ pub(super) fn remove_source(
     plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
 ) -> String {
     {
-        let mut cfg = write_shared_config(&state.config);
+        let mut cfg = write_shared_config(&state.services.config);
         if cfg.tools.plugin_sources.remove(name).is_none() {
             return format!("❌ No workspace plugin source named '{name}'.");
         }
@@ -125,11 +125,12 @@ pub(super) fn remove_source(
 
     // Unload the plugin if it is currently active; the registry will not be
     // re-loaded from this source on the next /plugins reload either.
-    state.skill_registry.remove_plugin(name);
-    state.plugin_registry.remove(name);
-    state.plugin_status = plugin_status_summary(&state.plugin_registry, &blocked_warnings(state));
+    state.services.skill_registry.remove_plugin(name);
+    state.provider.plugin_registry.remove(name);
+    state.provider.plugin_status =
+        plugin_status_summary(&state.provider.plugin_registry, &blocked_warnings(state));
     crate::send_or_warn!(
-        plugin_reload_tx.send(state.plugin_registry.clone()),
+        plugin_reload_tx.send(state.provider.plugin_registry.clone()),
         "plugin registry receiver dropped; executor may have exited"
     );
 

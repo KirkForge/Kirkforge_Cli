@@ -5,6 +5,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- WO 26.8: Decompose `AppState` from a single flat ~66-field struct into 11 sub-structs grouped by concern (`conversation`, `generation`, `budget`, `session`, `provider`, `approval`, `search`, `ui`, `doom`, `services`, + `dirty` bool). Call sites migrated to `state.<group>.<field>`; existing helper methods retained as accessor shims. TUI renders identically; session persistence format unchanged.
+
 ### Fixed
 - WO 26.4-F8: drop the job-store lock before `.await` in the scheduler daemon — no `MutexGuard` spans an await, removing a deadlock-under-load risk.
 

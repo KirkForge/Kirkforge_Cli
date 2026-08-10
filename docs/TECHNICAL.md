@@ -257,8 +257,8 @@ The input box offers **Tab-completion** (WO 14.6): when the buffer starts with
 readline contract, no fuzzy); when it starts with `@`, Tab completes the path
 portion against the filesystem (the `:A-B:raw` suffix is left alone). A single
 match replaces the buffer; multiple matches populate
-`AppState::completion_suggestions`, rendered as a one-line dim hint above the
-input text. The completion layer is `complete_command` (pure, over `COMMANDS`)
+`AppState::conversation.completion_suggestions`, rendered as a one-line dim
+hint above the input text. The completion layer is `complete_command` (pure, over `COMMANDS`)
 and `complete_path` (`std::fs::read_dir`, capped at 24 entries). The legacy
 "Tab on empty input toggles expand/collapse" behavior is preserved when the
 buffer doesn't start with `/` or `@`.

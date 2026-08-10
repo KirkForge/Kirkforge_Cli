@@ -338,28 +338,32 @@ pub(crate) async fn dispatch_slash_command(
 ) -> anyhow::Result<bool> {
     match cmd {
         "/clear" => {
-            state.messages.clear();
-            state.thinking_buffer.clear();
+            state.conversation.messages.clear();
+            state.generation.thinking_buffer.clear();
             state.search.matches.clear();
             state.search.match_idx = 0;
-            state.code_block_copy_index = 0;
+            state.conversation.code_block_copy_index = 0;
             Ok(true)
         }
         "/exit" | "/quit" => {
             send_or_warn!(ctx.cancel_tx.send(()), "cancel channel receiver dropped");
-            state.should_exit = true;
+            state.session.should_exit = true;
             Ok(true)
         }
         "/help" | "/h" | "/?" => {
-            state.messages.push_back(ConversationEntry::new(
-                "system",
-                help_text(&state.skill_registry),
-            ));
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new(
+                    "system",
+                    help_text(&state.services.skill_registry),
+                ));
             Ok(true)
         }
         "/fork" => {
             let msg = crate::tui::commands::handle_fork_command(args, state).await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -367,6 +371,7 @@ pub(crate) async fn dispatch_slash_command(
         "/resume" => {
             let msg = crate::tui::commands::handle_resume_command(args, state, ctx.resume_tx).await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -374,6 +379,7 @@ pub(crate) async fn dispatch_slash_command(
         "/jobs" => {
             let msg = crate::tui::commands::handle_jobs_command(args, state).await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -381,6 +387,7 @@ pub(crate) async fn dispatch_slash_command(
         "/status" => {
             let msg = crate::tui::commands::handle_status_command(args, state).await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -396,6 +403,7 @@ pub(crate) async fn dispatch_slash_command(
                 _ => crate::tui::commands::handle_reload_command(ctx.config_tx, state).await,
             };
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -405,6 +413,7 @@ pub(crate) async fn dispatch_slash_command(
                 crate::tui::commands::handle_model_command(args, ctx.model_tx, ctx.event_tx, state)
                     .await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -412,6 +421,7 @@ pub(crate) async fn dispatch_slash_command(
         "/compact" => {
             let msg = crate::tui::commands::handle_compact_command(args, ctx.compact_tx).await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -421,6 +431,7 @@ pub(crate) async fn dispatch_slash_command(
                 crate::tui::commands::handle_route_command(args, ctx.model_tx, ctx.event_tx, state)
                     .await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -428,6 +439,7 @@ pub(crate) async fn dispatch_slash_command(
         "/memory" => {
             let msg = crate::tui::commands::handle_memory_command(args);
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -435,6 +447,7 @@ pub(crate) async fn dispatch_slash_command(
         "/metrics" => {
             let msg = crate::tui::commands::handle_metrics_command();
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -443,6 +456,7 @@ pub(crate) async fn dispatch_slash_command(
             // WO 11.7: show recent verifier verdicts from the metrics log.
             let msg = crate::shared::metrics::format_verifier_report(20);
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -450,6 +464,7 @@ pub(crate) async fn dispatch_slash_command(
         "/save" => {
             let msg = crate::tui::commands::handle_save_command(args, state).await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -457,6 +472,7 @@ pub(crate) async fn dispatch_slash_command(
         "/undo" => {
             let msg = crate::tui::commands::handle_undo_command(args, ctx.undo_tx, state);
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -464,21 +480,25 @@ pub(crate) async fn dispatch_slash_command(
         "/permissions" => {
             let msg = handle_permissions_command(args, state);
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
         }
         "/thinking" => {
-            state.thinking_panel_visible = !state.thinking_panel_visible;
-            let status = if state.thinking_panel_visible {
+            state.generation.thinking_panel_visible = !state.generation.thinking_panel_visible;
+            let status = if state.generation.thinking_panel_visible {
                 "shown"
             } else {
                 "hidden"
             };
-            state.messages.push_back(ConversationEntry::new(
-                "system",
-                format!("Thinking blocks are now {status}. Press Esc to toggle."),
-            ));
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new(
+                    "system",
+                    format!("Thinking blocks are now {status}. Press Esc to toggle."),
+                ));
             Ok(true)
         }
         "/plan" => {
@@ -490,6 +510,7 @@ pub(crate) async fn dispatch_slash_command(
             )
             .await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -503,6 +524,7 @@ pub(crate) async fn dispatch_slash_command(
             )
             .await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -516,6 +538,7 @@ pub(crate) async fn dispatch_slash_command(
             )
             .await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -525,15 +548,19 @@ pub(crate) async fn dispatch_slash_command(
                 ctx.plan_tx.send(false),
                 "plan-mode channel receiver dropped"
             );
-            state.messages.push_back(ConversationEntry::new(
-                "system",
-                "✅ Plan mode disabled — implementation may begin.".to_string(),
-            ));
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new(
+                    "system",
+                    "✅ Plan mode disabled — implementation may begin.".to_string(),
+                ));
             Ok(true)
         }
         "/gh" => {
             let msg = crate::tui::commands::handle_gh_command(args);
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -542,15 +569,17 @@ pub(crate) async fn dispatch_slash_command(
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let msg = crate::tui::commands::handle_init_command(args, &cwd);
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
         }
         "/commit" => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let cfg = crate::shared::read_shared_config(&state.config).clone();
+            let cfg = crate::shared::read_shared_config(&state.services.config).clone();
             let msg = crate::tui::commands::handle_commit_command(args, &cwd, &cfg).await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -558,6 +587,7 @@ pub(crate) async fn dispatch_slash_command(
         "/sessions" => {
             let msg = crate::tui::commands::handle_sessions_command(args, state);
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -565,6 +595,7 @@ pub(crate) async fn dispatch_slash_command(
         "/carryover" => {
             let msg = crate::tui::commands::handle_carryover_command(args, state);
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -572,6 +603,7 @@ pub(crate) async fn dispatch_slash_command(
         "/test" => {
             let msg = crate::tui::commands::handle_test_command(args, state).await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -581,6 +613,7 @@ pub(crate) async fn dispatch_slash_command(
                 crate::tui::commands::handle_plugins_command(args, state, ctx.plugin_reload_tx)
                     .await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
@@ -590,24 +623,29 @@ pub(crate) async fn dispatch_slash_command(
                 crate::tui::commands::handle_workflow_command(args, state, ctx.persona_tx.clone())
                     .await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
         }
         "/mcp" => {
-            let cfg = crate::shared::read_shared_config(&state.config);
+            let cfg = crate::shared::read_shared_config(&state.services.config);
             let servers = &cfg.tools.mcp_servers;
             if servers.is_empty() {
-                state.messages.push_back(ConversationEntry::new(
-                    "system",
-                    "No MCP servers configured.".to_string(),
-                ));
+                state
+                    .conversation
+                    .messages
+                    .push_back(ConversationEntry::new(
+                        "system",
+                        "No MCP servers configured.".to_string(),
+                    ));
             } else {
                 let mut lines = vec![format!("{} MCP server(s) configured:", servers.len())];
                 for s in servers {
                     lines.push(format!("  {} ({})", s.name, s.transport));
                 }
                 state
+                    .conversation
                     .messages
                     .push_back(ConversationEntry::new("system", lines.join("\n")));
             }
@@ -631,13 +669,17 @@ fn handle_permissions_command(args: &str, state: &mut AppState) -> String {
     let sub = tokens.next().unwrap_or("list");
 
     match sub {
-        "list" | "" => ops::list(&crate::shared::read_shared_config(&state.config)),
+        "list" | "" => ops::list(&crate::shared::read_shared_config(&state.services.config)),
         "clear" => {
             let msg = {
-                let mut cfg = state.config.write().unwrap_or_else(|e| e.into_inner());
+                let mut cfg = state
+                    .services
+                    .config
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner());
                 ops::clear(&mut cfg)
             };
-            match persist_shared(&state.config) {
+            match persist_shared(&state.services.config) {
                 Ok(()) => msg,
                 Err(e) => format!("{msg}\n⚠️ Failed to persist config: {e}"),
             }
@@ -657,11 +699,15 @@ fn handle_permissions_command(args: &str, state: &mut AppState) -> String {
                 }
             };
             let result = {
-                let mut cfg = state.config.write().unwrap_or_else(|e| e.into_inner());
+                let mut cfg = state
+                    .services
+                    .config
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner());
                 ops::revoke(&mut cfg, idx)
             };
             match result {
-                Ok(msg) => match persist_shared(&state.config) {
+                Ok(msg) => match persist_shared(&state.services.config) {
                     Ok(()) => msg,
                     Err(e) => format!("{msg}\n⚠️ Failed to persist config: {e}"),
                 },

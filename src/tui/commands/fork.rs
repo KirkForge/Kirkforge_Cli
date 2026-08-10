@@ -12,7 +12,7 @@
 //!
 //! Both handlers are pure: they take `&mut AppState` and a channel
 //! sender (or nothing), and return a display string. The TUI event
-//! loop is responsible for pushing the string into `state.messages`.
+//! loop is responsible for pushing the string into `state.conversation.messages`.
 
 use crate::session::conversation::ConversationLog;
 use crate::tui::app::AppState;
@@ -22,7 +22,7 @@ use super::messages_to_entries;
 
 /// Handle `/fork` command: list forks or create a new one.
 pub async fn handle_fork_command(args: &str, state: &mut AppState) -> String {
-    let fm = match state.fork_manager.as_mut() {
+    let fm = match state.session.fork_manager.as_mut() {
         Some(fm) => fm,
         None => return "No fork manager available (session not initialized).".into(),
     };
@@ -53,7 +53,7 @@ pub async fn handle_fork_command(args: &str, state: &mut AppState) -> String {
 
     // Build a fake ConversationLog from our messages for fork creation
     // We use the conversation log path stored in state
-    let log_path = match &state.log_path {
+    let log_path = match &state.session.log_path {
         Some(p) => p.clone(),
         None => return "No log path available. Cannot create fork.".into(),
     };
@@ -99,7 +99,7 @@ pub async fn handle_resume_command(
                 "No recent sessions found. Use `/resume <fork-id>` to resume a fork, or `/fork list` to see forks.".into()
             }
             Ok(sessions) => {
-                state.session_picker =
+                state.session.session_picker =
                     Some(crate::tui::components::session_picker::SessionPicker::new(sessions));
                 "Select a recent session to resume (Enter to confirm, q/Esc to cancel).".into()
             }
@@ -108,7 +108,7 @@ pub async fn handle_resume_command(
     }
 
     // ── With args: treat as a fork id. ──
-    let fm = match state.fork_manager.as_mut() {
+    let fm = match state.session.fork_manager.as_mut() {
         Some(fm) => fm,
         None => return "No fork manager available.".into(),
     };
@@ -159,7 +159,7 @@ pub async fn resume_conversation_log(
         .file_stem()
         .and_then(|f| f.to_str())
         .map(|s| s.trim_end_matches(".conv").to_string())
-        .unwrap_or_else(|| state.session_id.clone());
+        .unwrap_or_else(|| state.session.session_id.clone());
 
     // Send the log to the executor (swaps in-place)
     if resume_tx.send(log).is_err() {
@@ -176,26 +176,26 @@ pub async fn resume_conversation_log(
     //   - expanded_tools / notified_jobs: indices/ids from the OLD session are meaningless
     //   - last_turn_prompt_tokens: 0; the executor will emit a fresh CostStats on the next turn
     //   - tokens_sent / tokens_received / cumulative_cost: running counters reset
-    state.messages = entries;
-    state.thinking_buffer.clear();
-    state.pending_approval = None;
-    state.expanded_tools.clear();
-    state.notified_jobs.clear();
-    state.notified_scheduled_runs.clear();
-    state.last_turn_prompt_tokens = 0;
-    state.tokens_sent = 0;
-    state.tokens_received = 0;
-    state.cumulative_cost = 0.0;
-    state.turn_cost = 0.0;
-    state.cached_tokens = 0;
+    state.conversation.messages = entries;
+    state.generation.thinking_buffer.clear();
+    state.approval.pending_approval = None;
+    state.conversation.expanded_tools.clear();
+    state.session.notified_jobs.clear();
+    state.session.notified_scheduled_runs.clear();
+    state.budget.last_turn_prompt_tokens = 0;
+    state.budget.tokens_sent = 0;
+    state.budget.tokens_received = 0;
+    state.budget.cumulative_cost = 0.0;
+    state.budget.turn_cost = 0.0;
+    state.budget.cached_tokens = 0;
 
     // Update session identity to the new log path. We keep the original
     // session_id as a parent marker so forks created from this resumed
     // branch still record their provenance.
-    state.session_id = format!("{new_id} (resumed)");
-    state.log_path = Some(new_log_path.clone());
-    state.fork_manager = Some(crate::session::session_fork::ForkManager::new(
-        &state.session_id,
+    state.session.session_id = format!("{new_id} (resumed)");
+    state.session.log_path = Some(new_log_path.clone());
+    state.session.fork_manager = Some(crate::session::session_fork::ForkManager::new(
+        &state.session.session_id,
         &new_log_path,
     ));
 
@@ -225,7 +225,7 @@ async fn load_recent_sessions_for_picker(
 pub async fn refresh_sessions(state: &mut AppState) {
     match load_recent_sessions_for_picker().await {
         Ok(sessions) => {
-            state.session_picker = Some(
+            state.session.session_picker = Some(
                 crate::tui::components::session_picker::SessionPicker::new(sessions),
             );
         }
@@ -243,8 +243,8 @@ mod tests {
 
     fn test_state_with_log(log_path: std::path::PathBuf) -> AppState {
         let mut state = app_state_with_log(log_path.clone());
-        state.session_id = "test-session".to_string();
-        state.fork_manager = Some(crate::session::session_fork::ForkManager::new(
+        state.session.session_id = "test-session".to_string();
+        state.session.fork_manager = Some(crate::session::session_fork::ForkManager::new(
             "test-session",
             &log_path,
         ));
@@ -262,28 +262,34 @@ mod tests {
 
         let (tx, _rx) = mpsc::unbounded_channel::<ConversationLog>();
         let mut state = test_state_with_log(old_log_path);
-        state.tokens_sent = 500;
-        state.tokens_received = 300;
-        state.cumulative_cost = 0.05;
-        state.turn_cost = 0.01;
-        state.cached_tokens = 200;
-        state.last_turn_prompt_tokens = 100;
+        state.budget.tokens_sent = 500;
+        state.budget.tokens_received = 300;
+        state.budget.cumulative_cost = 0.05;
+        state.budget.turn_cost = 0.01;
+        state.budget.cached_tokens = 200;
+        state.budget.last_turn_prompt_tokens = 100;
 
         let _msg = resume_conversation_log(new_log, &mut state, &tx).await;
 
-        assert_eq!(state.tokens_sent, 0, "tokens_sent must reset on fork");
         assert_eq!(
-            state.tokens_received, 0,
+            state.budget.tokens_sent, 0,
+            "tokens_sent must reset on fork"
+        );
+        assert_eq!(
+            state.budget.tokens_received, 0,
             "tokens_received must reset on fork"
         );
         assert_eq!(
-            state.cumulative_cost, 0.0,
+            state.budget.cumulative_cost, 0.0,
             "cumulative_cost must reset on fork"
         );
-        assert_eq!(state.turn_cost, 0.0, "turn_cost must reset on fork");
-        assert_eq!(state.cached_tokens, 0, "cached_tokens must reset on fork");
+        assert_eq!(state.budget.turn_cost, 0.0, "turn_cost must reset on fork");
         assert_eq!(
-            state.last_turn_prompt_tokens, 0,
+            state.budget.cached_tokens, 0,
+            "cached_tokens must reset on fork"
+        );
+        assert_eq!(
+            state.budget.last_turn_prompt_tokens, 0,
             "last_turn_prompt_tokens must reset on fork"
         );
     }
@@ -306,10 +312,10 @@ mod tests {
         assert!(rx.try_recv().is_ok());
 
         // The fork manager must now point at the resumed session.
-        assert!(state.fork_manager.is_some());
-        let fm = state.fork_manager.as_ref().unwrap();
+        assert!(state.session.fork_manager.is_some());
+        let fm = state.session.fork_manager.as_ref().unwrap();
         assert_eq!(fm.len(), 0); // new session has no forks yet
-        assert_eq!(state.log_path, Some(new_log_path));
-        assert!(state.session_id.contains("new-session"));
+        assert_eq!(state.session.log_path, Some(new_log_path));
+        assert!(state.session.session_id.contains("new-session"));
     }
 }

@@ -1,13 +1,13 @@
 //! Approval-mode keyboard handler.
 //!
-//! Only invoked when `state.pending_approval.is_some()`. Translates
+//! Only invoked when `state.approval.pending_approval.is_some()`. Translates
 //! y/n/a/Esc into `ApprovalResponse` and sends it back to the executor
 //! over the oneshot channel stored on the pending approval.
 //!
 //! **v1.2-p11:** also handles PageUp/PageDown/Up/Down/Home/End to
 //! scroll the args preview when the approval is taller than the
 //! dialog's visible window. Scroll bounds are clamped against
-//! `state.approval_max_scroll`, which the renderer writes each
+//! `state.approval.approval_max_scroll`, which the renderer writes each
 //! frame — same off-by-N avoidance pattern as `max_scroll` for
 //! the chat view.
 //!
@@ -26,7 +26,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 const APPROVAL_PAGE_SIZE: usize = 10;
 
 /// Handle a Y/N/Esc key for the `!` approval gate. The bang command
-/// lives on `state.pending_bang`; on Y we run it, on N/Esc we just
+/// lives on `state.approval.pending_bang`; on Y we run it, on N/Esc we just
 /// clear the gate with a system message. Scroll keys (PageUp/
 /// PageDown/Up/Down/Home/End) bubble through to the dialog's
 /// args-preview scroll state (shared with the regular approval flow
@@ -38,31 +38,35 @@ const APPROVAL_PAGE_SIZE: usize = 10;
 pub async fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
     match key.code {
         KeyCode::PageUp => {
-            state.approval_scroll = state.approval_scroll.saturating_sub(APPROVAL_PAGE_SIZE);
+            state.approval.approval_scroll = state
+                .approval
+                .approval_scroll
+                .saturating_sub(APPROVAL_PAGE_SIZE);
             return;
         }
         KeyCode::PageDown => {
-            state.approval_scroll = state
+            state.approval.approval_scroll = state
+                .approval
                 .approval_scroll
                 .saturating_add(APPROVAL_PAGE_SIZE)
-                .min(state.approval_max_scroll);
+                .min(state.approval.approval_max_scroll);
             return;
         }
         KeyCode::Up => {
-            state.approval_scroll = state.approval_scroll.saturating_sub(1);
+            state.approval.approval_scroll = state.approval.approval_scroll.saturating_sub(1);
             return;
         }
         KeyCode::Down => {
-            let next = state.approval_scroll + 1;
-            state.approval_scroll = next.min(state.approval_max_scroll);
+            let next = state.approval.approval_scroll + 1;
+            state.approval.approval_scroll = next.min(state.approval.approval_max_scroll);
             return;
         }
         KeyCode::Home => {
-            state.approval_scroll = 0;
+            state.approval.approval_scroll = 0;
             return;
         }
         KeyCode::End => {
-            state.approval_scroll = state.approval_max_scroll;
+            state.approval.approval_scroll = state.approval.approval_max_scroll;
             return;
         }
         _ => {}
@@ -80,12 +84,12 @@ pub async fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
     };
 
     // Take the bang command out of state — we own it now.
-    let Some(bang) = state.pending_bang.take() else {
+    let Some(bang) = state.approval.pending_bang.take() else {
         return;
     };
     // Reset scroll for the next approval of any kind.
-    state.approval_scroll = 0;
-    state.approval_max_scroll = 0;
+    state.approval.approval_scroll = 0;
+    state.approval.approval_max_scroll = 0;
 
     if approved {
         // The `!` runner is async; await it here so the TUI event
@@ -94,25 +98,29 @@ pub async fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
         // `block_in_place` + `Handle::block_on` froze the UI for the
         // duration of the command (up to the 30s bang timeout).
         let cmd = bang.cmd;
-        let config = crate::shared::read_shared_config(&state.config).clone();
+        let config = crate::shared::read_shared_config(&state.services.config).clone();
         let result = crate::tui::commands::handle_bang_command(&cmd, &config).await;
         // Split into summary / full for the collapse UX, using the
         // same helper as the direct (non-approval) `!` path so the
         // collapse behaviour is identical.
         let (summary, full) = crate::tui::keys::split_bang_summary(&result);
         state
+            .conversation
             .messages
             .push_back(ConversationEntry::tool(summary, full));
     } else {
-        state.messages.push_back(ConversationEntry::new(
-            "system",
-            format!("🚫 Cancelled: !{}", bang.cmd),
-        ));
+        state
+            .conversation
+            .messages
+            .push_back(ConversationEntry::new(
+                "system",
+                format!("🚫 Cancelled: !{}", bang.cmd),
+            ));
     }
 }
 
 pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
-    let approval = match state.pending_approval.take() {
+    let approval = match state.approval.pending_approval.take() {
         Some(a) => a,
         None => return,
     };
@@ -133,49 +141,53 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
         KeyCode::Char('q') | KeyCode::Char('Q') => Some(ApprovalResponse::Denied),
         KeyCode::Esc => Some(ApprovalResponse::Denied),
         KeyCode::Tab => {
-            state.pending_approval = Some(approval);
-            state.approval_diff_side_by_side = !state.approval_diff_side_by_side;
+            state.approval.pending_approval = Some(approval);
+            state.approval.approval_diff_side_by_side = !state.approval.approval_diff_side_by_side;
             return;
         }
         // Scroll keys — operate on the args preview, NOT the chat.
         // (Approval-mode keys never reach the chat-view scroll handler.)
         KeyCode::PageUp => {
-            state.pending_approval = Some(approval);
-            state.approval_scroll = state.approval_scroll.saturating_sub(APPROVAL_PAGE_SIZE);
+            state.approval.pending_approval = Some(approval);
+            state.approval.approval_scroll = state
+                .approval
+                .approval_scroll
+                .saturating_sub(APPROVAL_PAGE_SIZE);
             return;
         }
         KeyCode::PageDown => {
-            state.pending_approval = Some(approval);
-            state.approval_scroll = state
+            state.approval.pending_approval = Some(approval);
+            state.approval.approval_scroll = state
+                .approval
                 .approval_scroll
                 .saturating_add(APPROVAL_PAGE_SIZE)
-                .min(state.approval_max_scroll);
+                .min(state.approval.approval_max_scroll);
             return;
         }
         KeyCode::Up => {
-            state.pending_approval = Some(approval);
-            state.approval_scroll = state.approval_scroll.saturating_sub(1);
+            state.approval.pending_approval = Some(approval);
+            state.approval.approval_scroll = state.approval.approval_scroll.saturating_sub(1);
             return;
         }
         KeyCode::Down => {
-            state.pending_approval = Some(approval);
-            let next = state.approval_scroll + 1;
-            state.approval_scroll = next.min(state.approval_max_scroll);
+            state.approval.pending_approval = Some(approval);
+            let next = state.approval.approval_scroll + 1;
+            state.approval.approval_scroll = next.min(state.approval.approval_max_scroll);
             return;
         }
         KeyCode::Home => {
-            state.pending_approval = Some(approval);
-            state.approval_scroll = 0;
+            state.approval.pending_approval = Some(approval);
+            state.approval.approval_scroll = 0;
             return;
         }
         KeyCode::End => {
-            state.pending_approval = Some(approval);
-            state.approval_scroll = state.approval_max_scroll;
+            state.approval.pending_approval = Some(approval);
+            state.approval.approval_scroll = state.approval.approval_max_scroll;
             return;
         }
         _ => {
             // Unhandled key — put the approval back so the dialog stays.
-            state.pending_approval = Some(approval);
+            state.approval.pending_approval = Some(approval);
             return;
         }
     };
@@ -202,18 +214,18 @@ pub fn handle_approval_key(key: KeyEvent, state: &mut AppState) {
             // `push_rule_unique` dedups so mashing `[A]lways` twice
             // doesn't create duplicate rules.
             let rule = crate::shared::permission::suggest_rule(&approval.tool_name, &approval.args);
-            let mut cfg = crate::shared::write_shared_config(&state.config);
+            let mut cfg = crate::shared::write_shared_config(&state.services.config);
             push_rule_unique(&mut cfg.security.permission_rules, rule);
             drop(cfg);
-            let cfg = crate::shared::read_shared_config(&state.config);
+            let cfg = crate::shared::read_shared_config(&state.services.config);
             if let Err(e) = crate::session::config::save_config(&cfg) {
                 tracing::warn!(error = %e, "Failed to save auto-approve rule to config");
             }
         }
         // The user just decided — clear the scroll state so the next
         // approval (if any) starts fresh at the top.
-        state.approval_scroll = 0;
-        state.approval_max_scroll = 0;
+        state.approval.approval_scroll = 0;
+        state.approval.approval_max_scroll = 0;
         if let Some(tx) = approval.responder {
             if let Err(e) = tx.send(resp) {
                 tracing::warn!(
@@ -236,8 +248,8 @@ fn deny_pending_approval_and_exit(
     approval: crate::tui::app::PendingApproval,
     state: &mut AppState,
 ) {
-    state.approval_scroll = 0;
-    state.approval_max_scroll = 0;
+    state.approval.approval_scroll = 0;
+    state.approval.approval_max_scroll = 0;
     if let Some(tx) = approval.responder {
         if let Err(e) = tx.send(ApprovalResponse::DeniedWithReason(
             "User cancelled the approval dialog (Ctrl+C / exit)".into(),
@@ -249,7 +261,7 @@ fn deny_pending_approval_and_exit(
             );
         }
     }
-    state.should_exit = true;
+    state.session.should_exit = true;
 }
 
 #[cfg(test)]
@@ -264,7 +276,7 @@ mod tests {
         let mut s = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
             Config::default(),
         )));
-        s.pending_approval = Some(PendingApproval {
+        s.approval.pending_approval = Some(PendingApproval {
             tool_name: "bash".into(),
             args,
             responder: None,
@@ -277,110 +289,110 @@ mod tests {
     }
 
     fn cfg_mut(s: &mut AppState) -> std::sync::RwLockWriteGuard<'_, Config> {
-        s.config.write().unwrap_or_else(|e| e.into_inner())
+        s.services.config.write().unwrap_or_else(|e| e.into_inner())
     }
 
     /// PageDown moves scroll forward, clamped to max_scroll.
     #[test]
     fn test_pagedown_advances_and_clamps() {
         let mut s = make_state_with_approval(json!({"command": "ls"}));
-        s.approval_scroll = 0;
-        s.approval_max_scroll = 50;
+        s.approval.approval_scroll = 0;
+        s.approval.approval_max_scroll = 50;
         handle_approval_key(key(KeyCode::PageDown), &mut s);
-        assert_eq!(s.approval_scroll, 10);
+        assert_eq!(s.approval.approval_scroll, 10);
         // Far past the max — should clamp.
-        s.approval_scroll = 45;
+        s.approval.approval_scroll = 45;
         handle_approval_key(key(KeyCode::PageDown), &mut s);
-        assert_eq!(s.approval_scroll, 50);
+        assert_eq!(s.approval.approval_scroll, 50);
     }
 
     /// PageUp moves scroll backward via saturating_sub.
     #[test]
     fn test_pageup_saturates_at_zero() {
         let mut s = make_state_with_approval(json!({"command": "ls"}));
-        s.approval_scroll = 3;
-        s.approval_max_scroll = 50;
+        s.approval.approval_scroll = 3;
+        s.approval.approval_max_scroll = 50;
         handle_approval_key(key(KeyCode::PageUp), &mut s);
-        assert_eq!(s.approval_scroll, 0);
+        assert_eq!(s.approval.approval_scroll, 0);
         // Already at 0 — stays at 0.
         handle_approval_key(key(KeyCode::PageUp), &mut s);
-        assert_eq!(s.approval_scroll, 0);
+        assert_eq!(s.approval.approval_scroll, 0);
     }
 
     /// Down arrow advances by 1.
     #[test]
     fn test_down_arrow_advances_one() {
         let mut s = make_state_with_approval(json!({"command": "ls"}));
-        s.approval_scroll = 5;
-        s.approval_max_scroll = 50;
+        s.approval.approval_scroll = 5;
+        s.approval.approval_max_scroll = 50;
         handle_approval_key(key(KeyCode::Down), &mut s);
-        assert_eq!(s.approval_scroll, 6);
+        assert_eq!(s.approval.approval_scroll, 6);
     }
 
     /// Up arrow retreats by 1 via saturating_sub.
     #[test]
     fn test_up_arrow_saturates_at_zero() {
         let mut s = make_state_with_approval(json!({"command": "ls"}));
-        s.approval_scroll = 0;
-        s.approval_max_scroll = 50;
+        s.approval.approval_scroll = 0;
+        s.approval.approval_max_scroll = 50;
         handle_approval_key(key(KeyCode::Up), &mut s);
-        assert_eq!(s.approval_scroll, 0);
+        assert_eq!(s.approval.approval_scroll, 0);
     }
 
     /// Home jumps to 0, End jumps to max.
     #[test]
     fn test_home_end_jumps() {
         let mut s = make_state_with_approval(json!({"command": "ls"}));
-        s.approval_scroll = 20;
-        s.approval_max_scroll = 100;
+        s.approval.approval_scroll = 20;
+        s.approval.approval_max_scroll = 100;
         handle_approval_key(key(KeyCode::End), &mut s);
-        assert_eq!(s.approval_scroll, 100);
+        assert_eq!(s.approval.approval_scroll, 100);
         handle_approval_key(key(KeyCode::Home), &mut s);
-        assert_eq!(s.approval_scroll, 0);
+        assert_eq!(s.approval.approval_scroll, 0);
     }
 
     /// y/n/a/Esc still work — the approval gets consumed and scroll resets.
     #[test]
     fn test_y_consumes_approval_and_resets_scroll() {
         let mut s = make_state_with_approval(json!({"command": "ls"}));
-        s.approval_scroll = 7;
-        s.approval_max_scroll = 50;
+        s.approval.approval_scroll = 7;
+        s.approval.approval_max_scroll = 50;
         handle_approval_key(key(KeyCode::Char('y')), &mut s);
         // Approval is consumed (responder was None so no send — that's fine)
-        assert!(s.pending_approval.is_none());
+        assert!(s.approval.pending_approval.is_none());
         // Scroll state reset for the next approval.
-        assert_eq!(s.approval_scroll, 0);
-        assert_eq!(s.approval_max_scroll, 0);
+        assert_eq!(s.approval.approval_scroll, 0);
+        assert_eq!(s.approval.approval_max_scroll, 0);
     }
 
     /// Tab toggles side-by-side diff mode without consuming the approval.
     #[test]
     fn test_tab_toggles_side_by_side() {
         let mut s = make_state_with_approval(json!({"command": "ls"}));
-        assert!(!s.approval_diff_side_by_side);
+        assert!(!s.approval.approval_diff_side_by_side);
         handle_approval_key(key(KeyCode::Tab), &mut s);
-        assert!(s.pending_approval.is_some());
-        assert!(s.approval_diff_side_by_side);
+        assert!(s.approval.pending_approval.is_some());
+        assert!(s.approval.approval_diff_side_by_side);
         handle_approval_key(key(KeyCode::Tab), &mut s);
-        assert!(s.pending_approval.is_some());
-        assert!(!s.approval_diff_side_by_side);
+        assert!(s.approval.pending_approval.is_some());
+        assert!(!s.approval.approval_diff_side_by_side);
     }
 
     /// Unknown keys leave both the approval and the scroll state intact.
     #[test]
     fn test_unknown_key_preserves_state() {
         let mut s = make_state_with_approval(json!({"command": "ls"}));
-        s.approval_scroll = 7;
-        s.approval_max_scroll = 50;
+        s.approval.approval_scroll = 7;
+        s.approval.approval_max_scroll = 50;
         handle_approval_key(key(KeyCode::Char('z')), &mut s);
-        assert!(s.pending_approval.is_some());
-        assert_eq!(s.approval_scroll, 7);
-        assert_eq!(s.approval_max_scroll, 50);
+        assert!(s.approval.pending_approval.is_some());
+        assert_eq!(s.approval.approval_scroll, 7);
+        assert_eq!(s.approval.approval_max_scroll, 50);
     }
 
     /// **v1.2-p13 — `[A]lways` builds a permission rule, NOT a
     /// blanket `auto_approve` flip.** This is the regression guard
-    /// for the old `state.config.security.auto_approve = true;` line.
+    /// for the old `state.services.config.security.auto_approve = true;` line.
     #[test]
     fn test_always_approves_saves_permission_rule() {
         let mut s = make_state_with_approval(json!({"command": "cargo test --release"}));
@@ -420,7 +432,7 @@ mod tests {
         );
 
         // **The approval is still consumed (responder was None — fine).**
-        assert!(s.pending_approval.is_none());
+        assert!(s.approval.pending_approval.is_none());
     }
 
     /// `[A]lways` on an `edit_file` approval should build a rule
@@ -435,7 +447,7 @@ mod tests {
         let mut s = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
             Config::default(),
         )));
-        s.pending_approval = Some(PendingApproval {
+        s.approval.pending_approval = Some(PendingApproval {
             tool_name: "edit_file".into(),
             args: json!({
                 "path": "src/main.rs",
@@ -475,7 +487,7 @@ mod tests {
         // Synthesise a second approval with the same args (simulating
         // a second `[A]lways` in a later turn). The real flow would
         // have a fresh `pending_approval` from the next destructive call.
-        s.pending_approval = Some(PendingApproval {
+        s.approval.pending_approval = Some(PendingApproval {
             tool_name: "bash".into(),
             args: json!({"command": "ls"}),
             responder: None,
@@ -535,7 +547,7 @@ mod tests {
         let mut s = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
             Config::default(),
         )));
-        s.pending_bang = Some(crate::tui::app::PendingBangCommand { cmd: cmd.into() });
+        s.approval.pending_bang = Some(crate::tui::app::PendingBangCommand { cmd: cmd.into() });
         s
     }
 
@@ -553,10 +565,10 @@ mod tests {
         handle_bang_approval_key(key(KeyCode::Char('y')), &mut s).await;
 
         // The gate is consumed.
-        assert!(s.pending_bang.is_none());
+        assert!(s.approval.pending_bang.is_none());
         // A tool entry was pushed.
-        assert_eq!(s.messages.len(), 1);
-        let entry = &s.messages[0];
+        assert_eq!(s.conversation.messages.len(), 1);
+        let entry = &s.conversation.messages[0];
         assert_eq!(entry.role, "tool");
         // The full output is stored in the sidecar; the summary
         // is the first ~2 lines.
@@ -576,10 +588,10 @@ mod tests {
         // is pushed, and the run-method is never called (we'd see
         // a tool entry with a "touch" output, which we don't).
         handle_bang_approval_key(key(KeyCode::Char('n')), &mut s).await;
-        assert!(s.pending_bang.is_none());
-        assert_eq!(s.messages.len(), 1);
-        assert_eq!(s.messages[0].role, "system");
-        assert!(s.messages[0].content.contains("Cancelled"));
+        assert!(s.approval.pending_bang.is_none());
+        assert_eq!(s.conversation.messages.len(), 1);
+        assert_eq!(s.conversation.messages[0].role, "system");
+        assert!(s.conversation.messages[0].content.contains("Cancelled"));
     }
 
     /// Esc has the same effect as N — clears the gate, no run.
@@ -587,9 +599,9 @@ mod tests {
     async fn test_bang_esc_clears_gate() {
         let mut s = make_state_with_bang("rm -rf /");
         handle_bang_approval_key(key(KeyCode::Esc), &mut s).await;
-        assert!(s.pending_bang.is_none());
-        assert_eq!(s.messages.len(), 1);
-        assert!(s.messages[0].content.contains("Cancelled"));
+        assert!(s.approval.pending_bang.is_none());
+        assert_eq!(s.conversation.messages.len(), 1);
+        assert!(s.conversation.messages[0].content.contains("Cancelled"));
     }
 
     /// Unknown keys leave the gate intact so the user can still
@@ -599,8 +611,8 @@ mod tests {
     async fn test_bang_unknown_key_preserves_gate() {
         let mut s = make_state_with_bang("echo hi");
         handle_bang_approval_key(key(KeyCode::Char('z')), &mut s).await;
-        assert!(s.pending_bang.is_some());
-        assert!(s.messages.is_empty());
+        assert!(s.approval.pending_bang.is_some());
+        assert!(s.conversation.messages.is_empty());
     }
 
     /// Scroll keys bubble through to the shared scroll state. The
@@ -610,12 +622,12 @@ mod tests {
     #[tokio::test]
     async fn test_bang_scroll_keys_share_state() {
         let mut s = make_state_with_bang("echo hi");
-        s.approval_max_scroll = 50;
+        s.approval.approval_max_scroll = 50;
         handle_bang_approval_key(key(KeyCode::PageDown), &mut s).await;
-        assert_eq!(s.approval_scroll, 10);
+        assert_eq!(s.approval.approval_scroll, 10);
         handle_bang_approval_key(key(KeyCode::End), &mut s).await;
-        assert_eq!(s.approval_scroll, 50);
+        assert_eq!(s.approval.approval_scroll, 50);
         handle_bang_approval_key(key(KeyCode::Home), &mut s).await;
-        assert_eq!(s.approval_scroll, 0);
+        assert_eq!(s.approval.approval_scroll, 0);
     }
 }

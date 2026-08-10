@@ -34,7 +34,7 @@ pub fn render_welcome(f: &mut Frame, area: Rect, state: &AppState) {
     lines.push(Line::from(""));
 
     // CWD
-    let cwd = state.cwd.display().to_string();
+    let cwd = state.ui.cwd.display().to_string();
     lines.push(Line::from(vec![
         Span::styled("  cwd: ", Style::default().fg(Color::DarkGray)),
         Span::styled(cwd, Style::default().fg(Color::White)),
@@ -42,16 +42,16 @@ pub fn render_welcome(f: &mut Frame, area: Rect, state: &AppState) {
     lines.push(Line::from(""));
 
     // Session info
-    if !state.session_id.is_empty() {
+    if !state.session.session_id.is_empty() {
         lines.push(Line::from(vec![
             Span::styled("  session: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&state.session_id, Style::default().fg(Color::White)),
+            Span::styled(&state.session.session_id, Style::default().fg(Color::White)),
         ]));
     }
     lines.push(Line::from(""));
 
     // Recent forks (if available from the fork manager)
-    if let Some(ref fm) = state.fork_manager {
+    if let Some(ref fm) = state.session.fork_manager {
         let forks = fm.list();
         if !forks.is_empty() {
             lines.push(Line::from(Span::styled(

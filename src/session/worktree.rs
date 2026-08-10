@@ -37,7 +37,59 @@ impl WorktreeSession {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("git worktree add failed: {stderr}");
+            // A stale worktree from a crashed session occupies this path and
+            // makes `git worktree add` fail. Remove it so the next attempt can
+            // proceed instead of leaving the user stuck on every resume.
+            let remove = Command::new("git")
+                .args([
+                    "worktree",
+                    "remove",
+                    "--force",
+                    &worktree_path.to_string_lossy(),
+                ])
+                .current_dir(repo_root)
+                .output();
+            match remove {
+                Ok(out) if out.status.success() => {
+                    tracing::warn!(
+                        path = %worktree_path.display(),
+                        "removed stale worktree blocking session; retrying add"
+                    );
+                }
+                Ok(out) => {
+                    let remove_err = String::from_utf8_lossy(&out.stderr);
+                    tracing::warn!(
+                        path = %worktree_path.display(),
+                        error = %remove_err,
+                        "failed to remove stale worktree; original add error: {stderr}"
+                    );
+                    anyhow::bail!("git worktree add failed: {stderr}");
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        path = %worktree_path.display(),
+                        error = %e,
+                        "failed to run git worktree remove; original add error: {stderr}"
+                    );
+                    anyhow::bail!("git worktree add failed: {stderr}");
+                }
+            }
+            let retry = Command::new("git")
+                .args([
+                    "worktree",
+                    "add",
+                    "--detach",
+                    &worktree_path.to_string_lossy(),
+                    "HEAD",
+                ])
+                .current_dir(repo_root)
+                .output();
+            let output = retry
+                .map_err(|e| anyhow::anyhow!("failed to spawn git worktree add retry: {e}"))?;
+            if !output.status.success() {
+                let retry_err = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!("git worktree add retry failed: {retry_err}");
+            }
         }
 
         Ok(Self {
@@ -64,9 +116,10 @@ impl Drop for WorktreeSession {
             .current_dir(&self.original_path)
             .output();
         if let Err(e) = result {
-            eprintln!(
-                "warning: failed to remove worktree at {}: {e}",
-                self.worktree_path.display()
+            tracing::warn!(
+                path = %self.worktree_path.display(),
+                error = %e,
+                "failed to remove worktree"
             );
         }
     }
@@ -169,6 +222,95 @@ mod tests {
         );
 
         // Cleanup temp repo
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn worktree_create_recovers_from_stale_worktree() {
+        // Simulate a crashed session: a worktree is registered in git's
+        // worktree registry at the session path, but its directory was lost.
+        // A naive `git worktree add` fails because the path is already
+        // registered; create() must clean the stale entry and retry.
+        let tmp =
+            std::env::temp_dir().join(format!("kf-code-wt-stale-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "test"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        fs::write(tmp.join("README.md"), "test").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+
+        let session_id = "stale-session";
+        let wt_path = std::env::temp_dir().join(format!("kf-code-session-{session_id}"));
+        let _ = fs::remove_dir_all(&wt_path);
+
+        // First register a worktree at the session path (as if created by a
+        // crashed session that never unregistered it)...
+        let add = Command::new("git")
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                &wt_path.to_string_lossy(),
+                "HEAD",
+            ])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        assert!(add.status.success(), "initial worktree add should succeed");
+
+        // ...then destroy its directory without unregistering (crash).
+        fs::remove_dir_all(&wt_path).unwrap();
+        assert!(!wt_path.exists());
+
+        // A raw `git worktree add` at the same path must now fail.
+        let retry = Command::new("git")
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                &wt_path.to_string_lossy(),
+                "HEAD",
+            ])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        assert!(
+            !retry.status.success(),
+            "raw git worktree add should fail on a stale entry"
+        );
+
+        // create() should clean up the stale entry and succeed.
+        let wt = WorktreeSession::create(session_id, &tmp);
+        assert!(wt.is_ok(), "create should recover from stale worktree");
+        let wt = wt.unwrap();
+        assert!(wt_path.exists(), "worktree should exist after recovery");
+
+        drop(wt);
+        assert!(!wt_path.exists(), "worktree should be removed after drop");
         let _ = fs::remove_dir_all(&tmp);
     }
 

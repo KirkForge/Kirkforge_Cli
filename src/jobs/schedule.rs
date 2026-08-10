@@ -200,12 +200,11 @@ pub fn parse_schedule(input: &str) -> Result<ScheduleSpec> {
         return Ok(ScheduleSpec::Restart);
     }
 
-    if let Some(stripped) = trimmed
-        .to_lowercase()
-        .strip_prefix("@once ")
-        .map(|_| trimmed.replacen("@once ", "", 1))
-    {
-        let when = parse_iso_datetime(&stripped)?;
+    if trimmed.to_lowercase().starts_with("@once ") {
+        // `@once ` is a fixed 6-byte ASCII prefix; slice the original (not the
+        // lowercased copy) so the user's tag case is preserved in the output.
+        let stripped = &trimmed[6..];
+        let when = parse_iso_datetime(stripped)?;
         return Ok(ScheduleSpec::Once(when));
     }
 
@@ -335,6 +334,18 @@ mod tests {
         assert!(matches!(dt, ScheduleSpec::Once(_)));
         if let ScheduleSpec::Once(t) = dt {
             assert_eq!(t.to_rfc3339(), "2026-07-20T09:00:00+00:00");
+        }
+    }
+
+    #[test]
+    fn parse_once_preserves_tag_case() {
+        for tag in ["@once", "@Once", "@ONCE"] {
+            let dt = parse_schedule(&format!("{tag} 2026-07-20T09:00:00")).unwrap();
+            if let ScheduleSpec::Once(t) = dt {
+                assert_eq!(t.to_rfc3339(), "2026-07-20T09:00:00+00:00", "tag={tag}");
+            } else {
+                panic!("expected Once for tag={tag}");
+            }
         }
     }
 

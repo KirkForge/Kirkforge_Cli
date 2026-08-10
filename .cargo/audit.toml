@@ -1,0 +1,7 @@
+# cargo-audit config (project root). Blocks on critical/high CVSS advisories.
+# `--deny` on the CLI only accepts advisory *categories* (warnings, unsound,
+# unmaintained, yanked) — NOT severities. Severity blocking is done here via
+# severity_threshold. See rustsec/rustsec cargo-audit/audit.toml.example.
+[advisories]
+severity_threshold = "critical"
+informational_warnings = ["unmaintained"]

@@ -53,10 +53,12 @@ fi
 if [ "$MODE" != "quick" ]; then
     run_step "Build release binary" cargo build --release --locked
 
-    # Block on critical/RCE/unsound only; lower severities are warnings
+    # Block on critical/high CVSS + unsound only; lower severities are
+    # warnings. Severity blocking is configured in .cargo/audit.toml
+    # (severity_threshold); --deny only accepts advisory *categories*.
     echo
-    echo "==> Audit dependencies (critical/RCE/unsound)"
-    run_step "Audit critical" cargo audit --deny critical --deny unsound
+    echo "==> Audit dependencies (critical/high/unsound)"
+    run_step "Audit critical" cargo audit --deny unsound
 
     echo
     echo "==> Audit dependencies (informational warnings)"

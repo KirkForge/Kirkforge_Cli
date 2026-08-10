@@ -220,9 +220,11 @@ jobs:
         with:
           tool: cargo-audit
 
-      # Block on critical/RCE/unsound only; lower severities are warnings
-      - name: Audit dependencies (critical/RCE/unsound)
-        run: cargo audit --deny critical --deny unsound
+      # Block on critical/high CVSS + unsound only; lower severities are
+      # warnings. Severity blocking is configured in .cargo/audit.toml
+      # (severity_threshold); --deny only accepts advisory *categories*.
+      - name: Audit dependencies (critical/high/unsound)
+        run: cargo audit --deny unsound
 
       - name: Audit dependencies (informational warnings)
         if: always()

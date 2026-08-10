@@ -198,7 +198,9 @@ where
 
 /// Maximum number of recent sessions the daemon remembers.
 pub const RECENT_SESSIONS_LIMIT: usize = 5;
-
+/// Bounded capacity for each per-instance broadcast channel.
+/// ponytail: 1024 is arbitrary but bounded; tune when throughput measurement shows it's wrong.
+pub const INSTANCE_CHANNEL_CAPACITY: usize = 1024;
 /// A request sent from a client to the daemon.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "op")]
@@ -366,7 +368,7 @@ pub struct DaemonState {
     /// task that serialises `InstanceEvent`s onto one `UnixStream`.
     /// Dead senders (disconnected instances) are pruned by `broadcast`.
     #[cfg(unix)]
-    pub instances: Arc<std::sync::Mutex<Vec<tokio::sync::mpsc::UnboundedSender<InstanceEvent>>>>,
+    pub instances: Arc<std::sync::Mutex<Vec<tokio::sync::mpsc::Sender<InstanceEvent>>>>,
 }
 
 #[cfg(unix)]
@@ -394,10 +396,18 @@ impl DaemonState {
 
     /// Push `ev` to every registered instance, dropping senders whose
     /// receiver has been dropped (disconnected instance). Uses `try_send`
-    /// so a slow instance never blocks the broadcaster.
+    /// so a slow instance never blocks the broadcaster. A full channel
+    /// (slow consumer) logs a warning rather than silently dropping.
     pub fn broadcast(&self, ev: InstanceEvent) {
         let mut instances = self.instances.lock().unwrap();
-        instances.retain(|tx| tx.send(ev.clone()).is_ok());
+        instances.retain(|tx| match tx.try_send(ev.clone()) {
+            Ok(()) => true,
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!("instance channel full; dropping event");
+                true
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
+        });
     }
 
     /// Check the supplied token against `expected_token`. Returns `Ok(())`

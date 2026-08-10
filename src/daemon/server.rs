@@ -431,7 +431,8 @@ async fn handle_instance_register(
         return;
     }
 
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
+    let (tx, rx) =
+        tokio::sync::mpsc::channel::<InstanceEvent>(crate::daemon::INSTANCE_CHANNEL_CAPACITY);
 
     // Register the sender in the instance registry.
     {
@@ -632,8 +633,10 @@ mod tests {
         let state = DaemonState::new();
 
         // Two channels simulating two registered instances.
-        let (tx1, mut rx1) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
-        let (tx2, mut rx2) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
+        let (tx1, mut rx1) =
+            tokio::sync::mpsc::channel::<InstanceEvent>(crate::daemon::INSTANCE_CHANNEL_CAPACITY);
+        let (tx2, mut rx2) =
+            tokio::sync::mpsc::channel::<InstanceEvent>(crate::daemon::INSTANCE_CHANNEL_CAPACITY);
 
         {
             let mut instances = state.instances.lock().unwrap();
@@ -675,7 +678,8 @@ mod tests {
         use crate::daemon::InstanceEvent;
 
         let state = DaemonState::new();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
+        let (tx, mut rx) =
+            tokio::sync::mpsc::channel::<InstanceEvent>(crate::daemon::INSTANCE_CHANNEL_CAPACITY);
 
         {
             let mut instances = state.instances.lock().unwrap();

@@ -370,7 +370,7 @@ mod unix_imp {
     /// abort the join handle to force-close.
     pub async fn connect_instance_channel() -> anyhow::Result<(
         tokio::task::JoinHandle<()>,
-        tokio::sync::mpsc::UnboundedReceiver<InstanceEvent>,
+        tokio::sync::mpsc::Receiver<InstanceEvent>,
     )> {
         use crate::daemon::InstanceEvent;
 
@@ -407,7 +407,8 @@ mod unix_imp {
             anyhow::bail!("instance_register handshake failed: {ack:?}");
         }
 
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
+        let (tx, rx) =
+            tokio::sync::mpsc::channel::<InstanceEvent>(crate::daemon::INSTANCE_CHANNEL_CAPACITY);
 
         // Background reader: read NDJSON InstanceEvent lines and forward
         // them to the channel. Runs until the stream closes or errors.
@@ -425,8 +426,14 @@ mod unix_imp {
                         }
                         match serde_json::from_str::<InstanceEvent>(trimmed) {
                             Ok(ev) => {
-                                if tx.send(ev).is_err() {
-                                    break; // receiver dropped
+                                match tx.try_send(ev) {
+                                    Ok(()) => {}
+                                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                        tracing::warn!("instance channel full; dropping event");
+                                    }
+                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                        break; // receiver dropped
+                                    }
                                 }
                             }
                             Err(e) => {

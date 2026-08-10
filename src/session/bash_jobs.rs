@@ -167,7 +167,14 @@ impl BashJobRegistry {
             .stderr(std::process::Stdio::piped());
         setup_process_group(&mut proc);
         if let Some(ref wd) = workdir {
-            proc.current_dir(shellexpand::tilde(wd).as_ref());
+            // Resolve the working directory to a canonical absolute path
+            // before forking so the child's cwd is stable even if the
+            // parent's cwd changes after spawn (F15). A relative or
+            // nonexistent path is rejected with a clear error.
+            let expanded = shellexpand::tilde(wd);
+            let canonical = std::fs::canonicalize(expanded.as_ref())
+                .map_err(|e| anyhow::anyhow!("cannot resolve working directory '{wd}': {e}"))?;
+            proc.current_dir(canonical);
         }
 
         let child = proc.spawn()?;

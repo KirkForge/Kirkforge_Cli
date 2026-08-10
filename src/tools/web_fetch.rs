@@ -180,9 +180,18 @@ impl Tool for WebFetch {
         };
 
         let content = if output.len() > DEFAULT_MAX_TOOL_RESULT_CHARS {
+            // ponytail: floor_char_boundary is unstable on this toolchain; find the
+            // last char boundary at or before the cap manually. Upgrade path: use
+            // `output.floor_char_boundary(cap)` once it stabilizes.
+            let cut = output
+                .char_indices()
+                .take_while(|(i, _)| *i < DEFAULT_MAX_TOOL_RESULT_CHARS)
+                .last()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
             format!(
                 "{}\n\n[truncated {} characters]",
-                &output[..DEFAULT_MAX_TOOL_RESULT_CHARS],
+                &output[..cut],
                 output.len().saturating_sub(DEFAULT_MAX_TOOL_RESULT_CHARS)
             )
         } else {

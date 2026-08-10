@@ -148,7 +148,15 @@ impl Tool for NotebookEdit {
                     .collect(),
             );
         } else {
-            cell.as_object_mut().unwrap().insert(
+            let Some(obj) = cell.as_object_mut() else {
+                return ToolOutcome::Failure(ToolError::Internal {
+                    message: format!(
+                        "cell {index} is not a JSON object (type: {}); cannot add 'source'",
+                        cell_type_name(cell)
+                    ),
+                });
+            };
+            obj.insert(
                 "source".to_string(),
                 serde_json::Value::Array(
                     new_source
@@ -187,6 +195,17 @@ impl Tool for NotebookEdit {
         ToolOutcome::Success {
             content: format!("Updated cell {index} in {}", path.display()),
         }
+    }
+}
+
+fn cell_type_name(cell: &serde_json::Value) -> &'static str {
+    match cell {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
     }
 }
 

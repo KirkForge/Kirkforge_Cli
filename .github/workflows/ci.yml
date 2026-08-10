@@ -215,7 +215,7 @@ jobs:
 
       # Block on critical/RCE/unsound only; lower severities are warnings
       - name: Audit dependencies (critical/RCE/unsound)
-        run: cargo audit --deny=critical,unsound
+        run: cargo audit --deny critical --deny unsound
 
       - name: Audit dependencies (informational warnings)
         if: always()

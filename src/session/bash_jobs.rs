@@ -66,8 +66,12 @@ const MAX_JOBS: usize = 64;
 #[derive(Clone, Default)]
 pub struct BashJobRegistry {
     jobs: Arc<Mutex<HashMap<u64, BashJob>>>,
-    /// Child process handles stored separately (Child is not Clone).
-    children: Arc<Mutex<HashMap<u64, Child>>>,
+    /// Child process handles stored separately (Child is not Clone), each
+    /// behind an Arc<Mutex> so the watcher and cancel()/clean()/remove() can
+    /// share the same handle concurrently. A child stays in this map until it
+    /// has been reaped (see the watcher), so a cancel() racing the watcher
+    /// can still reach and kill it instead of silently no-op'ing.
+    children: Arc<Mutex<HashMap<u64, Arc<Mutex<Child>>>>>,
     next_id: Arc<AtomicU64>,
 }
 
@@ -136,7 +140,8 @@ impl BashJobRegistry {
         if !to_remove.is_empty() {
             let mut children = self.children.lock().await;
             for rid in to_remove {
-                if let Some(mut child) = children.remove(&rid) {
+                if let Some(child) = children.remove(&rid) {
+                    let mut child = child.lock().await;
                     kill_process_group(&mut child);
                 }
             }
@@ -167,34 +172,34 @@ impl BashJobRegistry {
 
         let child = proc.spawn()?;
 
-        // Store child handle for cancel()
+        // Store child handle for cancel(), wrapped so the watcher and
+        // cancel()/clean()/remove() can share it.
         {
             let mut children = self.children.lock().await;
-            children.insert(id, child);
+            children.insert(id, Arc::new(Mutex::new(child)));
         }
 
-        // Spawn watcher: wait for output, update job record, remove child handle.
+        // Spawn watcher: wait for output, update job record, remove child
+        // handle. The child handle is kept in the map until it has been
+        // reaped, so a concurrent cancel() can still reach and kill it; the
+        // map entry is removed only once this watcher has reaped it (F5).
         // A watchdog (below) flips Running → Failed if this task panics
         // before it records a terminal status, so a dead watcher cannot
         // leak a job stuck in Running forever. (bucketlist 3.32)
         let watcher_registry = self.clone();
         let watcher = tokio::spawn(async move {
             let child = {
-                let mut children = watcher_registry.children.lock().await;
-                children.remove(&id)
+                let children = watcher_registry.children.lock().await;
+                children.get(&id).cloned()
             };
 
-            let Some(mut child) = child else {
-                // Child handle was taken by cancel() — update status
-                let mut jobs = watcher_registry.jobs.lock().await;
-                if let Some(job) = jobs.get_mut(&id) {
-                    if job.status == JobStatus::Running {
-                        job.status = JobStatus::Cancelled;
-                    }
-                    job.finished_at = Some(chrono::Local::now());
-                }
+            let Some(child) = child else {
+                // No child was ever stored (spawn failed after insert or the
+                // child is not in the map) — nothing to reap.
                 return;
             };
+
+            let mut child = child.lock().await;
 
             // Take stdout/stderr before waiting so we can drain them
             // concurrently. This also lets us reap the child explicitly
@@ -247,6 +252,15 @@ impl BashJobRegistry {
                 reap_child(&mut child, Duration::from_secs(2)).await;
             }
 
+            // The child has been reaped: only now remove it from the map.
+            // Removing it any earlier lets a concurrent cancel() no-op (it
+            // can no longer find the child to kill), and keeps a child in
+            // the map past its reap. (F5)
+            {
+                let mut children = watcher_registry.children.lock().await;
+                children.remove(&id);
+            }
+
             // Join the drain tasks to capture output (or partial output on
             // timeout). A short timeout prevents a stuck pipe from wedging
             // cleanup.
@@ -269,11 +283,16 @@ impl BashJobRegistry {
 
             let mut jobs = watcher_registry.jobs.lock().await;
             if let Some(job) = jobs.get_mut(&id) {
-                if let Some(status) = status {
-                    job.status = JobStatus::Completed(status.code().unwrap_or(-1));
-                } else {
-                    job.status =
-                        JobStatus::Failed(error_msg.take().unwrap_or_else(|| "Failed".into()));
+                // Preserve a Cancelled status set by a racing cancel(); the
+                // watcher must not clobber it with Completed once the wait
+                // and reap above return. (F5)
+                if job.status != JobStatus::Cancelled {
+                    if let Some(status) = status {
+                        job.status = JobStatus::Completed(status.code().unwrap_or(-1));
+                    } else {
+                        job.status =
+                            JobStatus::Failed(error_msg.take().unwrap_or_else(|| "Failed".into()));
+                    }
                 }
                 job.stdout = cap_to_string(stdout_buf, stdout_dropped);
                 job.stderr = cap_to_string(stderr_buf, stderr_dropped);
@@ -328,10 +347,17 @@ impl BashJobRegistry {
     ///
     /// Kills the child process and sets status to Cancelled.
     pub async fn cancel(&self, id: u64) -> bool {
-        // Take the child handle and kill it
+        // Take the child handle and kill it. The child stays in the map
+        // until the watcher has reaped it (F5); this lock is released before
+        // the reap below so the watcher can still join it, but removal is
+        // done only in the watcher's reap path.
         {
-            let mut children = self.children.lock().await;
-            if let Some(mut child) = children.remove(&id) {
+            let child = {
+                let mut children = self.children.lock().await;
+                children.remove(&id)
+            };
+            if let Some(child) = child {
+                let mut child = child.lock().await;
                 kill_process_group(&mut child);
                 reap_child(&mut child, Duration::from_secs(2)).await;
             }
@@ -356,8 +382,12 @@ impl BashJobRegistry {
     pub async fn remove(&self, id: u64) -> bool {
         // Kill child if still alive
         {
-            let mut children = self.children.lock().await;
-            if let Some(mut child) = children.remove(&id) {
+            let child = {
+                let mut children = self.children.lock().await;
+                children.remove(&id)
+            };
+            if let Some(child) = child {
+                let mut child = child.lock().await;
                 kill_process_group(&mut child);
                 reap_child(&mut child, Duration::from_secs(2)).await;
             }
@@ -391,7 +421,8 @@ impl BashJobRegistry {
         {
             let mut children = self.children.lock().await;
             for id in &job_ids {
-                if let Some(mut child) = children.remove(id) {
+                if let Some(child) = children.remove(id) {
+                    let mut child = child.lock().await;
                     kill_process_group(&mut child);
                     reap_child(&mut child, Duration::from_secs(2)).await;
                 }

@@ -754,6 +754,9 @@ impl PromptBuilder {
     }
 
     fn truncate_to_budget(messages: &[Message], budget: usize) -> Vec<Message> {
+        if messages.is_empty() {
+            return messages.to_vec();
+        }
         let keep_count = (budget * 4) / 20;
         let history_to_keep = std::cmp::min(keep_count, messages.len() - 1);
 
@@ -838,6 +841,25 @@ mod tests {
         let builder = PromptBuilder::new();
         let prob = builder.cache_hit_probability("glm-5.1:cloud", true);
         assert!((0.0..=1.0).contains(&prob));
+    }
+
+    #[test]
+    fn test_truncate_to_budget_empty_context_no_panic() {
+        let empty: Vec<Message> = Vec::new();
+        assert!(PromptBuilder::truncate_to_budget(&empty, 0).is_empty());
+
+        let single = vec![Message {
+            role: Role::System,
+            content: "sys".to_string(),
+            content_parts: None,
+            thinking: None,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            token_count: None,
+        }];
+        let out = PromptBuilder::truncate_to_budget(&single, 0);
+        assert_eq!(out.len(), 1, "single system message survives zero budget");
     }
 
     #[test]

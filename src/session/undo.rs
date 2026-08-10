@@ -407,6 +407,72 @@ impl UndoStack {
     }
 }
 
+/// Age threshold for an orphaned undo directory to be considered stale.
+/// A session's undo dir is orphaned when its session log no longer exists
+/// (the session was deleted or pruned). We only remove dirs older than this
+/// so a session that is mid-creation (log not yet written) is never touched.
+/// ponytail: 24h is generous — snapshots are written on every edit and the
+/// FIFO cap is 50 entries / 50MB, so nothing legitimately in-flight is this
+/// old. Upgrade path: reference-count snap files if they need transactional
+/// semantics.
+const ORPHAN_SNAP_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Remove undo directories whose session no longer exists and whose mtime is
+/// older than [`ORPHAN_SNAP_MAX_AGE`]. Called at daemon startup so orphaned
+/// `.snap` files from deleted/pruned sessions don't leak disk forever.
+///
+/// Best-effort: a failure to read or remove one directory is logged and does
+/// not abort the scan of the rest.
+pub fn cleanup_orphan_snaps() {
+    let Ok(data_dir) = crate::session::data_dir() else {
+        return;
+    };
+    let undo_root = data_dir.join("undo");
+    let sessions_dir = data_dir.join("sessions");
+    let Ok(entries) = std::fs::read_dir(&undo_root) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(session_id) = dir.file_name().and_then(|f| f.to_str()) else {
+            continue;
+        };
+        // Skip dirs whose session log still exists — those are active.
+        if sessions_dir
+            .join(format!("{session_id}.conv.ndjson"))
+            .exists()
+        {
+            continue;
+        }
+        // Skip dirs that are too young to be safely considered orphaned.
+        let modified = match std::fs::metadata(&dir).and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(path = %dir.display(), error = %e, "could not stat undo dir; skipping");
+                continue;
+            }
+        };
+        // Skip if the dir is too young, or the mtime is in the future
+        // (clock skew) — never delete a possibly-in-flight snapshot.
+        let too_young = match now.duration_since(modified) {
+            Ok(age) => age < ORPHAN_SNAP_MAX_AGE,
+            Err(_) => true,
+        };
+        if too_young {
+            continue;
+        }
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            tracing::warn!(path = %dir.display(), error = %e, "failed to remove orphaned undo dir");
+        } else {
+            tracing::info!(path = %dir.display(), "removed orphaned undo dir");
+        }
+    }
+}
+
 /// What `pop` actually did. Display string is built by the caller.
 #[derive(Debug, Clone)]
 pub struct RestoredOp {
@@ -774,5 +840,46 @@ mod tests {
         assert!(stack.snapshot_path(1).ends_with("00000001.snap"));
         assert!(stack.snapshot_path(99999999).ends_with("99999999.snap"));
         assert!(stack.meta_path(1).ends_with("00000001.meta.json"));
+    }
+
+    /// `cleanup_orphan_snaps` removes undo dirs whose session log is gone and
+    /// whose mtime is older than the age threshold, and leaves active or young
+    /// dirs alone.
+    #[test]
+    fn cleanup_orphan_snaps_removes_only_stale_orphans() {
+        let _guard = DataDirGuard::new();
+        let data_dir = crate::session::data_dir().unwrap();
+        let undo_root = data_dir.join("undo");
+        let sessions_dir = data_dir.join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        // Active session: log exists → its undo dir must survive.
+        std::fs::write(sessions_dir.join("active.conv.ndjson"), b"").unwrap();
+        std::fs::create_dir_all(undo_root.join("active")).unwrap();
+
+        // Orphan, old: no log, mtime in the past → must be removed.
+        let old_orphan = undo_root.join("old-orphan");
+        std::fs::create_dir_all(&old_orphan).unwrap();
+        std::fs::write(old_orphan.join("00000001.snap"), b"x").unwrap();
+        let old =
+            std::time::SystemTime::now() - ORPHAN_SNAP_MAX_AGE - std::time::Duration::from_secs(60);
+        let f = std::fs::File::open(&old_orphan).unwrap();
+        let times = std::fs::FileTimes::new().set_modified(old);
+        f.set_times(times).unwrap();
+        drop(f);
+
+        // Orphan, young: no log but recent mtime → must survive.
+        let young_orphan = undo_root.join("young-orphan");
+        std::fs::create_dir_all(&young_orphan).unwrap();
+        std::fs::write(young_orphan.join("00000001.snap"), b"x").unwrap();
+
+        cleanup_orphan_snaps();
+
+        assert!(undo_root.join("active").exists(), "active undo dir kept");
+        assert!(!old_orphan.exists(), "old orphaned undo dir removed");
+        assert!(
+            young_orphan.exists(),
+            "young orphaned undo dir kept (not in-flight)"
+        );
     }
 }

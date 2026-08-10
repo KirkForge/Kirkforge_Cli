@@ -74,6 +74,9 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
     let shutdown = Arc::new(tokio::sync::Notify::new());
     let concurrency = Arc::new(Semaphore::new(16));
 
+    // Clean up orphaned undo snapshots from deleted/pruned sessions (F16).
+    crate::session::undo::cleanup_orphan_snaps();
+
     // Initial refresh.
     {
         let mut s = state.lock().await;

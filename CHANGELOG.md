@@ -5,6 +5,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- WO 26.4-F8: drop the job-store lock before `.await` in the scheduler daemon — no `MutexGuard` spans an await, removing a deadlock-under-load risk.
+
 ### Added
 - WO 26.3: `--features landlock` now compiles — declared the previously-orphaned `landlock` module in `bash_runner/mod.rs` and fixed the `Option<&LandlockPaths>` type mismatch. Landlock tests skip cleanly on kernels/caps that can't confine (probe `restrict_self`, not just `create_ruleset`).
 - WO 25.17: Document persona Anthropic-direct limitation (ponytail comment in persona.rs, TECHNICAL.md note). Bedrock/Vertex plumbing deferred (tracked in state.md).

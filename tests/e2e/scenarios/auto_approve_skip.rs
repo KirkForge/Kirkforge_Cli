@@ -32,17 +32,18 @@ async fn auto_approve_skips_approval() {
     crate::fixtures::seed_config_auto_approve(&env.data_dir(), &mock.url(), "e2e-test-model");
 
     let output = env
-        .command(&[
-            "run",
-            "--no-tui",
-            "--non-interactive",
-            "--max-turns",
-            "3",
-            "-m",
-            "e2e-test-model",
+        .run_with_prompt(
+            &[
+                "run",
+                "--no-tui",
+                "--non-interactive",
+                "--max-turns",
+                "3",
+                "-m",
+                "e2e-test-model",
+            ],
             "Clean up /tmp/e2e-test",
-        ])
-        .output()
+        )
         .expect("e2e: spawn kf-code run");
 
     // With auto_approve, the binary should complete without hanging on

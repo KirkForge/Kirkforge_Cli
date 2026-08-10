@@ -22,17 +22,18 @@ async fn mock_401_produces_clean_exit() {
     let env = IsolatedEnv::new(&mock.url(), "e2e-test-model");
 
     let output = env
-        .command(&[
-            "run",
-            "--no-tui",
-            "--non-interactive",
-            "--max-turns",
-            "1",
-            "-m",
-            "e2e-test-model",
+        .run_with_prompt(
+            &[
+                "run",
+                "--no-tui",
+                "--non-interactive",
+                "--max-turns",
+                "1",
+                "-m",
+                "e2e-test-model",
+            ],
             "Hello",
-        ])
-        .output()
+        )
         .expect("e2e: spawn kf-code run");
 
     // The binary should exit with a non-zero status (4xx is not retryable).

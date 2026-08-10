@@ -22,17 +22,18 @@ async fn openai_compat_model_hits_chat_completions() {
     let env = IsolatedEnv::new(&mock.url(), "qwen2.5:7b");
 
     let output = env
-        .command(&[
-            "run",
-            "--no-tui",
-            "--non-interactive",
-            "--max-turns",
-            "1",
-            "-m",
-            "qwen2.5:7b",
+        .run_with_prompt(
+            &[
+                "run",
+                "--no-tui",
+                "--non-interactive",
+                "--max-turns",
+                "1",
+                "-m",
+                "qwen2.5:7b",
+            ],
             "Hello",
-        ])
-        .output()
+        )
         .expect("e2e: spawn kf-code run");
 
     let log = mock.request_log();

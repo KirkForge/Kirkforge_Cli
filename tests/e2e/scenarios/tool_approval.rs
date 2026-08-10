@@ -30,17 +30,18 @@ async fn tool_approval_auto_approve_round_trip() {
     crate::fixtures::seed_config_auto_approve(&env.data_dir(), &mock.url(), "e2e-test-model");
 
     let output = env
-        .command(&[
-            "run",
-            "--no-tui",
-            "--non-interactive",
-            "--max-turns",
-            "3",
-            "-m",
-            "e2e-test-model",
+        .run_with_prompt(
+            &[
+                "run",
+                "--no-tui",
+                "--non-interactive",
+                "--max-turns",
+                "3",
+                "-m",
+                "e2e-test-model",
+            ],
             "Run echo hello",
-        ])
-        .output()
+        )
         .expect("e2e: spawn kf-code run");
 
     if !output.status.success() {

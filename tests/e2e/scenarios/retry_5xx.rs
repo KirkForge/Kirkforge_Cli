@@ -26,17 +26,18 @@ async fn adapter_retries_on_5xx() {
     let env = IsolatedEnv::new(&mock.url(), "e2e-test-model");
 
     let output = env
-        .command(&[
-            "run",
-            "--no-tui",
-            "--non-interactive",
-            "--max-turns",
-            "1",
-            "-m",
-            "e2e-test-model",
+        .run_with_prompt(
+            &[
+                "run",
+                "--no-tui",
+                "--non-interactive",
+                "--max-turns",
+                "1",
+                "-m",
+                "e2e-test-model",
+            ],
             "Test retry",
-        ])
-        .output()
+        )
         .expect("e2e: spawn kf-code run");
 
     // The binary may succeed (if it retries) or may fail (if it gives

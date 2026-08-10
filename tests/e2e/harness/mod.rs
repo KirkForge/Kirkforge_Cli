@@ -85,6 +85,23 @@ impl IsolatedEnv {
         cmd
     }
 
+    /// Run `kf-code` with the given args, piping `prompt` to stdin as a
+    /// single line (then EOF). `kf-code run --non-interactive` reads each
+    /// non-empty stdin line as one turn, so this is how a headless prompt
+    /// is delivered. Returns the captured output.
+    pub fn run_with_prompt(&self, args: &[&str], prompt: &str) -> std::io::Result<std::process::Output> {
+        use std::io::Write;
+        let mut cmd = self.command(args);
+        cmd.stdin(Stdio::piped());
+        let mut child = cmd.spawn()?;
+        {
+            let stdin = child.stdin.as_mut().expect("e2e: stdin");
+            writeln!(stdin, "{prompt}").expect("e2e: write prompt to stdin");
+        }
+        drop(child.stdin.take());
+        child.wait_with_output()
+    }
+
     /// Start `kf-code daemon --foreground` in the isolated env.
     /// Returns the daemon's PID.  The daemon is stopped on drop.
     #[allow(dead_code)]

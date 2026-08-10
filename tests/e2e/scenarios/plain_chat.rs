@@ -25,17 +25,18 @@ async fn plain_chat_turn_completes() {
     let env = IsolatedEnv::new(&mock.url(), "e2e-test-model");
 
     let output = env
-        .command(&[
-            "run",
-            "--no-tui",
-            "--non-interactive",
-            "--max-turns",
-            "1",
-            "-m",
-            "e2e-test-model",
+        .run_with_prompt(
+            &[
+                "run",
+                "--no-tui",
+                "--non-interactive",
+                "--max-turns",
+                "1",
+                "-m",
+                "e2e-test-model",
+            ],
             "Say hello",
-        ])
-        .output()
+        )
         .expect("e2e: spawn kf-code run");
 
     if !output.status.success() {

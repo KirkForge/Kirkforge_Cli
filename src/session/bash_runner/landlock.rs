@@ -10,12 +10,18 @@
 //! add it. The "everything else is denied" invariant relies on restrict_self
 //! removing the pre-landlock access scope.
 
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use std::os::unix::ffi::OsStrExt;
+
 const LANDLOCK_CREATE_RULESET: libc::c_long = 444;
+
+#[cfg(test)]
 const LANDLOCK_ADD_RULE: libc::c_long = 445;
+#[cfg(test)]
 const LANDLOCK_RESTRICT_SELF: libc::c_long = 446;
+#[cfg(test)]
 const RULE_PATH_BENEATH: libc::c_long = 1;
 
 #[repr(C, packed)]
@@ -23,6 +29,7 @@ struct landlock_ruleset_attr {
     handled_access_fs: u64,
 }
 
+#[cfg(test)]
 #[repr(C, packed)]
 struct landlock_path_beneath_attr {
     allowed_access: u64,
@@ -82,6 +89,7 @@ fn landlock_available() -> Option<libc::c_int> {
     Some(fd as libc::c_int)
 }
 
+#[cfg(test)]
 unsafe fn landlock_add_path_rule(
     ruleset_fd: libc::c_int,
     dir_fd: libc::c_int,
@@ -100,10 +108,12 @@ unsafe fn landlock_add_path_rule(
     ) == 0
 }
 
+#[cfg(test)]
 unsafe fn landlock_restrict(ruleset_fd: libc::c_int) -> bool {
     libc::syscall(LANDLOCK_RESTRICT_SELF, ruleset_fd as libc::c_long, 0u32) == 0
 }
 
+#[cfg(test)]
 unsafe fn add_path(ruleset_fd: libc::c_int, path: &Path, access: u64) -> bool {
     let fd = match libc::open(
         path.as_os_str().as_bytes().as_ptr() as *const _,
@@ -117,6 +127,7 @@ unsafe fn add_path(ruleset_fd: libc::c_int, path: &Path, access: u64) -> bool {
     ok
 }
 
+#[cfg(test)]
 static SYSTEM_READ_DIRS: &[&str] = &[
     "/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/nix", "/snap", "/var/lib", "/tmp",
     "/dev", "/proc",
@@ -124,6 +135,7 @@ static SYSTEM_READ_DIRS: &[&str] = &[
 
 /// Pre-resolved paths for the landlock allow-list. Built in the parent
 /// process (before fork) so the pre_exec closure never allocates.
+#[allow(dead_code)]
 pub(crate) struct LandlockPaths {
     pub workspace: PathBuf,
     pub home: Option<PathBuf>,
@@ -163,6 +175,7 @@ pub(crate) fn resolve_paths(workspace: &Path) -> Option<LandlockPaths> {
 ///
 /// Returns Err if workspace cannot be added or restrict_self fails
 /// (per WO 21.7-R5: refuse to launch unsandboxed).
+#[cfg(test)]
 pub(crate) fn apply_landlock(paths: &LandlockPaths) -> Result<(), String> {
     let ruleset_fd = match landlock_available() {
         Some(fd) => fd,
@@ -232,6 +245,19 @@ mod tests {
     use super::*;
     use std::os::unix::process::CommandExt;
 
+    // `landlock_available()` only proves the ruleset syscall exists. Real
+    // confinement additionally needs `restrict_self`, which requires
+    // CAP_SYS_ADMIN. Probe both so tests skip cleanly on kernels/caps that
+    // can't actually confine (e.g. unprivileged CI containers).
+    fn landlock_usable() -> bool {
+        let Some(fd) = landlock_available() else {
+            return false;
+        };
+        let ok = unsafe { landlock_restrict(fd) };
+        unsafe { libc::close(fd) };
+        ok
+    }
+
     #[test]
     fn landlock_probe_does_not_crash() {
         let result = landlock_available();
@@ -279,7 +305,7 @@ mod tests {
 
     #[test]
     fn landlock_blocks_write_outside_workspace() {
-        if landlock_available().is_none() {
+        if !landlock_usable() {
             eprintln!("skipping: landlock not available on this kernel");
             return;
         }
@@ -334,7 +360,7 @@ mod tests {
 
     #[test]
     fn landlock_allows_read_everywhere() {
-        if landlock_available().is_none() {
+        if !landlock_usable() {
             eprintln!("skipping: landlock not available on this kernel");
             return;
         }
@@ -374,7 +400,7 @@ mod tests {
 
     #[test]
     fn landlock_allows_write_in_workspace() {
-        if landlock_available().is_none() {
+        if !landlock_usable() {
             eprintln!("skipping: landlock not available on this kernel");
             return;
         }

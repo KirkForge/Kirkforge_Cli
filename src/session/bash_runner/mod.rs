@@ -9,6 +9,9 @@ use tokio::process::Command;
 #[cfg(feature = "pty")]
 pub mod pty;
 
+#[cfg(all(unix, feature = "landlock"))]
+mod landlock;
+
 /// Per-stream cap for captured stdout / stderr from a single bash invocation.
 ///
 /// Without this, a single `cat /dev/urandom` or `find / -print` against a
@@ -124,7 +127,7 @@ pub(crate) fn shell_program() -> &'static str {
 pub(crate) fn setup_rlimits(
     cmd: &mut Command,
     cfg: &SandboxConfig,
-    landlock_paths: Option<&landlock::LandlockPaths>,
+    _landlock_paths: Option<&landlock::LandlockPaths>,
 ) {
     use std::os::unix::process::CommandExt;
 
@@ -465,8 +468,8 @@ pub async fn run_shell_with_token(
         #[cfg(all(unix, feature = "landlock"))]
         let lp = landlock::resolve_paths(workdir);
         #[cfg(not(all(unix, feature = "landlock")))]
-        let lp: Option<&()> = None;
-        setup_rlimits(&mut proc, cfg, lp);
+        let lp: Option<()> = None;
+        setup_rlimits(&mut proc, cfg, lp.as_ref());
     }
 
     let mut child = proc

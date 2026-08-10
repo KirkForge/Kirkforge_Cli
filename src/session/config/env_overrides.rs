@@ -359,6 +359,12 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         cfg.display.memory_auto_populate
     );
 
+    // KF_CODE_MEMORY_SHOW_IN_STATUS
+    env_bool!(
+        "KF_CODE_MEMORY_SHOW_IN_STATUS",
+        cfg.display.memory_show_in_status
+    );
+
     // KF_CODE_REQUEST_TIMEOUT_SECS
     if let Ok(val) = std::env::var("KF_CODE_REQUEST_TIMEOUT_SECS") {
         if let Ok(n) = val.parse::<u64>() {

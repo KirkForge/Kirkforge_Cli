@@ -74,6 +74,9 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
     let shutdown = Arc::new(tokio::sync::Notify::new());
     let concurrency = Arc::new(Semaphore::new(16));
 
+    // Clean up orphaned undo snapshots from deleted/pruned sessions (F16).
+    crate::session::undo::cleanup_orphan_snaps();
+
     // Initial refresh.
     {
         let mut s = state.lock().await;
@@ -431,7 +434,8 @@ async fn handle_instance_register(
         return;
     }
 
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
+    let (tx, rx) =
+        tokio::sync::mpsc::channel::<InstanceEvent>(crate::daemon::INSTANCE_CHANNEL_CAPACITY);
 
     // Register the sender in the instance registry.
     {
@@ -632,8 +636,10 @@ mod tests {
         let state = DaemonState::new();
 
         // Two channels simulating two registered instances.
-        let (tx1, mut rx1) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
-        let (tx2, mut rx2) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
+        let (tx1, mut rx1) =
+            tokio::sync::mpsc::channel::<InstanceEvent>(crate::daemon::INSTANCE_CHANNEL_CAPACITY);
+        let (tx2, mut rx2) =
+            tokio::sync::mpsc::channel::<InstanceEvent>(crate::daemon::INSTANCE_CHANNEL_CAPACITY);
 
         {
             let mut instances = state.instances.lock().unwrap();
@@ -675,7 +681,8 @@ mod tests {
         use crate::daemon::InstanceEvent;
 
         let state = DaemonState::new();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<InstanceEvent>();
+        let (tx, mut rx) =
+            tokio::sync::mpsc::channel::<InstanceEvent>(crate::daemon::INSTANCE_CHANNEL_CAPACITY);
 
         {
             let mut instances = state.instances.lock().unwrap();

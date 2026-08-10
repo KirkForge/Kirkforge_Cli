@@ -62,6 +62,6 @@ pub(crate) fn app_state() -> crate::tui::app::AppState {
 #[cfg(test)]
 pub(crate) fn app_state_with_log(log_path: std::path::PathBuf) -> crate::tui::app::AppState {
     let mut state = app_state();
-    state.log_path = Some(log_path);
+    state.session.log_path = Some(log_path);
     state
 }

@@ -129,6 +129,7 @@ pub(super) fn tool_card_lines(
     collapsed: bool,
     search_query: &str,
     content_width: usize,
+    spinner: &'static str,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -150,12 +151,22 @@ pub(super) fn tool_card_lines(
     ));
     header_spans.push(role_badge("tool"));
     header_spans.push(Span::styled("  ".to_string(), Style::default()));
-    header_spans.push(Span::styled(
-        entry.content.clone(),
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::DIM),
-    ));
+    if entry.streaming {
+        // Streaming indicator: spinner + the incremental output so far.
+        header_spans.push(Span::styled(
+            format!("{spinner} {}", entry.content),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::DIM),
+        ));
+    } else {
+        header_spans.push(Span::styled(
+            entry.content.clone(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::DIM),
+        ));
+    }
     if collapsed {
         header_spans.push(Span::styled(
             "  · Enter to expand".to_string(),
@@ -212,9 +223,10 @@ pub(super) fn render_entry_lines(
     content_width: usize,
     search_query: &str,
     collapsed: bool,
+    spinner: &'static str,
 ) -> Vec<Line<'static>> {
     if entry.role == "tool" {
-        return tool_card_lines(entry, prev, collapsed, search_query, content_width);
+        return tool_card_lines(entry, prev, collapsed, search_query, content_width, spinner);
     }
 
     if collapsed {
@@ -281,16 +293,16 @@ pub(super) fn render_entry_lines(
 /// does not append the "more lines below" footer or compute scroll
 /// geometry. It returns the raw line list and a parallel `message_start`
 /// vector such that `message_start[i]` is the line index of the first
-/// rendered line belonging to `state.messages[i]`.
+/// rendered line belonging to `state.conversation.messages[i]`.
 pub(super) fn build_chat_lines(
     state: &AppState,
     content_width: usize,
 ) -> (Vec<Line<'static>>, Vec<usize>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut message_start: Vec<usize> = Vec::with_capacity(state.messages.len());
+    let mut message_start: Vec<usize> = Vec::with_capacity(state.conversation.messages.len());
 
     // Sandbox posture banner (always visible if unsandboxed).
-    if state.unsandboxed {
+    if state.provider.unsandboxed {
         lines.push(Line::from(vec![
             Span::styled(
                 " ⚠️  Unsandboxed ",
@@ -307,7 +319,7 @@ pub(super) fn build_chat_lines(
     }
 
     // Connection banner at top.
-    match &state.connection {
+    match &state.provider.connection {
         ConnectionState::Connected { .. } | ConnectionState::Connecting => {}
         ConnectionState::Disconnected => {
             lines.push(Line::from(vec![
@@ -335,7 +347,9 @@ pub(super) fn build_chat_lines(
     }
 
     // Loading indicator.
-    if state.is_generating && state.messages.back().map(|m| m.role.as_str()) != Some("assistant") {
+    if state.generation.is_generating
+        && state.conversation.messages.back().map(|m| m.role.as_str()) != Some("assistant")
+    {
         lines.push(Line::from(vec![Span::styled(
             format!(" ⏳ {} ", state.spinner_char()),
             Style::default()
@@ -346,11 +360,12 @@ pub(super) fn build_chat_lines(
     }
 
     // Conversation messages.
-    let last_idx = state.messages.len().saturating_sub(1);
+    let last_idx = state.conversation.messages.len().saturating_sub(1);
     let mut prev_entry: Option<&ConversationEntry> = None;
-    for (idx, entry) in state.messages.iter().enumerate() {
+    for (idx, entry) in state.conversation.messages.iter().enumerate() {
         message_start.push(lines.len());
-        let is_streaming_last = idx == last_idx && state.is_generating && entry.role == "assistant";
+        let is_streaming_last =
+            idx == last_idx && state.generation.is_generating && entry.role == "assistant";
         let collapsed = if is_streaming_last {
             false
         } else if entry.role == "tool" {
@@ -365,6 +380,7 @@ pub(super) fn build_chat_lines(
             content_width,
             &state.search.query,
             collapsed,
+            state.spinner_char(),
         );
         lines.extend(entry_lines);
         lines.push(Line::from(""));
@@ -372,7 +388,7 @@ pub(super) fn build_chat_lines(
     }
 
     // Inline thinking block.
-    if state.thinking_panel_visible && !state.thinking_buffer.is_empty() {
+    if state.generation.thinking_panel_visible && !state.generation.thinking_buffer.is_empty() {
         let thinking_width = content_width.saturating_sub(4);
         let border_style = Style::default()
             .fg(Color::Magenta)
@@ -390,7 +406,7 @@ pub(super) fn build_chat_lines(
             ),
             Span::styled("  · Esc to hide", border_style),
         ]));
-        for t in &state.thinking_buffer {
+        for t in &state.generation.thinking_buffer {
             for line in textwrap::fill(t, thinking_width).lines() {
                 lines.push(Line::from(vec![
                     Span::styled("    │ ", border_style),

@@ -6,6 +6,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- WO 26.8: Decompose `AppState` from a single flat ~66-field struct into 11 sub-structs grouped by concern (`conversation`, `generation`, `budget`, `session`, `provider`, `approval`, `search`, `ui`, `doom`, `services`, + `dirty` bool). Call sites migrated to `state.<group>.<field>`; existing helper methods retained as accessor shims. TUI renders identically; session persistence format unchanged.
+
+### Fixed
+- WO 26.4-F8: drop the job-store lock before `.await` in the scheduler daemon — no `MutexGuard` spans an await, removing a deadlock-under-load risk.
+
+### Added
+- WO 26.7-R4: Anthropic computer_use beta re-deferred with disclosure (hosted API path needs `computer` tool type + `anthropic-beta` header + coordinate-vision routing in the Anthropic adapter; tracked in state.md pending + WO 26.7-R4).
+- WO 26.7-R2: MCP `sampling/createMessage` handler — server-initiated sampling requests route through the same approval bus as tool calls (default deny in headless; opt-in `tools.allow_sampling_unattended`). New ADR-072 documents the trust model.
+- WO 26.7-R1: Bash streaming UX — PTY output streams into the TUI tool-result card via new `TurnEvent::BashPartialOutput` while an interactive command runs (spinner + incremental text). Non-PTY path unchanged.
+- WO 26.6-R3: Wire eslint into CI — `npm run lint` runs in `scripts/ci-local.sh` and the `quality` CI job; removed a pre-existing unused `readFileSync` import in the Node SDK that blocked the lint gate.
+- WO 26.3: `--features landlock` now compiles — declared the previously-orphaned `landlock` module in `bash_runner/mod.rs` and fixed the `Option<&LandlockPaths>` type mismatch. Landlock tests skip cleanly on kernels/caps that can't confine (probe `restrict_self`, not just `create_ruleset`).
 - WO 25.17: Document persona Anthropic-direct limitation (ponytail comment in persona.rs, TECHNICAL.md note). Bedrock/Vertex plumbing deferred (tracked in state.md).
 - WO 25.17: Document landlock as opt-in (ponytail comment on Cargo.toml feature, TECHNICAL.md already correct).
 - WO 23.8-R1: Doom-loop circuit breaker — auto-switches to plan mode after `doom_loop_max_hits` cumulative detections (default: 1). New `TurnEvent::DoomLoopRemediation` event. Config: `doom_loop_max_hits` / `KF_CODE_DOOM_LOOP_MAX_HITS`. Set to 0 to disable.

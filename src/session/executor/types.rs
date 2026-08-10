@@ -110,6 +110,21 @@ pub enum TurnEvent {
         round: usize,
         max: usize,
     },
+
+    /// A chunk of PTY output from a running interactive bash command.
+    /// Emitted incrementally while the command executes so the TUI can
+    /// stream it into the tool-result card. The full output is still
+    /// delivered once via `ToolResult` when the command finishes.
+    BashPartialOutput(String),
+
+    /// Emitted after a post-turn auto-extraction stored facts in the
+    /// memory store. `count` is the total number of facts now in the
+    /// store; `turn` is the executor turn counter. The TUI renders
+    /// this in the status bar so the operator sees memory grow live.
+    MemoryExtracted {
+        count: usize,
+        turn: u64,
+    },
 }
 
 #[cfg(test)]

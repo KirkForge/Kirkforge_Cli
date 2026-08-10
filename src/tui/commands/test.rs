@@ -52,10 +52,10 @@ pub const TEST_MAX_TIMEOUT_SECS: u64 = 3600;
 pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
     // Concurrency gate: don't stack test runs, and don't fight
     // the model for input.
-    if state.is_generating {
+    if state.generation.is_generating {
         return "/test: a turn is in progress; wait for the model to finish (or press Ctrl+C) before running tests.".into();
     }
-    if state.test_in_progress {
+    if state.generation.test_in_progress {
         return "/test: another test run is already in flight.".into();
     }
 
@@ -74,11 +74,11 @@ pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
     // dangerous-pattern checks as the model's `bash` tool. Going through
     // `Bash::run` directly would skip the executor's safety gate.
     let (deny_list, path_guard, _) = crate::session::access::access_from_config(
-        &crate::shared::read_shared_config(&state.config),
+        &crate::shared::read_shared_config(&state.services.config),
     );
 
     let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let workdir = if crate::shared::read_shared_config(&state.config)
+    let workdir = if crate::shared::read_shared_config(&state.services.config)
         .security
         .bash_sandbox_workdir
     {
@@ -96,16 +96,16 @@ pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
         Some(&workdir_str),
         &deny_list,
         &path_guard,
-        crate::shared::read_shared_config(&state.config)
+        crate::shared::read_shared_config(&state.services.config)
             .security
             .bash_sandbox_workdir,
     ) {
         return format!("🔒 /test blocked: {reason}");
     }
 
-    state.test_in_progress = true;
+    state.generation.test_in_progress = true;
     let result = run_shell(cmd, workdir, timeout_secs).await;
-    state.test_in_progress = false;
+    state.generation.test_in_progress = false;
 
     let (raw_stdout, raw_stderr, exit_code) = match result {
         Ok(out) => (out.stdout, out.stderr, out.status.code().unwrap_or(-1)),

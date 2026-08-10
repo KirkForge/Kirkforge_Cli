@@ -21,15 +21,15 @@ pub async fn handle_reload_command(
     state: &mut AppState,
 ) -> String {
     let (fresh, _warning) = crate::session::config::load_config();
-    let before = read_shared_config(&state.config).clone();
+    let before = read_shared_config(&state.services.config).clone();
     let diff_summary = crate::session::config::config_diff_summary(&before, &fresh);
 
     // Take the old Arc out of state so the lock operation borrows a
-    // local, not `state.config`. If the lock is poisoned, the local is
-    // dropped and `state.config` already points at a fresh, un-poisoned
+    // local, not `state.services.config`. If the lock is poisoned, the local is
+    // dropped and `state.services.config` already points at a fresh, un-poisoned
     // lock. This prevents a poisoned lock from wedging the TUI.
     let old_arc = std::mem::replace(
-        &mut state.config,
+        &mut state.services.config,
         Arc::new(std::sync::RwLock::new(fresh.clone())),
     );
     let write_ok = match old_arc.write() {
@@ -43,7 +43,7 @@ pub async fn handle_reload_command(
         // On success, keep the updated old_arc so any other holders of
         // the same Arc see the new config; on poison, the replacement
         // above is the source of truth.
-        state.config = old_arc;
+        state.services.config = old_arc;
     }
 
     // Forward the new snapshot to the executor. The executor owns the
@@ -64,17 +64,22 @@ pub async fn handle_reload_command(
 /// Re-scans registered skill paths and re-registers built-in skills on top.
 /// Returns a short summary for the TUI chat panel.
 pub fn handle_reload_skills_command(state: &mut AppState) -> String {
-    let cfg = read_shared_config(&state.config).clone();
-    let before = state.skill_registry.len();
-    state.skill_registry.clear();
+    let cfg = read_shared_config(&state.services.config).clone();
+    let before = state.services.skill_registry.len();
+    state.services.skill_registry.clear();
     state
+        .services
         .skill_registry
         .set_max_plugin_trust(cfg.tools.max_plugin_trust);
-    let scanned = state.skill_registry.scan_and_load(&cfg).unwrap_or(0);
+    let scanned = state
+        .services
+        .skill_registry
+        .scan_and_load(&cfg)
+        .unwrap_or(0);
     for skill in crate::session::skills::builtin_skills() {
-        state.skill_registry.register(skill);
+        state.services.skill_registry.register(skill);
     }
-    let after = state.skill_registry.len();
+    let after = state.services.skill_registry.len();
     format!("🧠 Reloaded skills: cleared {before}, rescanned {scanned}, now {after} registered.")
 }
 
@@ -87,7 +92,7 @@ pub async fn handle_reload_plugins_command(
     plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
     state: &mut AppState,
 ) -> String {
-    let cfg = read_shared_config(&state.config).clone();
+    let cfg = read_shared_config(&state.services.config).clone();
     let (registry, warnings) = match crate::session::plugin_tools::load_plugin_registry(&cfg) {
         Ok(r) => r,
         Err(e) => return format!("❌ Plugin reload failed: {e}"),
@@ -95,16 +100,17 @@ pub async fn handle_reload_plugins_command(
 
     // Refresh the skill/plugin status summary in the status bar.
     state
+        .services
         .skill_registry
         .set_max_plugin_trust(cfg.tools.max_plugin_trust);
-    if let Err(e) = state.skill_registry.scan_and_load(&cfg) {
+    if let Err(e) = state.services.skill_registry.scan_and_load(&cfg) {
         tracing::warn!(error = %e, "skill rescan during /reload plugins failed");
     }
     // Always re-register built-in skills on top.
     for skill in crate::session::skills::builtin_skills() {
-        state.skill_registry.register(skill);
+        state.services.skill_registry.register(skill);
     }
-    state.plugin_status = state.skill_registry.plugin_status_summary();
+    state.provider.plugin_status = state.services.skill_registry.plugin_status_summary();
 
     if plugin_reload_tx.send(registry).is_err() {
         return "❌ Plugins re-scanned, but executor is not running.".into();

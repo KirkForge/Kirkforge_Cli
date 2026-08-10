@@ -257,8 +257,8 @@ The input box offers **Tab-completion** (WO 14.6): when the buffer starts with
 readline contract, no fuzzy); when it starts with `@`, Tab completes the path
 portion against the filesystem (the `:A-B:raw` suffix is left alone). A single
 match replaces the buffer; multiple matches populate
-`AppState::completion_suggestions`, rendered as a one-line dim hint above the
-input text. The completion layer is `complete_command` (pure, over `COMMANDS`)
+`AppState::conversation.completion_suggestions`, rendered as a one-line dim
+hint above the input text. The completion layer is `complete_command` (pure, over `COMMANDS`)
 and `complete_path` (`std::fs::read_dir`, capped at 24 entries). The legacy
 "Tab on empty input toggles expand/collapse" behavior is preserved when the
 buffer doesn't start with `/` or `@`.
@@ -876,6 +876,13 @@ against a baseline threshold. `src/tools` (≈76.5%) and `src/adapters`
 (≈84%) clear the 75% floor; `src/session` (~68.6%) is honestly deferred
 to WO 25.16. The gate is a regression guard, not a vanity number.
 
+### Non-Rust linting (WO 26.6-R3)
+
+The tracked Node SDK (`npm/kf-plugin`) is linted with ESLint. `npm run lint`
+runs in the `quality` CI job and in `scripts/ci-local.sh` (all modes). No
+Python source is linted in-tree; the only `.py` files are test fixtures and
+a release script, so `ruff` is not wired.
+
 ---
 
 ## Feature flags
@@ -901,7 +908,7 @@ not the root binary.
 
 ## ADRs
 
-88 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+89 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
 execution replay (039), VFS minification (053), coverage-gate threshold

@@ -63,7 +63,7 @@ pub async fn handle_route_command(
     };
 
     let model = {
-        let cfg = read_shared_config(&state.config);
+        let cfg = read_shared_config(&state.services.config);
         resolve_tier_model(&cfg, tier)
     };
     let Some(model) = model else {
@@ -119,7 +119,7 @@ mod tests {
     fn resolve_tier_model_uses_defaults() {
         let state = state_with_map("kimi-2.7k-coder:cloud", std::collections::HashMap::new());
         assert_eq!(
-            resolve_tier_model(&read_shared_config(&state.config), "simple"),
+            resolve_tier_model(&read_shared_config(&state.services.config), "simple"),
             Some("kimi-2.7k-coder:cloud".to_string())
         );
     }
@@ -131,15 +131,15 @@ mod tests {
         map.insert("complex".to_string(), "my-big-model".to_string());
         let state = state_with_map("kimi-2.7k-coder:cloud", map);
         assert_eq!(
-            resolve_tier_model(&read_shared_config(&state.config), "simple"),
+            resolve_tier_model(&read_shared_config(&state.services.config), "simple"),
             Some("my-simple-model".to_string())
         );
         assert_eq!(
-            resolve_tier_model(&read_shared_config(&state.config), "medium"),
+            resolve_tier_model(&read_shared_config(&state.services.config), "medium"),
             Some("kimi-2.7k-coder:cloud".to_string())
         );
         assert_eq!(
-            resolve_tier_model(&read_shared_config(&state.config), "complex"),
+            resolve_tier_model(&read_shared_config(&state.services.config), "complex"),
             Some("my-big-model".to_string())
         );
     }

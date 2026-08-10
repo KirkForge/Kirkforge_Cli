@@ -521,7 +521,7 @@ async fn handle_run_now_command(args: &str, state: &mut AppState) -> String {
         Err(e) => return format!("Failed to load scheduled job {id}: {e:#}"),
     };
 
-    let config = crate::shared::read_shared_config(&state.config).clone();
+    let config = crate::shared::read_shared_config(&state.services.config).clone();
     match run_job(&mut job, &store, &config).await {
         Ok(run) => format!(
             "▶️ Scheduled job {id} ran now: {} — {} (exit {:?})\n  stdout: {}\n  stderr: {}",
@@ -620,7 +620,7 @@ pub async fn refresh_jobs_output(_state: &mut AppState) -> String {
 
 /// Walk the global `BashJob` registry and push a one-time chat
 /// notification for any job that has just finished. Idempotent: each
-/// job is notified exactly once thanks to `state.notified_jobs`.
+/// job is notified exactly once thanks to `state.session.notified_jobs`.
 ///
 /// Called by the TUI event loop on every tick. Cheap O(n) in the
 /// number of jobs; not O(n) in the number of turns.
@@ -639,7 +639,7 @@ pub async fn notify_completed_jobs(state: &mut AppState) -> bool {
             | crate::session::bash_jobs::JobStatus::Cancelled => true,
             crate::session::bash_jobs::JobStatus::Running => false,
         };
-        if finished && state.notified_jobs.insert(job.id) {
+        if finished && state.session.notified_jobs.insert(job.id) {
             // First time seeing this job as finished — push a notification
             let status_icon = match &job.status {
                 crate::session::bash_jobs::JobStatus::Completed(code) => {
@@ -654,6 +654,7 @@ pub async fn notify_completed_jobs(state: &mut AppState) -> bool {
                 _ => continue,
             };
             state
+                .conversation
                 .messages
                 .push_back(crate::tui::app::ConversationEntry::new(
                     "system",
@@ -666,7 +667,10 @@ pub async fn notify_completed_jobs(state: &mut AppState) -> bool {
     // evicts a finished job its ID never reappears, so the HashSet would grow
     // for the lifetime of the session without this.
     let live_ids: std::collections::HashSet<u64> = jobs.iter().map(|j| j.id).collect();
-    state.notified_jobs.retain(|id| live_ids.contains(id));
+    state
+        .session
+        .notified_jobs
+        .retain(|id| live_ids.contains(id));
     any
 }
 
@@ -690,13 +694,18 @@ pub async fn notify_completed_scheduled_jobs(state: &mut AppState) -> bool {
     for job in &jobs {
         if let Some(run) = &job.last_run {
             live_run_ids.insert(run.run_id.clone());
-            if state.notified_scheduled_runs.insert(run.run_id.clone()) {
+            if state
+                .session
+                .notified_scheduled_runs
+                .insert(run.run_id.clone())
+            {
                 let icon = match run.status {
                     RunStatus::Success => "✅",
                     RunStatus::Failure => "❌",
                     RunStatus::Cancelled => "🚫",
                 };
                 state
+                    .conversation
                     .messages
                     .push_back(crate::tui::app::ConversationEntry::new(
                         "system",
@@ -716,6 +725,7 @@ pub async fn notify_completed_scheduled_jobs(state: &mut AppState) -> bool {
 
     // Prune run IDs that no longer correspond to a stored last_run.
     state
+        .session
         .notified_scheduled_runs
         .retain(|id| live_run_ids.contains(id));
     any
@@ -834,7 +844,7 @@ mod tests {
         );
 
         assert!(notify_completed_scheduled_jobs(&mut state).await);
-        let msg = state.messages.back().unwrap().content.clone();
+        let msg = state.conversation.messages.back().unwrap().content.clone();
         assert!(msg.contains(&id), "notification missing id: {msg}");
         assert!(
             msg.contains("success"),

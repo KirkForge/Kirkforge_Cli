@@ -113,6 +113,13 @@ jobs:
       - name: Typecheck all targets
         run: cargo check --workspace --all-targets --locked
 
+      - name: Lint Node SDK (eslint)
+        run: |
+          set -euo pipefail
+          cd npm/kf-plugin
+          npm ci
+          npm run lint
+
   windows:
     runs-on: windows-latest
     needs: fmt
@@ -215,7 +222,7 @@ jobs:
 
       # Block on critical/RCE/unsound only; lower severities are warnings
       - name: Audit dependencies (critical/RCE/unsound)
-        run: cargo audit --deny=critical,unsound
+        run: cargo audit --deny critical --deny unsound
 
       - name: Audit dependencies (informational warnings)
         if: always()

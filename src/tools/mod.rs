@@ -103,6 +103,10 @@ pub struct ToolContext {
     pub diff_review: bool,
     pub task_spawner: Option<Arc<dyn task::TaskSpawner>>,
     pub tools: Option<Arc<CompositeToolset>>,
+    /// Optional channel for streaming partial tool output (e.g. PTY
+    /// output) to the TUI while a command runs. `None` in non-interactive
+    /// or test contexts — tools must treat it as best-effort.
+    pub event_tx: Option<tokio::sync::mpsc::Sender<crate::session::executor::TurnEvent>>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -113,6 +117,7 @@ impl std::fmt::Debug for ToolContext {
             .field("diff_review", &self.diff_review)
             .field("task_spawner", &self.task_spawner.is_some())
             .field("tools", &self.tools.is_some())
+            .field("event_tx", &self.event_tx.is_some())
             .finish()
     }
 }
@@ -125,6 +130,7 @@ impl ToolContext {
             diff_review: true,
             task_spawner: None,
             tools: None,
+            event_tx: None,
         }
     }
 
@@ -138,6 +144,7 @@ impl ToolContext {
             diff_review: true,
             task_spawner: None,
             tools: None,
+            event_tx: None,
         }
     }
 
@@ -149,6 +156,7 @@ impl ToolContext {
             diff_review: true,
             task_spawner: Some(spawner),
             tools: None,
+            event_tx: None,
         }
     }
 }

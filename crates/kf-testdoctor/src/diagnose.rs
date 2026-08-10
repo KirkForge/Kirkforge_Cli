@@ -6,10 +6,13 @@
 //! APIs but few tests float to the top.
 
 use anyhow::Result;
-use serde::Serialize;
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileDiagnosis {
     pub path: String,
     pub lines: usize,
@@ -38,6 +41,20 @@ pub struct DirDiagnosis {
     pub avg_test_density: f64,
 }
 
+/// Bump when the analysis logic changes so stale cache entries are invalidated.
+const CACHE_VERSION: &str = "1";
+
+/// Cache file location (target/ is gitignored).
+const CACHE_PATH: &str = "target/testdoctor-cache.json";
+
+/// A cached per-file diagnosis, keyed by content hash + testdoctor version.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedDiagnosis {
+    version: String,
+    hash: u64,
+    diag: FileDiagnosis,
+}
+
 /// Directories to scan by default. Covers all source directories
 /// in the workspace, not just the 3 CI originally scanned.
 const DEFAULT_DIRS: &[&str] = &[
@@ -53,20 +70,22 @@ const DEFAULT_DIRS: &[&str] = &[
 ];
 
 pub fn diagnose_with_dirs(root: &Path, dirs: &[&str]) -> Result<DiagnosisReport> {
-    let mut all_files: Vec<FileDiagnosis> = Vec::new();
-
+    let mut files: Vec<PathBuf> = Vec::new();
     for dir in dirs {
         let dir_path = root.join(dir);
         if !dir_path.is_dir() {
             continue;
         }
-        let files = collect_rs_files(&dir_path)?;
-        for f in files {
-            if let Some(diag) = analyze_file(&f, root) {
-                all_files.push(diag);
-            }
-        }
+        files.extend(collect_rs_files(&dir_path)?);
     }
+
+    let cache = load_cache();
+    let analyzed: Vec<(FileDiagnosis, u64)> = files
+        .par_iter()
+        .filter_map(|f| analyze_file_cached(f, root, &cache))
+        .collect();
+    save_cache(&analyzed);
+    let mut all_files: Vec<FileDiagnosis> = analyzed.into_iter().map(|(d, _)| d).collect();
 
     all_files.sort_by(|a, b| {
         b.roi
@@ -175,6 +194,63 @@ fn analyze_file(path: &Path, root: &Path) -> Option<FileDiagnosis> {
         test_density,
         roi,
     })
+}
+
+/// Analyze a file, reusing a cached result when the content hash and
+/// testdoctor version match. Returns None for empty/unreadable files.
+/// The returned tuple carries the content hash for cache persistence.
+fn analyze_file_cached(
+    path: &Path,
+    root: &Path,
+    cache: &HashMap<String, CachedDiagnosis>,
+) -> Option<(FileDiagnosis, u64)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let hash = content_hash(&text);
+    let rel_path = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .to_string();
+    if let Some(entry) = cache.get(&rel_path) {
+        if entry.version == CACHE_VERSION && entry.hash == hash {
+            return Some((entry.diag.clone(), hash));
+        }
+    }
+    analyze_file(path, root).map(|diag| (diag, hash))
+}
+
+/// FNV-1a hash of file content. Cheap and stable; used only to detect
+/// content changes for cache invalidation, not for security.
+fn content_hash(text: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn load_cache() -> HashMap<String, CachedDiagnosis> {
+    let Ok(text) = std::fs::read_to_string(CACHE_PATH) else {
+        return HashMap::new();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn save_cache(analyzed: &[(FileDiagnosis, u64)]) {
+    let entries: HashMap<String, CachedDiagnosis> = analyzed
+        .iter()
+        .map(|(diag, hash)| {
+            (
+                diag.path.clone(),
+                CachedDiagnosis {
+                    version: CACHE_VERSION.to_string(),
+                    hash: *hash,
+                    diag: diag.clone(),
+                },
+            )
+        })
+        .collect();
+    if let Ok(json) = serde_json::to_string(&entries) {
+        let _ = std::fs::write(CACHE_PATH, json);
+    }
 }
 
 /// Count top-level pub items and impl methods in a single pass.

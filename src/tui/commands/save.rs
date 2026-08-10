@@ -25,7 +25,7 @@ pub async fn handle_save_command(args: &str, state: &mut AppState) -> String {
     // through. `/save` writes user data to disk, so it must respect the
     // sandbox and deny list.
     let path_guard = {
-        let cfg = crate::shared::read_shared_config(&state.config);
+        let cfg = crate::shared::read_shared_config(&state.services.config);
         let (_deny_list, path_guard, _read_gate) = access_from_config(&cfg);
         path_guard
     };
@@ -34,8 +34,8 @@ pub async fn handle_save_command(args: &str, state: &mut AppState) -> String {
     }
 
     let transcript = crate::tui::transcript::format_transcript(
-        &state.session_id,
-        state.messages.make_contiguous(),
+        &state.session.session_id,
+        state.conversation.messages.make_contiguous(),
     );
 
     if let Err(e) = ensure_parent_dir(&path) {
@@ -73,7 +73,7 @@ fn resolve_save_path(args: &str, state: &AppState) -> PathBuf {
         return PathBuf::from(trimmed);
     }
 
-    if let Some(log) = &state.log_path {
+    if let Some(log) = &state.session.log_path {
         let stem = log
             .file_stem()
             .and_then(|f| f.to_str())
@@ -96,7 +96,7 @@ mod tests {
 
     fn test_state_with_log(log_path: PathBuf) -> AppState {
         let mut state = app_state_with_log(log_path);
-        state.session_id = "2026-06-22-session-01".to_string();
+        state.session.session_id = "2026-06-22-session-01".to_string();
         state
     }
 
@@ -133,9 +133,11 @@ mod tests {
         let log = tmp.path().join("s.conv.ndjson");
         let mut state = test_state_with_log(log);
         state
+            .conversation
             .messages
             .push_back(crate::tui::app::ConversationEntry::new("user", "hi"));
         state
+            .conversation
             .messages
             .push_back(crate::tui::app::ConversationEntry::new(
                 "assistant",

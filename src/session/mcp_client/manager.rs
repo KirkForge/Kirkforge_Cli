@@ -231,6 +231,21 @@ impl McpClientManager {
         self.clients.len()
     }
 
+    /// Install the sampling context (approval bus + config) on every connected
+    /// client so incoming `sampling/createMessage` requests route through the
+    /// approval bus. Called by the session driver once it has created its
+    /// approval channel. ponytail: a client that reconnects after this call
+    /// loses the context until the session reinstalls it; per-session
+    /// sampling is best-effort, matching the reconnect path's simplicity.
+    pub fn set_sampling(&self, ctx: super::SamplingContext) {
+        for slot in &self.clients {
+            let guard = slot.try_read();
+            if let Ok(guard) = guard {
+                guard.set_sampling(ctx.clone());
+            }
+        }
+    }
+
     /// Return the number of tools across all servers.
     pub fn tool_count(&self) -> usize {
         self.tools.len()

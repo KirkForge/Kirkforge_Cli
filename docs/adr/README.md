@@ -111,6 +111,7 @@ verifies the table and the file headers agree.
 | [068](./068-cli-yeet-decision.md) | Remove Standalone Subsystem CLIs | Accepted | CLI |
 | [070](./070-adapter-gap-decisions.md) | Adapter-Gap Decisions and Deferrals | Accepted | CLI |
 | [071](./071-structured-output.md) | JSON-Schema Structured Output | Accepted | CLI |
+| [072](./072-mcp-sampling-trust-model.md) | MCP Sampling Trust Model and Approval Flow | Accepted | CLI |
 
 ## Cross-references
 

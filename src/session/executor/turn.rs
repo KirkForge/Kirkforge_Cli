@@ -117,6 +117,17 @@ impl Executor {
                     if count > 0 {
                         let names: Vec<&str> = facts.iter().map(|f| f.name.as_str()).collect();
                         tracing::info!(count, facts = ?names, "auto-remembered facts");
+                        // WO 26.7-R3: tell the TUI so the status bar can
+                        // update in real-time as memory grows.
+                        crate::send_or_warn!(
+                            event_tx
+                                .send(TurnEvent::MemoryExtracted {
+                                    count: store.all().len(),
+                                    turn: self.turn_count,
+                                })
+                                .await,
+                            "TurnEvent receiver dropped; discarding event"
+                        );
                     }
                 }
             }
@@ -1259,6 +1270,7 @@ impl Executor {
                         diff_review: crate::shared::read_shared_config(&self.config)
                             .security
                             .diff_review,
+                        event_tx: Some(event_tx.clone()),
                     });
                 }
                 PreRunVerdict::Skip { events, message } => {
@@ -1998,6 +2010,7 @@ struct PreparedCall {
     resolved_path: Option<std::path::PathBuf>,
     timeout: std::time::Duration,
     diff_review: bool,
+    event_tx: Option<mpsc::Sender<TurnEvent>>,
 }
 
 /// Run only the tool body for a prepared call, returning the original
@@ -2035,6 +2048,7 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
         diff_review: prep.diff_review,
         task_spawner: None,
         tools: None,
+        event_tx: prep.event_tx,
     };
     let start = Instant::now();
     let outcome = tokio::time::timeout(

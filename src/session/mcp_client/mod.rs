@@ -37,10 +37,11 @@
 //!   reader/stderr tasks to finish, and reaps the child process. `Drop`
 //!   calls `disconnect()` synchronously as a best-effort fallback.
 
+use crate::session::executor::{ApprovalRequest, ApprovalResponder, ApprovalResponse};
 #[cfg(test)]
 use crate::session::process_group::reap_child;
 use crate::session::process_group::{kill_process_group, setup_process_group};
-use crate::shared::{McpServerConfig, ToolError, ToolOutcome};
+use crate::shared::{McpServerConfig, Message, Role, StreamEvent, ToolError, ToolOutcome};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -59,7 +60,20 @@ pub use manager::{McpClientManager, McpToolDef};
 use spawn::{spawn_child_reap, spawn_stderr_drain};
 
 /// MCP server capabilities that kf-code does not yet support.
-const UNSUPPORTED_CAPABILITIES: &[&str] = &["sampling"];
+const UNSUPPORTED_CAPABILITIES: &[&str] = &[];
+
+/// Wiring the MCP client needs to serve an incoming `sampling/createMessage`
+/// request through the same approval bus that gates tool calls.
+///
+/// The approval channel (`approval_tx`) is created per-session in `run_tui` /
+/// `run_line_mode`; the `Config` snapshot is used to build a one-off completion
+/// adapter. Both are installed after the manager is constructed, so the manager
+/// exposes this as a settable context rather than a constructor arg.
+#[derive(Clone)]
+pub struct SamplingContext {
+    pub approval_tx: tokio::sync::mpsc::UnboundedSender<ApprovalRequest>,
+    pub config: std::sync::Arc<crate::shared::Config>,
+}
 
 /// Log a warning for each unsupported capability advertised by the server.
 fn warn_unsupported_capabilities(server_name: &str, init_result: &serde_json::Value) {
@@ -152,6 +166,10 @@ enum McpClient {
 struct StdioMcpClient {
     /// Server config (name, command, args).
     config: McpServerConfig,
+    /// Approval-bus + config wiring for `sampling/createMessage`. Shared with
+    /// the reader task so it can be installed after connect (the approval
+    /// channel is created by the session driver after the manager is built).
+    sampling: Arc<tokio::sync::RwLock<Option<SamplingContext>>>,
     /// Write handle for the child's stdin. Protected by a Mutex so multiple
     /// tool-call tasks can send requests concurrently. Set to `None` after
     /// `disconnect()`.
@@ -175,8 +193,7 @@ struct StdioMcpClient {
     _stderr_drain: Option<tokio::task::JoinHandle<()>>,
 }
 
-/// Convert MCP content blocks into a `ToolOutcome::Success` string.
-///
+/// Convert MCP content blocks into a `ToolOutcome::Success` string.///
 /// Text blocks are joined. Non-text blocks (`image`, `audio`, `resource`,
 /// and any future kind) are surfaced as descriptive placeholders so the
 /// model knows they exist even if this runtime cannot render them. If no
@@ -231,6 +248,47 @@ fn tool_result_from_content_blocks(
     }
 }
 
+/// Translate the `messages` array of an MCP `sampling/createMessage` request
+/// into the internal `Message` type the adapters consume. Non-text content
+/// blocks (image, audio, resource) are surfaced as text placeholders so the
+/// model is informed they exist even if the adapter cannot render them.
+fn sampling_messages(params: &serde_json::Value) -> Vec<Message> {
+    let Some(msgs) = params.get("messages").and_then(|m| m.as_array()) else {
+        return Vec::new();
+    };
+    msgs.iter()
+        .filter_map(|m| {
+            let role = match m.get("role").and_then(|r| r.as_str()) {
+                Some("user") => Role::User,
+                Some("assistant") => Role::Assistant,
+                _ => return None,
+            };
+            let content = match m.get("content") {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(serde_json::Value::Array(blocks)) => {
+                    let mut parts: Vec<String> = Vec::new();
+                    for b in blocks {
+                        if let Some(text) = b.get("text").and_then(|t| t.as_str()) {
+                            parts.push(text.to_string());
+                            continue;
+                        }
+                        if let Some(kind) = b.get("type").and_then(|t| t.as_str()) {
+                            parts.push(format!("[{kind} content block]"));
+                        }
+                    }
+                    parts.join("")
+                }
+                _ => String::new(),
+            };
+            Some(Message {
+                role,
+                content,
+                ..Default::default()
+            })
+        })
+        .collect()
+}
+
 impl McpClient {
     /// Spawn the server process and perform the MCP handshake.
     ///
@@ -271,6 +329,7 @@ impl McpClient {
         let stdin = Arc::new(Mutex::new(Some(stdin)));
         let next_id = Arc::new(Mutex::new(1_u64));
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+        let sampling = Arc::new(tokio::sync::RwLock::new(None));
 
         let (reader_shutdown_tx, reader_shutdown_rx) = oneshot::channel();
         let (stderr_shutdown_tx, stderr_shutdown_rx) = oneshot::channel();
@@ -282,11 +341,13 @@ impl McpClient {
             alive.clone(),
             reader_shutdown_rx,
             stdin.clone(),
+            sampling.clone(),
         );
         let stderr_drain = spawn_stderr_drain(stderr, stderr_shutdown_rx);
 
         let client = StdioMcpClient {
             config: config.clone(),
+            sampling,
             stdin,
             next_id,
             pending,
@@ -352,6 +413,7 @@ impl McpClient {
         let stdin = Arc::new(Mutex::new(Some(stdin)));
         let next_id = Arc::new(Mutex::new(1_u64));
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+        let sampling = Arc::new(tokio::sync::RwLock::new(None));
 
         let (reader_shutdown_tx, reader_shutdown_rx) = oneshot::channel();
         let (stderr_shutdown_tx, stderr_shutdown_rx) = oneshot::channel();
@@ -363,11 +425,13 @@ impl McpClient {
             alive.clone(),
             reader_shutdown_rx,
             stdin.clone(),
+            sampling.clone(),
         );
         let stderr_drain = spawn_stderr_drain(None, stderr_shutdown_rx);
 
         let inner = StdioMcpClient {
             config,
+            sampling,
             stdin,
             next_id,
             pending,
@@ -386,6 +450,18 @@ impl McpClient {
         match self {
             McpClient::Stdio(c) => c.alive.load(Ordering::SeqCst),
             McpClient::Http(c) => c.is_alive(),
+        }
+    }
+
+    /// Install the sampling context (approval bus + config) on a stdio
+    /// client. The reader task reads this via the shared `RwLock`, so it can
+    /// be installed after the client connects. HTTP transport has no
+    /// server-to-client request handling, so it is a no-op there.
+    fn set_sampling(&self, ctx: SamplingContext) {
+        if let McpClient::Stdio(c) = self {
+            if let Ok(mut guard) = c.sampling.try_write() {
+                *guard = Some(ctx);
+            }
         }
     }
 
@@ -469,6 +545,7 @@ impl McpClient {
         alive: Arc<AtomicBool>,
         mut shutdown: oneshot::Receiver<()>,
         stdin: Arc<Mutex<Option<ChildStdin>>>,
+        sampling: Arc<tokio::sync::RwLock<Option<SamplingContext>>>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -526,7 +603,11 @@ impl McpClient {
                 if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
                     if id_str.is_some() {
                         // Server-to-client request (has method + id).
-                        if let Some(response) =
+                        if method == "sampling/createMessage" {
+                            let response =
+                                Self::handle_sampling_request(&sampling, &msg, &server_name).await;
+                            Self::write_response(&stdin, &response, &server_name).await;
+                        } else if let Some(response) =
                             Self::handle_server_request(method, &msg, &server_name)
                         {
                             Self::write_response(&stdin, &response, &server_name).await;
@@ -578,6 +659,136 @@ impl McpClient {
                 None
             }
         }
+    }
+
+    /// Handle a `sampling/createMessage` request from an MCP server.
+    ///
+    /// Sampling is a server-initiated model completion, so it MUST go through
+    /// the same `ApprovalRequest`/`ApprovalResponder` bus as tool calls — it
+    /// never runs a model unconditionally. The only bypass is the explicit
+    /// `tools.allow_sampling_unattended` config flag (default off), which
+    /// auto-approves for trusted headless setups. A denied request returns an
+    /// MCP JSON-RPC error so the server knows the completion was refused.
+    async fn handle_sampling_request(
+        sampling: &Arc<tokio::sync::RwLock<Option<SamplingContext>>>,
+        request: &serde_json::Value,
+        server_name: &str,
+    ) -> serde_json::Value {
+        let id = request
+            .get("id")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let Some(ctx) = sampling.read().await.clone() else {
+            tracing::warn!(server = %server_name, "sampling/createMessage before sampling context installed; denying");
+            return Self::sampling_error(
+                &id,
+                "sampling not configured; install the session approval context",
+            );
+        };
+
+        let allowed_unattended = ctx.config.tools.allow_sampling_unattended;
+        let approved = if allowed_unattended {
+            tracing::info!(
+                server = %server_name,
+                "sampling/createMessage auto-approved (tools.allow_sampling_unattended)"
+            );
+            true
+        } else {
+            Self::request_sampling_approval(&ctx, request, server_name).await
+        };
+
+        if !approved {
+            tracing::warn!(server = %server_name, "sampling/createMessage denied by user");
+            return Self::sampling_error(&id, "sampling request denied by user");
+        }
+
+        match Self::run_sampling_completion(&ctx, request, server_name).await {
+            Ok(content) => {
+                tracing::info!(server = %server_name, "sampling/createMessage completed");
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": { "content": content, "role": "assistant", "model": ctx.config.model.default_model }
+                })
+            }
+            Err(e) => {
+                tracing::warn!(server = %server_name, error = %e, "sampling/createMessage completion failed");
+                Self::sampling_error(&id, &format!("sampling completion failed: {e}"))
+            }
+        }
+    }
+
+    /// Route a sampling request through the approval bus and return whether
+    /// the user approved.
+    async fn request_sampling_approval(
+        ctx: &SamplingContext,
+        request: &serde_json::Value,
+        server_name: &str,
+    ) -> bool {
+        let (tx, rx) = tokio::sync::oneshot::channel::<ApprovalResponse>();
+        let args = serde_json::json!({
+            "mcp_sampling": {
+                "server": server_name,
+                "params": request.get("params").cloned().unwrap_or(serde_json::Value::Null)
+            }
+        });
+        if ctx
+            .approval_tx
+            .send(ApprovalRequest {
+                tool_name: format!("mcp/sampling/createMessage/{server_name}"),
+                args,
+                response: ApprovalResponder::new(tx),
+            })
+            .is_err()
+        {
+            tracing::warn!(server = %server_name, "approval channel closed; denying sampling");
+            return false;
+        }
+        // Bounded wait; a hung approval handler must not block the MCP reader.
+        matches!(
+            tokio::time::timeout(Duration::from_secs(300), rx).await,
+            Ok(Ok(
+                ApprovalResponse::Approved | ApprovalResponse::AlwaysApprove
+            ))
+        )
+    }
+
+    /// Run the model completion for an approved sampling request.
+    async fn run_sampling_completion(
+        ctx: &SamplingContext,
+        request: &serde_json::Value,
+        server_name: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let params = request
+            .get("params")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let messages = sampling_messages(&params);
+        let adapter = crate::adapters::sampling_adapter(&ctx.config);
+        let mut rx = adapter.stream(&messages, &[]).await?;
+        let mut text = String::new();
+        while let Some(event) = rx.recv().await {
+            match event {
+                StreamEvent::Text(t) => text.push_str(&t),
+                StreamEvent::Error(e) => {
+                    tracing::warn!(server = %server_name, error = %e, "sampling stream error");
+                }
+                _ => {}
+            }
+        }
+        if text.is_empty() {
+            anyhow::bail!("sampling completion produced no text");
+        }
+        Ok(serde_json::json!([{ "type": "text", "text": text }]))
+    }
+
+    /// Build an MCP JSON-RPC error response for a sampling request.
+    fn sampling_error(id: &serde_json::Value, message: &str) -> serde_json::Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": -32000, "message": message }
+        })
     }
 
     /// Write a JSON-RPC response line to the server's stdin.
@@ -1594,6 +1805,204 @@ mod tests {
         assert!(
             McpClient::handle_server_request("foo/bar", &request, "test").is_none(),
             "unknown methods should return None"
+        );
+    }
+
+    #[test]
+    fn test_sampling_messages_translates_roles_and_text() {
+        let params = serde_json::json!({
+            "messages": [
+                { "role": "user", "content": "hello" },
+                { "role": "assistant", "content": "hi" }
+            ]
+        });
+        let msgs = sampling_messages(&params);
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, crate::shared::Role::User);
+        assert_eq!(msgs[0].content, "hello");
+        assert_eq!(msgs[1].role, crate::shared::Role::Assistant);
+        assert_eq!(msgs[1].content, "hi");
+    }
+
+    #[test]
+    fn test_sampling_messages_joins_content_blocks() {
+        let params = serde_json::json!({
+            "messages": [
+                { "role": "user", "content": [
+                    { "type": "text", "text": "part1" },
+                    { "type": "text", "text": "part2" },
+                    { "type": "image", "source": { "type": "base64" } }
+                ]}
+            ]
+        });
+        let msgs = sampling_messages(&params);
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].content.contains("part1"), "{}", msgs[0].content);
+        assert!(msgs[0].content.contains("part2"), "{}", msgs[0].content);
+        assert!(msgs[0].content.contains("[image"), "{}", msgs[0].content);
+    }
+
+    #[test]
+    fn test_sampling_messages_ignores_unknown_roles() {
+        let params = serde_json::json!({
+            "messages": [
+                { "role": "system", "content": "sys" },
+                { "role": "user", "content": "ok" }
+            ]
+        });
+        let msgs = sampling_messages(&params);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, crate::shared::Role::User);
+    }
+
+    #[test]
+    fn test_sampling_messages_empty_params_yields_empty() {
+        let msgs = sampling_messages(&serde_json::json!({}));
+        assert!(msgs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_sampling_denied_before_context_returns_error() {
+        let sampling = Arc::new(tokio::sync::RwLock::new(None));
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "sampling/createMessage",
+            "params": { "messages": [{ "role": "user", "content": "hi" }] }
+        });
+        let response = McpClient::handle_sampling_request(&sampling, &request, "test").await;
+        assert!(
+            response.get("error").is_some(),
+            "expected an error before sampling context installed, got {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sampling_auto_approved_when_flag_set() {
+        // allow_sampling_unattended must skip the approval bus and attempt the
+        // completion directly (which then fails without a live provider). We
+        // assert it did NOT hit the approval bus (no ApprovalRequest observed)
+        // and returned a completion error rather than a denial error.
+        let (approval_tx, mut approval_rx) =
+            tokio::sync::mpsc::unbounded_channel::<ApprovalRequest>();
+        let mut cfg = crate::shared::Config::default();
+        cfg.tools.allow_sampling_unattended = true;
+        let ctx = SamplingContext {
+            approval_tx,
+            config: std::sync::Arc::new(cfg),
+        };
+        let sampling = Arc::new(tokio::sync::RwLock::new(Some(ctx)));
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "sampling/createMessage",
+            "params": { "messages": [{ "role": "user", "content": "hi" }] }
+        });
+        let response = McpClient::handle_sampling_request(&sampling, &request, "test").await;
+        // No ApprovalRequest must be sent on the bus when auto-approving.
+        assert!(
+            approval_rx.try_recv().is_err(),
+            "allow_sampling_unattended must not route through the approval bus"
+        );
+        let err_msg = response
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("");
+        assert!(
+            !err_msg.contains("denied"),
+            "unexpected denial message: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sampling_routes_through_approval_bus_and_denies() {
+        // The approval-gated path MUST send an ApprovalRequest on the shared
+        // bus and return an MCP error when it is denied (the headless
+        // non-interactive handler denies everything, so this is the default).
+        let (approval_tx, mut approval_rx) =
+            tokio::sync::mpsc::unbounded_channel::<ApprovalRequest>();
+        let cfg = crate::shared::Config::default();
+        let ctx = SamplingContext {
+            approval_tx,
+            config: std::sync::Arc::new(cfg),
+        };
+        let sampling = Arc::new(tokio::sync::RwLock::new(Some(ctx)));
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "sampling/createMessage",
+            "params": { "messages": [{ "role": "user", "content": "hi" }] }
+        });
+
+        let handle = tokio::spawn(async move {
+            McpClient::handle_sampling_request(&sampling, &request, "test").await
+        });
+        // An approval request must arrive on the bus.
+        let approval = tokio::time::timeout(std::time::Duration::from_secs(5), approval_rx.recv())
+            .await
+            .expect("timeout waiting for approval request")
+            .expect("approval channel should not close");
+        assert!(
+            approval.tool_name.contains("sampling"),
+            "expected sampling tool name, got {}",
+            approval.tool_name
+        );
+        // Deny it (as a headless handler would).
+        approval
+            .response
+            .send(ApprovalResponse::DeniedWithReason("test deny".into()))
+            .unwrap();
+
+        let response = handle.await.expect("handler task panicked");
+        assert!(
+            response.get("error").is_some(),
+            "denied sampling must return an MCP error, got {response}"
+        );
+        let msg = response["error"]["message"].as_str().unwrap_or("");
+        assert!(msg.contains("denied"), "got: {msg}");
+        // The request id must be preserved.
+        assert_eq!(response["id"], 9);
+    }
+
+    #[tokio::test]
+    async fn test_sampling_approved_but_completion_fails_returns_error() {
+        // When approved, the handler attempts a live completion (no provider in
+        // tests), which fails and returns an MCP error — proving the bus can
+        // approve without the handler bypassing to a hardcoded success.
+        let (approval_tx, mut approval_rx) =
+            tokio::sync::mpsc::unbounded_channel::<ApprovalRequest>();
+        let cfg = crate::shared::Config::default();
+        let ctx = SamplingContext {
+            approval_tx,
+            config: std::sync::Arc::new(cfg),
+        };
+        let sampling = Arc::new(tokio::sync::RwLock::new(Some(ctx)));
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "sampling/createMessage",
+            "params": { "messages": [{ "role": "user", "content": "hi" }] }
+        });
+
+        let handle = tokio::spawn(async move {
+            McpClient::handle_sampling_request(&sampling, &request, "test").await
+        });
+        let approval = tokio::time::timeout(std::time::Duration::from_secs(5), approval_rx.recv())
+            .await
+            .expect("timeout waiting for approval request")
+            .expect("approval channel should not close");
+        approval.response.send(ApprovalResponse::Approved).unwrap();
+
+        let response = handle.await.expect("handler task panicked");
+        assert!(
+            response.get("error").is_some(),
+            "failed completion must return an MCP error, got {response}"
+        );
+        let msg = response["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            !msg.contains("denied"),
+            "approved sampling must not report denial: {msg}"
         );
     }
 }

@@ -651,14 +651,20 @@ impl PromptBuilder {
             "[duplicate tool result omitted — see previous identical result]";
         const TOOL_RESULT_UNCHANGED_MARKER: &str =
             "[unchanged from previous identical tool result]";
-        let mut prev_tool_content: Option<(String, usize)> = None;
+        type DedupKey = (String, Option<String>, Option<String>);
+        let mut prev_tool: Option<(DedupKey, usize)> = None;
         for msg in messages.iter_mut() {
             if !matches!(msg.role, Role::Tool) {
-                prev_tool_content = None;
+                prev_tool = None;
                 continue;
             }
-            if let Some((prev, seen)) = prev_tool_content.as_ref() {
-                if prev == &msg.content {
+            let key = (
+                msg.content.clone(),
+                msg.tool_name.clone(),
+                msg.tool_call_id.clone(),
+            );
+            if let Some((prev, seen)) = prev_tool.as_ref() {
+                if prev == &key {
                     // Third and subsequent identical tool results in a row
                     // are collapsed to an "unchanged" marker. The first is
                     // kept full, the second is deduplicated to the existing
@@ -669,11 +675,11 @@ impl PromptBuilder {
                     } else {
                         TOOL_RESULT_DEDUP_MARKER.to_string()
                     };
-                    prev_tool_content = Some((prev.clone(), *seen + 1));
+                    prev_tool = Some((key, *seen + 1));
                     continue;
                 }
             }
-            prev_tool_content = Some((msg.content.clone(), 1));
+            prev_tool = Some((key, 1));
         }
     }
 
@@ -754,6 +760,9 @@ impl PromptBuilder {
     }
 
     fn truncate_to_budget(messages: &[Message], budget: usize) -> Vec<Message> {
+        if messages.is_empty() {
+            return messages.to_vec();
+        }
         let keep_count = (budget * 4) / 20;
         let history_to_keep = std::cmp::min(keep_count, messages.len() - 1);
 
@@ -817,6 +826,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_dedup_keys_on_tool_name_and_call_id() {
+        let mk = |tool_name: &str, tool_call_id: &str, content: &str| Message {
+            role: Role::Tool,
+            content: content.to_string(),
+            content_parts: None,
+            thinking: None,
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.to_string()),
+            tool_name: Some(tool_name.to_string()),
+            token_count: None,
+        };
+        // Same tool, same content, different call IDs: must NOT be deduplicated.
+        let mut msgs = vec![
+            mk("read_file", "call_1", "same"),
+            mk("read_file", "call_2", "same"),
+        ];
+        PromptBuilder::dedup_adjacent_tool_results(&mut msgs);
+        assert_eq!(
+            msgs[1].content, "same",
+            "different call ids must survive dedup"
+        );
+
+        // Different tools, same content: must NOT be deduplicated.
+        let mut msgs = vec![
+            mk("read_file", "call_1", "same"),
+            mk("grep", "call_2", "same"),
+        ];
+        PromptBuilder::dedup_adjacent_tool_results(&mut msgs);
+        assert_eq!(
+            msgs[1].content, "same",
+            "different tools must survive dedup"
+        );
+
+        // Same tool, same call id, same content: still deduplicated.
+        let mut msgs = vec![
+            mk("read_file", "call_1", "same"),
+            mk("read_file", "call_1", "same"),
+        ];
+        PromptBuilder::dedup_adjacent_tool_results(&mut msgs);
+        assert_eq!(
+            msgs[1].content, "[duplicate tool result omitted — see previous identical result]",
+            "identical tool+call_id+content still deduplicated"
+        );
+    }
+
+    #[test]
     fn test_build_stem_invariant() {
         let builder = PromptBuilder::new();
         let stem1 = builder.build_stem("glm-5.1:cloud", true);
@@ -838,6 +893,25 @@ mod tests {
         let builder = PromptBuilder::new();
         let prob = builder.cache_hit_probability("glm-5.1:cloud", true);
         assert!((0.0..=1.0).contains(&prob));
+    }
+
+    #[test]
+    fn test_truncate_to_budget_empty_context_no_panic() {
+        let empty: Vec<Message> = Vec::new();
+        assert!(PromptBuilder::truncate_to_budget(&empty, 0).is_empty());
+
+        let single = vec![Message {
+            role: Role::System,
+            content: "sys".to_string(),
+            content_parts: None,
+            thinking: None,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            token_count: None,
+        }];
+        let out = PromptBuilder::truncate_to_budget(&single, 0);
+        assert_eq!(out.len(), 1, "single system message survives zero budget");
     }
 
     #[test]
@@ -1195,12 +1269,14 @@ mod tests {
                 role: Role::Tool,
                 content: "Cargo.lock already exists at /tmp/foo.lock".into(),
                 tool_call_id: Some("call_1".into()),
+                tool_name: Some("bash".into()),
                 ..Default::default()
             },
             Message {
                 role: Role::Tool,
                 content: "Cargo.lock already exists at /tmp/foo.lock".into(),
-                tool_call_id: Some("call_2".into()),
+                tool_call_id: Some("call_1".into()),
+                tool_name: Some("bash".into()),
                 ..Default::default()
             },
         ];
@@ -1266,12 +1342,14 @@ mod tests {
                 role: Role::Tool,
                 content: "identical".into(),
                 tool_call_id: Some("c1".into()),
+                tool_name: Some("bash".into()),
                 ..Default::default()
             },
             Message {
                 role: Role::Tool,
                 content: "identical".into(),
-                tool_call_id: Some("c2".into()),
+                tool_call_id: Some("c1".into()),
+                tool_name: Some("bash".into()),
                 ..Default::default()
             },
             Message {
@@ -1286,12 +1364,14 @@ mod tests {
                 role: Role::Tool,
                 content: "identical".into(),
                 tool_call_id: Some("c3".into()),
+                tool_name: Some("bash".into()),
                 ..Default::default()
             },
             Message {
                 role: Role::Tool,
                 content: "identical".into(),
-                tool_call_id: Some("c4".into()),
+                tool_call_id: Some("c3".into()),
+                tool_name: Some("bash".into()),
                 ..Default::default()
             },
         ];

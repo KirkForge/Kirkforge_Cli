@@ -149,9 +149,14 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
                 handles.push(tokio::spawn(async move {
                     let _permit = sem.acquire().await;
                     tracing::info!(job_id = %job.id, "running scheduled job");
-                    {
-                        let store_guard = store.lock().await;
-                        match run_job(&mut job, &store_guard, &config).await {
+                    // Clone the store under the lock, then drop the guard before
+                    // awaiting run_job. JobStore is a per-job file handle with no
+                    // shared mutable state, so releasing the lock here is safe.
+                    let store_guard = {
+                        let store = store.lock().await;
+                        store.clone()
+                    };
+                    match run_job(&mut job, &store_guard, &config).await {
                             Ok(run) => {
                                 tracing::info!(
                                     job_id = %job.id,
@@ -162,7 +167,6 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
                             Err(e) => {
                                 tracing::error!(job_id = %job.id, error = %e, "scheduled job failed to run");
                             }
-                        }
                     }
                     // Recompute next run after execution. For one-shot and
                     // restart jobs, disable after the first execution so they

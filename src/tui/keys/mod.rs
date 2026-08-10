@@ -6,7 +6,7 @@
 //! The handler takes a single `HandleInputContext` instead of a long parameter
 //! list so the orchestrator can pass all channels in one struct.  The
 //! signature is `async fn handle_input_key(key, state, ctx) -> anyhow::Result<()>`.
-//! The orchestrator calls us only when `state.pending_approval.is_none()`.
+//! The orchestrator calls us only when `state.approval.pending_approval.is_none()`.
 
 use crate::session::conversation::ConversationLog;
 use crate::session::executor::TurnEvent;
@@ -76,7 +76,7 @@ async fn handle_doom_action(
     ctx: &HandleInputContext<'_>,
 ) {
     use crate::tui::widgets::doom_banner::DoomLoopAction;
-    if let Some(ref mut dl) = state.doom_loop {
+    if let Some(ref mut dl) = state.doom.doom_loop {
         dl.acknowledged = true;
     }
     state.mark_dirty();
@@ -89,10 +89,13 @@ async fn handle_doom_action(
                 ctx.cancel_tx.send(()),
                 "doom-loop break: cancel channel receiver dropped"
             );
-            state.messages.push_back(ConversationEntry::new(
-                "system",
-                "⏹ Break: cancelled in-flight generation to escape the doom loop.",
-            ));
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new(
+                    "system",
+                    "⏹ Break: cancelled in-flight generation to escape the doom loop.",
+                ));
         }
         DoomLoopAction::Plan => {
             // Switch into plan mode. Plan mode disables all mutating
@@ -103,7 +106,7 @@ async fn handle_doom_action(
                 ctx.plan_tx.send(true),
                 "doom-loop plan: plan channel receiver dropped"
             );
-            state.messages.push_back(ConversationEntry::new(
+            state.conversation.messages.push_back(ConversationEntry::new(
                 "system",
                 "📐 Plan: switched to plan mode to break the doom loop. Type /implement when ready to exit plan mode.",
             ));
@@ -114,7 +117,7 @@ async fn handle_doom_action(
             // banner if the model hasn't broken out of the loop
             // yet. That's the point — we let the user opt out of
             // the warning without losing it.
-            state.messages.push_back(ConversationEntry::new(
+            state.conversation.messages.push_back(ConversationEntry::new(
                 "system",
                 "▶️ Continue: dismissed doom-loop warning. The model will keep trying; the banner will re-appear if the loop continues.",
             ));
@@ -127,26 +130,26 @@ async fn handle_doom_loop_keys(
     state: &mut AppState,
     ctx: &HandleInputContext<'_>,
 ) -> Option<anyhow::Result<()>> {
-    let dl = state.doom_loop.as_ref()?;
+    let dl = state.doom.doom_loop.as_ref()?;
     if dl.count < crate::session::executor::DoomLoopTracker::THRESHOLD || dl.acknowledged {
         return None;
     }
     use crate::tui::widgets::doom_banner::DoomLoopAction;
     match key.code {
         KeyCode::Left => {
-            let cur = state.doom_loop_selection.index;
+            let cur = state.doom.doom_loop_selection.index;
             let len = DoomLoopAction::ALL.len();
-            state.doom_loop_selection.index = (cur + len - 1) % len;
+            state.doom.doom_loop_selection.index = (cur + len - 1) % len;
             state.mark_dirty();
         }
         KeyCode::Right => {
-            let cur = state.doom_loop_selection.index;
+            let cur = state.doom.doom_loop_selection.index;
             let len = DoomLoopAction::ALL.len();
-            state.doom_loop_selection.index = (cur + 1) % len;
+            state.doom.doom_loop_selection.index = (cur + 1) % len;
             state.mark_dirty();
         }
         KeyCode::Enter => {
-            let action = state.doom_loop_selection.selected();
+            let action = state.doom.doom_loop_selection.selected();
             handle_doom_action(action, state, ctx).await;
         }
         KeyCode::Esc => {
@@ -158,7 +161,7 @@ async fn handle_doom_loop_keys(
 }
 
 fn handle_slash_menu_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow::Result<()>> {
-    let menu = state.slash_menu.as_mut()?;
+    let menu = state.ui.slash_menu.as_mut()?;
     match key.code {
         KeyCode::Up => {
             if menu.selected > 0 {
@@ -175,15 +178,15 @@ fn handle_slash_menu_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
         KeyCode::Enter => {
             let commands = complete_command(&menu.query);
             if menu.selected < commands.len() {
-                state.input = commands[menu.selected].to_string();
-                state.cursor_position = state.input.chars().count();
+                state.conversation.input = commands[menu.selected].to_string();
+                state.conversation.cursor_position = state.conversation.input.chars().count();
             }
-            state.slash_menu = None;
+            state.ui.slash_menu = None;
             state.mark_dirty();
             Some(Ok(()))
         }
         KeyCode::Esc => {
-            state.slash_menu = None;
+            state.ui.slash_menu = None;
             state.mark_dirty();
             Some(Ok(()))
         }
@@ -191,7 +194,7 @@ fn handle_slash_menu_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
             menu.query.pop();
             menu.selected = 0;
             if menu.query.is_empty() {
-                state.slash_menu = None;
+                state.ui.slash_menu = None;
             }
             state.mark_dirty();
             Some(Ok(()))
@@ -207,7 +210,7 @@ fn handle_slash_menu_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
 }
 
 fn handle_file_completer_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow::Result<()>> {
-    let completer = state.file_completer.as_mut()?;
+    let completer = state.ui.file_completer.as_mut()?;
     match key.code {
         KeyCode::Up => {
             if completer.selected > 0 {
@@ -231,9 +234,9 @@ fn handle_file_completer_keys(key: KeyEvent, state: &mut AppState) -> Option<any
                 if path.is_dir() {
                     if completer.pick_directory {
                         if std::env::set_current_dir(&path).is_ok() {
-                            state.cwd = path.clone();
+                            state.ui.cwd = path.clone();
                         }
-                        state.file_completer = None;
+                        state.ui.file_completer = None;
                     } else {
                         let mut new_entries = Vec::new();
                         if let Ok(rd) = std::fs::read_dir(&path) {
@@ -251,16 +254,16 @@ fn handle_file_completer_keys(key: KeyEvent, state: &mut AppState) -> Option<any
                     }
                 } else if !completer.pick_directory {
                     let rel = format!("@{}", completer.dir.join(&entry).display());
-                    state.input = rel;
-                    state.cursor_position = state.input.chars().count();
-                    state.file_completer = None;
+                    state.conversation.input = rel;
+                    state.conversation.cursor_position = state.conversation.input.chars().count();
+                    state.ui.file_completer = None;
                 }
             }
             state.mark_dirty();
             Some(Ok(()))
         }
         KeyCode::Esc => {
-            state.file_completer = None;
+            state.ui.file_completer = None;
             state.mark_dirty();
             Some(Ok(()))
         }
@@ -324,7 +327,7 @@ async fn handle_session_picker_keys(
     state: &mut AppState,
     ctx: &HandleInputContext<'_>,
 ) -> Option<anyhow::Result<()>> {
-    let mut picker = state.session_picker.take()?;
+    let mut picker = state.session.session_picker.take()?;
     let consumed = picker.handle_key(key);
     if consumed && picker.is_confirmed() {
         if let Some(path) = picker.selected_path() {
@@ -334,14 +337,18 @@ async fn handle_session_picker_keys(
                         crate::tui::commands::resume_conversation_log(log, state, ctx.resume_tx)
                             .await;
                     state
+                        .conversation
                         .messages
                         .push_back(ConversationEntry::new("system", msg));
                 }
                 Err(e) => {
-                    state.messages.push_back(ConversationEntry::new(
-                        "system",
-                        format!("Error resuming session: {e}"),
-                    ));
+                    state
+                        .conversation
+                        .messages
+                        .push_back(ConversationEntry::new(
+                            "system",
+                            format!("Error resuming session: {e}"),
+                        ));
                 }
             }
         }
@@ -351,7 +358,7 @@ async fn handle_session_picker_keys(
         return Some(Ok(()));
     }
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        state.should_exit = true;
+        state.session.should_exit = true;
         return Some(Ok(()));
     }
     None
@@ -370,7 +377,7 @@ fn handle_search_mode_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow
         }
         KeyCode::Enter => {
             let matches = crate::tui::search::compute_matches(
-                state.messages.make_contiguous(),
+                state.conversation.messages.make_contiguous(),
                 &state.search.query,
             );
             state.search.matches = matches;
@@ -379,10 +386,10 @@ fn handle_search_mode_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow
                 state.search.mode = false;
                 if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
                     state,
-                    state.last_content_width,
+                    state.conversation.last_content_width,
                 ) {
-                    state.auto_scroll = false;
-                    state.scroll_offset = offset;
+                    state.conversation.auto_scroll = false;
+                    state.conversation.scroll_offset = offset;
                 }
             }
         }
@@ -397,8 +404,8 @@ fn handle_search_mode_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow
                 state.search.query.clear();
                 state.search.matches.clear();
                 state.search.match_idx = 0;
-                state.input.clear();
-                state.cursor_position = 0;
+                state.conversation.input.clear();
+                state.conversation.cursor_position = 0;
             }
         }
         _ => return None,
@@ -419,10 +426,10 @@ fn handle_search_nav_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
                 state.search.match_idx = idx;
                 if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
                     state,
-                    state.last_content_width,
+                    state.conversation.last_content_width,
                 ) {
-                    state.auto_scroll = false;
-                    state.scroll_offset = offset;
+                    state.conversation.auto_scroll = false;
+                    state.conversation.scroll_offset = offset;
                 }
             }
         }
@@ -434,10 +441,10 @@ fn handle_search_nav_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
                 state.search.match_idx = idx;
                 if let Some(offset) = crate::tui::widgets::chat::scroll_offset_for_search_match(
                     state,
-                    state.last_content_width,
+                    state.conversation.last_content_width,
                 ) {
-                    state.auto_scroll = false;
-                    state.scroll_offset = offset;
+                    state.conversation.auto_scroll = false;
+                    state.conversation.scroll_offset = offset;
                 }
             }
         }
@@ -456,29 +463,32 @@ async fn handle_tab_enter(
     state: &mut AppState,
     ctx: &HandleInputContext<'_>,
 ) -> anyhow::Result<()> {
-    let sel = match state.tab_list_state {
+    let sel = match state.ui.tab_list_state {
         Some(i) => i,
         None => {
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", "No row selected."));
             return Ok(());
         }
     };
 
-    match state.active_tab {
+    match state.ui.active_tab {
         ActiveTab::Models => {
-            if let Some(ref info) = state.model_info {
+            if let Some(ref info) = state.provider.model_info {
                 let msg = format!(
                     "Model: {} (context: {} tokens)",
                     info.name,
                     crate::tui::rendering::format_token_count(info.max_context_tokens)
                 );
                 state
+                    .conversation
                     .messages
                     .push_back(ConversationEntry::new("system", msg));
             } else {
                 state
+                    .conversation
                     .messages
                     .push_back(ConversationEntry::new("system", "No model connected."));
             }
@@ -486,7 +496,7 @@ async fn handle_tab_enter(
         }
         ActiveTab::Plugins => {
             let name = {
-                let config = crate::shared::read_shared_config(&state.config);
+                let config = crate::shared::read_shared_config(&state.services.config);
                 let names: Vec<String> = config.tools.plugin_sources.keys().cloned().collect();
                 // render_plugins has 2 header lines before data rows.
                 let idx = sel.saturating_sub(2);
@@ -494,6 +504,7 @@ async fn handle_tab_enter(
                     Some(n) => n.clone(),
                     None => {
                         state
+                            .conversation
                             .messages
                             .push_back(ConversationEntry::new("system", "No plugin at this row."));
                         return Ok(());
@@ -519,13 +530,14 @@ async fn handle_tab_enter(
         ActiveTab::Jobs => {
             let msg = crate::tui::commands::handle_jobs_command("", state).await;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", msg));
             state.mark_dirty();
         }
         ActiveTab::Settings => {
             let line = {
-                let config = crate::shared::read_shared_config(&state.config);
+                let config = crate::shared::read_shared_config(&state.services.config);
                 let lines = settings_keys_and_values(&config);
                 // render_settings has 2 header lines before data rows.
                 let idx = sel.saturating_sub(2);
@@ -535,6 +547,7 @@ async fn handle_tab_enter(
                 }
             };
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", line));
             state.mark_dirty();
@@ -609,7 +622,7 @@ pub(crate) async fn handle_input_key(
         return result;
     }
     if key.code != KeyCode::Tab {
-        state.completion_suggestions.clear();
+        state.conversation.completion_suggestions.clear();
     }
     match key.code {
         // ── F-key tab switching ───────────────────────────────────
@@ -619,16 +632,16 @@ pub(crate) async fn handle_input_key(
             let new_tab = ActiveTab::from_key_code(k).unwrap();
             // Reset list state when switching tabs so the highlight
             // doesn't carry over from a previous tab.
-            if new_tab != state.active_tab {
-                state.tab_list_state = if new_tab == ActiveTab::Chat {
+            if new_tab != state.ui.active_tab {
+                state.ui.tab_list_state = if new_tab == ActiveTab::Chat {
                     None
                 } else {
                     Some(0)
                 };
             }
-            state.active_tab = new_tab;
-            if new_tab == ActiveTab::Jobs && state.cached_jobs_output.is_none() {
-                state.jobs_dirty = true;
+            state.ui.active_tab = new_tab;
+            if new_tab == ActiveTab::Jobs && state.session.cached_jobs_output.is_none() {
+                state.session.jobs_dirty = true;
             }
             state.mark_dirty();
         }
@@ -644,6 +657,7 @@ pub(crate) async fn handle_input_key(
                 && (c == 'c' || c == 'C')
             {
                 let last = state
+                    .conversation
                     .messages
                     .iter()
                     .rev()
@@ -661,6 +675,7 @@ pub(crate) async fn handle_input_key(
                     Some(_) | None => "📋 No assistant message to copy".to_string(),
                 };
                 state
+                    .conversation
                     .messages
                     .push_back(ConversationEntry::new("system", line));
                 return Ok(());
@@ -676,6 +691,7 @@ pub(crate) async fn handle_input_key(
                 && (c == 'b' || c == 'B')
             {
                 let blocks: Vec<String> = state
+                    .conversation
                     .messages
                     .iter()
                     .rev()
@@ -688,9 +704,10 @@ pub(crate) async fn handle_input_key(
                     // Start at the most recent (last) block and cycle backward on
                     // repeated presses. `blocks` is in document order, so the last
                     // block is at blocks.len() - 1.
-                    let offset = state.code_block_copy_index % blocks.len();
+                    let offset = state.conversation.code_block_copy_index % blocks.len();
                     let idx = (blocks.len() - 1).wrapping_sub(offset);
-                    state.code_block_copy_index = (state.code_block_copy_index + 1) % blocks.len();
+                    state.conversation.code_block_copy_index =
+                        (state.conversation.code_block_copy_index + 1) % blocks.len();
                     let text = &blocks[idx];
                     match crate::tui::clipboard::copy_to_clipboard(text) {
                         Ok(n) => format!(
@@ -703,6 +720,7 @@ pub(crate) async fn handle_input_key(
                     }
                 };
                 state
+                    .conversation
                     .messages
                     .push_back(ConversationEntry::new("system", line));
                 return Ok(());
@@ -724,19 +742,22 @@ pub(crate) async fn handle_input_key(
                         // cancel in-flight generation. If nothing is running,
                         // treat it as a quit signal so the user can escape the
                         // app the same way every other terminal app works.
-                        if let Some(cancel) = state.persona_cancel.take() {
+                        if let Some(cancel) = state.generation.persona_cancel.take() {
                             cancel.store(true, std::sync::atomic::Ordering::SeqCst);
-                            state.persona_in_progress = None;
-                            state.is_generating = false;
-                            state.messages.push_back(ConversationEntry::new(
-                                "system",
-                                "⛔ Persona cancelled.".to_string(),
-                            ));
-                            state.input.clear();
-                            state.cursor_position = 0;
+                            state.generation.persona_in_progress = None;
+                            state.generation.is_generating = false;
+                            state
+                                .conversation
+                                .messages
+                                .push_back(ConversationEntry::new(
+                                    "system",
+                                    "⛔ Persona cancelled.".to_string(),
+                                ));
+                            state.conversation.input.clear();
+                            state.conversation.cursor_position = 0;
                             return Ok(());
                         }
-                        if state.is_generating {
+                        if state.generation.is_generating {
                             if ctx.cancel_tx.send(()).is_err() {
                                 // The executor driver is gone — the
                                 // session is ending or the TUI is
@@ -746,32 +767,33 @@ pub(crate) async fn handle_input_key(
                                 tracing::trace!(
                                     "cancel_tx receiver dropped on Ctrl+C; executor already gone"
                                 );
-                                state.should_exit = true;
+                                state.session.should_exit = true;
                                 return Ok(());
                             }
-                            state.is_generating = false;
-                            state.input.clear();
-                            state.cursor_position = 0;
+                            state.generation.is_generating = false;
+                            state.conversation.input.clear();
+                            state.conversation.cursor_position = 0;
                             return Ok(());
                         }
-                        state.should_exit = true;
+                        state.session.should_exit = true;
                         return Ok(());
                     }
                     'w' => {
                         // Ctrl+W: delete word backward within the current line.
                         let byte_pos = state.cursor_byte();
-                        let (line_start, line_end) = current_line_bounds(&state.input, byte_pos);
-                        let line = &state.input[line_start..line_end];
+                        let (line_start, line_end) =
+                            current_line_bounds(&state.conversation.input, byte_pos);
+                        let line = &state.conversation.input[line_start..line_end];
                         let rel_cursor = byte_pos - line_start;
                         let (new_line, new_rel_cursor) = delete_word_backward(line, rel_cursor);
-                        state.input = format!(
+                        state.conversation.input = format!(
                             "{}{}{}",
-                            &state.input[..line_start],
+                            &state.conversation.input[..line_start],
                             new_line,
-                            &state.input[line_end..]
+                            &state.conversation.input[line_end..]
                         );
-                        state.cursor_position =
-                            state.input[..line_start].chars().count() + new_rel_cursor;
+                        state.conversation.cursor_position =
+                            state.conversation.input[..line_start].chars().count() + new_rel_cursor;
                     }
                     'u' => {
                         // Ctrl+U: clear from the start of the current line to
@@ -779,10 +801,15 @@ pub(crate) async fn handle_input_key(
                         // whole line; in a multi-line input it clears only the
                         // current line's prefix.
                         let byte_pos = state.cursor_byte();
-                        let (line_start, _) = current_line_bounds(&state.input, byte_pos);
-                        state.input =
-                            format!("{}{}", &state.input[..line_start], &state.input[byte_pos..]);
-                        state.cursor_position = state.input[..line_start].chars().count();
+                        let (line_start, _) =
+                            current_line_bounds(&state.conversation.input, byte_pos);
+                        state.conversation.input = format!(
+                            "{}{}",
+                            &state.conversation.input[..line_start],
+                            &state.conversation.input[byte_pos..]
+                        );
+                        state.conversation.cursor_position =
+                            state.conversation.input[..line_start].chars().count();
                     }
                     'l' => {
                         // Ctrl+L: clear screen (terminal handles this)
@@ -793,18 +820,18 @@ pub(crate) async fn handle_input_key(
                         // they render the full output (the legacy flooding
                         // behavior). Per-entry expansion in `expanded_tools`
                         // overrides this global flag.
-                        state.tool_collapsed = !state.tool_collapsed;
-                        if state.tool_collapsed {
+                        state.conversation.tool_collapsed = !state.conversation.tool_collapsed;
+                        if state.conversation.tool_collapsed {
                             // Re-collapse: forget any per-entry expansions so
                             // the user gets a clean collapsed view.
-                            state.expanded_tools.clear();
+                            state.conversation.expanded_tools.clear();
                         }
                     }
                     'o' => {
                         // Ctrl+O: open directory picker (file completer in
                         // directory-pick mode). Only directories confirm;
                         // Enter on a directory chdirs and closes the picker.
-                        let cwd = state.cwd.clone();
+                        let cwd = state.ui.cwd.clone();
                         let mut entries = Vec::new();
                         if let Ok(rd) = std::fs::read_dir(&cwd) {
                             for de in rd.flatten() {
@@ -814,7 +841,7 @@ pub(crate) async fn handle_input_key(
                             }
                         }
                         entries.sort();
-                        state.file_completer = Some(crate::tui::app::FileCompleter {
+                        state.ui.file_completer = Some(crate::tui::app::FileCompleter {
                             dir: cwd,
                             entries,
                             selected: 0,
@@ -826,21 +853,27 @@ pub(crate) async fn handle_input_key(
                 }
             } else {
                 let byte_pos = state.cursor_byte();
-                state.input.insert(byte_pos, c);
-                state.cursor_position += 1;
+                state.conversation.input.insert(byte_pos, c);
+                state.conversation.cursor_position += 1;
                 // ── Slash menu: open when `/` is the first character ──
-                if c == '/' && state.input.starts_with('/') && state.input.chars().count() == 1 {
-                    state.slash_menu = Some(crate::tui::app::SlashMenu {
+                if c == '/'
+                    && state.conversation.input.starts_with('/')
+                    && state.conversation.input.chars().count() == 1
+                {
+                    state.ui.slash_menu = Some(crate::tui::app::SlashMenu {
                         query: String::new(),
                         selected: 0,
                     });
-                } else if let Some(ref mut menu) = state.slash_menu {
+                } else if let Some(ref mut menu) = state.ui.slash_menu {
                     // Append to the filter query while the popup is open.
                     menu.query.push(c);
                     menu.selected = 0;
                 }
                 // ── File completer: open when `@` is typed ──
-                if c == '@' && state.input.starts_with('@') && state.input.chars().count() == 1 {
+                if c == '@'
+                    && state.conversation.input.starts_with('@')
+                    && state.conversation.input.chars().count() == 1
+                {
                     let cwd = std::env::current_dir().unwrap_or_default();
                     let mut entries = Vec::new();
                     if let Ok(rd) = std::fs::read_dir(&cwd) {
@@ -851,14 +884,14 @@ pub(crate) async fn handle_input_key(
                         }
                     }
                     entries.sort();
-                    state.file_completer = Some(crate::tui::app::FileCompleter {
+                    state.ui.file_completer = Some(crate::tui::app::FileCompleter {
                         dir: cwd,
                         entries,
                         selected: 0,
                         query: String::new(),
                         pick_directory: false,
                     });
-                } else if let Some(ref mut completer) = state.file_completer {
+                } else if let Some(ref mut completer) = state.ui.file_completer {
                     if c != '/' {
                         completer.query.push(c);
                         completer.selected = 0;
@@ -881,78 +914,83 @@ pub(crate) async fn handle_input_key(
             // Tab on an empty input toggles expand/collapse on the most
             // recent message. Tool entries use `expanded_tools`; all other
             // messages use `collapsed_messages`.
-            if state.input.is_empty() {
-                if let Some(last_idx) = state.messages.len().checked_sub(1) {
-                    if state.messages[last_idx].role == "tool"
-                        && state.messages[last_idx].tool_output.is_some()
+            if state.conversation.input.is_empty() {
+                if let Some(last_idx) = state.conversation.messages.len().checked_sub(1) {
+                    if state.conversation.messages[last_idx].role == "tool"
+                        && state.conversation.messages[last_idx].tool_output.is_some()
                     {
-                        if state.expanded_tools.contains(&last_idx) {
-                            state.expanded_tools.remove(&last_idx);
+                        if state.conversation.expanded_tools.contains(&last_idx) {
+                            state.conversation.expanded_tools.remove(&last_idx);
                         } else {
-                            state.expanded_tools.insert(last_idx);
+                            state.conversation.expanded_tools.insert(last_idx);
                         }
-                    } else if state.collapsed_messages.contains(&last_idx) {
-                        state.collapsed_messages.remove(&last_idx);
+                    } else if state.conversation.collapsed_messages.contains(&last_idx) {
+                        state.conversation.collapsed_messages.remove(&last_idx);
                     } else {
-                        state.collapsed_messages.insert(last_idx);
+                        state.conversation.collapsed_messages.insert(last_idx);
                     }
                     return Ok(());
                 }
             }
         }
         KeyCode::Backspace => {
-            if state.cursor_position > 0 {
+            if state.conversation.cursor_position > 0 {
                 // Move back one char in char-index terms, then find the byte
                 // offset of the char we want to remove.
-                state.cursor_position -= 1;
+                state.conversation.cursor_position -= 1;
                 let remove_byte = state.cursor_byte();
-                state.input.remove(remove_byte);
+                state.conversation.input.remove(remove_byte);
             }
         }
         KeyCode::Delete => {
-            let char_count = state.input.chars().count();
-            if state.cursor_position < char_count {
+            let char_count = state.conversation.input.chars().count();
+            if state.conversation.cursor_position < char_count {
                 let byte_pos = state.cursor_byte();
-                state.input.remove(byte_pos);
+                state.conversation.input.remove(byte_pos);
             }
         }
         KeyCode::Left => {
             let (line, col) = state.cursor_line_col();
             if col > 0 {
-                state.cursor_position -= 1;
+                state.conversation.cursor_position -= 1;
             } else if line > 0 {
-                let lines: Vec<&str> = state.input.split('\n').collect();
+                let lines: Vec<&str> = state.conversation.input.split('\n').collect();
                 let prev_len = lines[line - 1].chars().count();
-                state.cursor_position = char_index_for_line_col(&state.input, line - 1, prev_len);
+                state.conversation.cursor_position =
+                    char_index_for_line_col(&state.conversation.input, line - 1, prev_len);
             }
         }
         KeyCode::Right => {
             let (line, col) = state.cursor_line_col();
-            let lines: Vec<&str> = state.input.split('\n').collect();
+            let lines: Vec<&str> = state.conversation.input.split('\n').collect();
             let line_len = lines[line].chars().count();
             if col < line_len {
-                state.cursor_position += 1;
+                state.conversation.cursor_position += 1;
             } else if line + 1 < lines.len() {
-                state.cursor_position = char_index_for_line_col(&state.input, line + 1, 0);
+                state.conversation.cursor_position =
+                    char_index_for_line_col(&state.conversation.input, line + 1, 0);
             }
         }
         KeyCode::Home => {
             let (line, _) = state.cursor_line_col();
-            state.cursor_position = char_index_for_line_col(&state.input, line, 0);
+            state.conversation.cursor_position =
+                char_index_for_line_col(&state.conversation.input, line, 0);
         }
         KeyCode::End => {
             let (line, _) = state.cursor_line_col();
             let line_len = state
+                .conversation
                 .input
                 .split('\n')
                 .nth(line)
                 .map(|l| l.chars().count())
                 .unwrap_or(0);
-            state.cursor_position = char_index_for_line_col(&state.input, line, line_len);
+            state.conversation.cursor_position =
+                char_index_for_line_col(&state.conversation.input, line, line_len);
         }
         KeyCode::Enter => {
             // On non-Chat tabs, Enter invokes a tab-specific action.
-            if state.active_tab != ActiveTab::Chat {
+            if state.ui.active_tab != ActiveTab::Chat {
                 handle_tab_enter(state, ctx).await?;
                 return Ok(());
             }
@@ -964,8 +1002,8 @@ pub(crate) async fn handle_input_key(
                 .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
             {
                 let byte_pos = state.cursor_byte();
-                state.input.insert(byte_pos, '\n');
-                state.cursor_position += 1;
+                state.conversation.input.insert(byte_pos, '\n');
+                state.conversation.cursor_position += 1;
                 return Ok(());
             }
             // v1.2-p14 — `!` bash passthrough. A line beginning with `!`
@@ -980,15 +1018,15 @@ pub(crate) async fn handle_input_key(
             // config flag was previously defined but not wired into this
             // branch — a security hole. We now route through the gate
             // when the flag is on, and only run directly when it's off.
-            if let Some(rest) = state.input.strip_prefix('!') {
+            if let Some(rest) = state.conversation.input.strip_prefix('!') {
                 let rest = rest.to_string();
-                state.input.clear();
-                state.cursor_position = 0;
+                state.conversation.input.clear();
+                state.conversation.cursor_position = 0;
 
-                let config = crate::shared::read_shared_config(&state.config).clone();
+                let config = crate::shared::read_shared_config(&state.services.config).clone();
                 match crate::tui::commands::bang_permission_action(&rest, &config) {
                     crate::shared::permission::PermissionAction::Deny => {
-                        state.messages.push_back(crate::tui::app::ConversationEntry::new(
+                        state.conversation.messages.push_back(crate::tui::app::ConversationEntry::new(
                             "system",
                             format!("🚫 Permission rule denied `!{rest}` — the command matches a deny rule."),
                         ));
@@ -1000,7 +1038,7 @@ pub(crate) async fn handle_input_key(
                         // The user hits Y to run, N/Esc to discard. We
                         // intentionally do NOT run the command here — that
                         // would defeat the gate.
-                        state.pending_bang =
+                        state.approval.pending_bang =
                             Some(crate::tui::app::PendingBangCommand { cmd: rest });
                         return Ok(());
                     }
@@ -1012,6 +1050,7 @@ pub(crate) async fn handle_input_key(
                         // Full output is everything.
                         let (summary, full) = split_bang_summary(&out);
                         state
+                            .conversation
                             .messages
                             .push_back(crate::tui::app::ConversationEntry::tool(summary, full));
                         return Ok(());
@@ -1025,28 +1064,28 @@ pub(crate) async fn handle_input_key(
             // gesture — a long tool output stays one line until the user
             // asks for it. We only intercept Enter when the input buffer
             // is empty so users can still send messages.
-            if state.input.is_empty() {
-                if let Some(last_idx) = state.messages.len().checked_sub(1) {
-                    if state.messages[last_idx].role == "tool"
-                        && state.messages[last_idx].tool_output.is_some()
+            if state.conversation.input.is_empty() {
+                if let Some(last_idx) = state.conversation.messages.len().checked_sub(1) {
+                    if state.conversation.messages[last_idx].role == "tool"
+                        && state.conversation.messages[last_idx].tool_output.is_some()
                     {
-                        if state.expanded_tools.contains(&last_idx) {
-                            state.expanded_tools.remove(&last_idx);
+                        if state.conversation.expanded_tools.contains(&last_idx) {
+                            state.conversation.expanded_tools.remove(&last_idx);
                         } else {
-                            state.expanded_tools.insert(last_idx);
+                            state.conversation.expanded_tools.insert(last_idx);
                         }
-                    } else if state.collapsed_messages.contains(&last_idx) {
-                        state.collapsed_messages.remove(&last_idx);
+                    } else if state.conversation.collapsed_messages.contains(&last_idx) {
+                        state.conversation.collapsed_messages.remove(&last_idx);
                     } else {
-                        state.collapsed_messages.insert(last_idx);
+                        state.conversation.collapsed_messages.insert(last_idx);
                     }
                     return Ok(());
                 }
             }
 
-            let input = state.input.clone();
-            state.input.clear();
-            state.cursor_position = 0;
+            let input = state.conversation.input.clone();
+            state.conversation.input.clear();
+            state.conversation.cursor_position = 0;
 
             if !input.is_empty() {
                 if input.starts_with('/') {
@@ -1068,35 +1107,44 @@ pub(crate) async fn handle_input_key(
                     };
                     let handled = dispatch_slash_command(cmd, args, state, &slash_ctx).await?;
                     if !handled {
-                        if let Some(skill) = state.skill_registry.get_by_trigger(cmd) {
+                        if let Some(skill) = state.services.skill_registry.get_by_trigger(cmd) {
                             if let Err(e) = crate::session::skills::Skill::tokenize_args(args) {
-                                state.messages.push_back(ConversationEntry::new(
-                                    "system",
-                                    format!("❌ Invalid arguments for {cmd}: {e}"),
-                                ));
+                                state
+                                    .conversation
+                                    .messages
+                                    .push_back(ConversationEntry::new(
+                                        "system",
+                                        format!("❌ Invalid arguments for {cmd}: {e}"),
+                                    ));
                                 return Ok(());
                             }
                             let rendered = skill.render_prompt(args);
-                            state.messages.push_back(ConversationEntry::new(
-                                "system",
-                                format!(
-                                    "🔧 Running skill: {} — {}",
-                                    skill.meta.name, skill.meta.description
-                                ),
-                            ));
-                            state.is_generating = true;
+                            state
+                                .conversation
+                                .messages
+                                .push_back(ConversationEntry::new(
+                                    "system",
+                                    format!(
+                                        "🔧 Running skill: {} — {}",
+                                        skill.meta.name, skill.meta.description
+                                    ),
+                                ));
+                            state.generation.is_generating = true;
                             if ctx.input_tx.send(rendered).is_err() {
                                 tracing::warn!(skill = %skill.meta.name, "input_tx receiver dropped while dispatching skill prompt");
-                                state.is_generating = false;
+                                state.generation.is_generating = false;
                                 return Ok(());
                             }
                         } else {
-                            state.messages.push_back(ConversationEntry::new(
-                                "system",
-                                format!(
+                            state
+                                .conversation
+                                .messages
+                                .push_back(ConversationEntry::new(
+                                    "system",
+                                    format!(
                                     "Unknown command: {cmd}\nType /help for available commands."
                                 ),
-                            ));
+                                ));
                         }
                     }
                 } else {
@@ -1114,14 +1162,16 @@ pub(crate) async fn handle_input_key(
                     let status_msg = crate::tui::commands::format_mention_status(&expansions);
 
                     state
+                        .conversation
                         .messages
                         .push_back(ConversationEntry::new("user", cleaned.clone()));
                     if !status_msg.is_empty() {
                         state
+                            .conversation
                             .messages
                             .push_back(ConversationEntry::new("system", status_msg));
                     }
-                    state.is_generating = true;
+                    state.generation.is_generating = true;
                     let prompt = if rendered_block.is_empty() {
                         cleaned
                     } else {
@@ -1136,7 +1186,7 @@ pub(crate) async fn handle_input_key(
                         tracing::warn!(
                             "input_tx receiver dropped while dispatching slash-command prompt"
                         );
-                        state.is_generating = false;
+                        state.generation.is_generating = false;
                         return Ok(());
                     }
                 }
@@ -1145,69 +1195,72 @@ pub(crate) async fn handle_input_key(
         KeyCode::Esc => {
             // On non-Chat tabs, Esc returns to Chat. Otherwise toggle
             // the thinking panel (the original behavior).
-            if state.active_tab != ActiveTab::Chat {
-                state.active_tab = ActiveTab::Chat;
-                state.tab_list_state = None;
+            if state.ui.active_tab != ActiveTab::Chat {
+                state.ui.active_tab = ActiveTab::Chat;
+                state.ui.tab_list_state = None;
             } else {
-                state.thinking_panel_visible = !state.thinking_panel_visible;
+                state.generation.thinking_panel_visible = !state.generation.thinking_panel_visible;
             }
             // Also dismiss any slash menu or file completer popup.
-            if state.slash_menu.is_some() {
-                state.slash_menu = None;
+            if state.ui.slash_menu.is_some() {
+                state.ui.slash_menu = None;
             }
-            if state.file_completer.is_some() {
-                state.file_completer = None;
+            if state.ui.file_completer.is_some() {
+                state.ui.file_completer = None;
             }
         }
         KeyCode::Up => {
             // On non-Chat tabs with list state, move selection up.
-            if state.active_tab != ActiveTab::Chat {
-                if let Some(idx) = state.tab_list_state {
-                    state.tab_list_state = Some(idx.saturating_sub(1));
+            if state.ui.active_tab != ActiveTab::Chat {
+                if let Some(idx) = state.ui.tab_list_state {
+                    state.ui.tab_list_state = Some(idx.saturating_sub(1));
                     state.mark_dirty();
                 }
-            } else if state.input.contains('\n') {
+            } else if state.conversation.input.contains('\n') {
                 let (line, col) = state.cursor_line_col();
                 if line > 0 {
-                    let lines: Vec<&str> = state.input.split('\n').collect();
+                    let lines: Vec<&str> = state.conversation.input.split('\n').collect();
                     let new_col = col.min(lines[line - 1].chars().count());
-                    state.cursor_position =
-                        char_index_for_line_col(&state.input, line - 1, new_col);
+                    state.conversation.cursor_position =
+                        char_index_for_line_col(&state.conversation.input, line - 1, new_col);
                 }
             } else {
                 // Scroll up (see older content)
-                state.auto_scroll = false;
-                state.scroll_offset = state.scroll_offset.saturating_sub(1);
+                state.conversation.auto_scroll = false;
+                state.conversation.scroll_offset =
+                    state.conversation.scroll_offset.saturating_sub(1);
             }
         }
         KeyCode::Down => {
             // On non-Chat tabs with list state, move selection down.
-            if state.active_tab != ActiveTab::Chat {
-                if let Some(idx) = state.tab_list_state {
-                    state.tab_list_state = Some(idx + 1);
+            if state.ui.active_tab != ActiveTab::Chat {
+                if let Some(idx) = state.ui.tab_list_state {
+                    state.ui.tab_list_state = Some(idx + 1);
                     state.mark_dirty();
                 }
-            } else if state.input.contains('\n') {
+            } else if state.conversation.input.contains('\n') {
                 let (line, col) = state.cursor_line_col();
-                let lines: Vec<&str> = state.input.split('\n').collect();
+                let lines: Vec<&str> = state.conversation.input.split('\n').collect();
                 if line + 1 < lines.len() {
                     let new_col = col.min(lines[line + 1].chars().count());
-                    state.cursor_position =
-                        char_index_for_line_col(&state.input, line + 1, new_col);
+                    state.conversation.cursor_position =
+                        char_index_for_line_col(&state.conversation.input, line + 1, new_col);
                 }
             } else {
                 // Scroll down (see newer content)
                 // Clamp to max_scroll so the view doesn't run off the bottom
                 // waiting for the next render to correct it.
-                state.scroll_offset = (state.scroll_offset + 1).min(state.max_scroll);
+                state.conversation.scroll_offset =
+                    (state.conversation.scroll_offset + 1).min(state.conversation.max_scroll);
             }
         }
         KeyCode::PageUp => {
-            state.auto_scroll = false;
-            state.scroll_offset = state.scroll_offset.saturating_sub(10);
+            state.conversation.auto_scroll = false;
+            state.conversation.scroll_offset = state.conversation.scroll_offset.saturating_sub(10);
         }
         KeyCode::PageDown => {
-            state.scroll_offset = (state.scroll_offset + 10).min(state.max_scroll);
+            state.conversation.scroll_offset =
+                (state.conversation.scroll_offset + 10).min(state.conversation.max_scroll);
         }
         _ => {}
     }
@@ -1219,7 +1272,7 @@ pub(crate) async fn handle_input_key(
 // The two completion sources are the `COMMANDS` table (slash) and the
 // filesystem (@-mention paths). Both are prefix-match (readline
 // contract — no fuzzy). A single match replaces the buffer; multiple
-// matches fill `state.completion_suggestions` so the renderer shows a
+// matches fill `state.conversation.completion_suggestions` so the renderer shows a
 // one-line hint. Returns true if the Tab key was consumed (a completion
 // was attempted), false to let the caller fall through to the legacy
 // empty-input expand/collapse behavior.
@@ -1231,7 +1284,7 @@ fn try_completion(state: &mut AppState) -> bool {
     if line != 0 {
         return false;
     }
-    let chars: Vec<char> = state.input.chars().collect();
+    let chars: Vec<char> = state.conversation.input.chars().collect();
     if chars.is_empty() || col <= 1 {
         return false;
     }
@@ -1284,7 +1337,7 @@ fn complete_mention(state: &mut AppState, prefix: &str) -> bool {
 // On many, store them in `completion_suggestions`. Returns true (the
 // Tab was consumed) in both cases; the caller never falls through.
 fn apply_completion(state: &mut AppState, trigger: &str, matches: Vec<String>) -> bool {
-    state.completion_suggestions.clear();
+    state.conversation.completion_suggestions.clear();
     match matches.len() {
         0 => {
             // No match — no-op (the WO allows a beep; we stay silent).
@@ -1292,13 +1345,13 @@ fn apply_completion(state: &mut AppState, trigger: &str, matches: Vec<String>) -
         }
         1 => {
             let completed = format!("{trigger}{}", matches.into_iter().next().unwrap());
-            state.input = completed;
-            state.cursor_position = state.input.chars().count();
+            state.conversation.input = completed;
+            state.conversation.cursor_position = state.conversation.input.chars().count();
             state.mark_dirty();
             true
         }
         _ => {
-            state.completion_suggestions = matches;
+            state.conversation.completion_suggestions = matches;
             state.mark_dirty();
             true
         }
@@ -1476,8 +1529,8 @@ mod tests {
     #[tokio::test]
     async fn shift_enter_inserts_newline_without_sending() {
         let mut state = app_state();
-        state.input = "hello".into();
-        state.cursor_position = 5;
+        state.conversation.input = "hello".into();
+        state.conversation.cursor_position = 5;
 
         let (input_tx, _input_rx) = mpsc::unbounded_channel();
         let (cancel_tx, _cancel_rx) = mpsc::unbounded_channel();
@@ -1512,18 +1565,18 @@ mod tests {
         )
         .await;
         assert!(result.is_ok());
-        assert_eq!(state.input, "hello\n");
-        assert_eq!(state.cursor_position, 6);
+        assert_eq!(state.conversation.input, "hello\n");
+        assert_eq!(state.conversation.cursor_position, 6);
         // No message sent.
-        assert!(state.messages.is_empty());
+        assert!(state.conversation.messages.is_empty());
     }
 
     #[tokio::test]
     async fn arrow_keys_move_across_input_lines() {
         let mut state = app_state();
-        state.input = "ab\ncd".into();
+        state.conversation.input = "ab\ncd".into();
         // Start at end: line 1, col 2 (char index 4).
-        state.cursor_position = 4;
+        state.conversation.cursor_position = 4;
 
         let (input_tx, _input_rx) = mpsc::unbounded_channel();
         let (cancel_tx, _cancel_rx) = mpsc::unbounded_channel();
@@ -1562,7 +1615,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert_eq!(state.cursor_position, 1); // col 1 on line 0 (clamped from 2)
+        assert_eq!(state.conversation.cursor_position, 1); // col 1 on line 0 (clamped from 2)
 
         send(
             &mut state,
@@ -1570,7 +1623,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert_eq!(state.cursor_position, 4); // back to end of line 1
+        assert_eq!(state.conversation.cursor_position, 4); // back to end of line 1
 
         send(
             &mut state,
@@ -1578,7 +1631,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert_eq!(state.cursor_position, 3); // start of line 1
+        assert_eq!(state.conversation.cursor_position, 3); // start of line 1
 
         send(
             &mut state,
@@ -1586,13 +1639,13 @@ mod tests {
             &ctx,
         )
         .await;
-        assert_eq!(state.cursor_position, 2); // end of line 0
+        assert_eq!(state.conversation.cursor_position, 2); // end of line 0
     }
 
     #[tokio::test]
     async fn enter_runs_plugins_command_and_pushes_system_message() {
         let mut state = app_state();
-        state.input = "/plugins list".into();
+        state.conversation.input = "/plugins list".into();
 
         let (input_tx, _input_rx) = mpsc::unbounded_channel();
         let (cancel_tx, _cancel_rx) = mpsc::unbounded_channel();
@@ -1622,12 +1675,14 @@ mod tests {
         };
         let result = handle_input_key(KeyEvent::from(KeyCode::Enter), &mut state, &ctx).await;
         assert!(result.is_ok(), "{result:?}");
-        assert_eq!(state.messages.len(), 1);
-        assert_eq!(state.messages[0].role, "system");
+        assert_eq!(state.conversation.messages.len(), 1);
+        assert_eq!(state.conversation.messages[0].role, "system");
         assert!(
-            state.messages[0].content.contains("Active plugins"),
+            state.conversation.messages[0]
+                .content
+                .contains("Active plugins"),
             "unexpected message: {}",
-            state.messages[0].content
+            state.conversation.messages[0].content
         );
     }
 
@@ -1718,17 +1773,17 @@ mod tests {
     async fn tab_completes_slash_command_single_match() {
         // "/he" + Tab → "/help" (single match replaces the buffer).
         let mut state = app_state();
-        state.input = "/he".into();
-        state.cursor_position = 3; // end of "/he"
+        state.conversation.input = "/he".into();
+        state.conversation.cursor_position = 3; // end of "/he"
 
         let ctx_holder = make_ctx();
         let ctx = ctx_holder.ctx();
         handle_input_key(KeyEvent::from(KeyCode::Tab), &mut state, &ctx)
             .await
             .unwrap();
-        assert_eq!(state.input, "/help");
-        assert_eq!(state.cursor_position, 5);
-        assert!(state.completion_suggestions.is_empty());
+        assert_eq!(state.conversation.input, "/help");
+        assert_eq!(state.conversation.cursor_position, 5);
+        assert!(state.conversation.completion_suggestions.is_empty());
     }
 
     #[tokio::test]
@@ -1736,8 +1791,8 @@ mod tests {
         // "/p" + Tab → multiple matches (e.g. /plan, /plugins). The
         // buffer is unchanged; suggestions are populated.
         let mut state = app_state();
-        state.input = "/p".into();
-        state.cursor_position = 2;
+        state.conversation.input = "/p".into();
+        state.conversation.cursor_position = 2;
 
         let ctx_holder = make_ctx();
         let ctx = ctx_holder.ctx();
@@ -1745,13 +1800,14 @@ mod tests {
             .await
             .unwrap();
         // Buffer unchanged (multiple matches → no auto-replace).
-        assert_eq!(state.input, "/p");
+        assert_eq!(state.conversation.input, "/p");
         assert!(
-            state.completion_suggestions.len() >= 2,
+            state.conversation.completion_suggestions.len() >= 2,
             "expected >=2 suggestions, got {:?}",
-            state.completion_suggestions
+            state.conversation.completion_suggestions
         );
         assert!(state
+            .conversation
             .completion_suggestions
             .iter()
             .all(|t| t.starts_with("/p")));
@@ -1774,8 +1830,8 @@ mod tests {
             "@{}tmpfile",
             tmp.display().to_string() + std::path::MAIN_SEPARATOR_STR
         );
-        state.input = typed.clone();
-        state.cursor_position = typed.chars().count();
+        state.conversation.input = typed.clone();
+        state.conversation.cursor_position = typed.chars().count();
 
         let ctx_holder = make_ctx();
         let ctx = ctx_holder.ctx();
@@ -1789,9 +1845,12 @@ mod tests {
             "@{}tmpfile.txt",
             tmp.display().to_string() + std::path::MAIN_SEPARATOR_STR
         );
-        assert_eq!(state.input, expected);
-        assert_eq!(state.cursor_position, state.input.chars().count());
-        assert!(state.completion_suggestions.is_empty());
+        assert_eq!(state.conversation.input, expected);
+        assert_eq!(
+            state.conversation.cursor_position,
+            state.conversation.input.chars().count()
+        );
+        assert!(state.conversation.completion_suggestions.is_empty());
     }
 
     #[tokio::test]
@@ -1799,40 +1858,41 @@ mod tests {
         // Tab on empty input must still toggle expand/collapse on the
         // last message (the legacy behavior — don't break it).
         let mut state = app_state();
-        state.input.clear();
-        state.cursor_position = 0;
+        state.conversation.input.clear();
+        state.conversation.cursor_position = 0;
         state
+            .conversation
             .messages
             .push_back(crate::tui::app::ConversationEntry::new("assistant", "hi"));
 
         let ctx_holder = make_ctx();
         let ctx = ctx_holder.ctx();
-        let last_idx = state.messages.len() - 1;
-        assert!(!state.collapsed_messages.contains(&last_idx));
+        let last_idx = state.conversation.messages.len() - 1;
+        assert!(!state.conversation.collapsed_messages.contains(&last_idx));
         handle_input_key(KeyEvent::from(KeyCode::Tab), &mut state, &ctx)
             .await
             .unwrap();
         assert!(
-            state.collapsed_messages.contains(&last_idx),
+            state.conversation.collapsed_messages.contains(&last_idx),
             "Tab on empty input should collapse the last message"
         );
-        assert!(state.completion_suggestions.is_empty());
+        assert!(state.conversation.completion_suggestions.is_empty());
     }
 
     #[tokio::test]
     async fn tab_no_match_on_unknown_slash_is_noop() {
         // "/zzz" + Tab → no matches, buffer unchanged, no suggestions.
         let mut state = app_state();
-        state.input = "/zzz".into();
-        state.cursor_position = 4;
+        state.conversation.input = "/zzz".into();
+        state.conversation.cursor_position = 4;
 
         let ctx_holder = make_ctx();
         let ctx = ctx_holder.ctx();
         handle_input_key(KeyEvent::from(KeyCode::Tab), &mut state, &ctx)
             .await
             .unwrap();
-        assert_eq!(state.input, "/zzz");
-        assert!(state.completion_suggestions.is_empty());
+        assert_eq!(state.conversation.input, "/zzz");
+        assert!(state.conversation.completion_suggestions.is_empty());
     }
 
     #[tokio::test]
@@ -1840,9 +1900,9 @@ mod tests {
         // After Tab shows suggestions, pressing any non-Tab key clears
         // them so the hint doesn't linger.
         let mut state = app_state();
-        state.input = "/p".into();
-        state.cursor_position = 2;
-        state.completion_suggestions = vec!["/plan".into(), "/plugins".into()];
+        state.conversation.input = "/p".into();
+        state.conversation.cursor_position = 2;
+        state.conversation.completion_suggestions = vec!["/plan".into(), "/plugins".into()];
 
         let ctx_holder = make_ctx();
         let ctx = ctx_holder.ctx();
@@ -1854,8 +1914,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(state.completion_suggestions.is_empty());
-        assert_eq!(state.input, "/px");
+        assert!(state.conversation.completion_suggestions.is_empty());
+        assert_eq!(state.conversation.input, "/px");
     }
 
     fn make_ctx() -> TestCtx {

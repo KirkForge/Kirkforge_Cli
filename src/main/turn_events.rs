@@ -278,6 +278,25 @@ pub(super) fn emit_turn_events(
                     print_json_line(&line);
                 }
             }
+            session::executor::TurnEvent::BashPartialOutput(chunk) => {
+                // Non-interactive mode has no tool-result card to stream
+                // into; the full output arrives via `ToolResult`. Swallow
+                // the partial chunks silently.
+                let _ = chunk;
+            }
+            session::executor::TurnEvent::MemoryExtracted { count, turn } => {
+                // Surface memory growth in non-interactive output too.
+                if output == kf_code::shared::OutputFormat::Text {
+                    eprintln!("\n[memory] {count} facts (last-updated turn {turn})");
+                } else if output == kf_code::shared::OutputFormat::StreamJson {
+                    let line = serde_json::json!({
+                        "type": "memory_extracted",
+                        "count": count,
+                        "turn": turn,
+                    });
+                    print_json_line(&line);
+                }
+            }
         }
     }
 }

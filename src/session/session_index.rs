@@ -460,10 +460,11 @@ fn prune_oldest_in_dir(
             .then_with(|| b.id.cmp(&a.id))
     });
 
-    if entries.len() <= keep + delete_count {
+    let threshold = keep.saturating_add(delete_count);
+    if entries.len() <= threshold {
         return Ok(Vec::new());
     }
-    let to_delete = &entries[keep..keep + delete_count];
+    let to_delete = &entries[keep..threshold];
     let mut deleted = Vec::with_capacity(to_delete.len());
     for e in to_delete {
         if let Err(err) = std::fs::remove_file(&e.path) {
@@ -753,6 +754,22 @@ mod tests {
         // 0 sessions on disk → nothing to delete.
         let deleted = prune_oldest_in_dir(&sessions_dir, 10, 5).unwrap();
         assert!(deleted.is_empty());
+    }
+
+    /// `prune_oldest_in_dir` must not overflow when `keep + delete_count`
+    /// exceeds `usize::MAX`; it should saturate and prune nothing.
+    #[test]
+    fn test_prune_oldest_saturates_at_usize_max() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::fs::write(sessions_dir.join("2026-06-01-session-01.conv.ndjson"), b"").unwrap();
+
+        let deleted = prune_oldest_in_dir(&sessions_dir, usize::MAX, usize::MAX).unwrap();
+        assert!(deleted.is_empty());
+        assert!(sessions_dir
+            .join("2026-06-01-session-01.conv.ndjson")
+            .exists());
     }
 
     /// `prune_oldest_in_dir` deletes the oldest sessions beyond `keep`.

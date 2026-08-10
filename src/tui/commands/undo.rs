@@ -44,7 +44,7 @@ pub fn handle_undo_command(
             }
         }
         "list" => {
-            let Some(ref stack) = state.undo_stack else {
+            let Some(ref stack) = state.session.undo_stack else {
                 return "Undo unavailable: no undo stack for this session.".to_string();
             };
             let entries = match stack.lock() {
@@ -54,7 +54,7 @@ pub fn handle_undo_command(
             format_undo_list(&entries)
         }
         "count" => {
-            let Some(ref stack) = state.undo_stack else {
+            let Some(ref stack) = state.session.undo_stack else {
                 return "Undo unavailable: no undo stack for this session.".to_string();
             };
             let count = match stack.lock() {
@@ -64,7 +64,7 @@ pub fn handle_undo_command(
             format!("Undo stack contains {} entr{}", count, if count == 1 { "y" } else { "ies" })
         }
         "clear" => {
-            let Some(ref stack) = state.undo_stack else {
+            let Some(ref stack) = state.session.undo_stack else {
                 return "Undo unavailable: no undo stack for this session.".to_string();
             };
             match stack.lock() {
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn test_undo_count_empty() {
         let (mut state, stack_ref, _) = state_with_stack();
-        state.undo_stack = Some(stack_ref);
+        state.session.undo_stack = Some(stack_ref);
         let (tx, _rx) = mpsc::unbounded_channel();
         let out = handle_undo_command("count", &tx, &mut state);
         assert!(out.contains("0 entries"), "got: {out}");
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn test_undo_list_empty() {
         let (mut state, stack_ref, _) = state_with_stack();
-        state.undo_stack = Some(stack_ref);
+        state.session.undo_stack = Some(stack_ref);
         let (tx, _rx) = mpsc::unbounded_channel();
         let out = handle_undo_command("list", &tx, &mut state);
         assert!(out.contains("empty"), "got: {out}");
@@ -236,7 +236,7 @@ mod tests {
                 .unwrap();
             std::fs::write(&target, b"v2").unwrap();
         }
-        state.undo_stack = Some(stack_ref);
+        state.session.undo_stack = Some(stack_ref);
         let (tx, _rx) = mpsc::unbounded_channel();
         let out = handle_undo_command("count", &tx, &mut state);
         assert!(out.contains("1 entry"), "got: {out}");
@@ -254,7 +254,7 @@ mod tests {
                 .unwrap();
             std::fs::write(&target, b"v2").unwrap();
         }
-        state.undo_stack = Some(stack_ref);
+        state.session.undo_stack = Some(stack_ref);
         let (tx, _rx) = mpsc::unbounded_channel();
         let out = handle_undo_command("list", &tx, &mut state);
         assert!(out.contains("1 entries"), "got: {out}");
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn test_undo_unknown_argument_returns_usage() {
         let (mut state, stack_ref, _) = state_with_stack();
-        state.undo_stack = Some(stack_ref);
+        state.session.undo_stack = Some(stack_ref);
         let (tx, mut rx) = mpsc::unbounded_channel();
         let out = handle_undo_command("foo", &tx, &mut state);
         assert!(out.contains("Usage"), "got: {out}");
@@ -291,7 +291,7 @@ mod tests {
             s.push(crate::session::undo::UndoKind::Edit, &target, true, &prev)
                 .unwrap();
         }
-        state.undo_stack = Some(stack_ref.clone());
+        state.session.undo_stack = Some(stack_ref.clone());
         let (tx, _rx) = mpsc::unbounded_channel();
         let out = handle_undo_command("clear", &tx, &mut state);
         assert!(out.contains("Cleared 1 undo entry"), "got: {out}");

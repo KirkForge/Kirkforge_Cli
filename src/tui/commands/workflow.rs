@@ -91,7 +91,7 @@ pub async fn handle_workflow_command(
 }
 
 fn handle_status(state: &AppState) -> String {
-    match &state.workflow_in_progress {
+    match &state.generation.workflow_in_progress {
         Some(h) => {
             let mut out = h.status_line();
             out.push('\n');
@@ -108,10 +108,10 @@ fn handle_status(state: &AppState) -> String {
 }
 
 fn handle_cancel(state: &mut AppState) -> String {
-    if let Some(cancel) = state.workflow_cancel.take() {
+    if let Some(cancel) = state.generation.workflow_cancel.take() {
         cancel.store(true, Ordering::SeqCst);
-        state.workflow_in_progress = None;
-        state.workflow_cancel = None;
+        state.generation.workflow_in_progress = None;
+        state.generation.workflow_cancel = None;
         "⛔ Workflow cancelled.".into()
     } else {
         "No workflow is running.".into()
@@ -128,10 +128,10 @@ async fn handle_run(
         return "Usage: /workflow run <name>".into();
     }
 
-    if state.workflow_in_progress.is_some() {
+    if state.generation.workflow_in_progress.is_some() {
         return format!(
             "A workflow ('{}') is already running. /workflow status or /workflow cancel first.",
-            state.workflow_in_progress.as_ref().unwrap().name
+            state.generation.workflow_in_progress.as_ref().unwrap().name
         );
     }
 
@@ -149,9 +149,10 @@ async fn handle_run(
         Err(e) => return format!("Failed to load workflow '{name}': {e}"),
     };
 
-    let cfg = read_shared_config(&state.config).clone();
+    let cfg = read_shared_config(&state.services.config).clone();
     let shared_cfg: crate::shared::SharedConfig = std::sync::Arc::new(std::sync::RwLock::new(cfg));
     let model_name = state
+        .provider
         .model_info
         .as_ref()
         .map(|m| m.name.clone())
@@ -164,11 +165,12 @@ async fn handle_run(
         c.model.ollama_host.clone()
     };
     let supports_images = state
+        .provider
         .model_info
         .as_ref()
         .map(|m| m.supports_images)
         .unwrap_or(false);
-    let undo_stack = state.undo_stack.clone();
+    let undo_stack = state.session.undo_stack.clone();
 
     let step_count = workflow.steps.len();
     let handle = WorkflowHandle {
@@ -177,10 +179,10 @@ async fn handle_run(
         completed: Vec::new(),
         outputs: HashMap::new(),
     };
-    state.workflow_in_progress = Some(handle);
+    state.generation.workflow_in_progress = Some(handle);
 
     let cancel = Arc::new(AtomicBool::new(false));
-    state.workflow_cancel = Some(cancel.clone());
+    state.generation.workflow_cancel = Some(cancel.clone());
 
     let name_for_spawn = name.clone();
     tokio::spawn(async move {
@@ -406,8 +408,8 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel::<PersonaResult>();
         let out = handle_run("smoke", &mut state, tx).await;
         assert!(out.contains("Started workflow 'smoke'"));
-        assert!(state.workflow_in_progress.is_some());
-        assert!(state.workflow_cancel.is_some());
+        assert!(state.generation.workflow_in_progress.is_some());
+        assert!(state.generation.workflow_cancel.is_some());
 
         std::env::set_current_dir(cwd).unwrap();
     }

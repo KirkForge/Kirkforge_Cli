@@ -517,6 +517,44 @@ pub fn adapter_for_with_provider(
     }
 }
 
+/// Build a fresh one-off completion adapter for an MCP `sampling/createMessage`
+/// request, from the session `Config`. This deliberately mirrors the adapter
+/// construction in `run_session` (without the caching wrapper) so a sampling
+/// completion uses the same provider/model config as the main loop, but never
+/// touches the executor's live adapter (whose swap/caching state is owned by
+/// the executor).
+pub fn sampling_adapter(config: &crate::shared::Config) -> Box<dyn ModelAdapter> {
+    adapter_for_with_provider(
+        &config.model.default_model,
+        &config.model.ollama_host,
+        None,
+        &config.model.anthropic_provider,
+        config.model.request_timeout_secs,
+        &config.model.opencode_zen_endpoint,
+        config.model.opencode_zen_api_key.as_deref(),
+        Some(&config.model.adapter_routing),
+        &ProviderApiKeys {
+            anthropic: config.model.anthropic_api_key.clone(),
+            openai: config.model.openai_api_key.clone(),
+            deepseek: config.model.deepseek_api_key.clone(),
+            gemini: config.model.gemini_api_key.clone(),
+            kimi: config.model.kimi_api_key.clone(),
+        },
+        Some(&config.model.aws_region),
+        if config.model.gcp_project_id.is_empty() {
+            None
+        } else {
+            Some(config.model.gcp_project_id.as_str())
+        },
+        if config.model.gcp_region.is_empty() {
+            None
+        } else {
+            Some(config.model.gcp_region.as_str())
+        },
+        config.model.gcp_service_account_path.clone(),
+    )
+}
+
 /// Shared: build the JSON body for `/api/chat`.
 ///
 /// `model_info` controls multimodal + cache_breakpoint behaviour

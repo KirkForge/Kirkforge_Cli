@@ -97,7 +97,7 @@ impl BangResult {
 /// Returns a `BangResult` capturing stdout/stderr/exit_code/timed_out
 /// for the formatter to consume. Does not write to `state` — the
 /// caller (`keys.rs`) is responsible for pushing the formatted string
-/// into `state.messages` so the conversation log records what happened.
+/// into `state.conversation.messages` so the conversation log records what happened.
 pub async fn run_bang_command(cmd: &str, config: &crate::shared::Config) -> BangResult {
     use std::time::Instant;
 
@@ -250,7 +250,7 @@ pub fn format_elapsed(ms: u64) -> String {
 
 /// The full `!` command pipeline: run the command, format the result.
 /// The caller is responsible for pushing the returned string into
-/// `state.messages`.
+/// `state.conversation.messages`.
 ///
 /// This is the function `keys.rs::Enter` calls when the input buffer
 /// starts with `!`. The `!` itself is stripped before this is called

@@ -50,49 +50,56 @@ use tokio::sync::mpsc;
 pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
     match ev {
         TurnEvent::Token(t) => {
-            state.is_generating = true; // got first token — turn off spinner
-                                        // Accumulate into the last assistant entry, or create one
+            state.generation.is_generating = true; // got first token — turn off spinner
+                                                   // Accumulate into the last assistant entry, or create one
             const ASSISTANT: &str = "assistant";
-            if let Some(last) = state.messages.back_mut() {
+            if let Some(last) = state.conversation.messages.back_mut() {
                 if last.role == ASSISTANT {
                     last.content.push_str(&t);
                     last.bump_version();
                 } else {
                     state
+                        .conversation
                         .messages
                         .push_back(ConversationEntry::new(ASSISTANT, t));
                 }
             } else {
                 state
+                    .conversation
                     .messages
                     .push_back(ConversationEntry::new(ASSISTANT, t));
             }
         }
         TurnEvent::Thinking(t) => {
-            state.thinking_buffer.push(t);
+            state.generation.thinking_buffer.push(t);
         }
         TurnEvent::ToolStart { name, args: _ } => {
-            state.is_generating = false; // turn ended (tool call)
-            state.turn_tool_calls += 1;
+            state.generation.is_generating = false; // turn ended (tool call)
+            state.generation.turn_tool_calls += 1;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("tool", format!("🔧 {name} ...")));
         }
         TurnEvent::ToolResult { name, output, .. } => {
             // Tool outputs are stored FULL in a sidecar and shown
             // as a one-line summary by default. Ctrl+T toggles
-            // collapse; per-index expansion is in state.expanded_tools.
+            // collapse; per-index expansion is in state.conversation.expanded_tools.
             let (lines, bytes) = AppState::tool_output_metrics(&output, 80);
             let summary =
                 format!("🔧 {name} (done) — {lines} lines, {bytes} bytes [Enter or Tab to expand]");
             // Avoid two entries per tool call: if the most recent message
-            // is the matching "🔧 name ..." placeholder, replace it.
-            if let Some(last) = state.messages.back() {
-                if last.role == "tool" && last.content == format!("🔧 {name} ...") {
-                    state.messages.pop_back();
+            // is the matching "🔧 name ..." placeholder (or a streaming
+            // entry for this tool), replace it.
+            if let Some(last) = state.conversation.messages.back() {
+                if last.role == "tool"
+                    && (last.content == format!("🔧 {name} ...") || last.streaming)
+                {
+                    state.conversation.messages.pop_back();
                 }
             }
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::tool(summary, output));
         }
@@ -102,26 +109,24 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             file,
             line,
         } => {
-            // ponytail: memory auto-populate indicator deferred — would need
-            // a MemoryExtracted event on the bus + a status bar widget. The
-            // server-side tracing::info!(count, ...) in turn.rs already
-            // provides observability; TUI visibility is M-sized work for a
-            // nice-to-have. Upgrade path: add TurnEvent::MemoryExtracted { count }
-            // in types.rs, emit from turn.rs after extraction, render here.
             let prefix = if success { "🔍" } else { "⚠️" };
             let loc = match (file, line) {
                 (Some(f), Some(l)) => format!(" {}:{}:", f.display(), l),
                 (Some(f), None) => format!(" {}:", f.display()),
                 _ => String::new(),
             };
-            state.messages.push_back(ConversationEntry::new(
-                "system",
-                format!("{prefix}{loc} {message}"),
-            ));
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new(
+                    "system",
+                    format!("{prefix}{loc} {message}"),
+                ));
         }
         TurnEvent::Error(e) => {
-            state.is_generating = false;
+            state.generation.is_generating = false;
             state
+                .conversation
                 .messages
                 .push_back(ConversationEntry::new("system", format!("Error: {e}")));
         }
@@ -131,13 +136,14 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             turn_cost,
             cumulative_cost,
         } => {
-            state.is_generating = false;
-            state.turn_tool_calls = 0; // reset for next turn
-            state.continuation = None;
-            state.tokens_sent = state.tokens_sent.wrapping_add(prompt_tokens);
-            state.tokens_received = state.tokens_received.wrapping_add(completion_tokens);
-            state.turn_cost = turn_cost;
-            state.cumulative_cost = cumulative_cost;
+            state.generation.is_generating = false;
+            state.generation.turn_tool_calls = 0; // reset for next turn
+            state.generation.continuation = None;
+            state.budget.tokens_sent = state.budget.tokens_sent.wrapping_add(prompt_tokens);
+            state.budget.tokens_received =
+                state.budget.tokens_received.wrapping_add(completion_tokens);
+            state.budget.turn_cost = turn_cost;
+            state.budget.cumulative_cost = cumulative_cost;
             // v1.2-p6: mirror the per-turn prompt size into
             // AppState so the status bar can compute the
             // budget-pressure percentage against
@@ -147,33 +153,33 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // whole conversation on every turn, so the most recent
             // prompt size is the right "current context pressure"
             // signal.
-            state.last_turn_prompt_tokens = prompt_tokens;
+            state.budget.last_turn_prompt_tokens = prompt_tokens;
         }
         TurnEvent::CacheStats {
             cached_tokens,
             prompt_tokens,
             stem_tokens,
         } => {
-            state.cached_tokens = state.cached_tokens.wrapping_add(cached_tokens);
-            state.stem_tokens = stem_tokens;
+            state.budget.cached_tokens = state.budget.cached_tokens.wrapping_add(cached_tokens);
+            state.budget.stem_tokens = stem_tokens;
             // Mirror the latest cache ratio for the status bar. If the
             // provider reports no prompt tokens, treat the turn as zero
             // cache hit to avoid division by zero.
-            state.cache_hit_ratio = if prompt_tokens > 0 {
+            state.budget.cache_hit_ratio = if prompt_tokens > 0 {
                 cached_tokens as f64 / prompt_tokens as f64
             } else {
                 0.0
             };
         }
         TurnEvent::PlanComplete => {
-            state.is_generating = false;
-            state.messages.push_back(ConversationEntry::new(
+            state.generation.is_generating = false;
+            state.conversation.messages.push_back(ConversationEntry::new(
                 "system",
                 "📐 Plan complete. The model has finished exploring and designed an implementation plan. Type /implement to allow edits and continue.".to_string(),
             ));
         }
         TurnEvent::Recovered { messages } => {
-            state.messages.push_back(ConversationEntry::new(
+            state.conversation.messages.push_back(ConversationEntry::new(
                 "system",
                 format!("🛟 Restored {messages} message(s) from checkpoint after a corrupt session log was detected."),
             ));
@@ -183,7 +189,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             completed,
             total,
         } => {
-            state.pull_progress = Some(crate::tui::app::PullProgress {
+            state.provider.pull_progress = Some(crate::tui::app::PullProgress {
                 status,
                 completed,
                 total,
@@ -202,7 +208,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // Rebuild the TUI's display list from the new
             // executor-side history. The executor is already
             // pointing at this new list; we just need to
-            // mirror it in `state.messages` so the user sees
+            // mirror it in `state.conversation.messages` so the user sees
             // the compacted view.
             //
             // Mapping `Message` -> `ConversationEntry`:
@@ -249,8 +255,8 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                     "🧹 Compacted: {original_count} → {compacted_count} messages ({tokens_before} → {tokens_after} tokens), dropped {dropped_tool_results} tool result(s), condensed {condensed_assistant_turns} assistant turn(s)."
                 ),
             ));
-            state.messages = rebuilt;
-            state.expanded_tools.clear();
+            state.conversation.messages = rebuilt;
+            state.conversation.expanded_tools.clear();
             // Search match indices are also tied to the old message
             // list; clear them so a committed search doesn't jump to
             // a stale or non-existent index after compaction.
@@ -258,8 +264,8 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             state.search.match_idx = 0;
             // Scroll back to the bottom so the user sees the
             // status message and the last few kept turns.
-            state.auto_scroll = true;
-            state.scroll_offset = 0;
+            state.conversation.auto_scroll = true;
+            state.conversation.scroll_offset = 0;
             // Recompute the context-pressure estimate from the
             // post-compact message list. Without this, the status
             // bar would keep showing the PRE-compact pressure
@@ -271,7 +277,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // The next CostStats will overwrite this with the
             // executor's canonical value, so the TUI never
             // disagrees with the model for long.
-            state.last_turn_prompt_tokens = estimate_messages_tokens(&new_messages);
+            state.budget.last_turn_prompt_tokens = estimate_messages_tokens(&new_messages);
         }
         TurnEvent::DoomLoopDetected {
             count,
@@ -283,13 +289,13 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // `count >= 3 && !acknowledged`; acknowledgement is a
             // user action (break/plan/continue) handled by the
             // banner's key handler.
-            state.doom_loop = Some(crate::tui::app::DoomLoopState {
+            state.doom.doom_loop = Some(crate::tui::app::DoomLoopState {
                 count,
                 tool: tool.clone(),
                 last_error: last_error.clone(),
                 acknowledged: false,
             });
-            state.messages.push_back(ConversationEntry::new(
+            state.conversation.messages.push_back(ConversationEntry::new(
                 "system",
                 format!(
                     "🔁 Doom loop detected: {tool} has failed {count} times in a row with: {last_error}"
@@ -298,14 +304,38 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             state.mark_dirty();
         }
         TurnEvent::DoomLoopRemediation { action, hits } => {
-            state.messages.push_back(ConversationEntry::new(
-                "system",
-                format!("⚠️ Doom-loop circuit breaker: {action} after {hits} hits"),
-            ));
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new(
+                    "system",
+                    format!("⚠️ Doom-loop circuit breaker: {action} after {hits} hits"),
+                ));
             state.mark_dirty();
         }
         TurnEvent::ContinuationRound { round, max } => {
-            state.continuation = Some((round, max));
+            state.generation.continuation = Some((round, max));
+            state.mark_dirty();
+        }
+        TurnEvent::BashPartialOutput(chunk) => {
+            // Stream PTY output into the running tool card. The last
+            // message is the "🔧 name ..." placeholder pushed by
+            // `ToolStart`; append the chunk and mark it streaming so the
+            // card renders a spinner + incremental text.
+            if let Some(last) = state.conversation.messages.back_mut() {
+                if last.role == "tool" {
+                    last.streaming = true;
+                    last.content.push_str(&chunk);
+                    last.bump_version();
+                    state.mark_dirty();
+                }
+            }
+        }
+        TurnEvent::MemoryExtracted { count, turn } => {
+            // Mirror into AppState so the status bar can render
+            // "🧠count@turn". This resolves the deferred note in the
+            // Verification arm above (WO 26.7-R3).
+            state.session.memory_status = Some((count, turn));
             state.mark_dirty();
         }
     }
@@ -368,13 +398,13 @@ pub fn drain_turn_events(state: &mut AppState, event_rx: &mut mpsc::Receiver<Tur
 /// existing UI state stays consistent. Clears search results — they'll be
 /// recomputed on the next search keystroke.
 fn prune_display_messages(state: &mut AppState) {
-    if state.messages.len() <= MAX_DISPLAY_MESSAGES {
+    if state.conversation.messages.len() <= MAX_DISPLAY_MESSAGES {
         return;
     }
-    let n_drop = state.messages.len() - KEEP_DISPLAY_MESSAGES;
-    state.messages.drain(0..n_drop);
+    let n_drop = state.conversation.messages.len() - KEEP_DISPLAY_MESSAGES;
+    state.conversation.messages.drain(0..n_drop);
     // Insert a sentinel so the user knows old entries were trimmed.
-    state.messages.push_front(
+    state.conversation.messages.push_front(
         ConversationEntry::new(
             "system",
             format!("[{n_drop} older messages pruned from display — use /save to preserve the full session]"),
@@ -383,12 +413,14 @@ fn prune_display_messages(state: &mut AppState) {
     // The sentinel is now at [0]; kept messages shifted by (1 - n_drop).
     // Re-map: old_idx → new_idx = old_idx - n_drop + 1  (only for old_idx >= n_drop)
     let remap = |i: usize| -> Option<usize> { i.checked_sub(n_drop).map(|x| x + 1) };
-    state.collapsed_messages = state
+    state.conversation.collapsed_messages = state
+        .conversation
         .collapsed_messages
         .iter()
         .filter_map(|&i| remap(i))
         .collect();
-    state.expanded_tools = state
+    state.conversation.expanded_tools = state
+        .conversation
         .expanded_tools
         .iter()
         .filter_map(|&i| remap(i))
@@ -416,7 +448,7 @@ pub fn drain_approval_requests(
         // `ApprovalResponder` drop-guard, simply dropping the old
         // responder would also send `Denied`; we send explicitly here so
         // the log records why.
-        if let Some(old) = state.pending_approval.take() {
+        if let Some(old) = state.approval.pending_approval.take() {
             if let Some(tx) = old.responder {
                 if let Err(e) = tx.send(ApprovalResponse::Denied) {
                     tracing::warn!(
@@ -431,18 +463,18 @@ pub fn drain_approval_requests(
         // this, both dialogs could be `Some` simultaneously and the
         // render path prefers one while the key handler prefers the
         // other, leaving one orphaned.
-        if state.pending_bang.is_some() {
-            state.pending_bang = None;
+        if state.approval.pending_bang.is_some() {
+            state.approval.pending_bang = None;
         }
-        state.pending_approval = Some(PendingApproval {
+        state.approval.pending_approval = Some(PendingApproval {
             tool_name: req.tool_name.clone(),
             args: req.args.clone(),
             responder: Some(req.response),
         });
         // Reset approval scroll for each new request — a fresh dialog
         // starts at the top, regardless of where the previous one was.
-        state.approval_scroll = 0;
-        state.approval_max_scroll = 0;
+        state.approval.approval_scroll = 0;
+        state.approval.approval_max_scroll = 0;
         any = true;
     }
     if any {
@@ -479,12 +511,12 @@ mod tests {
     #[test]
     fn token_on_empty_creates_assistant_entry() {
         let mut s = app_state();
-        assert!(!s.is_generating);
+        assert!(!s.generation.is_generating);
         dispatch_turn_event(&mut s, TurnEvent::Token("hi".into()));
-        assert_eq!(s.messages.len(), 1);
-        assert_eq!(s.messages[0].role, "assistant");
-        assert_eq!(s.messages[0].content, "hi");
-        assert!(s.is_generating);
+        assert_eq!(s.conversation.messages.len(), 1);
+        assert_eq!(s.conversation.messages[0].role, "assistant");
+        assert_eq!(s.conversation.messages[0].content, "hi");
+        assert!(s.generation.is_generating);
     }
 
     /// Subsequent `Token` events append to the *last* assistant
@@ -495,8 +527,8 @@ mod tests {
         let mut s = app_state();
         dispatch_turn_event(&mut s, TurnEvent::Token("foo".into()));
         dispatch_turn_event(&mut s, TurnEvent::Token("bar".into()));
-        assert_eq!(s.messages.len(), 1);
-        assert_eq!(s.messages[0].content, "foobar");
+        assert_eq!(s.conversation.messages.len(), 1);
+        assert_eq!(s.conversation.messages[0].content, "foobar");
     }
 
     /// `Thinking` accumulates into the thinking buffer. The TUI
@@ -507,7 +539,10 @@ mod tests {
         let mut s = app_state();
         dispatch_turn_event(&mut s, TurnEvent::Thinking("a".into()));
         dispatch_turn_event(&mut s, TurnEvent::Thinking("b".into()));
-        assert_eq!(s.thinking_buffer, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            s.generation.thinking_buffer,
+            vec!["a".to_string(), "b".to_string()]
+        );
     }
 
     /// `ToolStart` creates a "🔧 name ..." entry and flips
@@ -516,7 +551,7 @@ mod tests {
     fn toolstart_creates_running_entry() {
         let mut s = app_state();
         dispatch_turn_event(&mut s, TurnEvent::Token("hmm".into()));
-        assert!(s.is_generating);
+        assert!(s.generation.is_generating);
         dispatch_turn_event(
             &mut s,
             TurnEvent::ToolStart {
@@ -524,11 +559,52 @@ mod tests {
                 args: serde_json::json!({"cmd": "ls"}),
             },
         );
-        assert!(!s.is_generating);
-        assert_eq!(s.messages.len(), 2);
-        assert_eq!(s.messages[1].role, "tool");
-        assert!(s.messages[1].content.contains("bash"));
-        assert!(s.messages[1].content.contains("..."));
+        assert!(!s.generation.is_generating);
+        assert_eq!(s.conversation.messages.len(), 2);
+        assert_eq!(s.conversation.messages[1].role, "tool");
+        assert!(s.conversation.messages[1].content.contains("bash"));
+        assert!(s.conversation.messages[1].content.contains("..."));
+    }
+
+    /// `BashPartialOutput` streams PTY output into the running tool card:
+    /// it marks the last tool entry as streaming and appends the chunk.
+    /// The entry stays streaming until `ToolResult` finalizes it.
+    #[test]
+    fn bash_partial_output_streams_into_running_tool_card() {
+        let mut s = app_state();
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({"cmd": "top"}),
+            },
+        );
+        dispatch_turn_event(&mut s, TurnEvent::BashPartialOutput("PID  USER".into()));
+        dispatch_turn_event(&mut s, TurnEvent::BashPartialOutput("\n  1 root".into()));
+
+        assert_eq!(s.conversation.messages.len(), 1);
+        let entry = &s.conversation.messages[0];
+        assert_eq!(entry.role, "tool");
+        assert!(entry.streaming, "entry must be marked streaming");
+        assert!(entry.content.contains("PID  USER"));
+        assert!(entry.content.contains("1 root"));
+
+        // `ToolResult` finalizes the entry: streaming is cleared and the
+        // full output replaces the incremental text.
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: "final".into(),
+                success: true,
+            },
+        );
+        assert_eq!(s.conversation.messages.len(), 1);
+        assert!(!s.conversation.messages[0].streaming);
+        assert_eq!(
+            s.conversation.messages[0].tool_output.as_deref(),
+            Some("final")
+        );
     }
 
     /// `ToolResult` is the v1.1 contract: full output goes into
@@ -547,8 +623,8 @@ mod tests {
                 success: true,
             },
         );
-        assert_eq!(s.messages.len(), 1);
-        let entry = &s.messages[0];
+        assert_eq!(s.conversation.messages.len(), 1);
+        let entry = &s.conversation.messages[0];
         assert_eq!(entry.role, "tool");
         // Visible summary contains the byte count and expand hint
         assert!(entry.content.contains("bash"));
@@ -582,10 +658,12 @@ mod tests {
                 line: None,
             },
         );
-        assert!(s.messages[0].content.starts_with("🔍"));
-        assert!(s.messages[0].content.contains("lint clean"));
-        assert!(s.messages[1].content.starts_with("⚠️"));
-        assert!(s.messages[1].content.contains("found 2 warnings"));
+        assert!(s.conversation.messages[0].content.starts_with("🔍"));
+        assert!(s.conversation.messages[0].content.contains("lint clean"));
+        assert!(s.conversation.messages[1].content.starts_with("⚠️"));
+        assert!(s.conversation.messages[1]
+            .content
+            .contains("found 2 warnings"));
     }
 
     /// `Error` is a plain "Error: ..." system message. The model
@@ -594,11 +672,17 @@ mod tests {
     fn error_pushes_system_message_and_stops_generation() {
         let mut s = app_state();
         dispatch_turn_event(&mut s, TurnEvent::Token("partial".into()));
-        assert!(s.is_generating);
+        assert!(s.generation.is_generating);
         dispatch_turn_event(&mut s, TurnEvent::Error("timeout".into()));
-        assert!(!s.is_generating);
-        assert_eq!(s.messages.back().unwrap().role, "system");
-        assert!(s.messages.back().unwrap().content.contains("timeout"));
+        assert!(!s.generation.is_generating);
+        assert_eq!(s.conversation.messages.back().unwrap().role, "system");
+        assert!(s
+            .conversation
+            .messages
+            .back()
+            .unwrap()
+            .content
+            .contains("timeout"));
     }
 
     /// `CostStats` accumulates the **cumulative** token counters
@@ -619,11 +703,11 @@ mod tests {
                 cumulative_cost: 0.001,
             },
         );
-        assert_eq!(s.tokens_sent, 100);
-        assert_eq!(s.tokens_received, 50);
-        assert_eq!(s.turn_cost, 0.001);
-        assert_eq!(s.cumulative_cost, 0.001);
-        assert_eq!(s.last_turn_prompt_tokens, 100);
+        assert_eq!(s.budget.tokens_sent, 100);
+        assert_eq!(s.budget.tokens_received, 50);
+        assert_eq!(s.budget.turn_cost, 0.001);
+        assert_eq!(s.budget.cumulative_cost, 0.001);
+        assert_eq!(s.budget.last_turn_prompt_tokens, 100);
         // Second turn: API reports *per-response* prompt_tokens
         // (the whole conversation as the model saw it). We
         // accumulate, but last_turn_prompt_tokens tracks the
@@ -637,9 +721,9 @@ mod tests {
                 cumulative_cost: 0.003,
             },
         );
-        assert_eq!(s.tokens_sent, 300);
-        assert_eq!(s.tokens_received, 130);
-        assert_eq!(s.last_turn_prompt_tokens, 200);
+        assert_eq!(s.budget.tokens_sent, 300);
+        assert_eq!(s.budget.tokens_received, 130);
+        assert_eq!(s.budget.last_turn_prompt_tokens, 200);
     }
 
     /// `CompactionReport` rebuilds `messages` from `new_messages`,
@@ -651,9 +735,9 @@ mod tests {
         // Pre-existing tool expansion that references index 0 —
         // must be cleared, not silently re-applied to the wrong
         // entry after the rebuild.
-        s.expanded_tools.insert(0);
-        s.scroll_offset = 42;
-        s.auto_scroll = false;
+        s.conversation.expanded_tools.insert(0);
+        s.conversation.scroll_offset = 42;
+        s.conversation.auto_scroll = false;
 
         let new_messages = vec![msg(Role::User, "hi"), msg(Role::Assistant, "hello")];
         dispatch_turn_event(
@@ -669,20 +753,20 @@ mod tests {
             },
         );
         // The two kept messages plus the status line
-        assert_eq!(s.messages.len(), 3);
-        assert_eq!(s.messages[0].role, "user");
-        assert_eq!(s.messages[0].content, "hi");
-        assert_eq!(s.messages[1].role, "assistant");
-        assert_eq!(s.messages[1].content, "hello");
-        assert_eq!(s.messages[2].role, "system");
-        assert!(s.messages[2].content.contains("10 → 4"));
-        assert!(s.messages[2].content.contains("dropped 3"));
-        assert!(s.messages[2].content.contains("condensed 2"));
+        assert_eq!(s.conversation.messages.len(), 3);
+        assert_eq!(s.conversation.messages[0].role, "user");
+        assert_eq!(s.conversation.messages[0].content, "hi");
+        assert_eq!(s.conversation.messages[1].role, "assistant");
+        assert_eq!(s.conversation.messages[1].content, "hello");
+        assert_eq!(s.conversation.messages[2].role, "system");
+        assert!(s.conversation.messages[2].content.contains("10 → 4"));
+        assert!(s.conversation.messages[2].content.contains("dropped 3"));
+        assert!(s.conversation.messages[2].content.contains("condensed 2"));
         // Per-index expansion cleared (stale indices)
-        assert!(s.expanded_tools.is_empty());
+        assert!(s.conversation.expanded_tools.is_empty());
         // Scroll reset to bottom so the user sees the status line
-        assert!(s.auto_scroll);
-        assert_eq!(s.scroll_offset, 0);
+        assert!(s.conversation.auto_scroll);
+        assert_eq!(s.conversation.scroll_offset, 0);
     }
 
     /// `CompactionReport` also recomputes `last_turn_prompt_tokens`
@@ -697,7 +781,7 @@ mod tests {
         let mut s = app_state();
         // Pre-compact: a 30K token context (the kind of pressure
         // /compact exists to relieve).
-        s.last_turn_prompt_tokens = 30_000;
+        s.budget.last_turn_prompt_tokens = 30_000;
         // Post-compact: just two short messages, ~5 tokens total.
         let new_messages = vec![msg(Role::User, "hi"), msg(Role::Assistant, "hello")];
         dispatch_turn_event(
@@ -716,9 +800,9 @@ mod tests {
         // The exact number isn't load-bearing — what matters is
         // that it dropped from 30_000 to something much smaller.
         assert!(
-            s.last_turn_prompt_tokens < 1_000,
+            s.budget.last_turn_prompt_tokens < 1_000,
             "post-compact estimate should be near-zero, got {}",
-            s.last_turn_prompt_tokens
+            s.budget.last_turn_prompt_tokens
         );
     }
 
@@ -731,7 +815,7 @@ mod tests {
     fn compaction_estimate_counts_tool_calls() {
         use crate::shared::ToolInvocation;
         let mut s = app_state();
-        s.last_turn_prompt_tokens = 0;
+        s.budget.last_turn_prompt_tokens = 0;
         // An assistant message with a 4000-char tool call
         // (4k chars / 4 = 1k tokens for the call alone).
         let long_args = serde_json::json!({
@@ -763,9 +847,9 @@ mod tests {
         // The tool call alone is ~2k tokens (8k chars / 4).
         // A 0-token estimate would mean we ignored tool_calls.
         assert!(
-            s.last_turn_prompt_tokens > 1_000,
+            s.budget.last_turn_prompt_tokens > 1_000,
             "post-compact estimate must count tool_calls, got {}",
-            s.last_turn_prompt_tokens
+            s.budget.last_turn_prompt_tokens
         );
     }
 
@@ -777,7 +861,7 @@ mod tests {
     fn compaction_estimate_uses_post_compact_size_not_pre() {
         let mut s = app_state();
         // Pretend we were at 110K (deep red).
-        s.last_turn_prompt_tokens = 110_000;
+        s.budget.last_turn_prompt_tokens = 110_000;
         // Post-compact: 4 messages, 200 chars each = ~200 tokens.
         let new_messages = vec![
             msg(Role::User, "a".repeat(200).as_str()),
@@ -800,9 +884,9 @@ mod tests {
         // 4 messages * 200 chars / 4 = 200 tokens total.
         // The pre-compact 110K must NOT survive.
         assert!(
-            s.last_turn_prompt_tokens < 1_000,
+            s.budget.last_turn_prompt_tokens < 1_000,
             "post-compact estimate leaked the pre-compact value: {}",
-            s.last_turn_prompt_tokens
+            s.budget.last_turn_prompt_tokens
         );
     }
 
@@ -816,11 +900,11 @@ mod tests {
         tx.try_send(TurnEvent::Token("b".into())).unwrap();
         tx.try_send(TurnEvent::Token("c".into())).unwrap();
         drain_turn_events(&mut s, &mut rx);
-        assert_eq!(s.messages.len(), 1);
-        assert_eq!(s.messages[0].content, "abc");
+        assert_eq!(s.conversation.messages.len(), 1);
+        assert_eq!(s.conversation.messages[0].content, "abc");
         // Channel is drained — next call is a no-op
         drain_turn_events(&mut s, &mut rx);
-        assert_eq!(s.messages.len(), 1);
+        assert_eq!(s.conversation.messages.len(), 1);
     }
 
     /// `drain_approval_requests` replaces the pending approval
@@ -860,11 +944,14 @@ mod tests {
         let old_answer: Option<ApprovalResponse> = old_rx.try_recv().ok();
         assert_eq!(old_answer, Some(ApprovalResponse::Denied));
         // The pending approval is now the new one
-        assert!(s.pending_approval.is_some());
-        assert_eq!(s.pending_approval.as_ref().unwrap().tool_name, "edit_file");
+        assert!(s.approval.pending_approval.is_some());
+        assert_eq!(
+            s.approval.pending_approval.as_ref().unwrap().tool_name,
+            "edit_file"
+        );
     }
 
-    /// `PullProgress` updates `state.pull_progress` and marks state dirty
+    /// `PullProgress` updates `state.provider.pull_progress` and marks state dirty
     /// so the TUI re-renders the progress bar.
     #[test]
     fn pull_progress_updates_state_and_marks_dirty() {
@@ -878,7 +965,11 @@ mod tests {
                 total: None,
             },
         );
-        let p = s.pull_progress.as_ref().expect("pull_progress set");
+        let p = s
+            .provider
+            .pull_progress
+            .as_ref()
+            .expect("pull_progress set");
         assert_eq!(p.status, "pulling manifest");
         assert!(p.completed.is_none());
         assert!(p.total.is_none());
@@ -893,13 +984,17 @@ mod tests {
                 total: Some(512 * 1024 * 1024),
             },
         );
-        let p = s.pull_progress.as_ref().expect("pull_progress still set");
+        let p = s
+            .provider
+            .pull_progress
+            .as_ref()
+            .expect("pull_progress still set");
         assert_eq!(p.status, "downloading");
         assert_eq!(p.completed, Some(128 * 1024 * 1024));
         assert_eq!(p.total, Some(512 * 1024 * 1024));
     }
 
-    /// `DoomLoopDetected` sets `state.doom_loop` so the banner
+    /// `DoomLoopDetected` sets `state.doom.doom_loop` so the banner
     /// widget can render, marks the state dirty, and pushes a
     /// human-readable system message into the conversation.
     /// The banner itself is a render-time decision keyed on
@@ -909,7 +1004,7 @@ mod tests {
     fn doom_loop_detected_sets_state_and_marks_dirty() {
         let mut s = app_state();
         s.dirty = false;
-        assert!(s.doom_loop.is_none());
+        assert!(s.doom.doom_loop.is_none());
         dispatch_turn_event(
             &mut s,
             TurnEvent::DoomLoopDetected {
@@ -918,7 +1013,7 @@ mod tests {
                 last_error: "command not found".into(),
             },
         );
-        let dl = s.doom_loop.as_ref().expect("doom_loop set");
+        let dl = s.doom.doom_loop.as_ref().expect("doom_loop set");
         assert_eq!(dl.count, 3);
         assert_eq!(dl.tool, "bash");
         assert_eq!(dl.last_error, "command not found");
@@ -926,7 +1021,11 @@ mod tests {
         assert!(s.dirty, "doom loop event should mark state dirty");
 
         // The system message describes the loop for the user.
-        let last = s.messages.back().expect("system message pushed");
+        let last = s
+            .conversation
+            .messages
+            .back()
+            .expect("system message pushed");
         assert_eq!(last.role, "system");
         assert!(last.content.contains("bash"));
         assert!(last.content.contains('3'));
@@ -954,20 +1053,20 @@ mod tests {
                 last_error: "still broken".into(),
             },
         );
-        let dl = s.doom_loop.as_ref().expect("doom_loop still set");
+        let dl = s.doom.doom_loop.as_ref().expect("doom_loop still set");
         assert_eq!(dl.count, 5);
         assert_eq!(dl.tool, "grep");
         assert_eq!(dl.last_error, "still broken");
     }
 
-    /// `ContinuationRound` sets `state.continuation` and marks dirty.
+    /// `ContinuationRound` sets `state.generation.continuation` and marks dirty.
     #[test]
     fn continuation_round_sets_state_and_marks_dirty() {
         let mut s = app_state();
         s.dirty = false;
-        assert!(s.continuation.is_none());
+        assert!(s.generation.continuation.is_none());
         dispatch_turn_event(&mut s, TurnEvent::ContinuationRound { round: 3, max: 5 });
-        assert_eq!(s.continuation, Some((3, 5)));
+        assert_eq!(s.generation.continuation, Some((3, 5)));
         assert!(s.dirty);
     }
 
@@ -975,7 +1074,7 @@ mod tests {
     #[test]
     fn cost_stats_clears_continuation() {
         let mut s = app_state();
-        s.continuation = Some((3, 5));
+        s.generation.continuation = Some((3, 5));
         dispatch_turn_event(
             &mut s,
             TurnEvent::CostStats {
@@ -986,8 +1085,24 @@ mod tests {
             },
         );
         assert!(
-            s.continuation.is_none(),
+            s.generation.continuation.is_none(),
             "CostStats should clear continuation"
         );
+    }
+
+    /// `MemoryExtracted` mirrors the store size + turn into
+    /// `state.session.memory_status` and marks dirty so the status bar
+    /// updates in real-time as memory grows.
+    #[test]
+    fn memory_extracted_updates_status_and_marks_dirty() {
+        let mut s = app_state();
+        s.dirty = false;
+        assert!(s.session.memory_status.is_none());
+        dispatch_turn_event(&mut s, TurnEvent::MemoryExtracted { count: 3, turn: 5 });
+        assert_eq!(s.session.memory_status, Some((3, 5)));
+        assert!(s.dirty);
+        // A later extraction overwrites (does not accumulate).
+        dispatch_turn_event(&mut s, TurnEvent::MemoryExtracted { count: 7, turn: 8 });
+        assert_eq!(s.session.memory_status, Some((7, 8)));
     }
 }

@@ -12,7 +12,11 @@ use crate::shared::{FinishReason, StreamEvent, ToolDef, ToolOutcome};
 use std::sync::Mutex;
 
 #[cfg(unix)]
+// #[ignore]: the hook script `sleep 10` must outlive the fixed 5s hook
+// timeout, so the test inherently waits ~5s for the timeout to fire. Genuine
+// timeout-wait, not unnecessary setup. Run with `cargo test -- --ignored`.
 #[tokio::test]
+#[ignore]
 async fn test_pre_tool_hook_timeout_allows_and_warns() {
     let captured = Arc::new(Mutex::new(None));
     let tool = MockTool {

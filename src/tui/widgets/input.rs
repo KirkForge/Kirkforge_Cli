@@ -29,7 +29,7 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
             let total = state.search.matches.len();
             let cur = state.search.match_idx + 1;
             format!(" Input  ({cur} / {total} matches) ")
-        } else if state.input.contains('\n') {
+        } else if state.conversation.input.contains('\n') {
             format!(" Input  ({} lines) ", state.input_line_count())
         } else {
             " Input ".to_string()
@@ -40,13 +40,13 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
 
     let visible_rows = area.height.saturating_sub(2) as usize;
 
-    let mut display_text: Vec<Line> = if state.input.is_empty() {
+    let mut display_text: Vec<Line> = if state.conversation.input.is_empty() {
         vec![Line::from(Span::styled(
             " Type a message or /help for commands...",
             Style::default().fg(Color::DarkGray),
         ))]
     } else {
-        let lines: Vec<&str> = state.input.split('\n').collect();
+        let lines: Vec<&str> = state.conversation.input.split('\n').collect();
         let (cursor_line, cursor_col) = state.cursor_line_col();
 
         // Keep the cursor line visible when there are more lines than rows.
@@ -76,8 +76,11 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
     // WO 14.6: one-line completion suggestions shown above the input
     // text when Tab produced multiple matches (slash commands or
     // @-mention paths). Dim so it reads as a hint, not input.
-    if !state.completion_suggestions.is_empty() {
-        display_text.insert(0, render_suggestions(&state.completion_suggestions));
+    if !state.conversation.completion_suggestions.is_empty() {
+        display_text.insert(
+            0,
+            render_suggestions(&state.conversation.completion_suggestions),
+        );
     }
 
     let paragraph = Paragraph::new(display_text).block(block);

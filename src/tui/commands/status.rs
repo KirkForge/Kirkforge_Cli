@@ -17,7 +17,7 @@ use crate::tui::app::{AppState, ConnectionState};
 ///   - elapsed session time
 ///   - session id
 pub async fn handle_status_command(_args: &str, state: &AppState) -> String {
-    let model = match &state.connection {
+    let model = match &state.provider.connection {
         ConnectionState::Connected { model, .. } => model.clone(),
         ConnectionState::Disconnected | ConnectionState::Connecting => "(disconnected)".to_string(),
         ConnectionState::Error(e) => format!("(error: {e})"),
@@ -25,7 +25,10 @@ pub async fn handle_status_command(_args: &str, state: &AppState) -> String {
 
     // Context pressure: only meaningful once we've done at least one
     // turn AND the adapter has reported a `max_context_tokens`.
-    let pressure = match (state.model_info.as_ref(), state.last_turn_prompt_tokens) {
+    let pressure = match (
+        state.provider.model_info.as_ref(),
+        state.budget.last_turn_prompt_tokens,
+    ) {
         (Some(info), n) if info.max_context_tokens > 0 && n > 0 => {
             let pct = (n as f64 / info.max_context_tokens as f64) * 100.0;
             let band = if pct < 50.0 {
@@ -49,7 +52,7 @@ pub async fn handle_status_command(_args: &str, state: &AppState) -> String {
         (None, _) => "  Context:  (model info unavailable)".to_string(),
     };
 
-    let elapsed = state.session_started.elapsed();
+    let elapsed = state.session.session_started.elapsed();
     let elapsed_str = crate::tui::rendering::format_duration(elapsed.as_secs_f64());
 
     format!(
@@ -68,13 +71,13 @@ pub async fn handle_status_command(_args: &str, state: &AppState) -> String {
          \n\
          {pressure}\n",
         model = model,
-        session_id = state.session_id,
+        session_id = state.session.session_id,
         elapsed = elapsed_str,
-        sent = state.tokens_sent,
-        recv = state.tokens_received,
-        turn = state.last_turn_prompt_tokens,
-        turn_cost = state.turn_cost,
-        cum_cost = state.cumulative_cost,
+        sent = state.budget.tokens_sent,
+        recv = state.budget.tokens_received,
+        turn = state.budget.last_turn_prompt_tokens,
+        turn_cost = state.budget.turn_cost,
+        cum_cost = state.budget.cumulative_cost,
         pressure = pressure,
     )
 }

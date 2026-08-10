@@ -14,7 +14,7 @@ use ratatui::{
 /// The tab indicator has been moved to the top tab bar (WO 17.9);
 /// the status bar now shows only connection, token, and time info.
 pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
-    let left_info = match &state.connection {
+    let left_info = match &state.provider.connection {
         ConnectionState::Disconnected | ConnectionState::Connecting => {
             Span::styled(" ⚡ Disconnected ", Style::default().fg(Color::Red))
         }
@@ -26,15 +26,15 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         }
     };
 
-    let elapsed = format_duration(state.session_started.elapsed().as_secs_f64());
-    let cost_str = if state.cumulative_cost > 0.001 {
-        format!(" ${:.4}", state.cumulative_cost)
-    } else if state.turn_cost > 0.0 {
-        format!(" ${:.4}", state.turn_cost)
+    let elapsed = format_duration(state.session.session_started.elapsed().as_secs_f64());
+    let cost_str = if state.budget.cumulative_cost > 0.001 {
+        format!(" ${:.4}", state.budget.cumulative_cost)
+    } else if state.budget.turn_cost > 0.0 {
+        format!(" ${:.4}", state.budget.turn_cost)
     } else {
         String::new()
     };
-    let skill_count = state.skill_registry.len();
+    let skill_count = state.services.skill_registry.len();
     let skills_str = if skill_count > 0 {
         format!(" {skill_count}sk")
     } else {
@@ -42,12 +42,12 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     };
 
     // ── Plugin trust-tier indicator (Phase 2.3) ────────────────────
-    let plugin_str = state.plugin_status.as_deref().unwrap_or("");
+    let plugin_str = state.provider.plugin_status.as_deref().unwrap_or("");
 
     // ── Tool call counter (visible between tool calls when spinner is off) ──
-    let tool_calls_span: Span = if state.turn_tool_calls > 0 {
+    let tool_calls_span: Span = if state.generation.turn_tool_calls > 0 {
         Span::styled(
-            format!("🔧×{} ", state.turn_tool_calls),
+            format!("🔧×{} ", state.generation.turn_tool_calls),
             Style::default().fg(Color::Cyan),
         )
     } else {
@@ -57,7 +57,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     // ── Continuation round indicator (WO 23.9-R3) ──────────────
     // Active status info: "⟳ 3/5" during FinishReason::Length loops.
     // Never-drop (like sandbox) so the user always sees continuation state.
-    let continuation_span: Span = if let Some((round, max)) = state.continuation {
+    let continuation_span: Span = if let Some((round, max)) = state.generation.continuation {
         Span::styled(
             format!("⟳ {round}/{max} "),
             Style::default().fg(Color::Yellow),
@@ -73,21 +73,22 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     // the plain "↑12.4K" cumulative display (pre-first-turn, or no
     // model connected, or no max_context_tokens configured).
     let max_ctx = state
+        .provider
         .model_info
         .as_ref()
         .map(|m| m.max_context_tokens)
         .unwrap_or(0);
-    let sent_span: Span = if state.last_turn_prompt_tokens > 0 && max_ctx > 0 {
-        let (text, color) = format_budget_indicator(state.last_turn_prompt_tokens, max_ctx);
+    let sent_span: Span = if state.budget.last_turn_prompt_tokens > 0 && max_ctx > 0 {
+        let (text, color) = format_budget_indicator(state.budget.last_turn_prompt_tokens, max_ctx);
         Span::styled(format!("↑{text} "), Style::default().fg(color))
     } else {
         Span::styled(
-            format!("↑{} ", format_token_count(state.tokens_sent)),
+            format!("↑{} ", format_token_count(state.budget.tokens_sent)),
             Style::default().fg(Color::DarkGray),
         )
     };
     let received_span = Span::styled(
-        format!("↓{} ", format_token_count(state.tokens_received)),
+        format!("↓{} ", format_token_count(state.budget.tokens_received)),
         Style::default().fg(Color::DarkGray),
     );
     let cost_span = Span::styled(cost_str.clone(), Style::default().fg(Color::DarkGray));
@@ -106,9 +107,29 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         Span::styled(format!("{plugin_str} "), Style::default().fg(Color::Yellow))
     };
 
+    // ── Memory visibility widget (WO 26.7-R3) ────────────────────
+    // Show "🧠N@t" (N facts, last-updated turn t) when the config flag is
+    // on and memory has been auto-populated this session. Droppable at
+    // narrow widths (added to the drop list below).
+    let memory_show = crate::shared::read_shared_config(&state.services.config)
+        .display
+        .memory_show_in_status;
+    let memory_span: Span = if memory_show {
+        if let Some((count, turn)) = state.session.memory_status {
+            Span::styled(
+                format!("🧠{count}@t{turn} "),
+                Style::default().fg(Color::Cyan),
+            )
+        } else {
+            Span::raw(String::new())
+        }
+    } else {
+        Span::raw(String::new())
+    };
+
     // ── Sandbox indicator (v1.2-p12 follow-up) ─────────────────────
     // Shown in the status bar only when PathGuard is unsandboxed.
-    let sandbox_span: Span = if state.unsandboxed {
+    let sandbox_span: Span = if state.provider.unsandboxed {
         Span::styled(
             "⚠️ UNSANDBOXED ".to_string(),
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
@@ -123,10 +144,14 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     let collapse_span = Span::styled(
         format!(
             " [Ctrl+T: tool collapse {}] ",
-            if state.tool_collapsed { "ON" } else { "OFF" }
+            if state.conversation.tool_collapsed {
+                "ON"
+            } else {
+                "OFF"
+            }
         ),
         Style::default()
-            .fg(if state.tool_collapsed {
+            .fg(if state.conversation.tool_collapsed {
                 Color::Green
             } else {
                 Color::DarkGray
@@ -138,12 +163,12 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     // Display-cell width of a span. `chars().count()` undercounts wide
     // emoji (e.g. `⚠️` is 2 cells but 1 char + variation selector), so
     // add 1 for the known sandbox-emoji span when it's the UNSANDBOXED
-    // warning. `unicode-width` is not a direct dep here (only transitive
-    // via ratatui), so the manual correction stays cheaper than a new
-    // dependency.
+    // warning and for the 🧠 memory glyph (2 cells). `unicode-width` is
+    // not a direct dep here (only transitive via ratatui), so the manual
+    // correction stays cheaper than a new dependency.
     let span_width = |span: &Span| {
         let n = span.content.chars().count();
-        if span.content.contains('⚠') {
+        if span.content.contains('⚠') || span.content.contains('🧠') {
             n + 1
         } else {
             n
@@ -162,6 +187,7 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         continuation_span,
         skills_span,
         plugin_span,
+        memory_span,
         sent_span,
         received_span,
         cost_span,
@@ -170,9 +196,9 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
     ];
 
     // Drop order: drop first → last. Index into `right`.
-    // 5=plugin_span, 4=skills_span, 2=tool_calls_span, 0=collapse_span.
-    // Never-drop: 1=sandbox, 3=continuation, 6=sent, 7=received, 8=cost, 9=separator, 10=elapsed.
-    let drop_order: [usize; 4] = [5, 4, 2, 0];
+    // 6=memory_span, 5=plugin_span, 4=skills_span, 2=tool_calls_span, 0=collapse_span.
+    // Never-drop: 1=sandbox, 3=continuation, 7=sent, 8=received, 9=cost, 10=separator, 11=elapsed.
+    let drop_order: [usize; 5] = [6, 5, 4, 2, 0];
 
     let right_width = |right: &[Span]| right.iter().map(|s| span_width(s)).sum::<usize>();
     let fits = |right: &[Span]| area.width as usize >= left_len + right_width(right) + 2;
@@ -222,12 +248,12 @@ mod tests {
 
     fn make_state() -> AppState {
         let mut state = app_state();
-        state.connection = ConnectionState::Connected {
+        state.provider.connection = ConnectionState::Connected {
             model: "test".into(),
             since: Instant::now(),
         };
-        state.session_started = Instant::now() - Duration::from_secs(1);
-        state.cumulative_cost = 0.01;
+        state.session.session_started = Instant::now() - Duration::from_secs(1);
+        state.budget.cumulative_cost = 0.01;
         state
     }
 
@@ -268,7 +294,7 @@ mod tests {
     #[test]
     fn status_bar_drops_plugin_count_below_70_cols() {
         let mut state = make_state();
-        state.plugin_status = Some("🔒1".into());
+        state.provider.plugin_status = Some("🔒1".into());
         let wide = status_row(&mut state, 80);
         let narrow = status_row(&mut state, 60);
         assert!(
@@ -294,7 +320,7 @@ mod tests {
     #[test]
     fn status_bar_keeps_unsandboxed_warning_at_40_cols() {
         let mut state = make_state();
-        state.unsandboxed = true;
+        state.provider.unsandboxed = true;
         let row = status_row(&mut state, 40);
         assert!(
             row.contains("UNSANDBOXED"),
@@ -318,6 +344,53 @@ mod tests {
         assert!(
             cost.unwrap() < elapsed.unwrap(),
             "cost should render before elapsed at 60 cols (no overlap), got: {row:?}"
+        );
+    }
+
+    /// WO 26.7-R3: the memory widget renders once `memory_status` is
+    /// populated (showing fact count + last-updated turn), and drops at
+    /// narrow widths (it is a droppable span, not never-drop).
+    #[test]
+    fn status_bar_renders_memory_widget_when_populated() {
+        let mut state = make_state();
+        state.session.memory_status = Some((4, 7));
+        let row = status_row(&mut state, 80);
+        // The 🧠 emoji is wide (2 cells); the test buffer pads the
+        // continuation cell with a space, so assert on the emoji glyph
+        // and the count@turn separately rather than an exact string.
+        assert!(
+            row.contains('🧠') && row.contains("4@t7"),
+            "memory widget should render count@turn, got: {row:?}"
+        );
+    }
+
+    #[test]
+    fn status_bar_drops_memory_widget_below_50_cols() {
+        let mut state = make_state();
+        state.session.memory_status = Some((4, 7));
+        let wide = status_row(&mut state, 80);
+        let narrow = status_row(&mut state, 40);
+        assert!(
+            wide.contains('🧠') && wide.contains("4@t7"),
+            "memory widget should be visible at 80 cols, got: {wide:?}"
+        );
+        assert!(
+            !narrow.contains('🧠'),
+            "memory widget should drop at 40 cols, got: {narrow:?}"
+        );
+    }
+
+    #[test]
+    fn status_bar_hides_memory_widget_when_disabled() {
+        let mut state = make_state();
+        state.session.memory_status = Some((4, 7));
+        if let Ok(mut cfg) = state.services.config.write() {
+            cfg.display.memory_show_in_status = false;
+        }
+        let row = status_row(&mut state, 80);
+        assert!(
+            !row.contains('🧠'),
+            "memory widget should be hidden when memory_show_in_status=false, got: {row:?}"
         );
     }
 }

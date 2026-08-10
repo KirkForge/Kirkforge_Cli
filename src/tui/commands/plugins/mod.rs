@@ -127,12 +127,12 @@ pub async fn handle_plugins_command(
 
 /// `list` — show active, blocked, and available plugin directories.
 fn list_plugins(state: &AppState) -> String {
-    let active_names = active_plugin_names(&state.plugin_registry);
+    let active_names = active_plugin_names(&state.provider.plugin_registry);
     let warnings = blocked_warnings(state);
 
     let mut lines = Vec::new();
 
-    let active = state.plugin_registry.active_plugins();
+    let active = state.provider.plugin_registry.active_plugins();
     if active.is_empty() {
         lines.push("Active plugins: none".to_string());
     } else {
@@ -182,7 +182,7 @@ fn list_plugins(state: &AppState) -> String {
         Err(e) => lines.push(format!("Available plugin directories: {e}")),
     }
 
-    let cfg = read_shared_config(&state.config);
+    let cfg = read_shared_config(&state.services.config);
     let disabled: std::collections::HashSet<&String> = cfg.tools.disabled_plugins.iter().collect();
 
     if cfg.tools.plugin_sources.is_empty() {
@@ -266,12 +266,12 @@ async fn enable_plugin(
     state: &mut AppState,
     plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
 ) -> String {
-    let cfg = read_shared_config(&state.config).clone();
+    let cfg = read_shared_config(&state.services.config).clone();
     let dir = plugin_dir(name);
     let policy = TrustPolicy::up_to(cfg.tools.max_plugin_trust)
         .with_reject_on_excess(cfg.tools.reject_on_excess_plugin_trust);
 
-    let (loaded_name, load_warnings) = match state.plugin_registry.load_one(&dir, policy) {
+    let (loaded_name, load_warnings) = match state.provider.plugin_registry.load_one(&dir, policy) {
         Ok(r) => r,
         Err(e) => return format!("❌ Failed to enable plugin '{name}': {e}"),
     };
@@ -280,22 +280,27 @@ async fn enable_plugin(
     }
 
     // Replace any stale skills from a previous load of the same plugin.
-    state.skill_registry.remove_plugin(&loaded_name);
+    state.services.skill_registry.remove_plugin(&loaded_name);
 
-    let skills_added =
-        if let Some((manifest, plugin)) = state.plugin_registry.find_active_by_name(&loaded_name) {
-            state.skill_registry.add_plugin(manifest, plugin)
-        } else {
-            0
-        };
+    let skills_added = if let Some((manifest, plugin)) = state
+        .provider
+        .plugin_registry
+        .find_active_by_name(&loaded_name)
+    {
+        state.services.skill_registry.add_plugin(manifest, plugin)
+    } else {
+        0
+    };
 
-    state.plugin_status = plugin_status_summary(&state.plugin_registry, &blocked_warnings(state));
+    state.provider.plugin_status =
+        plugin_status_summary(&state.provider.plugin_registry, &blocked_warnings(state));
     crate::send_or_warn!(
-        plugin_reload_tx.send(state.plugin_registry.clone()),
+        plugin_reload_tx.send(state.provider.plugin_registry.clone()),
         "plugin registry receiver dropped; executor may have exited"
     );
 
     let hosted = state
+        .provider
         .plugin_registry
         .active_plugins()
         .into_iter()
@@ -313,16 +318,22 @@ fn disable_plugin(
     state: &mut AppState,
     plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
 ) -> String {
-    if state.plugin_registry.find_active_by_name(name).is_none() {
+    if state
+        .provider
+        .plugin_registry
+        .find_active_by_name(name)
+        .is_none()
+    {
         return format!("❌ Plugin '{name}' is not active.");
     }
 
-    state.skill_registry.remove_plugin(name);
-    state.plugin_registry.remove(name);
+    state.services.skill_registry.remove_plugin(name);
+    state.provider.plugin_registry.remove(name);
 
-    state.plugin_status = plugin_status_summary(&state.plugin_registry, &blocked_warnings(state));
+    state.provider.plugin_status =
+        plugin_status_summary(&state.provider.plugin_registry, &blocked_warnings(state));
     crate::send_or_warn!(
-        plugin_reload_tx.send(state.plugin_registry.clone()),
+        plugin_reload_tx.send(state.provider.plugin_registry.clone()),
         "plugin registry receiver dropped; executor may have exited"
     );
 
@@ -334,33 +345,34 @@ async fn reload_plugins(
     state: &mut AppState,
     plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
 ) -> String {
-    let cfg = read_shared_config(&state.config).clone();
-    let before = state.plugin_registry.active_count();
+    let cfg = read_shared_config(&state.services.config).clone();
+    let before = state.provider.plugin_registry.active_count();
 
     let (registry, warnings) = match crate::session::plugin_tools::load_plugin_registry(&cfg) {
         Ok(r) => r,
         Err(e) => return format!("❌ Plugin reload failed: {e}"),
     };
 
-    state.plugin_registry = registry;
+    state.provider.plugin_registry = registry;
 
     // Rebuild the skill registry from scratch so it matches the fresh registry.
-    state.skill_registry.clear();
+    state.services.skill_registry.clear();
     state
+        .services
         .skill_registry
         .set_max_plugin_trust(cfg.tools.max_plugin_trust);
-    if let Err(e) = state.skill_registry.scan_and_load(&cfg) {
+    if let Err(e) = state.services.skill_registry.scan_and_load(&cfg) {
         tracing::warn!(error = %e, "skill rescan during /plugins reload failed");
     }
     for skill in crate::session::skills::builtin_skills() {
-        state.skill_registry.register(skill);
+        state.services.skill_registry.register(skill);
     }
 
-    let after = state.plugin_registry.active_count();
-    state.plugin_status = state.skill_registry.plugin_status_summary();
+    let after = state.provider.plugin_registry.active_count();
+    state.provider.plugin_status = state.services.skill_registry.plugin_status_summary();
 
     crate::send_or_warn!(
-        plugin_reload_tx.send(state.plugin_registry.clone()),
+        plugin_reload_tx.send(state.provider.plugin_registry.clone()),
         "plugin registry receiver dropped; executor may have exited"
     );
 
@@ -387,13 +399,13 @@ async fn trust_plugin(
     };
 
     // Remove the current load (if any) so we can re-apply the trust policy.
-    state.skill_registry.remove_plugin(name);
-    state.plugin_registry.remove(name);
+    state.services.skill_registry.remove_plugin(name);
+    state.provider.plugin_registry.remove(name);
 
     let dir = plugin_dir(name);
     let policy = TrustPolicy::up_to(tier);
 
-    let (loaded_name, load_warnings) = match state.plugin_registry.load_one(&dir, policy) {
+    let (loaded_name, load_warnings) = match state.provider.plugin_registry.load_one(&dir, policy) {
         Ok(r) => r,
         Err(e) => return format!("❌ Failed to set trust tier for '{name}': {e}"),
     };
@@ -401,16 +413,20 @@ async fn trust_plugin(
         tracing::warn!(warning = %w, "plugin load warning");
     }
 
-    let skills_added =
-        if let Some((manifest, plugin)) = state.plugin_registry.find_active_by_name(&loaded_name) {
-            state.skill_registry.add_plugin(manifest, plugin)
-        } else {
-            0
-        };
+    let skills_added = if let Some((manifest, plugin)) = state
+        .provider
+        .plugin_registry
+        .find_active_by_name(&loaded_name)
+    {
+        state.services.skill_registry.add_plugin(manifest, plugin)
+    } else {
+        0
+    };
 
-    state.plugin_status = plugin_status_summary(&state.plugin_registry, &blocked_warnings(state));
+    state.provider.plugin_status =
+        plugin_status_summary(&state.provider.plugin_registry, &blocked_warnings(state));
     crate::send_or_warn!(
-        plugin_reload_tx.send(state.plugin_registry.clone()),
+        plugin_reload_tx.send(state.provider.plugin_registry.clone()),
         "plugin registry receiver dropped; executor may have exited"
     );
 
@@ -433,8 +449,9 @@ fn active_plugin_names(registry: &PluginRegistry) -> std::collections::HashSet<S
 
 /// Plugin warnings that are not stale because the plugin is now active.
 fn blocked_warnings(state: &AppState) -> Vec<String> {
-    let active = active_plugin_names(&state.plugin_registry);
+    let active = active_plugin_names(&state.provider.plugin_registry);
     state
+        .services
         .skill_registry
         .plugin_warnings()
         .iter()
@@ -558,13 +575,13 @@ async fn toggle_plugin(
     plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
 ) -> String {
     let is_workspace_source = {
-        let cfg = read_shared_config(&state.config);
+        let cfg = read_shared_config(&state.services.config);
         cfg.tools.plugin_sources.contains_key(name)
     };
 
     let was_disabled;
     {
-        let mut cfg = write_shared_config(&state.config);
+        let mut cfg = write_shared_config(&state.services.config);
 
         was_disabled = cfg.tools.disabled_plugins.contains(name);
         if was_disabled {
@@ -777,17 +794,33 @@ prompt = "Demo skill"
             enable_msg.contains("Enabled plugin 'demo'"),
             "unexpected enable message: {enable_msg}"
         );
-        assert!(state.plugin_registry.find_active_by_name("demo").is_some());
-        assert!(state.skill_registry.get_by_trigger("/demo").is_some());
-        assert_eq!(state.plugin_status, Some("🔒1".to_string()));
+        assert!(state
+            .provider
+            .plugin_registry
+            .find_active_by_name("demo")
+            .is_some());
+        assert!(state
+            .services
+            .skill_registry
+            .get_by_trigger("/demo")
+            .is_some());
+        assert_eq!(state.provider.plugin_status, Some("🔒1".to_string()));
 
         let disable_msg = handle_plugins_command("disable demo", &mut state, &tx).await;
         assert!(
             disable_msg.contains("Disabled plugin 'demo'"),
             "unexpected disable message: {disable_msg}"
         );
-        assert!(state.plugin_registry.find_active_by_name("demo").is_none());
-        assert!(state.skill_registry.get_by_trigger("/demo").is_none());
+        assert!(state
+            .provider
+            .plugin_registry
+            .find_active_by_name("demo")
+            .is_none());
+        assert!(state
+            .services
+            .skill_registry
+            .get_by_trigger("/demo")
+            .is_none());
     }
 
     #[tokio::test]
@@ -818,7 +851,11 @@ prompt = "Demo skill"
         // by default, then verify that `/plugins trust` overrides it for the
         // current session.
         {
-            let mut cfg = state.config.write().unwrap_or_else(|e| e.into_inner());
+            let mut cfg = state
+                .services
+                .config
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
             cfg.tools.max_plugin_trust = TrustTier::ReadOnly;
         }
         let tx = dummy_reload_tx();
@@ -835,6 +872,7 @@ prompt = "Demo skill"
             "{msg}"
         );
         let hosted = state
+            .provider
             .plugin_registry
             .active_plugins()
             .into_iter()
@@ -943,7 +981,11 @@ command = "hooks/post-turn.sh"
         // Clamp host max to ReadOnly + reject_on_excess=false so the shell
         // plugin is downgraded (not rejected) and its tool+hook filtered.
         {
-            let mut cfg = state.config.write().unwrap_or_else(|e| e.into_inner());
+            let mut cfg = state
+                .services
+                .config
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
             cfg.tools.max_plugin_trust = TrustTier::ReadOnly;
             cfg.tools.reject_on_excess_plugin_trust = false;
         }

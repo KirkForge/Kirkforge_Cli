@@ -15,7 +15,6 @@
 
 import { SecurityEmitter } from "./security-emitter.js";
 import { EventBus } from "@kirkforge/core-events";
-import { readFileSync } from "node:fs";
 
 interface BridgeVerdict {
   verifier: string;

@@ -155,7 +155,13 @@ impl JobStore {
             }
         }
 
-        let run_id = format!("run-{}", started_at.timestamp());
+        // timestamp() is second-granularity, so rapid starts collide and
+        // overwrite the previous run. Nanos + pid keeps each run unique.
+        let run_id = format!(
+            "run-{}-{}",
+            started_at.timestamp_nanos_opt().unwrap_or_default(),
+            std::process::id()
+        );
         let run_dir = runs_dir.join(&run_id);
         fs::create_dir_all(&run_dir)
             .with_context(|| format!("creating run directory {}", run_dir.display()))?;
@@ -351,6 +357,19 @@ mod tests {
             let meta = fs::metadata(&paths.stdout_path).unwrap();
             assert_eq!(meta.permissions().mode() & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn rapid_create_run_ids_are_unique() {
+        let (_tmp, store) = tmp_store();
+        let job = sample_job("job-20260716-001");
+        store.save(&job).unwrap();
+        let a = store.create_run(&job.id, Utc::now()).unwrap();
+        let b = store.create_run(&job.id, Utc::now()).unwrap();
+        assert_ne!(
+            a.run_id, b.run_id,
+            "two rapid session starts must not collide"
+        );
     }
 
     #[test]

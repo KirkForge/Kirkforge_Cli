@@ -110,6 +110,12 @@ pub enum TurnEvent {
         round: usize,
         max: usize,
     },
+
+    /// A chunk of PTY output from a running interactive bash command.
+    /// Emitted incrementally while the command executes so the TUI can
+    /// stream it into the tool-result card. The full output is still
+    /// delivered once via `ToolResult` when the command finishes.
+    BashPartialOutput(String),
 }
 
 #[cfg(test)]

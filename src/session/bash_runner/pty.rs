@@ -13,6 +13,7 @@ pub fn run_with_pty(
     workdir: &std::path::Path,
     cols: u16,
     rows: u16,
+    event_tx: Option<tokio::sync::mpsc::Sender<crate::session::executor::TurnEvent>>,
 ) -> anyhow::Result<PtyResult> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
@@ -34,7 +35,20 @@ pub fn run_with_pty(
     drop(pair.master);
 
     let mut stdout_buf = Vec::new();
-    std::io::copy(&mut reader, &mut stdout_buf)?;
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = reader.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        stdout_buf.extend_from_slice(&chunk[..n]);
+        if let Some(tx) = &event_tx {
+            let text = String::from_utf8_lossy(&chunk[..n]).to_string();
+            // Best-effort: a dropped receiver (TUI closed) must not fail
+            // the command.
+            let _ = tx.try_send(crate::session::executor::TurnEvent::BashPartialOutput(text));
+        }
+    }
 
     let exit_status = child.wait()?;
     let exit_code = if exit_status.success() { Some(0) } else { None };

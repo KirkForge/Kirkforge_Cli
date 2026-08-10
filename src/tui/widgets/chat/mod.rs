@@ -153,6 +153,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
 
     for (idx, entry) in state.messages.iter().enumerate() {
         let is_streaming_last = idx == last_idx && state.is_generating && entry.role == "assistant";
+        let is_streaming_tool = entry.role == "tool" && entry.streaming;
         let collapsed = if is_streaming_last {
             // The message currently being streamed must stay expanded
             // so the user can watch it arrive.
@@ -163,7 +164,9 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
             state.message_should_collapse(idx)
         };
 
-        let cached = if is_streaming_last {
+        let cached = if is_streaming_last || is_streaming_tool {
+            // Streaming entries (assistant or PTY tool) must re-render
+            // every frame so the spinner animates and text arrives live.
             None
         } else {
             state
@@ -185,6 +188,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 content_width,
                 &state.search.query,
                 collapsed,
+                state.spinner_char(),
             );
             if let Some(slot) = state.chat_render_cache.entries.get_mut(idx) {
                 *slot = Some((entry.version, lines.clone()));
@@ -430,7 +434,7 @@ mod tests {
     #[test]
     fn collapsed_tool_card_is_one_line() {
         let e = tool_entry("git status", "nothing to commit", 9, 14);
-        let lines = tool_card_lines(&e, None, true, "", 80);
+        let lines = tool_card_lines(&e, None, true, "", 80, "▁");
         assert_eq!(lines.len(), 1);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("git status"));
@@ -441,7 +445,7 @@ mod tests {
     #[test]
     fn tool_card_includes_timestamp_for_first_entry() {
         let e = tool_entry("git status", "full", 9, 14);
-        let lines = tool_card_lines(&e, None, true, "", 80);
+        let lines = tool_card_lines(&e, None, true, "", 80, "▁");
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.starts_with("09:14 ▶ "));
     }
@@ -450,7 +454,7 @@ mod tests {
     fn tool_card_omits_timestamp_when_same_minute() {
         let prev = tool_entry("first", "full", 9, 14);
         let e = tool_entry("second", "full", 9, 14);
-        let lines = tool_card_lines(&e, Some(&prev), true, "", 80);
+        let lines = tool_card_lines(&e, Some(&prev), true, "", 80, "▁");
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(!text.contains("09:14"));
         assert!(text.starts_with("▶ "));
@@ -459,7 +463,7 @@ mod tests {
     #[test]
     fn expanded_tool_card_has_header_body_and_footer() {
         let e = tool_entry("git status", "line1\nline2", 9, 14);
-        let lines = tool_card_lines(&e, None, false, "", 80);
+        let lines = tool_card_lines(&e, None, false, "", 80, "▁");
         assert!(lines.len() >= 3);
 
         let header: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
@@ -480,7 +484,7 @@ mod tests {
     #[test]
     fn expanded_tool_card_body_is_indented() {
         let e = tool_entry("summary", "body text", 9, 14);
-        let lines = tool_card_lines(&e, None, false, "", 80);
+        let lines = tool_card_lines(&e, None, false, "", 80, "▁");
         assert!(lines.len() >= 2);
         let body_line = &lines[1];
         assert!(body_line.spans[0].content.starts_with("  ▕ "));
@@ -490,7 +494,7 @@ mod tests {
     #[test]
     fn tool_card_preserves_search_highlight() {
         let e = tool_entry("summary", "needle in haystack", 9, 14);
-        let lines = tool_card_lines(&e, None, false, "needle", 80);
+        let lines = tool_card_lines(&e, None, false, "needle", 80, "▁");
         assert!(lines.len() >= 2);
         let body_line = &lines[1];
         let found = body_line

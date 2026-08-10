@@ -796,7 +796,12 @@ async fn run_event_loop(
         if dirty_from_tick {
             let spinner_visible = state.is_generating
                 && state.messages.back().map(|m| m.role.as_str()) != Some("assistant");
-            if spinner_visible {
+            let tool_streaming = state
+                .messages
+                .back()
+                .map(|m| m.role == "tool" && m.streaming)
+                .unwrap_or(false);
+            if spinner_visible || tool_streaming {
                 state.spinner_tick = state.spinner_tick.wrapping_add(1);
                 state.mark_dirty();
             }

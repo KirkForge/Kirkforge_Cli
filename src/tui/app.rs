@@ -651,6 +651,11 @@ impl AppState {
     /// True when collapse mode is on AND the user hasn't explicitly expanded it.
     #[inline]
     pub fn tool_should_collapse(&self, idx: usize) -> bool {
+        // A streaming tool entry must stay expanded so the user can watch
+        // the PTY output arrive; it collapses once `ToolResult` finalizes it.
+        if self.messages.get(idx).map(|m| m.streaming).unwrap_or(false) {
+            return false;
+        }
         self.tool_collapsed && !self.expanded_tools.contains(&idx)
     }
 
@@ -747,6 +752,11 @@ pub struct ConversationEntry {
     /// When `Some`, the UI may render `content` as a summary and expand
     /// via the stored `tool_output` on user request.
     pub tool_output: Option<String>,
+    /// True while a tool is still running and streaming partial output
+    /// into this entry (PTY path). The tool card renders a spinner and
+    /// the accumulated `content` as incremental text until `ToolResult`
+    /// finalizes the entry.
+    pub streaming: bool,
     /// Render-generation counter. Bumped whenever `content` or `tool_output`
     /// changes so the chat render cache can validate with an O(1) integer
     /// comparison instead of hashing every byte of every message each frame.
@@ -761,6 +771,7 @@ impl ConversationEntry {
             content: content.into(),
             timestamp: chrono::Local::now(),
             tool_output: None,
+            streaming: false,
             version: 0,
         }
     }
@@ -774,6 +785,7 @@ impl ConversationEntry {
             content: summary.into(),
             timestamp: chrono::Local::now(),
             tool_output: Some(full.into()),
+            streaming: false,
             version: 0,
         }
     }

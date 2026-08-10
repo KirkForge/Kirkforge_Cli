@@ -129,6 +129,7 @@ pub(super) fn tool_card_lines(
     collapsed: bool,
     search_query: &str,
     content_width: usize,
+    spinner: &'static str,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -150,12 +151,22 @@ pub(super) fn tool_card_lines(
     ));
     header_spans.push(role_badge("tool"));
     header_spans.push(Span::styled("  ".to_string(), Style::default()));
-    header_spans.push(Span::styled(
-        entry.content.clone(),
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::DIM),
-    ));
+    if entry.streaming {
+        // Streaming indicator: spinner + the incremental output so far.
+        header_spans.push(Span::styled(
+            format!("{spinner} {}", entry.content),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::DIM),
+        ));
+    } else {
+        header_spans.push(Span::styled(
+            entry.content.clone(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::DIM),
+        ));
+    }
     if collapsed {
         header_spans.push(Span::styled(
             "  · Enter to expand".to_string(),
@@ -212,9 +223,10 @@ pub(super) fn render_entry_lines(
     content_width: usize,
     search_query: &str,
     collapsed: bool,
+    spinner: &'static str,
 ) -> Vec<Line<'static>> {
     if entry.role == "tool" {
-        return tool_card_lines(entry, prev, collapsed, search_query, content_width);
+        return tool_card_lines(entry, prev, collapsed, search_query, content_width, spinner);
     }
 
     if collapsed {
@@ -365,6 +377,7 @@ pub(super) fn build_chat_lines(
             content_width,
             &state.search.query,
             collapsed,
+            state.spinner_char(),
         );
         lines.extend(entry_lines);
         lines.push(Line::from(""));

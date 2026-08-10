@@ -278,6 +278,12 @@ pub(super) fn emit_turn_events(
                     print_json_line(&line);
                 }
             }
+            session::executor::TurnEvent::BashPartialOutput(chunk) => {
+                // Non-interactive mode has no tool-result card to stream
+                // into; the full output arrives via `ToolResult`. Swallow
+                // the partial chunks silently.
+                let _ = chunk;
+            }
         }
     }
 }

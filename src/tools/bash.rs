@@ -343,7 +343,7 @@ impl Tool for Bash {
             #[cfg(feature = "pty")]
             if interactive {
                 use crate::session::bash_runner::pty::run_with_pty;
-                return match run_with_pty(&cmd, &workdir_path, 80, 24) {
+                return match run_with_pty(&cmd, &workdir_path, 80, 24, ctx.event_tx.clone()) {
                     Ok(pty_result) => {
                         let code = pty_result.exit_code.unwrap_or(-1);
                         if code == 0 {

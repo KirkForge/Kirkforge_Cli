@@ -86,9 +86,12 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             let summary =
                 format!("🔧 {name} (done) — {lines} lines, {bytes} bytes [Enter or Tab to expand]");
             // Avoid two entries per tool call: if the most recent message
-            // is the matching "🔧 name ..." placeholder, replace it.
+            // is the matching "🔧 name ..." placeholder (or a streaming
+            // entry for this tool), replace it.
             if let Some(last) = state.messages.back() {
-                if last.role == "tool" && last.content == format!("🔧 {name} ...") {
+                if last.role == "tool"
+                    && (last.content == format!("🔧 {name} ...") || last.streaming)
+                {
                     state.messages.pop_back();
                 }
             }
@@ -307,6 +310,20 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
         TurnEvent::ContinuationRound { round, max } => {
             state.continuation = Some((round, max));
             state.mark_dirty();
+        }
+        TurnEvent::BashPartialOutput(chunk) => {
+            // Stream PTY output into the running tool card. The last
+            // message is the "🔧 name ..." placeholder pushed by
+            // `ToolStart`; append the chunk and mark it streaming so the
+            // card renders a spinner + incremental text.
+            if let Some(last) = state.messages.back_mut() {
+                if last.role == "tool" {
+                    last.streaming = true;
+                    last.content.push_str(&chunk);
+                    last.bump_version();
+                    state.mark_dirty();
+                }
+            }
         }
     }
 }
@@ -529,6 +546,44 @@ mod tests {
         assert_eq!(s.messages[1].role, "tool");
         assert!(s.messages[1].content.contains("bash"));
         assert!(s.messages[1].content.contains("..."));
+    }
+
+    /// `BashPartialOutput` streams PTY output into the running tool card:
+    /// it marks the last tool entry as streaming and appends the chunk.
+    /// The entry stays streaming until `ToolResult` finalizes it.
+    #[test]
+    fn bash_partial_output_streams_into_running_tool_card() {
+        let mut s = app_state();
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({"cmd": "top"}),
+            },
+        );
+        dispatch_turn_event(&mut s, TurnEvent::BashPartialOutput("PID  USER".into()));
+        dispatch_turn_event(&mut s, TurnEvent::BashPartialOutput("\n  1 root".into()));
+
+        assert_eq!(s.messages.len(), 1);
+        let entry = &s.messages[0];
+        assert_eq!(entry.role, "tool");
+        assert!(entry.streaming, "entry must be marked streaming");
+        assert!(entry.content.contains("PID  USER"));
+        assert!(entry.content.contains("1 root"));
+
+        // `ToolResult` finalizes the entry: streaming is cleared and the
+        // full output replaces the incremental text.
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: "final".into(),
+                success: true,
+            },
+        );
+        assert_eq!(s.messages.len(), 1);
+        assert!(!s.messages[0].streaming);
+        assert_eq!(s.messages[0].tool_output.as_deref(), Some("final"));
     }
 
     /// `ToolResult` is the v1.1 contract: full output goes into

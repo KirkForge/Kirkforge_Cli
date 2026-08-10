@@ -1259,6 +1259,7 @@ impl Executor {
                         diff_review: crate::shared::read_shared_config(&self.config)
                             .security
                             .diff_review,
+                        event_tx: Some(event_tx.clone()),
                     });
                 }
                 PreRunVerdict::Skip { events, message } => {
@@ -1998,6 +1999,7 @@ struct PreparedCall {
     resolved_path: Option<std::path::PathBuf>,
     timeout: std::time::Duration,
     diff_review: bool,
+    event_tx: Option<mpsc::Sender<TurnEvent>>,
 }
 
 /// Run only the tool body for a prepared call, returning the original
@@ -2035,6 +2037,7 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
         diff_review: prep.diff_review,
         task_spawner: None,
         tools: None,
+        event_tx: prep.event_tx,
     };
     let start = Instant::now();
     let outcome = tokio::time::timeout(

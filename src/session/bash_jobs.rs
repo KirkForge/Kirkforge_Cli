@@ -218,17 +218,16 @@ impl BashJobRegistry {
             });
 
             // Wait with optional timeout
-            let status_result: Result<std::process::ExitStatus, String> = if let Some(t) =
-                timeout.filter(|t| !t.is_zero())
-            {
-                match tokio::time::timeout(t, child.wait()).await {
-                    Ok(Ok(status)) => Ok(status),
-                    Ok(Err(e)) => Err(e.to_string()),
-                    Err(_) => Err("Timed out".into()),
-                }
-            } else {
-                child.wait().await.map_err(|e| e.to_string())
-            };
+            let status_result: Result<std::process::ExitStatus, String> =
+                if let Some(t) = timeout.filter(|t| !t.is_zero()) {
+                    match tokio::time::timeout(t, child.wait()).await {
+                        Ok(Ok(status)) => Ok(status),
+                        Ok(Err(e)) => Err(e.to_string()),
+                        Err(_) => Err("Timed out".into()),
+                    }
+                } else {
+                    child.wait().await.map_err(|e| e.to_string())
+                };
 
             let (status, mut error_msg) = match status_result {
                 Ok(status) => (Some(status), None),

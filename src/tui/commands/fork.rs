@@ -218,6 +218,23 @@ async fn load_recent_sessions_for_picker(
     }
 }
 
+/// Refresh the Threads tab's session picker from the daemon's current
+/// recent-session list. Mirrors `refresh_jobs_output`: called when
+/// `sessions_dirty` is set so the tab re-reads session metadata on the
+/// next draw tick instead of showing stale state.
+pub async fn refresh_sessions(state: &mut AppState) {
+    match load_recent_sessions_for_picker().await {
+        Ok(sessions) => {
+            state.session_picker = Some(
+                crate::tui::components::session_picker::SessionPicker::new(sessions),
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to refresh recent sessions");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

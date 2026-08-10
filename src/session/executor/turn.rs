@@ -117,6 +117,17 @@ impl Executor {
                     if count > 0 {
                         let names: Vec<&str> = facts.iter().map(|f| f.name.as_str()).collect();
                         tracing::info!(count, facts = ?names, "auto-remembered facts");
+                        // WO 26.7-R3: tell the TUI so the status bar can
+                        // update in real-time as memory grows.
+                        crate::send_or_warn!(
+                            event_tx
+                                .send(TurnEvent::MemoryExtracted {
+                                    count: store.all().len(),
+                                    turn: self.turn_count,
+                                })
+                                .await,
+                            "TurnEvent receiver dropped; discarding event"
+                        );
                     }
                 }
             }

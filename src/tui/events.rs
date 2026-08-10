@@ -105,12 +105,6 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             file,
             line,
         } => {
-            // ponytail: memory auto-populate indicator deferred — would need
-            // a MemoryExtracted event on the bus + a status bar widget. The
-            // server-side tracing::info!(count, ...) in turn.rs already
-            // provides observability; TUI visibility is M-sized work for a
-            // nice-to-have. Upgrade path: add TurnEvent::MemoryExtracted { count }
-            // in types.rs, emit from turn.rs after extraction, render here.
             let prefix = if success { "🔍" } else { "⚠️" };
             let loc = match (file, line) {
                 (Some(f), Some(l)) => format!(" {}:{}:", f.display(), l),
@@ -324,6 +318,13 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                     state.mark_dirty();
                 }
             }
+        }
+        TurnEvent::MemoryExtracted { count, turn } => {
+            // Mirror into AppState so the status bar can render
+            // "🧠count@turn". This resolves the deferred note in the
+            // Verification arm above (WO 26.7-R3).
+            state.memory_status = Some((count, turn));
+            state.mark_dirty();
         }
     }
 }
@@ -1044,5 +1045,21 @@ mod tests {
             s.continuation.is_none(),
             "CostStats should clear continuation"
         );
+    }
+
+    /// `MemoryExtracted` mirrors the store size + turn into
+    /// `state.memory_status` and marks dirty so the status bar
+    /// updates in real-time as memory grows.
+    #[test]
+    fn memory_extracted_updates_status_and_marks_dirty() {
+        let mut s = app_state();
+        s.dirty = false;
+        assert!(s.memory_status.is_none());
+        dispatch_turn_event(&mut s, TurnEvent::MemoryExtracted { count: 3, turn: 5 });
+        assert_eq!(s.memory_status, Some((3, 5)));
+        assert!(s.dirty);
+        // A later extraction overwrites (does not accumulate).
+        dispatch_turn_event(&mut s, TurnEvent::MemoryExtracted { count: 7, turn: 8 });
+        assert_eq!(s.memory_status, Some((7, 8)));
     }
 }

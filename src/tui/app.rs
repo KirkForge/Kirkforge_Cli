@@ -512,6 +512,13 @@ pub struct AppState {
     /// Cleared when the turn completes normally (CostStats).
     pub continuation: Option<(usize, usize)>,
 
+    // ── Memory visibility widget (WO 26.7-R3) ────────────────────
+    /// Latest memory store size and the executor turn that last mutated
+    /// it, as reported by `TurnEvent::MemoryExtracted`. `Some((count,
+    /// turn))` once memory has been auto-populated; the status bar renders
+    /// "🧠count@turn" when the config flag is enabled.
+    pub memory_status: Option<(usize, u64)>,
+
     // ── Daemon push events (WO 17.2) ───────────────────────────────
     /// When true, the daemon pushed `ThreadsChanged` and the TUI should
     /// re-list recent sessions on the next draw tick instead of polling.
@@ -636,6 +643,7 @@ impl AppState {
             active_tab: ActiveTab::default(),
             tab_list_state: None,
             continuation: None,
+            memory_status: None,
             sessions_dirty: false,
             jobs_dirty: false,
             cached_jobs_output: None,

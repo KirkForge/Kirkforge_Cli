@@ -208,13 +208,35 @@ async fn run_persona_task(
     undo_stack: Option<UndoStackRef>,
     cancelled: Arc<AtomicBool>,
 ) -> PersonaResult {
-    // ponytail: personas route through Anthropic-direct only; Bedrock/Vertex plumbing deferred (WO 25.17-R1-remaining: extend adapter_for sig + pass Config ref at all call sites)
     let adapter = adapters::caching::maybe_wrap_cached(
-        adapters::adapter_for(
+        adapters::adapter_for_with_provider(
             &model_name,
             &ollama_host,
             None,
+            &config.model.anthropic_provider,
             config.model.request_timeout_secs,
+            &config.model.opencode_zen_endpoint,
+            config.model.opencode_zen_api_key.as_deref(),
+            Some(&config.model.adapter_routing),
+            &adapters::ProviderApiKeys {
+                anthropic: config.model.anthropic_api_key.clone(),
+                openai: config.model.openai_api_key.clone(),
+                deepseek: config.model.deepseek_api_key.clone(),
+                gemini: config.model.gemini_api_key.clone(),
+                kimi: config.model.kimi_api_key.clone(),
+            },
+            Some(&config.model.aws_region),
+            if config.model.gcp_project_id.is_empty() {
+                None
+            } else {
+                Some(config.model.gcp_project_id.as_str())
+            },
+            if config.model.gcp_region.is_empty() {
+                None
+            } else {
+                Some(config.model.gcp_region.as_str())
+            },
+            config.model.gcp_service_account_path.clone(),
         ),
         &config,
     );

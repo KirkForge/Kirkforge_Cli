@@ -304,7 +304,12 @@ fn default_docker_cpus() -> String {
 /// Unix-only concept; Windows has job objects but they're a separate
 /// API surface and out of scope for this WO).
 // ponytail: fields serde-deserialized from config; replace with const when config schema stabilizes
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+// NOTE: Default is NOT derived — #[derive(Default)] would zero the rlimit fields
+// (u64::default() = 0), contradicting the serde defaults of 300/2048/512. A zero
+// CPU/memory/filesize limit kills every spawned subprocess instantly via SIGXCPU/
+// SIGXFSZ. The manual Default below matches the serde defaults. (WO 27.2-R2 root
+// cause for 11 "known-broken" ignored tests + a latent production footgun.)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SandboxConfig {
     /// Enable rlimit hardening for the non-Docker bash path. Default
     /// false. When Docker is enabled, this flag is ignored (Docker
@@ -381,6 +386,22 @@ fn default_sandbox_memory_limit_mb() -> u64 {
 }
 fn default_sandbox_filesize_limit_mb() -> u64 {
     512
+}
+
+/// Manual `Default` matching the serde defaults above. Do NOT derive —
+/// see the struct-level note (derive would zero the rlimits).
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            harden: false,
+            no_network: false,
+            block_edits: false,
+            accept_unsandboxed: false,
+            cpu_limit_secs: default_sandbox_cpu_limit_secs(),
+            memory_limit_mb: default_sandbox_memory_limit_mb(),
+            filesize_limit_mb: default_sandbox_filesize_limit_mb(),
+        }
+    }
 }
 
 /// Configuration for a single MCP server connection.

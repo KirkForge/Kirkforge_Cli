@@ -48,9 +48,10 @@ command = "greet.sh"
 }
 
 #[cfg(unix)]
-// ignore: known-broken — see state.md
+// WO 27.2-R2: was "known-broken" — root cause was SandboxConfig::default()
+// zeroing rlimits (derive Default vs serde 300/2048/512), fixed in this commit.
+// Verified passing 2026-08-11.
 #[tokio::test]
-#[ignore]
 async fn wrapper_for_plugin_tool() {
     let (_tmp, reg, cfg) = make_greet_plugin();
     let tools = all_plugin_tools(&reg, cfg, None);

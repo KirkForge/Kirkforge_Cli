@@ -9,9 +9,9 @@
 //! - https://docs.aws.amazon.com/bedrock/latest/userguide/inference-invoke.html
 //! - https://docs.anthropic.com/en/api/claude-on-amazon-bedrock
 
+use super::next_chunk_or_idle_timeout;
 use crate::adapters::anthropic;
 use crate::shared::{Message, ModelInfo, StreamEvent};
-use futures_util::StreamExt;
 
 use super::ModelAdapter;
 
@@ -137,12 +137,18 @@ async fn parse_bedrock_event_stream<B, E>(
     let (inner_tx, inner_rx) =
         tokio::sync::mpsc::channel::<Result<Vec<u8>, std::convert::Infallible>>(4096);
 
+    // Clone tx for the idle-timeout helper; the original is moved into the
+    // spawned Anthropic parser below. On timeout the error goes straight to
+    // the consumer (bypassing the parser) since this is a transport-level
+    // stall, not an envelope-parse issue.
+    let tx_for_timeout = tx.clone();
+
     let parser_handle = tokio::spawn(anthropic::parse_anthropic_stream(
         tx,
         tokio_stream::wrappers::ReceiverStream::new(inner_rx),
     ));
 
-    while let Some(chunk_result) = stream.next().await {
+    while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx_for_timeout).await {
         match chunk_result {
             Ok(chunk) => {
                 envelope_buffer.extend_from_slice(chunk.as_ref());

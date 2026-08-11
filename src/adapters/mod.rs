@@ -22,6 +22,16 @@ use std::future::Future;
 /// and MCP HTTP transports.
 pub(crate) const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
+// ponytail: 90s idle ceiling catches wedged HTTP body streams. The
+// reqwest `.timeout(120s)` does not reliably bound the streaming-body
+// phase, so without this a server that opens the connection and never
+// sends EOF hangs the agent loop forever (the e2e stdin-piping hang
+// was this bug). 90s is well above any realistic silence — Ollama
+// cold-start TTFT is typically <60s, established streams chunk every
+// <1s — but turns a true hang into a clean StreamEvent::Error.
+// Upgrade path: per-adapter configurable idle timeout.
+pub(crate) const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
 /// Build `ModelInfo` for any Anthropic-family model (first-party, Bedrock,
 /// or Vertex). `image_prefix` is the model-id prefix that signals vision
 /// support — `"claude-3"` for first-party/Vertex, `"anthropic.claude-3"` for
@@ -844,6 +854,37 @@ pub(crate) fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
+}
+
+/// Pull the next chunk from a streaming body, aborting with a
+/// `StreamEvent::Error` if no byte arrives within `STREAM_IDLE_TIMEOUT`.
+/// Returns `None` on stream end OR on idle-timeout (after emitting the
+/// error), so callers can use it as a drop-in for `stream.next().await`
+/// inside a `while let Some(...)` loop. See `STREAM_IDLE_TIMEOUT` for
+/// why the ceiling exists.
+pub(crate) async fn next_chunk_or_idle_timeout<S, B, E>(
+    stream: &mut S,
+    tx: &tokio::sync::mpsc::Sender<StreamEvent>,
+) -> Option<Result<B, E>>
+where
+    B: AsRef<[u8]>,
+    E: std::fmt::Display,
+    S: tokio_stream::Stream<Item = Result<B, E>> + Unpin,
+{
+    use tokio_stream::StreamExt;
+    match tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await {
+        Ok(Some(chunk_result)) => Some(chunk_result),
+        Ok(None) => None,
+        Err(_) => {
+            let _ = tx
+                .send(StreamEvent::Error(format!(
+                    "stream idle for {}s; aborting",
+                    STREAM_IDLE_TIMEOUT.as_secs()
+                )))
+                .await;
+            None
+        }
+    }
 }
 
 /// Trim ASCII whitespace from both ends of a byte slice.

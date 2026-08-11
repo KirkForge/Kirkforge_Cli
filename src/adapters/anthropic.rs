@@ -10,13 +10,14 @@
 //! The executor consumes the canonical `StreamEvent` events produced by
 //! [`parse_anthropic_stream`]; no other module needs to know the wire format.
 
+use super::{
+    find_subseq, next_chunk_or_idle_timeout, trim_ascii_whitespace, ModelAdapter,
+    MAX_SSE_BUFFER_BYTES,
+};
 use crate::shared::{
     ContentPart, FinishReason, Message, ModelInfo, ResponseFormat, Role, StreamEvent, TokenUsage,
     ToolInvocation,
 };
-use tokio_stream::StreamExt;
-
-use super::{find_subseq, trim_ascii_whitespace, ModelAdapter, MAX_SSE_BUFFER_BYTES};
 
 /// Anthropic Messages API version we target.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -392,7 +393,7 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
     let mut done_emitted = false;
     let mut pending_stop_reason: Option<String> = None;
 
-    while let Some(chunk_result) = stream.next().await {
+    while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx).await {
         match chunk_result {
             Ok(bytes) => {
                 buffer.extend_from_slice(bytes.as_ref());

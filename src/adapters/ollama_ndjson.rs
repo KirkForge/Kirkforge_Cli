@@ -17,8 +17,8 @@
 //! Parameterization is via [`OllamaNdjsonConfig`]: pick a thinking field
 //! name (or `None`) and the rest is shared.
 
+use super::next_chunk_or_idle_timeout;
 use crate::shared::{FinishReason, StreamEvent, TokenUsage, ToolInvocation};
-use tokio_stream::StreamExt;
 
 /// Maximum bytes the NDJSON parser will accumulate while waiting for a
 /// complete line. A misbehaving server that never emits a newline would
@@ -186,7 +186,7 @@ pub async fn parse_ollama_ndjson_stream<B, E, S>(
     let mut buffer: Vec<u8> = Vec::new();
     let mut tool_calls_buffer: Vec<ToolInvocation> = Vec::new();
 
-    while let Some(chunk_result) = stream.next().await {
+    while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx).await {
         match chunk_result {
             Ok(bytes) => {
                 buffer.extend_from_slice(bytes.as_ref());
@@ -499,6 +499,7 @@ mod tests {
     use super::*;
     use crate::shared::{FinishReason, StreamEvent};
     use serde_json::json;
+    use tokio_stream::StreamExt;
 
     /// Drain the channel into a Vec, up to `max` events or until empty.
     async fn drain(

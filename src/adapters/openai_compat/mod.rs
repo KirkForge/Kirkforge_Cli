@@ -8,9 +8,11 @@
 //! OpenAI function-calling format.
 
 use crate::shared::{FinishReason, Message, ModelInfo, StreamEvent, TokenUsage, ToolCallStyle};
-use tokio_stream::StreamExt;
 
-use super::{find_subseq, trim_ascii_whitespace, ModelAdapter, MAX_SSE_BUFFER_BYTES};
+use super::{
+    find_subseq, next_chunk_or_idle_timeout, trim_ascii_whitespace, ModelAdapter,
+    MAX_SSE_BUFFER_BYTES,
+};
 
 mod tool_call;
 use tool_call::ToolCallAccumulator;
@@ -59,7 +61,7 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
     let mut pending_tool_calls = ToolCallAccumulator::new();
     let mut done_emitted = false;
 
-    while let Some(chunk_result) = stream.next().await {
+    while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx).await {
         match chunk_result {
             Ok(bytes) => {
                 buffer.extend_from_slice(bytes.as_ref());

@@ -7,10 +7,17 @@ use std::path::Path;
 /// at the mock provider.
 #[allow(dead_code)]
 pub fn seed_config(data_dir: &Path, mock_url: &str, model: &str) {
+    // The `[adapter_routing]` table forces the e2e model to the Ollama
+    // adapter regardless of name-prefix guessing, so scenarios can assert
+    // the `/api/chat` path deterministically. Without it, `e2e-test-model`
+    // falls through `adapter_kind_for_default` to OpenAiCompat and hits
+    // `/v1/chat/completions` instead.
     let config = format!(
         "default_model = \"{model}\"\n\
          ollama_host = \"{mock_url}\"\n\
-         auto_approve = false\n"
+         auto_approve = false\n\
+         [adapter_routing]\n\
+         \"e2e-\" = \"Ollama\"\n"
     );
     std::fs::write(data_dir.join("config.toml"), config).expect("seed config.toml");
 }
@@ -21,7 +28,9 @@ pub fn seed_config_auto_approve(data_dir: &Path, mock_url: &str, model: &str) {
     let config = format!(
         "default_model = \"{model}\"\n\
          ollama_host = \"{mock_url}\"\n\
-         auto_approve = true\n"
+         auto_approve = true\n\
+         [adapter_routing]\n\
+         \"e2e-\" = \"Ollama\"\n"
     );
     std::fs::write(data_dir.join("config.toml"), config).expect("seed auto-approve config.toml");
 }

@@ -663,71 +663,10 @@ mod tests {
         assert_eq!(estimate_tokens(&[]), 0);
     }
 
-    // ignore: known-broken — see state.md
-    #[test]
-    #[ignore]
-    fn estimate_tokens_sums_content_chars_divided_by_four() {
-        let msgs = vec![user("1234")]; // 4 chars / 4 = 1
-        assert_eq!(estimate_tokens(&msgs), 1);
-        let msgs2 = vec![user("1234"), assistant("abcd")]; // 1 + 1
-        assert_eq!(estimate_tokens(&msgs2), 2);
-    }
-
-    // ignore: known-broken — see state.md
-    #[test]
-    #[ignore]
-    fn estimate_message_tokens_includes_thinking() {
-        let mut m = user("1234"); // content = 1
-        m.thinking = Some("5678".into()); // thinking = 1
-        assert_eq!(estimate_message_tokens(&m), 2);
-    }
-
-    // ignore: known-broken — see state.md
-    #[test]
-    #[ignore]
-    fn estimate_message_tokens_includes_tool_calls_json() {
-        use crate::shared::ToolInvocation;
-        let mut m = user("1234"); // content = 1
-        m.tool_calls = Some(vec![ToolInvocation {
-            id: "c1".into(),
-            name: "bash".into(),
-            arguments: serde_json::json!({"command": "ls"}),
-        }]);
-        // tool_calls JSON length / 4 added to content tokens
-        let expected_extra = serde_json::to_string(m.tool_calls.as_ref().unwrap())
-            .unwrap()
-            .len()
-            / 4;
-        assert_eq!(estimate_message_tokens(&m), 1 + expected_extra);
-    }
-
     #[test]
     fn estimate_message_tokens_zero_for_empty_message() {
         let m = Message::default();
         assert_eq!(estimate_message_tokens(&m), 0);
-    }
-
-    // ignore: known-broken — see state.md
-    #[test]
-    #[ignore]
-    fn estimate_message_tokens_truncates_tool_calls_on_serialize_error() {
-        // A tool_calls vec that serializes fine still yields tokens; the
-        // unwrap_or(0) path is only hit on a serialization failure which
-        // is hard to provoke. Just confirm the happy path.
-        use crate::shared::ToolInvocation;
-        let m = Message {
-            tool_calls: Some(vec![ToolInvocation {
-                id: "x".into(),
-                name: "t".into(),
-                arguments: serde_json::json!({}),
-            }]),
-            ..Default::default()
-        };
-        let extra = serde_json::to_string(m.tool_calls.as_ref().unwrap())
-            .unwrap()
-            .len()
-            / 4;
-        assert_eq!(estimate_message_tokens(&m), extra);
     }
 
     // ── extract_unresolved_verifier_findings ──

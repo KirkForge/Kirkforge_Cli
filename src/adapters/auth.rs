@@ -38,18 +38,23 @@ pub fn resolve_api_key(provider: &str, config_key: Option<&str>) -> Option<Strin
 mod tests {
     use super::*;
 
+    // WO 27.2 R3: every test in this mod mutates <PROVIDER>_API_KEY env vars.
+    // The mutex serializes them so they can't race each other. Mutex poisoning
+    // is treated as acquisition (panic-on-poison would defeat the purpose).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn config_key_wins_over_env() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("ANTHROPIC_API_KEY", "env-key");
         let result = resolve_api_key("anthropic", Some("config-key"));
         assert_eq!(result, Some("config-key".to_string()));
         std::env::remove_var("ANTHROPIC_API_KEY");
     }
 
-    // ignore: known-broken — see state.md
     #[test]
-    #[ignore]
     fn env_key_used_when_no_config() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("ANTHROPIC_API_KEY", "env-key");
         let result = resolve_api_key("anthropic", None);
         assert_eq!(result, Some("env-key".to_string()));
@@ -58,6 +63,7 @@ mod tests {
 
     #[test]
     fn env_key_used_when_config_empty() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("ANTHROPIC_API_KEY", "env-key");
         let result = resolve_api_key("anthropic", Some(""));
         assert_eq!(result, Some("env-key".to_string()));
@@ -66,6 +72,7 @@ mod tests {
 
     #[test]
     fn none_when_both_missing() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("ANTHROPIC_API_KEY");
         let result = resolve_api_key("anthropic", None);
         assert!(result.is_none());
@@ -73,6 +80,7 @@ mod tests {
 
     #[test]
     fn none_when_env_empty() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("OPENAI_API_KEY", "");
         let result = resolve_api_key("openai", None);
         assert!(result.is_none());
@@ -81,6 +89,7 @@ mod tests {
 
     #[test]
     fn provider_case_insensitive_env() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("DEEPSEEK_API_KEY", "ds-key");
         let result = resolve_api_key("deepseek", None);
         assert_eq!(result, Some("ds-key".to_string()));
@@ -89,6 +98,7 @@ mod tests {
 
     #[test]
     fn gemini_provider_resolves() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("GEMINI_API_KEY", "gem-key");
         let result = resolve_api_key("gemini", None);
         assert_eq!(result, Some("gem-key".to_string()));
@@ -97,6 +107,7 @@ mod tests {
 
     #[test]
     fn kimi_provider_resolves() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("KIMI_API_KEY", "kimi-key");
         let result = resolve_api_key("kimi", None);
         assert_eq!(result, Some("kimi-key".to_string()));

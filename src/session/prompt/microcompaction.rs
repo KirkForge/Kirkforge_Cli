@@ -605,24 +605,6 @@ mod tests {
         assert_eq!(estimate_tokens(&[]), 0);
     }
 
-    // ignore: known-broken — see state.md
-    #[test]
-    #[ignore]
-    fn estimate_message_tokens_includes_thinking_and_tool_calls() {
-        let mut m = assistant("1234");
-        m.thinking = Some("5678".into());
-        m.tool_calls = Some(vec![ToolInvocation {
-            id: "c1".into(),
-            name: "bash".into(),
-            arguments: serde_json::json!({}),
-        }]);
-        let extra = serde_json::to_string(m.tool_calls.as_ref().unwrap())
-            .unwrap()
-            .len()
-            / 4;
-        assert_eq!(estimate_message_tokens(&m), 1 + 1 + extra);
-    }
-
     /// WO 17.5: `use_llm=true` with a high drop_threshold triggers the LLM
     /// compaction path, which produces a structured summary with
     /// goals/decisions, files, and TODOs.

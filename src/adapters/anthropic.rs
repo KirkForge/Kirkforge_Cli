@@ -2297,17 +2297,6 @@ mod tests {
         std::env::remove_var("ANTHROPIC_API_KEY");
     }
 
-    // ignore: known-broken — see state.md
-    #[test]
-    #[ignore]
-    fn env_key_used_when_no_config() {
-        // When config is None, env key is used.
-        std::env::set_var("ANTHROPIC_API_KEY", "env-key");
-        let key = super::super::auth::resolve_api_key("anthropic", None);
-        assert_eq!(key, Some("env-key".to_string()));
-        std::env::remove_var("ANTHROPIC_API_KEY");
-    }
-
     #[test]
     fn none_when_both_missing() {
         std::env::remove_var("ANTHROPIC_API_KEY");

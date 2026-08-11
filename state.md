@@ -30,7 +30,7 @@
   - `windows`: e2e tests fail. Root cause found: scenarios passed the prompt as a positional CLI arg, but `kf-code run` has no positional field → clap exits code 2 → zero mock requests. Fixed by `cdb3b42` (pipe prompt via stdin). A second pre-existing bug — **the stdin-piping path hung, the binary never completed the turn against the mock** — is now **RESOLVED** (commit `260e7d8`: 90s `STREAM_IDLE_TIMEOUT` via a shared `next_chunk_or_idle_timeout` helper across the 4 adapter parsers, plus an `[adapter_routing] "e2e-" = "Ollama"` seed fixing the e2e routing mismatch; see the RESOLVED block below). CI should clear once `260e7d8` + `cdb3b42`/`76e037a` are pushed.
 - **Version bump to 0.3.7: NOT done.**
 - **`main` fast-forward: NOT done** (main still at e95c347).
-- **WO 27 series: STARTED.** Overview at `docs/workorders/27.0-wo27-overview.md`; 7 detail workorders (27.1 landlock, 27.2 test-health, 27.3 architecture, 27.4 plugin-trust, 27.5 bash-hardening, 27.6 themes, 27.7 mouse). 27.2 is In Progress (7 binary-spawn e2e scenarios `#[ignore]`-gated to unblock CI green); the rest Planned.
+- **WO 27 series: STARTED.** Overview at `docs/workorders/27.0-wo27-overview.md`; 7 detail workorders (27.1 landlock, 27.2 test-health, 27.3 architecture, 27.4 plugin-trust, 27.5 bash-hardening, 27.6 themes, 27.7 mouse). 27.2 is In Progress (7 binary-spawn e2e scenarios `#[ignore]`-gated to unblock CI green); **27.6 themes IN PROGRESS** (Theme struct + 4 built-ins + `display.theme` config + `/theme` slash command wired; not yet committed); the rest Planned.
 - **Local install at /home/henrik/own-code/kf-code: NOT done.**
 
 ### Pending / blocked
@@ -56,7 +56,7 @@ Full codebase review (8 parallel read-only subagents) surfaced findings; safe fi
 - **H8 — `tools ↔ session` circular module dependency** (tools import `session::access::PathGuard`, `task.rs` constructs nested `Executor`). Needs a `tool::Sandbox`/`tool::Guard` port trait. Architecture refactor.
 - **H9 — god-objects on hot path** (`anthropic.rs` 2316 LOC monolithic; `executor/turn.rs` `dispatch_tool_call_batch` ~360 LOC + `stream_iteration` ~390 LOC). Split into directory form mirroring `openai_compat/`. Multi-step.
 - **H6 — 29 "known-broken" `#[ignore]` tests** need per-test root-cause diagnosis. 8 in `plugin_tools/tests.rs` are security-critical (sandbox isolation, env sanitization). `config_field_count_drift_guard` canary also ignored. Tracked separately.
-- **H10 — workspace plugin trust bypass** (`local_trust_policy` sets `verify_signatures: false` with no operator opt-in). Design decision on opt-in shape.
+- **H10 — workspace plugin trust bypass** (`local_trust_policy` sets `verify_signatures: false` with no operator opt-in). **IN PROGRESS — WO 27.4**: `plugin_trust_workspace` config field added (default `false`); workspace plugins now fail-closed on missing/invalid signatures unless opted in. (Note: WO 27.4 title labels this "H9"; state.md uses H9 for the god-objects item. This is the workspace-trust item.)
 - **H3 — bash deny-list bypassable** (`$()` subst, var indirection, base64 payloads). Fundamental; depends on C1.
 
 ### Review subagent corrections (over-eager "dead code" flags, verified NOT dead)

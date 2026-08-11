@@ -4,6 +4,7 @@
 //! formatting. These take primitives in and return `String` / `Color`
 //! out — no ratatui frame state — so they're unit-testable in isolation.
 
+use crate::tui::theme::Theme;
 use ratatui::style::Color;
 
 /// Format a duration for display.
@@ -47,23 +48,23 @@ pub fn format_token_count(tokens: usize) -> String {
 /// Why this lives here and not in `status.rs`: the helper is pure
 /// (string + color out, no ratatui types) so it's trivially unit-testable
 /// without a frame buffer. The status widget just consumes the output.
-pub fn format_budget_indicator(used: usize, max: usize) -> (String, Color) {
+pub fn format_budget_indicator(used: usize, max: usize, theme: &Theme) -> (String, Color) {
     match budget_pct(used, max) {
         None => {
             // No budget known (model not connected yet, or model has
             // 0 max_context_tokens in its config). Return the plain
             // used-count so the caller can fall back to `↑N`.
-            (format_token_count(used), Color::DarkGray)
+            (format_token_count(used), theme.budget_neutral)
         }
         Some(pct) => {
             let color = if pct < 50 {
-                Color::Green
+                theme.budget_comfortable
             } else if pct < 80 {
-                Color::Yellow
+                theme.budget_tight
             } else if pct < 95 {
-                Color::Red
+                theme.budget_high
             } else {
-                Color::Rgb(255, 100, 100) // light red — "the cliff is here"
+                theme.budget_cliff
             };
 
             let text = format!(

@@ -457,6 +457,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Boolean(v)) = table.get("plugin_signature_validation") {
         cfg.tools.plugin_signature_validation = *v;
     }
+    if let Some(Value::Boolean(v)) = table.get("plugin_trust_workspace") {
+        cfg.tools.plugin_trust_workspace = *v;
+    }
     if let Some(Value::String(v)) = table.get("plugin_public_key_path") {
         cfg.tools.plugin_public_key_path = if v.is_empty() {
             None
@@ -486,6 +489,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     }
     if let Some(Value::Boolean(v)) = table.get("memory_show_in_status") {
         cfg.display.memory_show_in_status = *v;
+    }
+    if let Some(Value::String(v)) = table.get("theme") {
+        cfg.display.theme = v.clone();
     }
     if let Some(Value::Integer(v)) = table.get("checkpoint_interval_messages") {
         cfg.session.checkpoint_interval_messages = (*v).max(0) as usize;
@@ -676,6 +682,12 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
             before.tools.plugin_signature_validation, after.tools.plugin_signature_validation
         ));
     }
+    if before.tools.plugin_trust_workspace != after.tools.plugin_trust_workspace {
+        diffs.push(format!(
+            "plugin_trust_workspace: {} → {}",
+            before.tools.plugin_trust_workspace, after.tools.plugin_trust_workspace
+        ));
+    }
     if before.tools.plugin_public_key_path != after.tools.plugin_public_key_path {
         diffs.push(format!(
             "plugin_public_key_path: {:?} → {:?}",
@@ -710,6 +722,12 @@ pub fn config_diff_summary(before: &Config, after: &Config) -> String {
         diffs.push(format!(
             "memory_show_in_status: {} → {}",
             before.display.memory_show_in_status, after.display.memory_show_in_status
+        ));
+    }
+    if before.display.theme != after.display.theme {
+        diffs.push(format!(
+            "theme: {} → {}",
+            before.display.theme, after.display.theme
         ));
     }
     if before.session.checkpoint_interval_messages != after.session.checkpoint_interval_messages {
@@ -2065,9 +2083,9 @@ mod tests {
 
         // ── 1. Total struct-level fields ──────────────────────────
         // ModelConfig=33, SecurityConfig=20, ToolConfig=32,
-        // SessionConfig=9, DisplayConfig=5
+        // SessionConfig=9, DisplayConfig=7
         assert_eq!(
-            CONFIG_FIELD_COUNT, 100,
+            CONFIG_FIELD_COUNT, 102,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2128,6 +2146,7 @@ mod tests {
             memory_top_n = 999
             memory_auto_populate = true
             memory_show_in_status = true
+            theme = "x"
             checkpoint_interval_messages = 999
             anthropic_provider = "x"
             aws_region = "x"
@@ -2169,8 +2188,8 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 64 top-level leaf keys + 5 single-key sub-tables + 7 computer_use sub-keys = 76
-        const MERGE_TOML_EXPECTED: usize = 76;
+        // 64 top-level leaf keys + 5 single-key sub-tables + 7 computer_use sub-keys = 77
+        const MERGE_TOML_EXPECTED: usize = 77;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2179,9 +2198,9 @@ mod tests {
         // ── 3. apply_env_overrides field coverage ─────────────────
         // Count KF_CODE_* env var checks in apply_env_overrides.
         // This must stay in sync with env_overrides.rs.
-        const ENV_OVERRIDE_EXPECTED: usize = 78;
+        const ENV_OVERRIDE_EXPECTED: usize = 79;
         assert_eq!(
-            ENV_OVERRIDE_EXPECTED, 78,
+            ENV_OVERRIDE_EXPECTED, 79,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
         );
 

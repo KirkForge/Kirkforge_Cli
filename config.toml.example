@@ -343,6 +343,13 @@
 # bar. Default: true.
 # memory_show_in_status = true
 
+# TUI color theme. Built-ins: "default" (the prior hard-coded colors),
+# "dark" (high-contrast dark), "light" (readable on white terminals),
+# "monokai" (warm palette). Unknown values fall back to "default".
+# Live-switchable via the /theme slash command. Default: "default".
+# Env: KF_CODE_THEME.
+# theme = "default"
+
 # ---------------------------------------------------------------------------
 # Workspace plugin sources
 # ---------------------------------------------------------------------------
@@ -353,6 +360,15 @@
 # `enabled_plugins`. Relative paths resolve against the current working
 # directory; in an installed release the bundled plugin is looked up under
 # `~/.local/share/kf-code/plugins/<name>`.
+#
+# SECURITY (H9 / WO 27.4): workspace plugin dirs are NOT trust roots by
+# default. A model with `write_file` access can drop a plugin + manifest into
+# a workspace path and trigger `/reload`, so signature verification on
+# workspace plugins is enforced unless you explicitly opt in here. With the
+# default (false), unsigned workspace plugins are rejected at load. Set this
+# to true ONLY if no model/tool can write to any configured `plugin_sources`
+# path — otherwise a planted plugin loads with full user privileges.
+# plugin_trust_workspace = false
 #
 # [plugin_sources]
 # kf-plugin = "plugins/kf-plugin"

@@ -79,7 +79,11 @@ pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
         .map(|m| m.max_context_tokens)
         .unwrap_or(0);
     let sent_span: Span = if state.budget.last_turn_prompt_tokens > 0 && max_ctx > 0 {
-        let (text, color) = format_budget_indicator(state.budget.last_turn_prompt_tokens, max_ctx);
+        let (text, color) = format_budget_indicator(
+            state.budget.last_turn_prompt_tokens,
+            max_ctx,
+            &state.ui.theme,
+        );
         Span::styled(format!("↑{text} "), Style::default().fg(color))
     } else {
         Span::styled(

@@ -230,6 +230,13 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
         usage: "/mcp shows configured servers, tool counts, and resource/prompt warnings",
         group: "Diagnostics",
     },
+    SlashCommand {
+        triggers: &["/theme"],
+        description: "Switch TUI color theme",
+        usage: "/theme [default | dark | light | monokai]\n\
+                /theme with no arg cycles through the four built-ins.",
+        group: "Diagnostics",
+    },
 ];
 
 /// Return the primary trigger (first alias) of every command whose
@@ -651,6 +658,14 @@ pub(crate) async fn dispatch_slash_command(
             }
             Ok(true)
         }
+        "/theme" => {
+            let msg = handle_theme_command(args, state);
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new("system", msg));
+            Ok(true)
+        }
         _ => Ok(false),
     }
 }
@@ -724,6 +739,57 @@ fn handle_permissions_command(args: &str, state: &mut AppState) -> String {
 fn persist_shared(cfg: &crate::shared::SharedConfig) -> anyhow::Result<()> {
     let snapshot = crate::shared::read_shared_config(cfg).clone();
     crate::session::config::save_config(&snapshot)
+}
+
+/// Handle `/theme [name]` (WO 27.6).
+///
+/// No-arg cycles default→dark→light→monokai→default. With-arg sets the
+/// theme if the name matches a built-in; otherwise prints the available
+/// list. On a successful switch: updates `state.ui.theme`, clears the
+/// chat render cache (so all entries rebuild with new colors), and
+/// persists the choice to `display.theme` in config.toml.
+fn handle_theme_command(args: &str, state: &mut AppState) -> String {
+    use crate::tui::theme::Theme;
+
+    let current = crate::shared::read_shared_config(&state.services.config)
+        .display
+        .theme
+        .clone();
+    let trimmed = args.trim();
+    let next: String = if trimmed.is_empty() {
+        Theme::next_name(&current).to_string()
+    } else {
+        trimmed.to_string()
+    };
+
+    if !Theme::BUILTIN_NAMES.contains(&next.as_str()) {
+        return format!(
+            "Unknown theme '{next}'. Available: {}.",
+            Theme::BUILTIN_NAMES.join(", ")
+        );
+    }
+
+    state.ui.theme = Theme::from_name(&next);
+    // Cache invalidation: rendered Lines carry the old colors as Style
+    // state, so they must be rebuilt. clear_entries is O(entries).
+    state.conversation.chat_render_cache.clear_entries();
+    state.mark_dirty();
+
+    {
+        let mut cfg = state
+            .services
+            .config
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        cfg.display.theme = next.clone();
+    }
+    match persist_shared(&state.services.config) {
+        Ok(()) => format!("Theme: {next} (saved to config.toml)."),
+        Err(e) => format!(
+            "Theme: {next} for this session.\n\
+             ⚠️ Failed to persist to config.toml: {e}"
+        ),
+    }
 }
 
 #[cfg(test)]

@@ -306,6 +306,7 @@ prompt = "hello"
         m
     };
     cfg.tools.enabled_plugins = vec!["workspace-demo".to_string()];
+    cfg.tools.plugin_trust_workspace = true;
 
     let mut registry = PluginRegistry::new();
     let warnings = load_workspace_plugins(&mut registry, &cfg);
@@ -451,6 +452,7 @@ command = "hello.sh"
         .into_iter()
         .collect();
     cfg.tools.enabled_plugins = vec!["demo".to_string()];
+    cfg.tools.plugin_trust_workspace = true;
 
     let mut registry = PluginRegistry::new();
     let warnings = load_workspace_plugins(&mut registry, &cfg);
@@ -523,6 +525,7 @@ fn bundled_plugins_load_from_data_dir() {
     let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
     let mut cfg = Config::default();
     cfg.tools.plugin_signature_validation = false;
+    cfg.tools.plugin_trust_workspace = true;
     let (registry, warnings) =
         load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
@@ -554,6 +557,7 @@ fn bundled_plugin_tool_commands_exist_in_data_dir() {
     let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
     let mut cfg = Config::default();
     cfg.tools.plugin_signature_validation = false;
+    cfg.tools.plugin_trust_workspace = true;
     let (registry, warnings) =
         load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
@@ -610,6 +614,7 @@ async fn bundled_stratum_mode_tool_executes_via_host() {
     let _data_guard = DataDirGuard::set_async(&tmp.path().to_string_lossy()).await;
     let mut cfg = Config::default();
     cfg.tools.plugin_signature_validation = false;
+    cfg.tools.plugin_trust_workspace = true;
     let (registry, warnings) =
         load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
@@ -670,6 +675,7 @@ async fn bundled_node_sdk_tool_executes_via_host() {
     let _guard = DataDirGuard::set_async(&tmp.path().to_string_lossy()).await;
     let mut cfg = Config::default();
     cfg.tools.plugin_signature_validation = false;
+    cfg.tools.plugin_trust_workspace = true;
     let (registry, warnings) =
         load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");

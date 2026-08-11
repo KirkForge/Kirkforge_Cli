@@ -14,6 +14,7 @@ use chrono::Timelike;
 
 use crate::tui::app::{AppState, ConnectionState, ConversationEntry};
 use crate::tui::rendering::{highlight_line_spans, render_markdown_lines_with_query};
+use crate::tui::theme::Theme;
 
 /// Map a conversation role to a short, color-coded badge span.
 pub(super) fn role_badge(role: &str) -> Span<'static> {
@@ -130,6 +131,7 @@ pub(super) fn tool_card_lines(
     search_query: &str,
     content_width: usize,
     spinner: &'static str,
+    theme: &Theme,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -196,7 +198,7 @@ pub(super) fn tool_card_lines(
         let wrapped = textwrap::fill(raw_line, body_width);
         for wline in wrapped.lines() {
             let mut spans = vec![Span::styled("  ▕ ".to_string(), border_style)];
-            spans.extend(highlight_line_spans(wline, search_query, body_style));
+            spans.extend(highlight_line_spans(wline, search_query, body_style, theme));
             lines.push(Line::from(spans));
         }
     }
@@ -216,6 +218,8 @@ pub(super) fn tool_card_lines(
 ///
 /// This is the per-message unit that the chat render cache stores. It does
 /// not include the trailing blank line between messages.
+// reason: each arg is an independent rendering input; grouping would obscure the wiring.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_entry_lines(
     entry: &ConversationEntry,
     prev: Option<&ConversationEntry>,
@@ -224,9 +228,18 @@ pub(super) fn render_entry_lines(
     search_query: &str,
     collapsed: bool,
     spinner: &'static str,
+    theme: &Theme,
 ) -> Vec<Line<'static>> {
     if entry.role == "tool" {
-        return tool_card_lines(entry, prev, collapsed, search_query, content_width, spinner);
+        return tool_card_lines(
+            entry,
+            prev,
+            collapsed,
+            search_query,
+            content_width,
+            spinner,
+            theme,
+        );
     }
 
     if collapsed {
@@ -257,7 +270,7 @@ pub(super) fn render_entry_lines(
 
     if entry.role == "assistant" {
         let md_lines =
-            render_markdown_lines_with_query(&entry.content, search_query, content_width);
+            render_markdown_lines_with_query(&entry.content, search_query, content_width, theme);
         for md_line in md_lines {
             if md_line.spans.is_empty()
                 || (md_line.spans.len() == 1 && md_line.spans[0].content.is_empty())
@@ -276,6 +289,7 @@ pub(super) fn render_entry_lines(
                 content_line,
                 search_query,
                 Style::default(),
+                theme,
             ));
             lines.push(Line::from(spans));
         }
@@ -381,6 +395,7 @@ pub(super) fn build_chat_lines(
             &state.search.query,
             collapsed,
             state.spinner_char(),
+            &state.ui.theme,
         );
         lines.extend(entry_lines);
         lines.push(Line::from(""));

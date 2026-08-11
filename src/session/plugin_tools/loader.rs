@@ -81,12 +81,38 @@ pub fn trust_policy_from_config(cfg: &Config) -> TrustPolicy {
     }
 }
 
-/// Build a trust policy for local workspace plugins: same as the base policy
-/// but with signature verification disabled (local-trust bypass).
-fn local_trust_policy(base: &TrustPolicy) -> TrustPolicy {
-    TrustPolicy {
-        verify_signatures: false,
-        ..base.clone()
+/// Build a trust policy for local workspace plugins.
+///
+/// Workspace plugin dirs (`cfg.tools.plugin_sources`) are NOT trust roots by
+/// default — a model with `write_file` access can drop a plugin + manifest
+/// there and wait for `/reload` (H9). The operator must explicitly opt in via
+/// `plugin_trust_workspace = true` to restore the local-trust bypass.
+///
+/// - `trust_workspace == false` (default): `verify_signatures` is forced on
+///   regardless of the global `plugin_signature_validation` toggle, so
+///   unsigned/invalid workspace plugins fail-closed at load. The bar is
+///   higher than data-dir plugins because workspace dirs are model-writable.
+/// - `trust_workspace == true`: signatures are bypassed as before, with a
+///   `tracing::warn!` so the operator sees the trust decision in logs.
+fn local_trust_policy(base: &TrustPolicy, trust_workspace: bool) -> TrustPolicy {
+    if trust_workspace {
+        tracing::warn!(
+            "plugin_trust_workspace = true: workspace plugins bypass signature verification \
+             (unsafe if a model can write to the workspace)"
+        );
+        TrustPolicy {
+            verify_signatures: false,
+            ..base.clone()
+        }
+    } else {
+        tracing::warn!(
+            "plugin_trust_workspace = false: workspace plugins require signatures and will be \
+             rejected without a configured plugin_public_key_path"
+        );
+        TrustPolicy {
+            verify_signatures: true,
+            ..base.clone()
+        }
     }
 }
 
@@ -98,7 +124,7 @@ fn local_trust_policy(base: &TrustPolicy) -> TrustPolicy {
 /// tiers; the plugin itself is not added to the registry if it fails to load.
 pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Vec<String> {
     let policy = trust_policy_from_config(cfg);
-    let ws_policy = local_trust_policy(&policy);
+    let ws_policy = local_trust_policy(&policy, cfg.tools.plugin_trust_workspace);
     let mut warnings = Vec::new();
 
     for name in &cfg.tools.enabled_plugins {
@@ -494,17 +520,39 @@ mod loader_tests {
     }
 
     #[test]
-    fn local_trust_policy_bypasses_signature_verification() {
+    fn local_trust_policy_default_enforces_signatures() {
+        // H9 / WO 27.4: workspace plugins are NOT trusted by default. The
+        // policy forces verify_signatures = true (fail-closed) regardless of
+        // the base policy, so unsigned plugins are rejected unless the
+        // operator opts in via plugin_trust_workspace = true.
+        let base = TrustPolicy {
+            max: kf_plugin_sdk::TrustTier::Shell,
+            reject_on_excess: true,
+            verify_signatures: false,
+            signature_key_path: None,
+        };
+        let local = local_trust_policy(&base, false);
+        assert!(
+            local.verify_signatures,
+            "default (no opt-in) must enforce signatures on workspace plugins"
+        );
+        assert_eq!(local.max, base.max, "other fields must be preserved");
+        assert_eq!(local.reject_on_excess, base.reject_on_excess);
+        assert_eq!(local.signature_key_path, base.signature_key_path);
+    }
+
+    #[test]
+    fn local_trust_policy_opt_in_bypasses_signature_verification() {
         let base = TrustPolicy {
             max: kf_plugin_sdk::TrustTier::Shell,
             reject_on_excess: true,
             verify_signatures: true,
             signature_key_path: Some(PathBuf::from("/keys/pub.key")),
         };
-        let local = local_trust_policy(&base);
+        let local = local_trust_policy(&base, true);
         assert!(
             !local.verify_signatures,
-            "local-trust policy must disable signature verification"
+            "opt-in must bypass signature verification for workspace plugins"
         );
         assert_eq!(local.max, base.max, "other fields must be preserved");
         assert_eq!(local.reject_on_excess, base.reject_on_excess);

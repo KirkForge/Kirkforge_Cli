@@ -31,6 +31,7 @@ pub mod rendering;
 pub mod replay;
 pub mod search;
 pub mod syntax;
+pub mod theme;
 pub mod transcript;
 pub mod widgets;
 
@@ -134,7 +135,9 @@ async fn init_app_state(
     conversation_log_path: &std::path::Path,
     undo_stack: &Option<crate::tools::UndoStackRef>,
 ) -> AppState {
+    use crate::tui::theme::Theme;
     let mut state = AppState::new(shared_config.clone());
+    state.ui.theme = Theme::from_name(&cfg.display.theme);
     state.session.undo_stack = undo_stack.clone();
     state.session.session_started = Instant::now();
     state.session.log_path = Some(conversation_log_path.to_path_buf());

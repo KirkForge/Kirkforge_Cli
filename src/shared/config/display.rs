@@ -20,6 +20,10 @@ fn default_memory_show_in_status() -> bool {
     true
 }
 
+fn default_theme() -> String {
+    "default".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayConfig {
     #[serde(default = "default_memory_enabled")]
@@ -32,6 +36,11 @@ pub struct DisplayConfig {
     pub memory_auto_populate: bool,
     #[serde(default = "default_memory_show_in_status")]
     pub memory_show_in_status: bool,
+    /// TUI color theme name. Built-ins: `"default"`, `"dark"`,
+    /// `"light"`, `"monokai"`. Unknown values fall back to `"default"`.
+    /// Live-switchable via the `/theme` slash command (WO 27.6).
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 impl Default for DisplayConfig {
@@ -42,6 +51,7 @@ impl Default for DisplayConfig {
             memory_top_n: default_memory_top_n(),
             memory_auto_populate: default_memory_auto_populate(),
             memory_show_in_status: default_memory_show_in_status(),
+            theme: default_theme(),
         }
     }
 }

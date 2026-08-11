@@ -6,7 +6,8 @@
 //! and optional search highlighting. Everything here is private to
 //! the `rendering` module.
 
-use ratatui::style::{Color, Modifier, Style};
+use crate::tui::theme::Theme;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::highlight_line_spans;
@@ -46,7 +47,12 @@ impl TableState {
 ///
 /// `width` is the content width in columns; cells are truncated with an
 /// ellipsis rather than wrapped, keeping each row one line tall.
-pub(super) fn render_table(state: TableState, query: &str, width: usize) -> Vec<Line<'static>> {
+pub(super) fn render_table(
+    state: TableState,
+    query: &str,
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     let TableState {
         alignments, rows, ..
     } = state;
@@ -74,7 +80,7 @@ pub(super) fn render_table(state: TableState, query: &str, width: usize) -> Vec<
         }
     }
 
-    let base_style = Style::default().fg(Color::White);
+    let base_style = Style::default().fg(theme.table_base);
     let mut out: Vec<Line<'static>> = Vec::new();
 
     // Render separator after header if there is more than one row.
@@ -94,6 +100,7 @@ pub(super) fn render_table(state: TableState, query: &str, width: usize) -> Vec<
                 } else {
                     base_style
                 },
+                theme,
             );
             spans.extend(cell_spans);
             spans.push(Span::raw(" | "));
@@ -113,7 +120,7 @@ pub(super) fn render_table(state: TableState, query: &str, width: usize) -> Vec<
             }
             out.push(Line::from(Span::styled(
                 sep,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.table_separator),
             )));
         }
     }

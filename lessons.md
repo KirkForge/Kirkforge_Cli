@@ -49,6 +49,36 @@
   and `comm -23` against all. (Not `git merge-base --is-merged` + naive `git branch` parse —
   worktree `+` markers break it.)
 
+## WO 27.6 themes session (2026-08-11)
+
+- **`Color::DarkYellow` / `Color::DarkRed` do NOT exist in ratatui.** The
+  16-color palette is: Black, Red, Green, Yellow, Blue, Magenta, Cyan,
+  Gray, DarkGray, LightRed, LightGreen, LightYellow, LightBlue,
+  LightMagenta, LightCyan, White, Reset, Rgb(r,g,b), Indexed(i). For a
+  "darker yellow on white background" use `Color::Yellow` (renders olive)
+  or a custom `Color::Rgb(255, 205, 0)`.
+- **`impl Default for Theme` + inherent `fn default()` collide.** Clippy
+  (`should_implement_trait`) fires when both exist with the same name.
+  Pattern that works: keep `impl Default for Theme { fn default() -> Self
+  { Self::default_colors() } }` and rename the inherent constructor
+  (`default_colors`) — call sites still write `Theme::default()` and get
+  trait resolution.
+- **`#[cfg(test)] use` for test-only Color refs in production modules.**
+  When production code is fully theme-driven but tests still want to
+  assert specific colors via `Theme::default()`, declare the `Color`
+  import inside the `mod tests { ... }` body. Keeps production `use`
+  clean and tests expressive.
+- **Theme-change cache invalidation.** Rendered `Line`s carry `Style`
+  state inline (no theme ref), so on `/theme` switch the chat render
+  cache must be cleared (`clear_entries`) or stale-colored lines
+  persist until content changes.
+- **Pre-existing test failure NOT mine:** `session::plugin_ops::tests::
+  doctor_reports_missing_tool_command` fails because plugin signature
+  verification is now default-on (the test expects the loader to reach
+  the "tool not accessible" warning, but it fails earlier with "missing
+  required .kf-code.sig signature file"). Out of WO 27.6 scope — needs
+  its own workorder to either #[ignore] it or scaffold a signature.
+
 ## WO 26 session (2026-08-10) — what went wrong, what to do differently
 - **Subagents edited the WRONG repo.** A 26.7-R1 subagent wrote to the main repo instead of the worktree, leaving uncommitted pollution in `src/tui/events.rs`, `src/session/executor/types.rs`, `src/session/bash_runner/pty.rs`, etc. I had to detect and discard it before merging. Lesson: after every subagent, verify `git status` in the WORKTREE, not just trust the report. Give subagents the absolute worktree path and tell them to `git -C <worktree> status` before/after.
 - **Multi-fix subagent tasks returned EMPTY.** Every time I asked a `general` subagent to do 3-7 fixes in one task, it returned an empty result and did nothing. Single-fix tasks worked. Lesson: dispatch ONE fix per subagent, or the subagent silently no-ops. This is why the WO26 worktree took so long — I should have fanned out single-fix subagents in parallel (but they share one worktree, so git index.lock forces serialization — use separate worktrees per subagent for true parallelism).

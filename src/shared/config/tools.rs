@@ -135,6 +135,8 @@ pub struct ToolConfig {
     pub reject_on_excess_plugin_trust: bool,
     #[serde(default = "default_plugin_signature_validation")]
     pub plugin_signature_validation: bool,
+    #[serde(default = "default_plugin_trust_workspace")]
+    pub plugin_trust_workspace: bool,
     #[serde(default)]
     pub plugin_public_key_path: Option<String>,
     #[serde(default)]
@@ -165,6 +167,10 @@ fn default_plugin_signature_validation() -> bool {
     true
 }
 
+fn default_plugin_trust_workspace() -> bool {
+    false
+}
+
 fn default_max_plugin_trust() -> kf_plugin_sdk::TrustTier {
     kf_plugin_sdk::TrustTier::Shell
 }
@@ -192,6 +198,7 @@ impl Default for ToolConfig {
             max_plugin_trust: default_max_plugin_trust(),
             reject_on_excess_plugin_trust: default_reject_on_excess_plugin_trust(),
             plugin_signature_validation: true,
+            plugin_trust_workspace: false,
             plugin_public_key_path: None,
             plugin_allowed_env_vars: vec![],
             plugin_sources: default_plugin_sources(),

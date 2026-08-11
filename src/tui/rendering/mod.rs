@@ -2,8 +2,9 @@
 
 use crate::tui::search::case_fold_with_mapping;
 use crate::tui::syntax::{highlight_line, highlighter_for};
+use crate::tui::theme::Theme;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Tag, TagEnd};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 mod format;
@@ -18,38 +19,39 @@ fn current_style(style_stack: &[Style]) -> Style {
         .fold(Style::default(), |acc, s| acc.patch(*s))
 }
 
-fn code_block_style() -> Style {
+fn code_block_style(theme: &Theme) -> Style {
     Style::default()
-        .fg(Color::Rgb(180, 180, 140)) // soft yellow
-        .bg(Color::Rgb(45, 45, 40)) // dim warm background
+        .fg(theme.code_block_fg)
+        .bg(theme.code_block_bg)
 }
 
-fn code_block_border_style() -> Style {
-    Style::default().fg(Color::DarkGray)
+fn code_block_border_style(theme: &Theme) -> Style {
+    Style::default().fg(theme.code_block_border)
 }
 
-fn code_block_header_style() -> Style {
-    Style::default().fg(Color::Gray)
+fn code_block_header_style(theme: &Theme) -> Style {
+    Style::default().fg(theme.code_block_header)
 }
 
-fn inline_code_style() -> Style {
-    Style::default().fg(Color::Rgb(230, 160, 50)) // orange
+fn inline_code_style(theme: &Theme) -> Style {
+    Style::default().fg(theme.inline_code)
 }
 
-fn code_block_header_line(lang: &Option<String>) -> Line<'static> {
+fn code_block_header_line(lang: &Option<String>, theme: &Theme) -> Line<'static> {
     let label = lang.as_deref().unwrap_or("code");
     Line::from(vec![
-        Span::styled("▌ ", code_block_border_style()),
-        Span::styled(label.to_string(), code_block_header_style()),
-        Span::styled("  · copy", code_block_border_style()),
+        Span::styled("▌ ", code_block_border_style(theme)),
+        Span::styled(label.to_string(), code_block_header_style(theme)),
+        Span::styled("  · copy", code_block_border_style(theme)),
     ])
 }
 
 /// Apply search highlight to an already-styled list of spans.
 ///
-/// Matches are shown with a yellow background and black foreground while
-/// keeping the original span style on non-matching portions.
-fn highlight_spans(spans: Vec<Span<'static>>, query: &str) -> Vec<Span<'static>> {
+/// Matches are shown with the theme's search-match background and
+/// foreground while keeping the original span style on non-matching
+/// portions.
+fn highlight_spans(spans: Vec<Span<'static>>, query: &str, theme: &Theme) -> Vec<Span<'static>> {
     if query.is_empty() {
         return spans;
     }
@@ -73,8 +75,8 @@ fn highlight_spans(spans: Vec<Span<'static>>, query: &str) -> Vec<Span<'static>>
         for s in &mut matched {
             s.style = s
                 .style
-                .fg(Color::Black)
-                .bg(Color::Yellow)
+                .fg(theme.search_fg)
+                .bg(theme.search_bg)
                 .add_modifier(Modifier::BOLD);
         }
         result.extend(matched);
@@ -127,6 +129,7 @@ pub(crate) fn highlight_line_spans(
     line: &str,
     query: &str,
     base_style: Style,
+    theme: &Theme,
 ) -> Vec<Span<'static>> {
     if query.is_empty() {
         return vec![Span::styled(line.to_string(), base_style)];
@@ -151,8 +154,8 @@ pub(crate) fn highlight_line_spans(
         spans.push(Span::styled(
             line[orig_start..orig_end].to_string(),
             base_style
-                .fg(Color::Black)
-                .bg(Color::Yellow)
+                .fg(theme.search_fg)
+                .bg(theme.search_bg)
                 .add_modifier(Modifier::BOLD),
         ));
         orig_last_end = orig_end;
@@ -167,20 +170,25 @@ pub(crate) fn highlight_line_spans(
     spans
 }
 
-fn blockquote_style() -> Style {
+fn blockquote_style(theme: &Theme) -> Style {
     Style::default()
-        .fg(Color::Rgb(180, 180, 180))
+        .fg(theme.blockquote_fg)
         .add_modifier(Modifier::ITALIC)
 }
 
-fn flush_current(lines: &mut Vec<Line<'static>>, current_line: &mut Vec<Span<'static>>) {
-    flush_current_with_prefix(lines, current_line, 0);
+fn flush_current(
+    lines: &mut Vec<Line<'static>>,
+    current_line: &mut Vec<Span<'static>>,
+    theme: &Theme,
+) {
+    flush_current_with_prefix(lines, current_line, 0, theme);
 }
 
 fn flush_current_with_prefix(
     lines: &mut Vec<Line<'static>>,
     current_line: &mut Vec<Span<'static>>,
     blockquote_depth: usize,
+    theme: &Theme,
 ) {
     if current_line.is_empty() {
         return;
@@ -188,7 +196,7 @@ fn flush_current_with_prefix(
     if blockquote_depth > 0 {
         let mut prefixed = vec![Span::styled(
             "▌".repeat(blockquote_depth) + " ",
-            blockquote_style(),
+            blockquote_style(theme),
         )];
         prefixed.extend(std::mem::take(current_line));
         lines.push(Line::from(prefixed));
@@ -197,12 +205,12 @@ fn flush_current_with_prefix(
     }
 }
 
-fn push_blank_with_depth(lines: &mut Vec<Line<'static>>, blockquote_depth: usize) {
+fn push_blank_with_depth(lines: &mut Vec<Line<'static>>, blockquote_depth: usize, theme: &Theme) {
     if lines.last().map(|l| !l.spans.is_empty()).unwrap_or(true) {
         if blockquote_depth > 0 {
             lines.push(Line::from(Span::styled(
                 "▌".repeat(blockquote_depth) + " ",
-                blockquote_style(),
+                blockquote_style(theme),
             )));
         } else {
             lines.push(Line::from(""));
@@ -223,6 +231,7 @@ pub fn render_markdown_lines_with_query(
     text: &str,
     query: &str,
     content_width: usize,
+    theme: &Theme,
 ) -> Vec<Line<'static>> {
     let options = pulldown_cmark::Options::ENABLE_TABLES;
     let parser = pulldown_cmark::Parser::new_ext(text, options);
@@ -244,7 +253,7 @@ pub fn render_markdown_lines_with_query(
                 Tag::Heading { level, .. } => {
                     let mut style = Style::default().add_modifier(Modifier::BOLD);
                     if level == HeadingLevel::H1 {
-                        style = style.fg(Color::White);
+                        style = style.fg(theme.heading);
                     }
                     style_stack.push(style);
                 }
@@ -280,7 +289,7 @@ pub fn render_markdown_lines_with_query(
                     });
                 }
                 Tag::Item => {
-                    flush_current(&mut lines, &mut current_line);
+                    flush_current(&mut lines, &mut current_line, theme);
                     let depth = list_stack.len().saturating_sub(1);
                     let indent = "  ".repeat(depth);
                     let prefix = if let Some(state) = list_stack.last_mut() {
@@ -299,23 +308,28 @@ pub fn render_markdown_lines_with_query(
                 Tag::Link { .. } => {
                     style_stack.push(
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(theme.link)
                             .add_modifier(Modifier::UNDERLINED),
                     );
                 }
                 Tag::Image { .. } => {
                     style_stack.push(
                         Style::default()
-                            .fg(Color::Magenta)
+                            .fg(theme.image)
                             .add_modifier(Modifier::ITALIC),
                     );
                 }
                 Tag::BlockQuote(_) => {
                     blockquote_depth += 1;
-                    style_stack.push(blockquote_style());
+                    style_stack.push(blockquote_style(theme));
                 }
                 Tag::Table(alignments) => {
-                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
+                    flush_current_with_prefix(
+                        &mut lines,
+                        &mut current_line,
+                        blockquote_depth,
+                        theme,
+                    );
                     table_state = Some(TableState {
                         alignments,
                         ..Default::default()
@@ -340,12 +354,22 @@ pub fn render_markdown_lines_with_query(
             },
             Event::End(tag) => match tag {
                 TagEnd::Paragraph => {
-                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
-                    push_blank_with_depth(&mut lines, blockquote_depth);
+                    flush_current_with_prefix(
+                        &mut lines,
+                        &mut current_line,
+                        blockquote_depth,
+                        theme,
+                    );
+                    push_blank_with_depth(&mut lines, blockquote_depth, theme);
                 }
                 TagEnd::Heading(_) => {
-                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
-                    push_blank_with_depth(&mut lines, blockquote_depth);
+                    flush_current_with_prefix(
+                        &mut lines,
+                        &mut current_line,
+                        blockquote_depth,
+                        theme,
+                    );
+                    push_blank_with_depth(&mut lines, blockquote_depth, theme);
                     style_stack.pop();
                 }
                 TagEnd::Strong
@@ -356,33 +380,48 @@ pub fn render_markdown_lines_with_query(
                     style_stack.pop();
                 }
                 TagEnd::CodeBlock => {
-                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
+                    flush_current_with_prefix(
+                        &mut lines,
+                        &mut current_line,
+                        blockquote_depth,
+                        theme,
+                    );
                     in_code_block = false;
                     code_block_lang = None;
                     code_block_badge_emitted = false;
                     code_highlighter = highlighter_for(None);
-                    push_blank_with_depth(&mut lines, blockquote_depth);
+                    push_blank_with_depth(&mut lines, blockquote_depth, theme);
                 }
                 TagEnd::Item => {
-                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
+                    flush_current_with_prefix(
+                        &mut lines,
+                        &mut current_line,
+                        blockquote_depth,
+                        theme,
+                    );
                 }
                 TagEnd::List(_) => {
                     list_stack.pop();
-                    push_blank_with_depth(&mut lines, blockquote_depth);
+                    push_blank_with_depth(&mut lines, blockquote_depth, theme);
                 }
                 TagEnd::BlockQuote(_) => {
-                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
+                    flush_current_with_prefix(
+                        &mut lines,
+                        &mut current_line,
+                        blockquote_depth,
+                        theme,
+                    );
                     blockquote_depth = blockquote_depth.saturating_sub(1);
                     style_stack.pop();
-                    push_blank_with_depth(&mut lines, blockquote_depth);
+                    push_blank_with_depth(&mut lines, blockquote_depth, theme);
                 }
                 TagEnd::Table => {
                     if let Some(t) = table_state.take() {
-                        let table_lines = render_table(t, query, content_width);
+                        let table_lines = render_table(t, query, content_width, theme);
                         for line in table_lines {
                             lines.push(line);
                         }
-                        push_blank_with_depth(&mut lines, blockquote_depth);
+                        push_blank_with_depth(&mut lines, blockquote_depth, theme);
                     }
                 }
                 TagEnd::TableHead => {
@@ -409,13 +448,18 @@ pub fn render_markdown_lines_with_query(
                     // Code blocks render as standalone bordered lines; flush any
                     // open inline line first so the border/background block is
                     // self-contained.
-                    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
+                    flush_current_with_prefix(
+                        &mut lines,
+                        &mut current_line,
+                        blockquote_depth,
+                        theme,
+                    );
                     if !code_block_badge_emitted {
                         code_block_badge_emitted = true;
-                        lines.push(code_block_header_line(&code_block_lang));
+                        lines.push(code_block_header_line(&code_block_lang, theme));
                     }
-                    let style = code_block_style();
-                    let border_style = code_block_border_style();
+                    let style = code_block_style(theme);
+                    let border_style = code_block_border_style(theme);
                     let text = t.to_string();
                     let parts: Vec<&str> = text.split('\n').collect();
                     for (i, chunk) in parts.iter().enumerate() {
@@ -428,7 +472,7 @@ pub fn render_markdown_lines_with_query(
                         let mut line_spans = if blockquote_depth > 0 {
                             vec![Span::styled(
                                 "▌".repeat(blockquote_depth) + " ",
-                                blockquote_style(),
+                                blockquote_style(theme),
                             )]
                         } else {
                             Vec::new()
@@ -439,7 +483,7 @@ pub fn render_markdown_lines_with_query(
                             if query.is_empty() {
                                 line_spans.extend(code_spans);
                             } else {
-                                line_spans.extend(highlight_spans(code_spans, query));
+                                line_spans.extend(highlight_spans(code_spans, query, theme));
                             }
                         }
                         lines.push(Line::from(line_spans));
@@ -449,38 +493,44 @@ pub fn render_markdown_lines_with_query(
                         &t,
                         query,
                         current_style(&style_stack),
+                        theme,
                     ));
                 }
             }
             Event::Code(c) => {
-                current_line.extend(highlight_line_spans(&c, query, inline_code_style()));
+                current_line.extend(highlight_line_spans(
+                    &c,
+                    query,
+                    inline_code_style(theme),
+                    theme,
+                ));
             }
             Event::SoftBreak | Event::HardBreak => {
-                flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
+                flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth, theme);
             }
             Event::Rule => {
-                flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
+                flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth, theme);
                 let rule_width = content_width.max(1);
                 lines.push(Line::from("─".repeat(rule_width)));
-                push_blank_with_depth(&mut lines, blockquote_depth);
+                push_blank_with_depth(&mut lines, blockquote_depth, theme);
             }
             Event::Html(h) => {
                 current_line.push(Span::styled(
                     h.to_string(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.code_block_border),
                 ));
             }
             Event::FootnoteReference(r) => {
                 current_line.push(Span::styled(
                     r.to_string(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.code_block_border),
                 ));
             }
             Event::TaskListMarker(checked) => {
                 let marker = if checked { "[x] " } else { "[ ] " };
                 current_line.push(Span::styled(
                     marker.to_string(),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.tasklist_marker),
                 ));
             }
             Event::InlineMath(t) | Event::DisplayMath(t) => {
@@ -489,13 +539,13 @@ pub fn render_markdown_lines_with_query(
             Event::InlineHtml(h) => {
                 current_line.push(Span::styled(
                     h.to_string(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.code_block_border),
                 ));
             }
         }
     }
 
-    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth);
+    flush_current_with_prefix(&mut lines, &mut current_line, blockquote_depth, theme);
 
     // Trim trailing blank lines so the chat panel doesn't pad the end.
     // Blockquote blank lines carry a "▌ " prefix span, so we treat any
@@ -559,10 +609,20 @@ pub fn all_code_blocks(markdown: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::theme::Theme;
+    use ratatui::style::Color;
+
+    // Test calls pass `&Theme::default()`, which preserves the prior
+    // hard-coded colors verbatim — so the existing color-specific
+    // assertions (Color::Green, Color::Yellow, etc.) still hold.
+
+    fn default_theme() -> Theme {
+        Theme::default()
+    }
 
     // ── Budget indicator (v1.2-p6) ───────────────────────────────────
     //
-    // The status bar uses `format_budget_indicator(used, max)` to show
+    // The status bar uses `format_budget_indicator(used, max, &default_theme())` to show
     // the user how full the model's context window is, with a color
     // signal that tells them when `/compact` is a good idea. These
     // tests pin down the three behaviors the status widget depends on.
@@ -573,7 +633,7 @@ mod tests {
     /// old-style `↑N` display.
     #[test]
     fn test_budget_indicator_no_max_falls_back() {
-        let (text, color) = format_budget_indicator(12_345, 0);
+        let (text, color) = format_budget_indicator(12_345, 0, &default_theme());
         assert_eq!(text, "12.3K");
         // DarkGray is the "neutral / unknown" cue. We don't pin
         // the exact variant here because ratatui's Color enum
@@ -586,7 +646,7 @@ mod tests {
     /// the absolute count and the percentage.
     #[test]
     fn test_budget_indicator_comfortable_is_green() {
-        let (text, color) = format_budget_indicator(42_000, 128_000);
+        let (text, color) = format_budget_indicator(42_000, 128_000, &default_theme());
         assert!(
             text.contains("42.0K"),
             "should show used in K, got '{text}'"
@@ -610,7 +670,7 @@ mod tests {
     #[test]
     fn test_budget_indicator_tight_is_yellow() {
         // 60_000 / 100_000 = exactly 60%
-        let (text, color) = format_budget_indicator(60_000, 100_000);
+        let (text, color) = format_budget_indicator(60_000, 100_000, &default_theme());
         assert!(text.contains("(60%)"), "should show 60%, got '{text}'");
         assert!(matches!(color, Color::Yellow), "50-80% should be yellow");
     }
@@ -619,7 +679,7 @@ mod tests {
     #[test]
     fn test_budget_indicator_high_is_red() {
         // 85_000 / 100_000 = 85%
-        let (text, color) = format_budget_indicator(85_000, 100_000);
+        let (text, color) = format_budget_indicator(85_000, 100_000, &default_theme());
         assert!(text.contains("(85%)"), "should show 85%, got '{text}'");
         assert!(matches!(color, Color::Red), "80-95% should be red");
     }
@@ -668,7 +728,7 @@ mod tests {
 
     #[test]
     fn test_markdown_bold() {
-        let lines = render_markdown_lines_with_query("**bold text**", "", 80);
+        let lines = render_markdown_lines_with_query("**bold text**", "", 80, &default_theme());
         assert_eq!(lines.len(), 1);
         assert_eq!(
             lines[0].spans,
@@ -681,20 +741,20 @@ mod tests {
 
     #[test]
     fn test_markdown_inline_code() {
-        let lines = render_markdown_lines_with_query("use `cargo test`", "", 80);
+        let lines = render_markdown_lines_with_query("use `cargo test`", "", 80, &default_theme());
         assert_eq!(lines.len(), 1);
         assert_eq!(
             lines[0].spans,
             vec![
                 Span::raw("use "),
-                Span::styled("cargo test", inline_code_style()),
+                Span::styled("cargo test", inline_code_style(&default_theme())),
             ]
         );
     }
 
     #[test]
     fn test_markdown_heading() {
-        let lines = render_markdown_lines_with_query("# Title\n\nbody", "", 80);
+        let lines = render_markdown_lines_with_query("# Title\n\nbody", "", 80, &default_theme());
         assert_eq!(lines.len(), 3);
         assert_eq!(
             lines[0].spans,
@@ -711,7 +771,7 @@ mod tests {
 
     #[test]
     fn test_markdown_unordered_list() {
-        let lines = render_markdown_lines_with_query("- a\n- b\n- c", "", 80);
+        let lines = render_markdown_lines_with_query("- a\n- b\n- c", "", 80, &default_theme());
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].spans[0].content, "- ");
         assert_eq!(lines[0].spans[1].content, "a");
@@ -723,7 +783,8 @@ mod tests {
 
     #[test]
     fn test_markdown_ordered_list() {
-        let lines = render_markdown_lines_with_query("1. first\n2. second", "", 80);
+        let lines =
+            render_markdown_lines_with_query("1. first\n2. second", "", 80, &default_theme());
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].spans[0].content, "1. ");
         assert_eq!(lines[0].spans[1].content, "first");
@@ -733,7 +794,8 @@ mod tests {
 
     #[test]
     fn test_markdown_nested_inline_styles() {
-        let lines = render_markdown_lines_with_query("**bold *italic* bold**", "", 80);
+        let lines =
+            render_markdown_lines_with_query("**bold *italic* bold**", "", 80, &default_theme());
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 3);
         assert_eq!(
@@ -757,20 +819,25 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block_with_lang_badge() {
-        let lines = render_markdown_lines_with_query("```rust\nfn main() {}\n```", "", 80);
+        let lines = render_markdown_lines_with_query(
+            "```rust\nfn main() {}\n```",
+            "",
+            80,
+            &default_theme(),
+        );
         assert_eq!(lines.len(), 2);
         assert_eq!(
             lines[0].spans,
             vec![
-                Span::styled("▌ ", code_block_border_style()),
-                Span::styled("rust", code_block_header_style()),
-                Span::styled("  · copy", code_block_border_style()),
+                Span::styled("▌ ", code_block_border_style(&default_theme())),
+                Span::styled("rust", code_block_header_style(&default_theme())),
+                Span::styled("  · copy", code_block_border_style(&default_theme())),
             ]
         );
         // Body is syntax highlighted: `fn` keyword plus the rest as plain code.
         assert_eq!(
             lines[1].spans[0],
-            Span::styled("▕ ", code_block_border_style())
+            Span::styled("▕ ", code_block_border_style(&default_theme()))
         );
         let body_text: String = lines[1].spans[1..]
             .iter()
@@ -788,28 +855,29 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block_without_language_uses_code_fallback() {
-        let lines = render_markdown_lines_with_query("```\nhello\n```", "", 80);
+        let lines = render_markdown_lines_with_query("```\nhello\n```", "", 80, &default_theme());
         assert_eq!(lines.len(), 2);
         assert_eq!(
             lines[0].spans,
             vec![
-                Span::styled("▌ ", code_block_border_style()),
-                Span::styled("code", code_block_header_style()),
-                Span::styled("  · copy", code_block_border_style()),
+                Span::styled("▌ ", code_block_border_style(&default_theme())),
+                Span::styled("code", code_block_header_style(&default_theme())),
+                Span::styled("  · copy", code_block_border_style(&default_theme())),
             ]
         );
         assert_eq!(
             lines[1].spans,
             vec![
-                Span::styled("▕ ", code_block_border_style()),
-                Span::styled("hello", code_block_style()),
+                Span::styled("▕ ", code_block_border_style(&default_theme())),
+                Span::styled("hello", code_block_style(&default_theme())),
             ]
         );
     }
 
     #[test]
     fn test_markdown_code_block_body_has_background() {
-        let lines = render_markdown_lines_with_query("```python\nprint(1)\n```", "", 80);
+        let lines =
+            render_markdown_lines_with_query("```python\nprint(1)\n```", "", 80, &default_theme());
         let body = &lines[1];
         assert_eq!(body.spans[0].content, "▕ ");
         // Syntax highlighting splits `print(1)` into several spans; every
@@ -826,7 +894,8 @@ mod tests {
 
     #[test]
     fn test_markdown_indented_code_block_gets_border() {
-        let lines = render_markdown_lines_with_query("    indented\n    block", "", 80);
+        let lines =
+            render_markdown_lines_with_query("    indented\n    block", "", 80, &default_theme());
         // Should produce a header and two body lines.
         assert!(lines.len() >= 3);
         assert_eq!(lines[0].spans[0].content, "▌ ");
@@ -836,7 +905,7 @@ mod tests {
 
     #[test]
     fn test_markdown_code_block_trims_trailing_newline_border() {
-        let lines = render_markdown_lines_with_query("```\na\n```", "", 80);
+        let lines = render_markdown_lines_with_query("```\na\n```", "", 80, &default_theme());
         // Should be header + one body line; no bare trailing border line.
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[1].spans.len(), 2);
@@ -845,7 +914,12 @@ mod tests {
 
     #[test]
     fn test_markdown_link() {
-        let lines = render_markdown_lines_with_query("see [docs](https://docs.rs)", "", 80);
+        let lines = render_markdown_lines_with_query(
+            "see [docs](https://docs.rs)",
+            "",
+            80,
+            &default_theme(),
+        );
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 2);
         assert_eq!(lines[0].spans[0].content, "see ");
@@ -862,7 +936,7 @@ mod tests {
 
     #[test]
     fn test_markdown_search_highlight_in_plain_text() {
-        let lines = render_markdown_lines_with_query("hello world", "world", 80);
+        let lines = render_markdown_lines_with_query("hello world", "world", 80, &default_theme());
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 2);
         assert_eq!(lines[0].spans[0].content, "hello ");
@@ -875,7 +949,8 @@ mod tests {
 
     #[test]
     fn test_markdown_search_highlight_in_inline_code() {
-        let lines = render_markdown_lines_with_query("use `cargo test`", "cargo", 80);
+        let lines =
+            render_markdown_lines_with_query("use `cargo test`", "cargo", 80, &default_theme());
         assert_eq!(lines.len(), 1);
         // "use " + "cargo" (highlight) + " test" (plain inline code style)
         assert_eq!(lines[0].spans[0].content, "use ");
@@ -889,7 +964,12 @@ mod tests {
 
     #[test]
     fn test_markdown_search_highlight_in_code_block() {
-        let lines = render_markdown_lines_with_query("```python\nprint(needle)\n```", "needle", 80);
+        let lines = render_markdown_lines_with_query(
+            "```python\nprint(needle)\n```",
+            "needle",
+            80,
+            &default_theme(),
+        );
         // Header + one body line.
         assert_eq!(lines.len(), 2);
         let body = &lines[1];
@@ -910,7 +990,7 @@ mod tests {
         // folded string, which would slice the original mid-character and
         // panic. The mapping-aware renderer must align to original byte
         // boundaries.
-        let lines = render_markdown_lines_with_query("İstanbul", "stan", 80);
+        let lines = render_markdown_lines_with_query("İstanbul", "stan", 80, &default_theme());
         assert_eq!(lines.len(), 1);
         let spans: Vec<String> = lines[0]
             .spans
@@ -928,7 +1008,8 @@ mod tests {
         // Code-block highlighting uses `highlight_spans` on the already
         // syntax-highlighted spans, so it must also translate folded offsets
         // back to original byte boundaries.
-        let lines = render_markdown_lines_with_query("```\nİstanbul\n```", "stan", 80);
+        let lines =
+            render_markdown_lines_with_query("```\nİstanbul\n```", "stan", 80, &default_theme());
         assert!(lines.len() >= 2);
         let body = &lines[1];
         let spans: Vec<String> = body.spans.iter().map(|s| s.content.to_string()).collect();
@@ -959,7 +1040,7 @@ mod tests {
 
     #[test]
     fn test_markdown_blockquote_renders_with_bar_and_muted_style() {
-        let lines = render_markdown_lines_with_query("> quoted line", "", 80);
+        let lines = render_markdown_lines_with_query("> quoted line", "", 80, &default_theme());
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans[0].content, "▌ ");
         assert_eq!(lines[0].spans[1].content, "quoted line");
@@ -971,7 +1052,7 @@ mod tests {
 
     #[test]
     fn test_markdown_nested_blockquote_renders_multiple_bars() {
-        let lines = render_markdown_lines_with_query(">> nested quote", "", 80);
+        let lines = render_markdown_lines_with_query(">> nested quote", "", 80, &default_theme());
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans[0].content, "▌▌ ");
     }
@@ -979,7 +1060,7 @@ mod tests {
     #[test]
     fn test_markdown_table_renders_grid() {
         let md = "| Name | Value |\n|------|-------|\n| foo  | bar   |";
-        let lines = render_markdown_lines_with_query(md, "", 80);
+        let lines = render_markdown_lines_with_query(md, "", 80, &default_theme());
         assert!(
             lines.iter().any(|l| l
                 .spans
@@ -1012,7 +1093,7 @@ mod tests {
     #[test]
     fn test_markdown_table_search_highlight() {
         let md = "| A | B |\n|---|---|\n| x | y |";
-        let lines = render_markdown_lines_with_query(md, "y", 80);
+        let lines = render_markdown_lines_with_query(md, "y", 80, &default_theme());
         assert!(lines.iter().any(|l| l
             .spans
             .iter()
@@ -1022,7 +1103,7 @@ mod tests {
     /// Edge case: entirely empty input should not panic.
     #[test]
     fn test_markdown_empty_input() {
-        let lines = render_markdown_lines_with_query("", "", 80);
+        let lines = render_markdown_lines_with_query("", "", 80, &default_theme());
         assert!(lines.is_empty() || (lines.len() == 1 && lines[0].spans.is_empty()));
     }
 
@@ -1034,6 +1115,7 @@ mod tests {
             "1. outer\n   1. inner a\n   2. inner b\n2. next",
             "",
             80,
+            &default_theme(),
         );
         assert_eq!(lines.len(), 5);
         assert_eq!(lines[0].spans[0].content, "1. ");
@@ -1051,7 +1133,8 @@ mod tests {
     /// single span with both modifiers.
     #[test]
     fn test_markdown_bold_italic_combined() {
-        let lines = render_markdown_lines_with_query("***bold italic*** plain", "", 80);
+        let lines =
+            render_markdown_lines_with_query("***bold italic*** plain", "", 80, &default_theme());
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 2);
         assert_eq!(
@@ -1072,7 +1155,8 @@ mod tests {
     #[test]
     fn test_markdown_long_inline_code_survives() {
         let long = "a".repeat(200);
-        let lines = render_markdown_lines_with_query(&format!("`{long}`"), "", 80);
+        let lines =
+            render_markdown_lines_with_query(&format!("`{long}`"), "", 80, &default_theme());
         assert_eq!(lines.len(), 1);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, long);
@@ -1081,7 +1165,8 @@ mod tests {
     /// Edge case: search highlight should still split inside a bold span.
     #[test]
     fn test_markdown_search_highlight_inside_bold() {
-        let lines = render_markdown_lines_with_query("**hello world**", "world", 80);
+        let lines =
+            render_markdown_lines_with_query("**hello world**", "world", 80, &default_theme());
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 2);
         assert_eq!(lines[0].spans[0].content, "hello ");
@@ -1096,7 +1181,8 @@ mod tests {
     /// hard-coded 40 columns (P6).
     #[test]
     fn test_markdown_rule_scales_with_content_width() {
-        let lines = render_markdown_lines_with_query("before\n\n---\n\nafter", "", 30);
+        let lines =
+            render_markdown_lines_with_query("before\n\n---\n\nafter", "", 30, &default_theme());
         let rule_line = lines
             .iter()
             .find(|l| l.spans.len() == 1 && l.spans[0].content.starts_with('─'))

@@ -289,6 +289,12 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         cfg.tools.plugin_signature_validation
     );
 
+    // KF_CODE_PLUGIN_TRUST_WORKSPACE
+    env_bool!(
+        "KF_CODE_PLUGIN_TRUST_WORKSPACE",
+        cfg.tools.plugin_trust_workspace
+    );
+
     // KF_CODE_PLUGIN_PUBLIC_KEY_PATH
     if let Ok(val) = std::env::var("KF_CODE_PLUGIN_PUBLIC_KEY_PATH") {
         cfg.tools.plugin_public_key_path = if val.is_empty() {
@@ -364,6 +370,13 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         "KF_CODE_MEMORY_SHOW_IN_STATUS",
         cfg.display.memory_show_in_status
     );
+
+    // KF_CODE_THEME
+    if let Ok(val) = std::env::var("KF_CODE_THEME") {
+        if !val.is_empty() {
+            cfg.display.theme = val;
+        }
+    }
 
     // KF_CODE_REQUEST_TIMEOUT_SECS
     if let Ok(val) = std::env::var("KF_CODE_REQUEST_TIMEOUT_SECS") {

@@ -194,6 +194,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 &state.search.query,
                 collapsed,
                 state.spinner_char(),
+                &state.ui.theme,
             );
             if let Some(slot) = state.conversation.chat_render_cache.entries.get_mut(idx) {
                 *slot = Some((entry.version, lines.clone()));
@@ -318,9 +319,14 @@ mod tests {
     use super::lines::{message_header, role_badge, tool_card_lines};
     use super::*;
     use crate::shared::test_util::app_state;
+    use crate::tui::theme::Theme;
     use chrono::Timelike;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+
+    fn default_theme() -> Theme {
+        Theme::default()
+    }
 
     fn make_state(connection: ConnectionState) -> AppState {
         let mut state = app_state();
@@ -439,7 +445,7 @@ mod tests {
     #[test]
     fn collapsed_tool_card_is_one_line() {
         let e = tool_entry("git status", "nothing to commit", 9, 14);
-        let lines = tool_card_lines(&e, None, true, "", 80, "▁");
+        let lines = tool_card_lines(&e, None, true, "", 80, "▁", &default_theme());
         assert_eq!(lines.len(), 1);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("git status"));
@@ -450,7 +456,7 @@ mod tests {
     #[test]
     fn tool_card_includes_timestamp_for_first_entry() {
         let e = tool_entry("git status", "full", 9, 14);
-        let lines = tool_card_lines(&e, None, true, "", 80, "▁");
+        let lines = tool_card_lines(&e, None, true, "", 80, "▁", &default_theme());
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.starts_with("09:14 ▶ "));
     }
@@ -459,7 +465,7 @@ mod tests {
     fn tool_card_omits_timestamp_when_same_minute() {
         let prev = tool_entry("first", "full", 9, 14);
         let e = tool_entry("second", "full", 9, 14);
-        let lines = tool_card_lines(&e, Some(&prev), true, "", 80, "▁");
+        let lines = tool_card_lines(&e, Some(&prev), true, "", 80, "▁", &default_theme());
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(!text.contains("09:14"));
         assert!(text.starts_with("▶ "));
@@ -468,7 +474,7 @@ mod tests {
     #[test]
     fn expanded_tool_card_has_header_body_and_footer() {
         let e = tool_entry("git status", "line1\nline2", 9, 14);
-        let lines = tool_card_lines(&e, None, false, "", 80, "▁");
+        let lines = tool_card_lines(&e, None, false, "", 80, "▁", &default_theme());
         assert!(lines.len() >= 3);
 
         let header: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
@@ -489,7 +495,7 @@ mod tests {
     #[test]
     fn expanded_tool_card_body_is_indented() {
         let e = tool_entry("summary", "body text", 9, 14);
-        let lines = tool_card_lines(&e, None, false, "", 80, "▁");
+        let lines = tool_card_lines(&e, None, false, "", 80, "▁", &default_theme());
         assert!(lines.len() >= 2);
         let body_line = &lines[1];
         assert!(body_line.spans[0].content.starts_with("  ▕ "));
@@ -499,7 +505,7 @@ mod tests {
     #[test]
     fn tool_card_preserves_search_highlight() {
         let e = tool_entry("summary", "needle in haystack", 9, 14);
-        let lines = tool_card_lines(&e, None, false, "needle", 80, "▁");
+        let lines = tool_card_lines(&e, None, false, "needle", 80, "▁", &default_theme());
         assert!(lines.len() >= 2);
         let body_line = &lines[1];
         let found = body_line

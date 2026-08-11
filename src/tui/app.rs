@@ -2,6 +2,7 @@
 use crate::session::session_fork::ForkManager;
 use crate::session::skills::SkillRegistry;
 use crate::shared::{ModelInfo, SharedConfig};
+use crate::tui::theme::Theme;
 use crossterm::event::KeyCode;
 use kf_plugin_host::PluginRegistry;
 use ratatui::text::Line;
@@ -505,6 +506,10 @@ pub struct UiState {
     pub tab_list_state: Option<usize>,
     /// Current working directory. Updated by Ctrl+O directory picker.
     pub cwd: std::path::PathBuf,
+    /// Active color palette (WO 27.6). Seeded from `display.theme` at
+    /// startup; mutated by the `/theme` slash command. Renderers in
+    /// `src/tui/rendering/` read colors from this field via `&Theme`.
+    pub theme: Theme,
 }
 
 impl Default for UiState {
@@ -515,6 +520,7 @@ impl Default for UiState {
             active_tab: ActiveTab::default(),
             tab_list_state: None,
             cwd: std::env::current_dir().unwrap_or_default(),
+            theme: Theme::default(),
         }
     }
 }

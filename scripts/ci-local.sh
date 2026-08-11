@@ -35,8 +35,12 @@ run_step() {
 }
 
 # Core checks always run.
+# Cap test threads: the workspace fans out ~38 integration test binaries;
+# uncapped `cargo test --workspace` OOMs the host (killed a prior session).
+TEST_THREADS="${KF_TEST_THREADS:-$(nproc)}"
+if [ "$TEST_THREADS" -gt 8 ]; then TEST_THREADS=8; fi
 run_step "Check formatting" cargo fmt --check
-run_step "Run unit tests" cargo test --locked --workspace
+run_step "Run unit tests" cargo test --locked --workspace -- --test-threads="$TEST_THREADS"
 run_step "Run smoke tests" cargo test --test smoke_test
 run_step "Run Clippy" cargo clippy --all-targets -- -D warnings
 

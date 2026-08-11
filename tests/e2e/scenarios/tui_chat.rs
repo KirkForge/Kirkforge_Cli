@@ -46,7 +46,7 @@ async fn tui_chat_headless_round_trip() {
     // Close stdin to signal EOF.
     drop(child.stdin.take());
 
-    let output = child.wait_with_output().expect("e2e: wait for kf-code");
+    let output = crate::harness::wait_with_timeout(&mut child).expect("e2e: wait for kf-code");
 
     if !output.status.success() {
         panic!(

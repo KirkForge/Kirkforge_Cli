@@ -9,9 +9,59 @@ pub mod mock;
 pub mod shard;
 pub mod ui;
 
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// Ceiling for how long a spawned `kf-code` binary may run in an e2e test
+/// before the harness kills it. nextest's `timeout-period` is 60s in CI, so
+/// this fires first and the test gets a real error result (with stdout/stderr)
+/// instead of a nextest hard-kill with no output. Real e2e turns complete in
+/// 2-5s against the mock; 30s is a generous ceiling that catches hangs.
+const E2E_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Wait for a child to exit, collecting stdout/stderr into an `Output`.
+/// If the child does not exit within `E2E_TIMEOUT`, it is killed and an
+/// `io::TimedOut` error is returned. This is the e2e-hang defense: the
+/// prior `child.wait_with_output()` blocked forever if `kf-code` wedged,
+/// and nextest's 60s kill orphaned the spawned binary (no kill_on_drop).
+pub fn wait_with_timeout(child: &mut Child) -> std::io::Result<Output> {
+    let deadline = Instant::now() + E2E_TIMEOUT;
+    let status = loop {
+        match child.try_wait()? {
+            Some(s) => break s,
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!(
+                            "e2e: kf-code did not exit within {}s; killed",
+                            E2E_TIMEOUT.as_secs()
+                        ),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    };
+    let mut stdout = Vec::new();
+    if let Some(mut s) = child.stdout.take() {
+        s.read_to_end(&mut stdout)?;
+    }
+    let mut stderr = Vec::new();
+    if let Some(mut s) = child.stderr.take() {
+        s.read_to_end(&mut stderr)?;
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
 
 /// Isolated environment for one e2e test.  Creates a temp HOME + XDG
 /// dirs, a temp socket dir, and a seed config.toml pointing at the
@@ -74,7 +124,12 @@ impl IsolatedEnv {
     }
 
     /// Build a `Command` for `kf-code` with the isolated env vars set.
-    /// The caller adds subcommand args and launches.
+    /// The caller adds subcommand args and launches. NOTE: std
+    /// `process::Command` has no `kill_on_drop` (that's tokio-only), so
+    /// callers MUST pass the spawned child to `wait_with_timeout`, which
+    /// kills on the 30s ceiling. A panic between spawn and wait could
+    /// orphan the binary; the adapter's own STREAM_IDLE_TIMEOUT (90s)
+    /// bounds that residual case.
     pub fn command(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(&self.bin);
         cmd.args(args)
@@ -88,7 +143,8 @@ impl IsolatedEnv {
     /// Run `kf-code` with the given args, piping `prompt` to stdin as a
     /// single line (then EOF). `kf-code run --non-interactive` reads each
     /// non-empty stdin line as one turn, so this is how a headless prompt
-    /// is delivered. Returns the captured output.
+    /// is delivered. Returns the captured output. Bounded by
+    /// `E2E_TIMEOUT` — see `wait_with_timeout`.
     pub fn run_with_prompt(
         &self,
         args: &[&str],
@@ -100,10 +156,10 @@ impl IsolatedEnv {
         let mut child = cmd.spawn()?;
         {
             let stdin = child.stdin.as_mut().expect("e2e: stdin");
-            writeln!(stdin, "{prompt}").expect("e2e: write prompt to stdin");
+            writeln!(stdin, "{prompt}")?;
         }
         drop(child.stdin.take());
-        child.wait_with_output()
+        wait_with_timeout(&mut child)
     }
 
     /// Start `kf-code daemon --foreground` in the isolated env.

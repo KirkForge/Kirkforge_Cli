@@ -1322,19 +1322,22 @@ mod tests {
         }
     }
 
-    // ignore: known-broken — see state.md
     #[test]
-    #[ignore]
     fn test_append_alert_writes_ndjson() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let previous = std::env::var("KF_CODE_DATA_DIR").ok();
         std::env::set_var("KF_CODE_DATA_DIR", dir.path());
 
+        // append_alert writes to <data_dir>/sessions/.alerts.ndjson, so the
+        // sessions subdir must exist (OpenOptions::create makes the file, not
+        // the parent directory).
+        std::fs::create_dir_all(dir.path().join("sessions")).unwrap();
+
         append_alert("job-001", "bash", "echo hi", "exit code 1").unwrap();
         append_alert("job-002", "workflow", "deploy.yml", "template not found").unwrap();
 
-        let alerts_path = dir.path().join(".alerts.ndjson");
+        let alerts_path = dir.path().join("sessions").join(".alerts.ndjson");
         let content = std::fs::read_to_string(&alerts_path).unwrap();
         let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
         assert_eq!(lines.len(), 2, "expected 2 alert lines, got {lines:?}");

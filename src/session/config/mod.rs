@@ -1492,11 +1492,16 @@ mod tests {
         assert_eq!(parse_bool_env(""), None);
     }
 
-    // ignore: known-broken — see state.md
+    // WO 27.2-R2: un-ignored after fixing the test fixture. The alias
+    // wiring (compaction_use_llm → compaction_use_heuristic) is flat
+    // top-level in merge_toml_into_config; the original test wrapped
+    // the key in [session], which the fallback merger doesn't descend
+    // into. The primary serde path handles [session] via SessionConfig
+    // (with the alias = "compaction_use_llm" annotation); this test
+    // exercises the flat fallback path.
     #[test]
-    #[ignore]
     fn compaction_use_llm_alias_backward_compat() {
-        let toml = "[session]\ncompaction_use_llm = true\n";
+        let toml = "compaction_use_llm = true\n";
         let table: toml::Table = toml.parse().expect("parse toml table");
         let mut cfg = Config::default();
         merge_toml_into_config(&mut cfg, table);
@@ -2078,17 +2083,22 @@ mod tests {
     ///
     /// If any site is missing the field, the counts below will diverge
     /// from their expected values and the test will fail.
-    // ignore: known-broken — see state.md
+    //
+    // WO 27.2-R2: un-ignored after recomputing the expected literals.
+    // The const itself had drifted (+5 over the real struct count) and
+    // the env-var assertion was tautological (`assert_eq!(80, 80)`).
+    // Both corrected: const 103 → 98, env-var count made real, merge
+    // TOML expected bumped 78 → 85 to cover compaction_use_llm,
+    // doom_loop_action, and plugin_trust_workspace.
     #[test]
-    #[ignore]
     fn config_field_count_drift_guard() {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=33, SecurityConfig=20, ToolConfig=32,
-        // SessionConfig=9, DisplayConfig=8
+        // ModelConfig=31, SecurityConfig=19, ToolConfig=33,
+        // SessionConfig=8, DisplayConfig=7 → 98 total pub fields.
         assert_eq!(
-            CONFIG_FIELD_COUNT, 103,
+            CONFIG_FIELD_COUNT, 98,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2112,6 +2122,7 @@ mod tests {
             max_concurrent_scheduled_jobs = 999
             carryover_enabled = true
             compaction_use_heuristic = true
+            compaction_use_llm = true
             compaction_drop_threshold = 0.5
             stem_file_cap = 999
             shutdown_timeout_secs = 999
@@ -2137,12 +2148,14 @@ mod tests {
             max_background_tasks = 4
             task_concurrency_mode = "queue"
             doom_loop_max_hits = 3
+            doom_loop_action = "x"
             tool_timeout_secs = 999
             audit_log_path = "x"
             diff_review = false
             hooks_dir = "x"
             reject_on_excess_plugin_trust = true
             plugin_signature_validation = true
+            plugin_trust_workspace = true
             plugin_public_key_path = "x"
             memory_enabled = true
             memory_max_tokens = 999
@@ -2192,19 +2205,30 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 65 top-level leaf keys + 5 single-key sub-tables + 7 computer_use sub-keys = 78
-        const MERGE_TOML_EXPECTED: usize = 78;
+        // 68 top-level leaf keys + 7 array keys + 3 single-key inline
+        // tables + 7 computer_use sub-keys = 85
+        const MERGE_TOML_EXPECTED: usize = 85;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
         );
 
         // ── 3. apply_env_overrides field coverage ─────────────────
-        // Count KF_CODE_* env var checks in apply_env_overrides.
-        // This must stay in sync with env_overrides.rs.
-        const ENV_OVERRIDE_EXPECTED: usize = 80;
+        // Count env-var read calls (direct std::env::var + env_bool!
+        // macro invocations) in env_overrides.rs. This must stay in
+        // sync with the function body. WO 27.2-R2: replaced the
+        // tautological `assert_eq!(80, 80)` with a real source scan.
+        let env_overrides_src = include_str!("env_overrides.rs");
+        let env_var_count = env_overrides_src.matches("\"KF_CODE_").count()
+            + env_overrides_src.matches("\"ANTHROPIC_API_KEY\"").count()
+            + env_overrides_src.matches("\"OPENAI_API_KEY\"").count()
+            + env_overrides_src.matches("\"DEEPSEEK_API_KEY\"").count()
+            + env_overrides_src.matches("\"GEMINI_API_KEY\"").count()
+            + env_overrides_src.matches("\"KIMI_API_KEY\"").count();
+        // 76 KF_CODE_* literals + 5 API-key literals = 81
+        const ENV_OVERRIDE_EXPECTED: usize = 81;
         assert_eq!(
-            ENV_OVERRIDE_EXPECTED, 80,
+            env_var_count, ENV_OVERRIDE_EXPECTED,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
         );
 
@@ -2252,7 +2276,12 @@ mod tests {
         let obj = json.as_object().unwrap();
         // Fields that exist in the struct but are skipped during serialization.
         const SKIP_SERIALIZING_FIELDS: usize = 1; // seed (ModelConfig)
-        let serde_field_count = obj.len() + SKIP_SERIALIZING_FIELDS;
+                                                  // Flattened-name collisions: ToolConfig.memory_auto_populate and
+                                                  // DisplayConfig.memory_auto_populate both serialize to the same
+                                                  // JSON key, so serde produces 1 key for 2 struct fields. Document
+                                                  // here so the count stays honest.
+        const FLATTEN_COLLISIONS: usize = 1; // memory_auto_populate
+        let serde_field_count = obj.len() + SKIP_SERIALIZING_FIELDS + FLATTEN_COLLISIONS;
         assert_eq!(
             CONFIG_FIELD_COUNT, serde_field_count,
             "CONFIG_FIELD_COUNT ({CONFIG_FIELD_COUNT}) != serde field count ({serde_field_count}) \

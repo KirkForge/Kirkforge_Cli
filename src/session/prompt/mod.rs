@@ -1163,9 +1163,13 @@ mod tests {
         assert!(capped.content.contains("🦀"));
     }
 
-    // ignore: known-broken — see state.md
+    // WO 27.2-R2: un-ignored after tightening the budget so the stub
+    // branch actually fires. Today's build_messages runs microcompaction
+    // first; with the original 3_000 budget, microcompaction's result
+    // (5 trailing tool msgs × ~500 tokens + summary) snuck under budget
+    // and the stub branch was unreachable. Lower budget forces the
+    // stub branch to handle the overflow.
     #[test]
-    #[ignore]
     fn test_build_messages_stubs_old_tool_results_when_over_budget() {
         let mut builder = PromptBuilder::new();
         let system = Message {
@@ -1195,7 +1199,7 @@ mod tests {
             })
             .collect();
 
-        let result = builder.build_messages(system, &history, 3_000, &tool_results);
+        let result = builder.build_messages(system, &history, 2_000, &tool_results);
 
         let tool_msgs: Vec<&Message> = result
             .iter()

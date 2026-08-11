@@ -452,9 +452,12 @@ mod tests {
         assert_eq!(config.min_turns_for_summary, 6);
     }
 
-    // ignore: known-broken — see state.md
+    // WO 27.2-R2: un-ignored after fixing the zero-token input. The
+    // original test used two 1-char messages claiming len/4 == 0, but
+    // the estimator moved to tiktoken cl100k_base which scores each
+    // non-empty string as >= 1 token. The guard only fires when the
+    // total estimate is actually zero, so use empty contents.
     #[tokio::test]
-    #[ignore]
     async fn test_zero_tokens_before_avoids_divide_by_zero() {
         // Regression for C12: summarizer used to divide by tokens_before,
         // panicking when the conversation estimated to zero tokens.
@@ -473,16 +476,17 @@ mod tests {
             .mount(&server)
             .await;
 
-        // Two one-character messages estimate to zero tokens (len / 4 == 0).
+        // Two empty-content messages estimate to zero tokens (tiktoken
+        // returns 0 for empty input).
         let messages = vec![
             Message {
                 role: Role::User,
-                content: "a".into(),
+                content: "".into(),
                 ..Default::default()
             },
             Message {
                 role: Role::Assistant,
-                content: "b".into(),
+                content: "".into(),
                 ..Default::default()
             },
         ];

@@ -224,6 +224,7 @@ async fn trufflehog_scan(path: &Path) -> Option<Verdict> {
     let output = match tokio::time::timeout(
         std::time::Duration::from_secs(TRUFFLEHOG_TIMEOUT_SECS),
         tokio::process::Command::new(&binary)
+            .kill_on_drop(true)
             .arg("filesystem")
             .arg("--no-update")
             .arg("--json")
@@ -352,6 +353,46 @@ mod tests {
     use super::*;
     use crate::shared::test_util::remove_test_file;
 
+    // The two `trufflehog_*` tests inject a fake `trufflehog` binary via PATH
+    // and gate it on distinct marker env vars. Their PATH/marker pollution is
+    // process-global, so any CONCURRENT low-entropy `verify_security` call
+    // (one that reaches `trufflehog_scan` and expects `Clean`) can be flipped
+    // to `Unfixable` by the leaked fake. This mutex serializes the polluters
+    // against those vulnerable callers. Mirrors the budget.rs OnceLock-Mutex
+    // idiom.
+    fn path_mutating_test_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    // Captures the prior PATH on construction (and sets a marker env var);
+    // restores PATH and removes the marker on drop so a mid-test panic cannot
+    // leak the mutated environment. The caller sets PATH to its fake bin dir
+    // AFTER constructing the guard.
+    struct PathEnvGuard {
+        prior_path: Option<std::ffi::OsString>,
+        marker: &'static str,
+    }
+    impl PathEnvGuard {
+        fn new(marker: &'static str) -> Self {
+            let g = Self {
+                prior_path: std::env::var_os("PATH"),
+                marker,
+            };
+            std::env::set_var(marker, "1");
+            g
+        }
+    }
+    impl Drop for PathEnvGuard {
+        fn drop(&mut self) {
+            match &self.prior_path {
+                Some(p) => std::env::set_var("PATH", p),
+                None => std::env::remove_var("PATH"),
+            }
+            std::env::remove_var(self.marker);
+        }
+    }
+
     #[tokio::test]
     async fn test_skips_unrelated_events() {
         // Only FileWrite and Edit are scanned; BashExec, FileRead, etc. should skip
@@ -368,6 +409,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_scans_edit_event() {
+        // Low-entropy content reaches trufflehog_scan: exclude the PATH-polluting trufflehog tests.
+        let _lock = path_mutating_test_lock().lock().await;
         let dir = std::env::temp_dir();
         let path = dir.join("kf_code_sec_edit_check.txt");
         std::fs::write(&path, "let x = 1;").unwrap();
@@ -401,6 +444,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_clean_file_passes() {
+        let _lock = path_mutating_test_lock().lock().await;
         let dir = std::env::temp_dir();
         let path = dir.join("kf_code_sec_clean.txt");
         std::fs::write(&path, "let x = 1;").unwrap();
@@ -508,6 +552,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_path_traversal_no_false_positive() {
+        let _lock = path_mutating_test_lock().lock().await;
         // `../` inside string content must NOT be flagged (it's a legitimate import)
         let dir = std::env::temp_dir();
         let path = dir.join("kf_code_sec_traversal.txt");
@@ -545,6 +590,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_low_entropy_token_not_detected() {
+        let _lock = path_mutating_test_lock().lock().await;
         let dir = std::env::temp_dir();
         let path = dir.join("kf_code_sec_entropy_low.txt");
         std::fs::write(&path, "api_key = \"sk-aaaaaaaaaaaaaaaa\"").unwrap();
@@ -568,6 +614,7 @@ mod tests {
     // documents the dangerous command.
     #[tokio::test]
     async fn test_shell_danger_in_slash_comment_is_skipped() {
+        let _lock = path_mutating_test_lock().lock().await;
         let dir = std::env::temp_dir();
         let path = dir.join("kf_code_sec_comment_slash.txt");
         std::fs::write(&path, "// do not run: rm -rf /\nlet x = 1;\n").unwrap();
@@ -587,6 +634,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_danger_in_hash_comment_is_skipped() {
+        let _lock = path_mutating_test_lock().lock().await;
         let dir = std::env::temp_dir();
         let path = dir.join("kf_code_sec_comment_hash.txt");
         std::fs::write(&path, "# do not run: rm -rf /\nx = 1\n").unwrap();
@@ -606,6 +654,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_danger_in_block_comment_is_skipped() {
+        let _lock = path_mutating_test_lock().lock().await;
         let dir = std::env::temp_dir();
         let path = dir.join("kf_code_sec_comment_block.txt");
         std::fs::write(
@@ -629,6 +678,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_danger_in_star_comment_line_is_skipped() {
+        let _lock = path_mutating_test_lock().lock().await;
         let dir = std::env::temp_dir();
         let path = dir.join("kf_code_sec_comment_star.txt");
         std::fs::write(
@@ -696,12 +746,14 @@ mod tests {
     // `None` (no finding) on timeout. This test injects a fake
     // trufflehog that sleeps past the timeout and asserts the verifier
     // returns `Clean` rather than hanging.
-    // ignore: known-broken — see state.md
     #[tokio::test]
     #[cfg(unix)]
-    #[ignore]
     async fn test_trufflehog_timeout_does_not_block() {
         use std::os::unix::fs::PermissionsExt;
+
+        // Serialize against test_trufflehog_path_discovery: both inject a
+        // fake `trufflehog` via PATH and would cross-resolve if run together.
+        let _lock = path_mutating_test_lock().lock().await;
 
         let dir = std::env::temp_dir();
         let path = dir.join("kf_code_sec_trufflehog_timeout.txt");
@@ -724,7 +776,11 @@ mod tests {
         // and the verifier reaches the trufflehog step.
         std::fs::write(&path, "api_key = \"sk-aaaaaaaaaaaaaaaa\"").unwrap();
 
-        let original_path = std::env::var_os("PATH").clone();
+        // PathEnvGuard captures prior PATH and owns the sleep marker; drop
+        // restores both even if the assertion panics. Set PATH AFTER the
+        // guard so the guard captures the original.
+        let original_path = std::env::var_os("PATH");
+        let _path_guard = PathEnvGuard::new("KF_CODE_FAKE_TRUFFLEHOG_SLEEP");
         let new_path = format!(
             "{}:{}",
             fake_bin_dir.display(),
@@ -734,7 +790,6 @@ mod tests {
                 .unwrap_or_default()
         );
         std::env::set_var("PATH", new_path);
-        std::env::set_var("KF_CODE_FAKE_TRUFFLEHOG_SLEEP", "1");
 
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
@@ -750,12 +805,6 @@ mod tests {
             .await
             .expect("verify_security should resolve before the 15s test budget");
 
-        if let Some(p) = original_path {
-            std::env::set_var("PATH", p);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        std::env::remove_var("KF_CODE_FAKE_TRUFFLEHOG_SLEEP");
         remove_test_file(&path);
         remove_test_file(&fake_trufflehog);
         let _ = std::fs::remove_dir(&fake_bin_dir);
@@ -770,6 +819,10 @@ mod tests {
     #[cfg(unix)]
     async fn test_trufflehog_path_discovery() {
         use std::os::unix::fs::PermissionsExt;
+
+        // Serialize against test_trufflehog_timeout_does_not_block (both
+        // inject a fake `trufflehog` via PATH; would cross-resolve together).
+        let _lock = path_mutating_test_lock().lock().await;
 
         let dir = std::env::temp_dir();
         let path = dir.join("kf_code_sec_trufflehog.txt");

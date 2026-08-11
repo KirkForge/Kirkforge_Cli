@@ -20,14 +20,21 @@ use serde::{Deserialize, Serialize};
 /// If either site is missing the new field, the drift-guard test will fail.
 ///
 /// Breakdown:
-///   ModelConfig    33
-///   SecurityConfig 20  (17 direct + 3 sub-struct handles)
+///   ModelConfig    31
+///   SecurityConfig 19  (16 direct + 3 sub-struct handles)
 ///   ToolConfig     33
-///   SessionConfig   9
-///   DisplayConfig   8
+///   SessionConfig   8
+///   DisplayConfig   7
 ///   Note: 1 field (seed) has #[serde(skip_serializing)], so serde
-///   produces 102 keys. The drift-guard test accounts for this.
-pub const CONFIG_FIELD_COUNT: usize = 103;
+///   produces 95 keys; ToolConfig.memory_auto_populate and
+///   DisplayConfig.memory_auto_populate flatten to the same JSON key,
+///   dropping 1 more. The drift-guard test accounts for both.
+//
+// WO 27.2-R2: corrected from 103 → 98. The const had drifted +5 over
+// the actual struct count (doc claimed 33/20/33/9/8; reality is
+// 31/19/33/8/7). The "known-broken" drift-guard test hid the drift
+// for several WO cycles; un-ignoring it forced the correction.
+pub const CONFIG_FIELD_COUNT: usize = 98;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

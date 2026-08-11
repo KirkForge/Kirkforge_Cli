@@ -622,48 +622,35 @@ mod tests {
     }
 
     /// WO 22.10-R1: Skipped verdicts must produce a CorrectionResult so the
-    /// model can see that verification was skipped.
-    // ignore: known-broken — see state.md
+    /// model can see that verification was skipped. The handler folds
+    /// individual-verifier `Skipped` to `Clean` (see
+    /// `handler_verify_event_skipped_verdict`); the only aggregate
+    /// `Verdict::Skipped` the correction loop ever sees is the handler's
+    /// ToolError short-circuit (handler.rs verify_event). So this test drives
+    /// the loop with a `BusEvent::ToolError` and asserts the loop's Skipped
+    /// branch produces exactly one CorrectionResult.
     #[tokio::test]
-    #[ignore]
     async fn correction_loop_skipped_verdict_produces_result() {
-        use super::super::types::{Verdict, Verifier};
-        struct StubSkippedVerifier;
-        #[async_trait::async_trait]
-        impl Verifier for StubSkippedVerifier {
-            fn name(&self) -> &str {
-                "skip-check"
-            }
-            fn priority(&self) -> u8 {
-                1
-            }
-            async fn verify(&self, _event: &BusEvent) -> Verdict {
-                Verdict::Skipped("tool not available".into())
-            }
-        }
-        let mut slots_inner = super::super::slots::VerifierSlots::new();
-        slots_inner
-            .register(std::sync::Arc::new(StubSkippedVerifier))
-            .unwrap();
+        let slots_inner = super::super::slots::VerifierSlots::new();
         let slots = std::sync::Arc::new(std::sync::RwLock::new(slots_inner));
         let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
             slots,
             crate::session::access::PathGuard::default(),
         ));
         let loop_ = CorrectionLoop::new(handler).with_max_iterations(1);
-        let event = crate::session::verifier::types::BusEvent::Edit(
-            crate::session::verifier::types::EditEvent {
-                path: PathBuf::from("/tmp/none.rs"),
-                diff: "@@ -1 +1 @@\n-a\n+b".into(),
+        let event = crate::session::verifier::types::BusEvent::ToolError(
+            crate::session::verifier::types::ToolErrorEvent {
+                tool: "bash".into(),
+                error: "exit code 1".into(),
             },
         );
         let results = loop_.run(&event).await;
         assert_eq!(results.len(), 1, "Skipped verdict must produce one result");
-        assert_eq!(results[0].verifier, "skip-check");
+        assert_eq!(results[0].verifier, "aggregate");
         assert!(results[0].success, "Skipped is not a failure");
         assert_eq!(
             results[0].message,
-            "verification skipped: tool not available"
+            "verification skipped: tool-error event: no verifiers act on ToolError"
         );
         assert!(results[0].fix.is_none());
         assert!(results[0].file.is_none());

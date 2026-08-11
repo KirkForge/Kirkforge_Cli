@@ -165,13 +165,18 @@ fn openai_json_mode_off_omits_response_format() {
     assert!(body.get("tool_choice").is_none());
 }
 
-// ignore: known-broken — see state.md
+// WO 27.2-R2: un-ignored after WO 17.5 expanded the cache-marker
+// algorithm — system+tools breakpoint on idx 0 and tail breakpoint
+// on the last user turn were added on top of the last-2-of-prefix
+// markers. The original test only asserted the last-2-of-prefix
+// behavior and denied the system/tail markers; today all four
+// positions are marked in this scenario.
 #[test]
-#[ignore]
 fn openai_cache_mode_marks_last_two_prefix_messages() {
-    // Three prefix messages + a trailing user turn. The trailing
-    // turn is NOT marked (changes every turn); the last 2 of the
-    // prefix ARE marked with cache_control.
+    // Three prefix messages + a trailing user turn. Today's
+    // algorithm marks: system (idx 0) via the system+tools
+    // breakpoint, the last 2 of the prefix (idx 1, 2), and the
+    // trailing user (idx 3) via the tail breakpoint.
     let mut mi = dummy_model_info();
     mi.supports_cache = true;
     let tools: Vec<ToolDef> = vec![];
@@ -195,17 +200,14 @@ fn openai_cache_mode_marks_last_two_prefix_messages() {
     ];
     let body = build_openai_compat_body("m", &mi, &msgs, &tools, None, None, None);
     let oai_msgs = body["messages"].as_array().unwrap();
-    // System message (idx 0): no marker (only the last 2 of the
-    // prefix are marked, and the system is the head of the prefix
-    // — out of the window).
-    assert!(oai_msgs[0].get("cache_control").is_none());
-    // First assistant (idx 1): MARKER (last 2 of the prefix, with
-    // prefix = [0, 1, 2])
+    // System message (idx 0): MARKER (system+tools breakpoint, WO 17.5)
+    assert_eq!(oai_msgs[0]["cache_control"], json!({"type": "ephemeral"}));
+    // First assistant (idx 1): MARKER (last 2 of the prefix)
     assert_eq!(oai_msgs[1]["cache_control"], json!({"type": "ephemeral"}));
     // Second assistant (idx 2): MARKER (last 2 of the prefix)
     assert_eq!(oai_msgs[2]["cache_control"], json!({"type": "ephemeral"}));
-    // Trailing user (idx 3): no marker — it's the live turn
-    assert!(oai_msgs[3].get("cache_control").is_none());
+    // Trailing user (idx 3): MARKER (tail breakpoint, WO 17.5)
+    assert_eq!(oai_msgs[3]["cache_control"], json!({"type": "ephemeral"}));
 }
 
 #[test]

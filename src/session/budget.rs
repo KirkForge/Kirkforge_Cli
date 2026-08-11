@@ -36,7 +36,7 @@ pub fn new_session_store() -> SharedStore {
 
 /// Initialize an existing budget from config.
 pub fn init_from_config(budget: &SharedBudget, cfg: &crate::shared::Config) {
-    let mut guard = budget.lock().expect("budget mutex poisoned");
+    let mut guard = budget.lock().unwrap_or_else(|e| e.into_inner());
     guard.ceiling = cfg.tools.budget_ceiling;
     guard.approaching_ratio = cfg.tools.budget_approaching_ratio;
 }
@@ -124,26 +124,20 @@ fn sliced_listeners() -> &'static Mutex<Vec<BudgetSlicedListener>> {
 /// earlier listeners shadow later ones — duplicate registrations
 /// are harmless but waste an `Arc` allocation per reload.
 pub fn register_sliced_listener(listener: BudgetSlicedListener) {
-    let mut guard = sliced_listeners()
-        .lock()
-        .expect("sliced listener mutex poisoned");
+    let mut guard = sliced_listeners().lock().unwrap_or_else(|e| e.into_inner());
     guard.push(listener);
 }
 
 /// Number of registered sliced listeners — for tests.
 #[cfg(test)]
 pub fn sliced_listener_count() -> usize {
-    let guard = sliced_listeners()
-        .lock()
-        .expect("sliced listener mutex poisoned");
+    let guard = sliced_listeners().lock().unwrap_or_else(|e| e.into_inner());
     guard.len()
 }
 
 #[cfg(test)]
 pub fn clear_sliced_listeners() {
-    let mut guard = sliced_listeners()
-        .lock()
-        .expect("sliced listener mutex poisoned");
+    let mut guard = sliced_listeners().lock().unwrap_or_else(|e| e.into_inner());
     guard.clear();
 }
 
@@ -241,7 +235,7 @@ pub fn apply_budget_slice(
     store: &SharedStore,
 ) -> ToolOutcome {
     let state = {
-        let guard = budget.lock().expect("budget mutex poisoned");
+        let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
         guard.state()
     };
     if state != BudgetState::Over && state != BudgetState::Approaching {
@@ -250,7 +244,7 @@ pub fn apply_budget_slice(
     if state == BudgetState::Approaching {
         maybe_escalate_stratum();
     }
-    let guard = budget.lock().expect("budget mutex poisoned");
+    let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
     match outcome {
         ToolOutcome::Success { content } => {
             let original_size = content.len();
@@ -338,9 +332,7 @@ pub fn apply_budget_slice(
 /// first listener that returns `Some` wins; the rest are skipped for
 /// this event. Returns `None` if no listener returned a replacement.
 fn dispatch_sliced(event: BudgetSlicedEvent) -> Option<String> {
-    let listeners = sliced_listeners()
-        .lock()
-        .expect("sliced listener mutex poisoned");
+    let listeners = sliced_listeners().lock().unwrap_or_else(|e| e.into_inner());
     for listener in listeners.iter() {
         if let Some(replacement) = listener(event.clone()) {
             return Some(replacement);
@@ -398,7 +390,7 @@ impl Tool for BudgetStatus {
     }
 
     async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
-        let budget = self.budget.lock().expect("budget mutex poisoned");
+        let budget = self.budget.lock().unwrap_or_else(|e| e.into_inner());
         let state = budget.state();
         let remaining = budget.remaining();
         let ceiling = budget.ceiling;
@@ -452,7 +444,7 @@ impl Tool for BudgetSet {
                 }
             }
         };
-        let mut budget = self.budget.lock().expect("budget mutex poisoned");
+        let mut budget = self.budget.lock().unwrap_or_else(|e| e.into_inner());
         budget.ceiling = ceiling;
         ToolOutcome::Success {
             content: format!("Budget ceiling set to {ceiling}"),
@@ -476,7 +468,7 @@ impl Tool for BudgetCompact {
     }
 
     async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
-        let mut budget = self.budget.lock().expect("budget mutex poisoned");
+        let mut budget = self.budget.lock().unwrap_or_else(|e| e.into_inner());
         let old_used = budget.used;
         budget.used = 0;
         ToolOutcome::Success {
@@ -677,7 +669,7 @@ impl PostHook for SessionStartHook {
     }
 
     fn handle(&self, _ctx: &HookContext) -> Result<(), String> {
-        let budget = self.budget.lock().expect("budget mutex poisoned");
+        let budget = self.budget.lock().unwrap_or_else(|e| e.into_inner());
         let state = budget.state();
         let remaining = budget.remaining();
         tracing::info!(
@@ -729,7 +721,7 @@ impl PostHook for PreCompactHook {
     }
 
     fn handle(&self, ctx: &HookContext) -> Result<(), String> {
-        let mut budget = self.budget.lock().expect("budget mutex poisoned");
+        let mut budget = self.budget.lock().unwrap_or_else(|e| e.into_inner());
         let state = budget.state();
         if state == BudgetState::Over || state == BudgetState::Approaching {
             let stats = ctx.compact_stats.as_ref();
@@ -765,7 +757,7 @@ fn record_tool_usage(
         return Ok(());
     };
     let tokens = crate::session::prompt::count_tokens(result);
-    let mut budget = budget.lock().expect("budget mutex poisoned");
+    let mut budget = budget.lock().unwrap_or_else(|e| e.into_inner());
     budget.record(tokens);
     let state = budget.state();
     match state {
@@ -1012,7 +1004,7 @@ mod tests {
         // actually considers slicing.
         {
             let budget = shared_budget();
-            let mut guard = budget.lock().expect("budget mutex poisoned");
+            let mut guard = budget.lock().unwrap_or_else(|e| e.into_inner());
             guard.ceiling = 1000;
             guard.used = 900;
         }
@@ -1031,7 +1023,7 @@ mod tests {
         // Reset the shared budget so other tests are not affected.
         {
             let budget = shared_budget();
-            let mut guard = budget.lock().expect("budget mutex poisoned");
+            let mut guard = budget.lock().unwrap_or_else(|e| e.into_inner());
             guard.used = 0;
             guard.ceiling = 200_000;
         }
@@ -1042,7 +1034,7 @@ mod tests {
         let _guard = shared_budget_test_lock().blocking_lock();
         {
             let budget = shared_budget();
-            let mut guard = budget.lock().expect("budget mutex poisoned");
+            let mut guard = budget.lock().unwrap_or_else(|e| e.into_inner());
             guard.ceiling = 200_000;
             guard.used = 0;
         }
@@ -1058,7 +1050,7 @@ mod tests {
 
     fn reset_shared_budget(ceiling: usize, used: usize) {
         let budget = shared_budget();
-        let mut guard = budget.lock().expect("budget mutex poisoned");
+        let mut guard = budget.lock().unwrap_or_else(|e| e.into_inner());
         guard.ceiling = ceiling;
         guard.used = used;
         guard.approaching_ratio = 0.8;
@@ -1141,7 +1133,7 @@ mod tests {
         let used_before = 0usize;
         let used_after = {
             let budget = shared_budget();
-            let guard = budget.lock().expect("budget mutex poisoned");
+            let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
             guard.used
         };
         assert!(
@@ -1156,7 +1148,7 @@ mod tests {
         reset_shared_budget(1000, 2000);
         {
             let budget = shared_budget();
-            let guard = budget.lock().expect("budget mutex poisoned");
+            let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
             assert_eq!(guard.state(), BudgetState::Over);
         }
         let hook = PreCompactHook {
@@ -1169,7 +1161,7 @@ mod tests {
         assert_eq!(hook.handle(&ctx), Ok(()));
         let used = {
             let budget = shared_budget();
-            let guard = budget.lock().expect("budget mutex poisoned");
+            let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
             guard.used
         };
         assert_eq!(used, 0, "PreCompactHook must reset used to 0 when over");
@@ -1271,7 +1263,7 @@ mod tests {
         cfg.tools.budget_approaching_ratio = 0.9;
         init_from_config(&shared_budget(), &cfg);
         let budget = shared_budget();
-        let guard = budget.lock().expect("budget mutex poisoned");
+        let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(guard.ceiling, 12_345);
         assert_eq!(guard.approaching_ratio, 0.9);
         drop(guard);
@@ -1324,7 +1316,7 @@ mod tests {
         }
         let used = {
             let budget = shared_budget();
-            let guard = budget.lock().expect("budget mutex poisoned");
+            let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
             guard.used
         };
         assert_eq!(used, 0);
@@ -1430,7 +1422,7 @@ mod tests {
         };
         let decision = record_tool_usage(&budget, &ctx, "bash");
         assert_eq!(decision, Ok(()));
-        let guard = budget.lock().expect("budget mutex poisoned");
+        let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(guard.used, 0, "no result should not record usage");
     }
 
@@ -1446,7 +1438,7 @@ mod tests {
         };
         let decision = record_tool_usage(&budget, &ctx, "bash");
         assert_eq!(decision, Ok(()));
-        let guard = budget.lock().expect("budget mutex poisoned");
+        let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(guard.used, 0, "empty result records 0 tokens");
     }
 
@@ -1462,7 +1454,7 @@ mod tests {
             ..Default::default()
         };
         let _ = record_tool_usage(&budget, &ctx, "write_file");
-        let guard = budget.lock().expect("budget mutex poisoned");
+        let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(guard.state(), BudgetState::Approaching);
     }
 
@@ -1480,7 +1472,7 @@ mod tests {
         };
         assert_eq!(hook.handle(&ctx), Ok(()));
         let budget = shared_budget();
-        let guard = budget.lock().expect("budget mutex poisoned");
+        let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
         assert!(guard.used > 0, "write_file hook must record usage");
     }
 

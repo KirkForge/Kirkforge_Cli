@@ -96,14 +96,14 @@ fn session_mode() -> &'static Mutex<Mode> {
 
 /// Read the current per-session Stratum mode.
 pub fn current_session_mode() -> Mode {
-    *session_mode().lock().expect("session mode mutex poisoned")
+    *session_mode().lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Set the per-session Stratum mode. Intended for the budget's
 /// auto-escalation path. The new mode takes effect for the next
 /// compression call.
 pub fn set_session_mode(mode: Mode) {
-    *session_mode().lock().expect("session mode mutex poisoned") = mode;
+    *session_mode().lock().unwrap_or_else(|e| e.into_inner()) = mode;
 }
 
 // ── Sliced-event coordination (WO 8.6) ─────────────────────────────────

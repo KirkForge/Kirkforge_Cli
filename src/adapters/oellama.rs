@@ -62,6 +62,18 @@ const GEMINI_PROFILE: OellamaProfile = OellamaProfile {
     ndjson_config: OllamaNdjsonConfig::GEMINI,
 };
 
+/// Standard Ollama profile for generic models (llama, qwen, mistral, phi,
+/// and any name routed to the Ollama adapter that doesn't match a known
+/// dialect). No thinking channel; conservative 8K context default.
+const OLLAMA_PROFILE: OellamaProfile = OellamaProfile {
+    thinking: false,
+    tool_call_format: ToolCallStyle::Native,
+    max_context_tokens: 8192,
+    recommended_temperature: 0.7,
+    supports_images: false,
+    ndjson_config: OllamaNdjsonConfig::OLLAMA,
+};
+
 /// Generic Ollama `/api/chat` adapter. Covers DeepSeek, Gemini, GLM, and
 /// Kimi — all four share the same HTTP path and NDJSON framing; only the
 /// `OellamaProfile` (model metadata + parser config) differs.
@@ -110,6 +122,14 @@ impl OellamaAdapter {
 
     pub fn gemini(ollama_host: &str, model: &str, timeout_secs: u64) -> Self {
         Self::new(&GEMINI_PROFILE, ollama_host, model, timeout_secs)
+    }
+
+    /// Standard Ollama adapter for generic models. Used when the routing
+    /// table selects `AdapterKind::Ollama` but the model name doesn't
+    /// match a known dialect (glm/deepseek/gemini/kimi). Replaces the old
+    /// fall-through to OpenAiCompat that broke `/api/chat` routing.
+    pub fn ollama(ollama_host: &str, model: &str, timeout_secs: u64) -> Self {
+        Self::new(&OLLAMA_PROFILE, ollama_host, model, timeout_secs)
     }
 }
 

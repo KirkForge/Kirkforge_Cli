@@ -150,6 +150,12 @@ impl OllamaNdjsonConfig {
     pub const GEMINI: Self = Self {
         thinking_field: None,
     };
+    /// Standard Ollama models (llama, qwen, mistral, phi, etc.) — no
+    /// thinking channel. Used for any model routed to the Ollama adapter
+    /// that doesn't match a known dialect profile.
+    pub const OLLAMA: Self = Self {
+        thinking_field: None,
+    };
 }
 
 /// Drive an Ollama `/api/chat` NDJSON response into a `StreamEvent` channel.

@@ -480,10 +480,13 @@ pub fn adapter_for_with_provider(
                     timeout_secs,
                 ))
             } else {
-                // With the current classification this branch is
-                // unreachable, but keep the previous permissive
-                // fallback so we never panic on unknown input.
-                Box::new(openai_compat::OpenAiCompatAdapter::new(
+                // Generic Ollama model (llama, qwen, mistral, phi, or any
+                // name routed to Ollama via the adapter_routing table that
+                // doesn't match a known dialect). Use the standard Ollama
+                // NDJSON profile — NOT OpenAiCompat. The old fall-through
+                // to OpenAiCompat here broke `/api/chat` routing for any
+                // routed-but-unknown model name (the e2e hang root cause).
+                Box::new(oellama::OellamaAdapter::ollama(
                     ollama_host,
                     model_name,
                     timeout_secs,

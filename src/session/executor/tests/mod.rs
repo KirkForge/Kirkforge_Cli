@@ -12,3 +12,4 @@ mod loop_;
 mod scout;
 mod turn;
 mod verifier_cross;
+mod wiremock_integration;

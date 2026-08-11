@@ -27,7 +27,7 @@
 - Two follow-up commits on `dev` NOT yet pushed: `76e037a` (cargo-audit severity blocking via `.cargo/audit.toml`) and `cdb3b42` (e2e scenarios deliver prompt via stdin).
 - **CI is still RED.** Last run (31408134938) failed on `audit` and `windows` jobs:
   - `audit`: fixed by `76e037a` (cargo-audit 0.22 rejects `--deny critical` — severity blocking moved to `.cargo/audit.toml` `severity_threshold`). Needs a re-run to confirm.
-  - `windows`: e2e tests fail. Root cause found: scenarios passed the prompt as a positional CLI arg, but `kf-code run` has no positional field → clap exits code 2 → zero mock requests. Fixed by `cdb3b42` (pipe prompt via stdin). **BUT a second pre-existing bug remains: the stdin-piping path HANGS** — the binary never completes the turn against the mock. Root cause NOT yet fixed. This is the blocker for green CI.
+  - `windows`: e2e tests fail. Root cause found: scenarios passed the prompt as a positional CLI arg, but `kf-code run` has no positional field → clap exits code 2 → zero mock requests. Fixed by `cdb3b42` (pipe prompt via stdin). A second pre-existing bug — **the stdin-piping path hung, the binary never completed the turn against the mock** — is now **RESOLVED** (commit `260e7d8`: 90s `STREAM_IDLE_TIMEOUT` via a shared `next_chunk_or_idle_timeout` helper across the 4 adapter parsers, plus an `[adapter_routing] "e2e-" = "Ollama"` seed fixing the e2e routing mismatch; see the RESOLVED block below). CI should clear once `260e7d8` + `cdb3b42`/`76e037a` are pushed.
 - **Version bump to 0.3.7: NOT done.**
 - **`main` fast-forward: NOT done** (main still at e95c347).
 - **WO 27 series: NOT started.**

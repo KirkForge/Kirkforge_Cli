@@ -47,12 +47,12 @@ kf-code (root bin)          ← the CLI the user runs
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── plugins/                   ← shell plugin manifests + tool/hook scripts
 │   └── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
-├── benches/tasks/             ← 31 benchmark task definitions (TOML)
+├── benches/tasks/             ← 30 benchmark task definitions (TOML)
 └── docs/adr/                  ← 89 Architecture Decision Records
 ```
 
 The workspace has ~2,900 `#[test]` functions (~2,200 under `src/`,
-~680 under `crates/`). The `crates/` count is pinned by the
+~635 under `crates/`). The `crates/` count is pinned by the
 `readme_drift` test (`crates/kf-budget-core/README.md` State table).
 
 ### Compiled-in vs satellite
@@ -162,13 +162,18 @@ available. Keychain/OAuth expansion is planned for Series 18.
 
 ### `tools/` — built-in tools
 
-19 tools implementing the `Tool` trait: `read_file`, `write_file`, `edit_file`,
-`atomic_write`, `bash`, `bash_cancel`, `bash_minify`, `bash_status`, `glob`,
-`grep`, `lsp_query`, `read_image`, `web_fetch`, `web_search`, `computer_use`,
-`notebook_edit`, `task`, `todo`, `workflow_run`. The `workflow_run` tool
-(WO 9.1) wraps the `kf-workflow` crate's `WorkflowExecutor` so the
-agent loop and bench harness can invoke workflows via tool calls, reusing
-the same in-process `TaskSpawner` as the `task` tool. Plugin tools are
+20 tools implementing the `Tool` trait (17 always registered + 3 conditional),
+registered in `all_tools()` (`src/tools/mod.rs`): `read_file`, `write_file`,
+`edit_file`, `notebook_edit`, `bash`, `bash_status`, `bash_cancel`, `grep`,
+`glob`, `web_fetch`, `web_search`, `task`, `task_output`, `workflow_run`,
+`todo_write`, `todo_read`, `remember` are always registered; `read_image`
+(when `supports_images`), `lsp_query` (when an LSP pool is configured), and
+`computer_use` (when enabled with image support + config) are conditioned on
+their capability flags in `ToolContextBuilder`. (`atomic_write` and
+`bash_minify` are internal helper modules, not model-facing tools.) The
+`workflow_run` tool (WO 9.1) wraps the `kf-workflow` crate's `WorkflowExecutor`
+so the agent loop and bench harness can invoke workflows via tool calls,
+reusing the same in-process `TaskSpawner` as the `task` tool. Plugin tools are
 registered alongside these at runtime.
 
 The `bash` tool has three isolation layers: Docker execution mode
@@ -224,9 +229,12 @@ reactive: the executor owns the detector and emits a `TurnEvent::DoomLoopDetecte
 that the TUI's `dispatch_turn_event` translates into banner state.
 
 **Doom-loop circuit breaker** (WO 23.8): after N cumulative doom-loop hits
-(default 3, configured via `doom_loop_max_hits` / `KF_CODE_DOOM_LOOP_MAX_HITS`),
+(default 1, configured via `doom_loop_max_hits` / `KF_CODE_DOOM_LOOP_MAX_HITS`),
 the executor auto-switches to plan mode (emitting `TurnEvent::DoomLoopRemediation`
-with `action: "auto_plan_mode"`). If already in plan mode when the breaker fires,
+with `action: "auto_plan_mode"`). Note this circuit-breaker counter (default 1)
+is distinct from the warning banner's `DoomLoopTracker::THRESHOLD` of 3
+identical errors in a row described above — the banner surfaces the loop, the
+circuit breaker takes remediation action. If already in plan mode when the breaker fires,
 the turn is halted with an error message (`action: "halt"`). Setting
 `doom_loop_max_hits = 0` disables the circuit breaker entirely (pre-WO behavior).
 The cumulative hit counter persists across tool types within a session.
@@ -826,14 +834,19 @@ differentiator vs Claude Code / Vix / opencode.
   `cfg.tools.budget_ceiling`; `init_from_config` applies it to the shared
   `TokenBudget`. No new budget code — reuses ADR-0005 / WO 7.5 / WO 8.6.
 
-A `bench` workflow runs all tasks on Ollama with `qwen2.5:0.5b` on push to main (bench-baseline.yml, currently disabled).
+A `bench` workflow runs all tasks on Ollama with `qwen2.5:0.5b` on push to main.
 It posts a delta summary as a PR comment comparing against the `main` baseline
 (ADR-045). A nightly `bench-baseline` workflow on `main` stores the
-canonical baseline report as a workflow artifact.
+canonical baseline report as a workflow artifact. **This whole workflow is
+currently OFFLINE** — the file is checked in as
+`.github/workflows/bench-baseline.yml.disabled`, so none of the jobs below
+currently run. The disabled state is documented up front so the job
+descriptions below are read as the *design*, not a live system.
 
-### Bench CI loop (WO 10.9)
+### Bench CI loop (WO 10.9) — *currently disabled* (file: `bench-baseline.yml.disabled`)
 
-The bench CI loop has three jobs in `.github/workflows/bench-baseline.yml`:
+The bench CI loop has three jobs in `.github/workflows/bench-baseline.yml`
+(all currently disabled; described as designed, not as running):
 
 1. **`bench-baseline`** (push to main): runs `bench run` with
    `qwen2.5:0.5b`, uploads the report as a 90-day-retention artifact.
@@ -891,7 +904,11 @@ The root `Cargo.toml` exposes these features:
   direct Rust calls (ADR-046).
 - `budget` (default) — folds the token-budget guard in as direct
    Rust calls with full in-process event context (ADR-047).
-- `otel` (non-default) — OpenTelemetry export.
+- `pty` (non-default) — PTY-backed interactive bash commands via `portable-pty`
+  (WO 21.5-R2; opt in via `--features pty`).
+- `landlock` (non-default) — optional Linux landlock syscall filter for the
+  bash tool (WO 22.1; opt-in only, not default-on — `--features landlock`).
+- `otel` (non-default) — OpenTelemetry span/metric export.
 
 Two plugins are feature-gated compiled-in modules, served as
 direct Rust calls when their feature is on and falling back to the shell

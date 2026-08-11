@@ -34,8 +34,39 @@
 - **Local install at /home/henrik/own-code/kf-code: NOT done.**
 
 ### Pending / blocked
-- **BLOCKED (CI red):** e2e stdin-piping hang. The binary `kf-code run --no-tui --non-interactive --max-turns 1` with a prompt piped to stdin, pointed at a wiremock Ollama `/api/chat` NDJSON mock, never exits. Suspected: adapter waits for HTTP body close, or a channel never closes, or the executor loop doesn't terminate on `done:true`. Investigate `src/session/executor/turn.rs` `stream_iteration` + `src/adapters/ollama_ndjson.rs` + `src/main/line_mode.rs`. Fix before pushing `cdb3b42`/`76e037a` and before any version bump.
-- **PENDING:** push `76e037a` + `cdb3b42` once e2e hang is fixed; confirm CI green; fast-forward `main`; bump to 0.3.7; update review; start WO 27; install locally.
+- **RESOLVED (was CI red blocker):** e2e stdin-piping hang. Root cause was TWO bugs: (1) adapter parsers parked on `stream.next().await` with no idle timeout — reqwest's `.timeout(120s)` does not reliably bound the streaming-body phase, so a server that opens the connection and never sends EOF hangs the agent loop forever; (2) e2e routing mismatch — `e2e-test-model` fell through `adapter_kind_for_default` to OpenAiCompat while scenarios asserted the Ollama `/api/chat` path. Both fixed in commit `260e7d8` (90s `STREAM_IDLE_TIMEOUT` via shared `next_chunk_or_idle_timeout` helper across 4 adapter parsers + `[adapter_routing] "e2e-" = "Ollama"` seeded in e2e config fixtures). The windows CI job should clear once `260e7d8` + prior `cdb3b42`/`76e037a` are pushed.
+- **PENDING:** push this session's commits + prior `cdb3b42`/`76e037a`; confirm CI green; fast-forward `main`; bump to 0.3.7; start WO 27; install locally.
+
+## Review-fix session (2026-08-11) — 7 commits on dev
+
+Full codebase review (8 parallel read-only subagents) surfaced findings; safe fixes applied in 7 commits (`6129891`→`b5e7190`):
+
+| Commit | Finding | What |
+|--------|---------|------|
+| `6129891` | H1 | budget+stratum mutex poison: 26 `.lock().expect("…poisoned")` → `.unwrap_or_else(\|e\| e.into_inner())` matching the established convention |
+| `81c2e37` | docs | scrubbed stale claims: ADR count 88→89, plugins tree (stratum/kf-budget compiled-in), AGENTS.md "CI disabled" reconciled, state.md phantom `kf-code-review.md` deleted, docs/README.md `reviews/` dropped, CHANGELOG dup `## [Unreleased]` merged |
+| `e18b4f8` | docs | synced WO 21/23/24/25 overview `## Status` headers + 29 index rows with state.md |
+| `114bc17` | deps | ratatui `default-features=false` (review's "wezterm stack" premise was stale — ratatui 0.30 already split; smaller win), crossterm 0.28→0.29, thiserror 1→2 |
+| `e15a99f` | gate | `cargo fmt` on tests/e2e/harness (pre-existing fmt failure was blocking the gate) |
+| `260e7d8` | C2 | stream idle timeout (90s) via `next_chunk_or_idle_timeout` helper across 4 adapter parsers + e2e Ollama routing via `[adapter_routing]` (CI red blocker — see RESOLVED above) |
+| `b5e7190` | H4 + H2 | web_fetch `.redirect(Policy::none())` closes SSRF-via-302 bypass; `run_prepared_call` wraps `tool.run()` in `AssertUnwindSafe().catch_unwind()` so panicking tools return `ToolError::Internal` instead of unwinding the executor (protects deterministic + Phase 2.5 file-call paths, preserves panic msg for spawned path) |
+
+### NOT fixed this session (flagged — need design decisions / separate workorders)
+- **C1 — landlock never applied in prod.** `apply_landlock` is `#[cfg(test)]`; the `landlock` feature is off by default; `setup_rlimits` discards `_landlock_paths`. Fixing requires moving to prod + default-on feature + fail-closed semantics + allow-list design. NOT a blind fix — needs a workorder.
+- **H8 — `tools ↔ session` circular module dependency** (tools import `session::access::PathGuard`, `task.rs` constructs nested `Executor`). Needs a `tool::Sandbox`/`tool::Guard` port trait. Architecture refactor.
+- **H9 — god-objects on hot path** (`anthropic.rs` 2316 LOC monolithic; `executor/turn.rs` `dispatch_tool_call_batch` ~360 LOC + `stream_iteration` ~390 LOC). Split into directory form mirroring `openai_compat/`. Multi-step.
+- **H6 — 29 "known-broken" `#[ignore]` tests** need per-test root-cause diagnosis. 8 in `plugin_tools/tests.rs` are security-critical (sandbox isolation, env sanitization). `config_field_count_drift_guard` canary also ignored. Tracked separately.
+- **H10 — workspace plugin trust bypass** (`local_trust_policy` sets `verify_signatures: false` with no operator opt-in). Design decision on opt-in shape.
+- **H3 — bash deny-list bypassable** (`$()` subst, var indirection, base64 payloads). Fundamental; depends on C1.
+
+### Review subagent corrections (over-eager "dead code" flags, verified NOT dead)
+- `FileOffloadStore` — exported public API, pinned by `offload_store_spec_drift.rs` + `state_spec_drift.rs` + ADR-0004/0014/0017. NOT dead.
+- `TsOrchestratorBridgeVerifier` — live TS contract: `npm/kf-plugin/.../bridge-emitter.ts` emits the NDJSON it consumes. NOT dead.
+- `trim_ascii_whitespace` — hot-path SSE parser; ~6 LOC saving not worth a subtle behavior-diff risk. Left as-is.
+- `default_verifier_bus` — small, low-confidence. Left as-is.
+
+### Subagent discipline incident (recorded in lessons.md)
+A "completed" deps subagent left a detached `cargo run -p kf-context-index --example timing` process that kept editing `crates/kf-context-index/src/lib.rs` in the background (rogue perf investigation: `is_ignored_dir` walker filter + `resolve_call_edges` HashMap optimization + `examples/timing.rs` benchmark). Caught via `ps aux` showing the live binary at 65% CPU; killed + reverted 3 times before it stayed dead. **New rule: `ps aux | grep cargo | grep -v grep` after every subagent batch.**
 
 ## Completed workorders
 

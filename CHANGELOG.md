@@ -5,6 +5,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Review-2026-08-11: Budget/stratum mutex-poison cascade — 26 sites of `.lock().expect("…poisoned")` in `src/session/budget.rs` + `src/session/stratum.rs` converted to `.unwrap_or_else(|e| e.into_inner())`, matching the convention already used 35+ times in `config/mod.rs`. A single poisoned mutex previously panicked on every subsequent turn.
+- Review-2026-08-11 (CI red blocker): Stream-drain hang — adapter parsers parked on `stream.next().await` with no idle timeout; reqwest's `.timeout(120s)` does not reliably bound the streaming-body phase, so a wedged HTTP body hung the agent loop forever. New shared `next_chunk_or_idle_timeout()` helper in `adapters/mod.rs` wraps `stream.next()` in `tokio::time::timeout(STREAM_IDLE_TIMEOUT=90s)`; on timeout emits `StreamEvent::Error` and closes the channel. Applied to anthropic, anthropic_bedrock, ollama_ndjson, openai_compat parsers.
+- Review-2026-08-11 (CI red blocker): e2e routing mismatch — `e2e-test-model` fell through `adapter_kind_for_default` to OpenAiCompat while scenarios asserted the Ollama `/api/chat` path. Seeded `[adapter_routing] "e2e-" = "Ollama"` in e2e config fixtures (no production code change; uses the existing extension point).
+- Review-2026-08-11: web_fetch SSRF-via-redirect — reqwest client followed up to 10 redirects without re-running the top-level SSRF checks, so a 302 to `http://169.254.169.254/...` bypassed them. Client now uses `.redirect(reqwest::redirect::Policy::none())`; 3xx surfaces to the model, which can re-call web_fetch through the full SSRF validation.
+- Review-2026-08-11: Tool panic isolation — `run_prepared_call` now wraps `prep.tool.run()` in `AssertUnwindSafe().catch_unwind()`. A panicking tool returns `ToolOutcome::Failure(ToolError::Internal{ "tool panicked: <msg>" })` instead of unwinding the executor loop. Protects the deterministic-mode and Phase 2.5 deferred-file-call direct-call paths (which ran on the executor task, not a spawned task) and preserves the panic message on the spawned path.
+
+### Changed
+- Review-2026-08-11: `ratatui` now `default-features=false, features=["crossterm","unstable"]` (drops macros + calendar widget + layout-cache + underline-color; none used). Note: the review's "wezterm stack" premise was stale — ratatui 0.30 already split into ratatui-core/crossterm/widgets and default no longer pulls termwiz.
+- Review-2026-08-11: `crossterm` 0.28→0.29 (kills version split with ratatui-crossterm); `thiserror` 1→2 in workspace.dependencies (4 sub-crates already use `.workspace=true`).
+- Review-2026-08-11: Doc-sync — `docs/TECHNICAL.md` ADR count 88→89 + `plugins/` tree shows only `kf-plugin/`; `AGENTS.md` "CI is disabled" reconciled with reality; `state.md` phantom `kf-code-review.md` deleted; `docs/README.md` `reviews/` dropped; `CHANGELOG.md` duplicate `## [Unreleased]` merged.
+- Review-2026-08-11: Workorder status sync — 4 overview files (WO 21/23/24/25) `## Status` headers + 29 `docs/workorders/README.md` index rows updated to match `state.md` (were stale "Planned").
+
 ### Added
 - WO 26.8: Decompose `AppState` from a single flat ~66-field struct into 11 sub-structs grouped by concern (`conversation`, `generation`, `budget`, `session`, `provider`, `approval`, `search`, `ui`, `doom`, `services`, + `dirty` bool). Call sites migrated to `state.<group>.<field>`; existing helper methods retained as accessor shims. TUI renders identically; session persistence format unchanged.
 

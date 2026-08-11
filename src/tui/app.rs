@@ -510,6 +510,11 @@ pub struct UiState {
     /// startup; mutated by the `/theme` slash command. Renderers in
     /// `src/tui/rendering/` read colors from this field via `&Theme`.
     pub theme: Theme,
+    /// Last row seen during an in-progress left-button drag, used by
+    /// `events::handle_mouse_event` to drag-scroll the chat by the
+    /// row delta. `None` when no drag is active (cleared on
+    /// `MouseEventKind::Up`) (WO 27.7).
+    pub mouse_drag_row: Option<u16>,
 }
 
 impl Default for UiState {
@@ -521,6 +526,7 @@ impl Default for UiState {
             tab_list_state: None,
             cwd: std::env::current_dir().unwrap_or_default(),
             theme: Theme::default(),
+            mouse_drag_row: None,
         }
     }
 }

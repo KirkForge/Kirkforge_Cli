@@ -26,9 +26,118 @@
 
 use crate::session::executor::{ApprovalRequest, ApprovalResponse, TurnEvent};
 use crate::shared::Role;
-use crate::tui::app::{AppState, ConversationEntry, PendingApproval};
+use crate::tui::app::{ActiveTab, AppState, ConversationEntry, PendingApproval};
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use std::collections::VecDeque;
 use tokio::sync::mpsc;
+
+/// Apply a crossterm mouse event to the TUI state.
+///
+/// Pure mutation of `state` — no I/O, no async — so it is unit-testable
+/// in isolation (see `tests` below). Extracted from the inline handler
+/// that previously lived in `tui::dispatch_kb_events` (WO 27.7).
+///
+/// Behavior:
+/// - `ScrollDown` / `ScrollUp` — scroll the chat view by 3 rows
+///   (unchanged from the prior inline handler). ScrollUp also turns
+///   auto-follow off so the view sticks where the user scrolled.
+/// - `Down(Left)` — click. Row 0 is always the tab bar (the layout
+///   pins it to the top with height 1), so a click there switches to
+///   the tab whose label span covers the column — the mouse equivalent
+///   of F1–F6. A click anywhere else "grabs" the chat for drag-scroll:
+///   auto-follow is turned off and the row is recorded as the drag
+///   baseline.
+/// - `Drag(Left)` — drag-scroll the chat by the row delta since the
+///   last event. Natural scrolling: drag down moves content down
+///   (offset shrinks), drag up reveals later content.
+/// - `Up(Left)` — end drag (clears the baseline).
+///
+/// ponytail: click-to-position the text cursor inside the prompt /
+/// approval input is NOT implemented here — our `LineReader` does not
+/// expose a set-position API cleanly, so R2-cursor is deferred to
+/// 27.7-R2-later (tracked in `docs/workorders/27.7-tui-mouse.md`).
+/// A related ceiling: because the handler does not see the terminal
+/// height, clicks in the input row are not distinguished from clicks
+/// in the chat body (both just stick auto-scroll); precise per-rect
+/// hit-testing lands together with cursor positioning.
+pub fn handle_mouse_event(state: &mut AppState, mouse: MouseEvent) {
+    match mouse.kind {
+        MouseEventKind::ScrollDown => {
+            state.conversation.scroll_offset =
+                (state.conversation.scroll_offset + 3).min(state.conversation.max_scroll);
+        }
+        MouseEventKind::ScrollUp => {
+            state.conversation.auto_scroll = false;
+            state.conversation.scroll_offset = state.conversation.scroll_offset.saturating_sub(3);
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            if mouse.row == 0 {
+                if let Some(tab) = tab_at_column(mouse.column as usize) {
+                    apply_tab_switch(state, tab);
+                }
+            } else {
+                // Grab the chat for drag-scroll: stop following and
+                // record the drag baseline row.
+                state.conversation.auto_scroll = false;
+                state.ui.mouse_drag_row = Some(mouse.row);
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if let Some(last) = state.ui.mouse_drag_row {
+                let delta = mouse.row as isize - last as isize;
+                state.conversation.auto_scroll = false;
+                let off = state.conversation.scroll_offset as isize;
+                // Natural scroll: content follows the drag direction.
+                let new_off = off - delta;
+                let clamped = new_off.max(0).min(state.conversation.max_scroll as isize) as usize;
+                state.conversation.scroll_offset = clamped;
+            }
+            state.ui.mouse_drag_row = Some(mouse.row);
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            state.ui.mouse_drag_row = None;
+        }
+        _ => {}
+    }
+    state.mark_dirty();
+}
+
+/// Switch to `tab`, mirroring the F-key handler in `keys::handle_input_key`:
+/// reset the list-state highlight when crossing tabs, seed it for non-Chat
+/// tabs, and trip the jobs-refresh flag when entering Jobs cold.
+fn apply_tab_switch(state: &mut AppState, tab: ActiveTab) {
+    if tab != state.ui.active_tab {
+        state.ui.tab_list_state = if tab == ActiveTab::Chat {
+            None
+        } else {
+            Some(0)
+        };
+    }
+    state.ui.active_tab = tab;
+    if tab == ActiveTab::Jobs && state.session.cached_jobs_output.is_none() {
+        state.session.jobs_dirty = true;
+    }
+}
+
+/// Map a tab-bar column to the tab whose label span contains it.
+///
+/// `widgets::tabs::render_tab_bar` renders `" {label} "` per tab joined
+/// by `" │ "`. The labels are ASCII, so byte length == display width.
+/// Returns `None` for a click in a separator gutter or past the last tab.
+fn tab_at_column(column: usize) -> Option<ActiveTab> {
+    let mut cursor: usize = 0;
+    for (i, tab) in ActiveTab::ALL.iter().enumerate() {
+        if i > 0 {
+            cursor += 3; // " │ "
+        }
+        let span_len = tab.label().len() + 2; // leading + trailing space
+        if column >= cursor && column < cursor + span_len {
+            return Some(*tab);
+        }
+        cursor += span_len;
+    }
+    None
+}
 
 /// Apply a single executor event to the TUI state.
 ///
@@ -1104,5 +1213,190 @@ mod tests {
         // A later extraction overwrites (does not accumulate).
         dispatch_turn_event(&mut s, TurnEvent::MemoryExtracted { count: 7, turn: 8 });
         assert_eq!(s.session.memory_status, Some((7, 8)));
+    }
+
+    // ── Mouse handler (WO 27.7) ──────────────────────────────────
+
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    fn mouse(kind: MouseEventKind, row: u16, column: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            row,
+            column,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }
+    }
+
+    /// ScrollUp scrolls the chat up, turns auto-follow off, and marks dirty.
+    #[test]
+    fn mouse_scroll_up_offsets_and_sticks() {
+        let mut s = app_state();
+        s.conversation.scroll_offset = 10;
+        s.conversation.max_scroll = 100;
+        s.conversation.auto_scroll = true;
+        s.dirty = false;
+        handle_mouse_event(&mut s, mouse(MouseEventKind::ScrollUp, 5, 5));
+        assert_eq!(s.conversation.scroll_offset, 7);
+        assert!(!s.conversation.auto_scroll);
+        assert!(s.dirty);
+    }
+
+    /// ScrollDown advances the offset but never past `max_scroll`.
+    #[test]
+    fn mouse_scroll_down_clamps_to_max() {
+        let mut s = app_state();
+        s.conversation.scroll_offset = 98;
+        s.conversation.max_scroll = 100;
+        handle_mouse_event(&mut s, mouse(MouseEventKind::ScrollDown, 5, 5));
+        assert_eq!(s.conversation.scroll_offset, 100);
+        // Already at the bottom — stays clamped.
+        handle_mouse_event(&mut s, mouse(MouseEventKind::ScrollDown, 5, 5));
+        assert_eq!(s.conversation.scroll_offset, 100);
+    }
+
+    /// Clicking the tab bar (row 0) under a tab's label span switches
+    /// to that tab — the mouse equivalent of F1–F6. This is the panel
+    /// focus must-have from the workorder.
+    #[test]
+    fn mouse_click_tab_bar_switches_tab() {
+        let mut s = app_state();
+        assert_eq!(s.ui.active_tab, ActiveTab::Chat);
+        // "F4:Jobs" span starts at col 41: " F1:Chat "(9)+" │ "(3)+
+        // " F2:Models "(11)+" │ "(3)+" F3:Plugins "(12)+" │ "(3) = 41;
+        // Jobs span is cols 41..50. A click at column 45 is inside it.
+        handle_mouse_event(
+            &mut s,
+            mouse(MouseEventKind::Down(MouseButton::Left), 0, 45),
+        );
+        assert_eq!(s.ui.active_tab, ActiveTab::Jobs);
+        // Entering Jobs cold trips the jobs-refresh flag.
+        assert!(s.session.jobs_dirty);
+        // List highlight seeded for the non-Chat tab.
+        assert_eq!(s.ui.tab_list_state, Some(0));
+    }
+
+    /// Clicking row 0 in a separator gutter does not switch tabs.
+    #[test]
+    fn mouse_click_tab_gutter_is_noop() {
+        let mut s = app_state();
+        // Column 9 is the "│" between Chat and Models in the default
+        // layout — no tab owns it.
+        handle_mouse_event(&mut s, mouse(MouseEventKind::Down(MouseButton::Left), 0, 9));
+        assert_eq!(s.ui.active_tab, ActiveTab::Chat);
+    }
+
+    /// Clicking the chat body (row > 0) grabs it for drag-scroll:
+    /// auto-follow turns off and the drag baseline is recorded.
+    #[test]
+    fn mouse_click_body_grabs_chat_for_drag() {
+        let mut s = app_state();
+        s.conversation.auto_scroll = true;
+        s.ui.mouse_drag_row = None;
+        handle_mouse_event(
+            &mut s,
+            mouse(MouseEventKind::Down(MouseButton::Left), 10, 5),
+        );
+        assert!(!s.conversation.auto_scroll);
+        assert_eq!(s.ui.mouse_drag_row, Some(10));
+    }
+
+    /// Drag scrolls the chat by the row delta (natural scrolling:
+    /// drag down → content moves down → offset shrinks).
+    #[test]
+    fn mouse_drag_scrolls_by_row_delta() {
+        let mut s = app_state();
+        s.conversation.scroll_offset = 50;
+        s.conversation.max_scroll = 100;
+        s.conversation.auto_scroll = true;
+        // Start drag at row 20.
+        handle_mouse_event(
+            &mut s,
+            mouse(MouseEventKind::Down(MouseButton::Left), 20, 5),
+        );
+        assert_eq!(s.conversation.scroll_offset, 50);
+        // Drag down 3 rows → offset drops by 3.
+        handle_mouse_event(
+            &mut s,
+            mouse(MouseEventKind::Drag(MouseButton::Left), 23, 5),
+        );
+        assert_eq!(s.conversation.scroll_offset, 47);
+        // Drag up 1 row from there → offset grows by 1.
+        handle_mouse_event(
+            &mut s,
+            mouse(MouseEventKind::Drag(MouseButton::Left), 22, 5),
+        );
+        assert_eq!(s.conversation.scroll_offset, 48);
+        assert!(!s.conversation.auto_scroll);
+    }
+
+    /// Drag never scrolls below 0 or above `max_scroll`.
+    #[test]
+    fn mouse_drag_clamps_to_scroll_bounds() {
+        let mut s = app_state();
+        s.conversation.max_scroll = 100;
+
+        // Lower clamp: drag down past the top → stops at 0 (no underflow).
+        s.conversation.scroll_offset = 1;
+        handle_mouse_event(&mut s, mouse(MouseEventKind::Down(MouseButton::Left), 5, 5));
+        handle_mouse_event(
+            &mut s,
+            mouse(MouseEventKind::Drag(MouseButton::Left), 55, 5),
+        );
+        assert_eq!(s.conversation.scroll_offset, 0);
+
+        // Upper clamp: drag up past the bottom → stops at max_scroll.
+        s.conversation.scroll_offset = 95;
+        s.ui.mouse_drag_row = Some(100);
+        handle_mouse_event(&mut s, mouse(MouseEventKind::Drag(MouseButton::Left), 0, 5));
+        assert_eq!(s.conversation.scroll_offset, 100);
+    }
+
+    /// MouseUp ends the drag: the baseline is cleared so a later drag
+    /// without a fresh Down does nothing.
+    #[test]
+    fn mouse_up_ends_drag() {
+        let mut s = app_state();
+        s.conversation.scroll_offset = 10;
+        s.conversation.max_scroll = 100;
+        handle_mouse_event(&mut s, mouse(MouseEventKind::Down(MouseButton::Left), 5, 5));
+        handle_mouse_event(&mut s, mouse(MouseEventKind::Up(MouseButton::Left), 5, 5));
+        assert_eq!(s.ui.mouse_drag_row, None);
+        let before = s.conversation.scroll_offset;
+        handle_mouse_event(
+            &mut s,
+            mouse(MouseEventKind::Drag(MouseButton::Left), 50, 5),
+        );
+        assert_eq!(s.conversation.scroll_offset, before);
+    }
+
+    /// `tab_at_column` covers every tab label and the gutters between.
+    #[test]
+    fn tab_at_column_maps_each_label() {
+        // Walk every column of the rendered tab bar and confirm the
+        // tab boundaries match the renderer's layout (`" {label} "`
+        // per tab, joined by `" │ "`).
+        let mut expected: Vec<Option<ActiveTab>> = Vec::new();
+        for (i, tab) in ActiveTab::ALL.iter().enumerate() {
+            if i > 0 {
+                for _ in 0..3 {
+                    expected.push(None); // " │ " gutter
+                }
+            }
+            for _ in 0..(tab.label().len() + 2) {
+                expected.push(Some(*tab));
+            }
+        }
+        for (col, want) in expected.iter().enumerate() {
+            assert_eq!(
+                tab_at_column(col),
+                *want,
+                "column {col}: expected {:?}, got {:?}",
+                want,
+                tab_at_column(col)
+            );
+        }
+        // Past the last tab → None.
+        assert_eq!(tab_at_column(expected.len()), None);
     }
 }

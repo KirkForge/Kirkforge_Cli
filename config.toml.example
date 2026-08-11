@@ -350,6 +350,11 @@
 # Env: KF_CODE_THEME.
 # theme = "default"
 
+# Enable TUI mouse capture (click/drag/scroll). Set false if mouse
+# capture hijacks your terminal's native scrollback / scroll wheel.
+# Default: true. Env: KF_CODE_MOUSE_ENABLED.
+# mouse_enabled = true
+
 # ---------------------------------------------------------------------------
 # Workspace plugin sources
 # ---------------------------------------------------------------------------

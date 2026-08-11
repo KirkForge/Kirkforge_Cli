@@ -24,6 +24,10 @@ fn default_theme() -> String {
     "default".to_string()
 }
 
+fn default_mouse_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayConfig {
     #[serde(default = "default_memory_enabled")]
@@ -41,6 +45,12 @@ pub struct DisplayConfig {
     /// Live-switchable via the `/theme` slash command (WO 27.6).
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Enable TUI mouse capture (click/drag/scroll). When `false`,
+    /// `EnableMouseCapture` is skipped so the terminal keeps native
+    /// scrollback behavior (some users dislike mouse-capture hijacking
+    /// the scroll wheel). Default: `true` (WO 27.7).
+    #[serde(default = "default_mouse_enabled")]
+    pub mouse_enabled: bool,
 }
 
 impl Default for DisplayConfig {
@@ -52,6 +62,7 @@ impl Default for DisplayConfig {
             memory_auto_populate: default_memory_auto_populate(),
             memory_show_in_status: default_memory_show_in_status(),
             theme: default_theme(),
+            mouse_enabled: default_mouse_enabled(),
         }
     }
 }

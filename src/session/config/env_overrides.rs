@@ -378,6 +378,9 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // KF_CODE_MOUSE_ENABLED
+    env_bool!("KF_CODE_MOUSE_ENABLED", cfg.display.mouse_enabled);
+
     // KF_CODE_REQUEST_TIMEOUT_SECS
     if let Ok(val) = std::env::var("KF_CODE_REQUEST_TIMEOUT_SECS") {
         if let Ok(n) = val.parse::<u64>() {

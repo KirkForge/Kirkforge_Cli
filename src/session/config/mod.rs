@@ -493,6 +493,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::String(v)) = table.get("theme") {
         cfg.display.theme = v.clone();
     }
+    if let Some(Value::Boolean(v)) = table.get("mouse_enabled") {
+        cfg.display.mouse_enabled = *v;
+    }
     if let Some(Value::Integer(v)) = table.get("checkpoint_interval_messages") {
         cfg.session.checkpoint_interval_messages = (*v).max(0) as usize;
     }
@@ -2083,9 +2086,9 @@ mod tests {
 
         // ── 1. Total struct-level fields ──────────────────────────
         // ModelConfig=33, SecurityConfig=20, ToolConfig=32,
-        // SessionConfig=9, DisplayConfig=7
+        // SessionConfig=9, DisplayConfig=8
         assert_eq!(
-            CONFIG_FIELD_COUNT, 102,
+            CONFIG_FIELD_COUNT, 103,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2147,6 +2150,7 @@ mod tests {
             memory_auto_populate = true
             memory_show_in_status = true
             theme = "x"
+            mouse_enabled = true
             checkpoint_interval_messages = 999
             anthropic_provider = "x"
             aws_region = "x"
@@ -2188,8 +2192,8 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 64 top-level leaf keys + 5 single-key sub-tables + 7 computer_use sub-keys = 77
-        const MERGE_TOML_EXPECTED: usize = 77;
+        // 65 top-level leaf keys + 5 single-key sub-tables + 7 computer_use sub-keys = 78
+        const MERGE_TOML_EXPECTED: usize = 78;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2198,9 +2202,9 @@ mod tests {
         // ── 3. apply_env_overrides field coverage ─────────────────
         // Count KF_CODE_* env var checks in apply_env_overrides.
         // This must stay in sync with env_overrides.rs.
-        const ENV_OVERRIDE_EXPECTED: usize = 79;
+        const ENV_OVERRIDE_EXPECTED: usize = 80;
         assert_eq!(
-            ENV_OVERRIDE_EXPECTED, 79,
+            ENV_OVERRIDE_EXPECTED, 80,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
         );
 

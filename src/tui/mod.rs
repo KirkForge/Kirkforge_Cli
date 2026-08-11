@@ -56,7 +56,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use events::{drain_approval_requests, drain_turn_events};
+use events::{drain_approval_requests, drain_turn_events, handle_mouse_event};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -369,16 +369,21 @@ pub async fn run_tui(
     mcp_manager: Option<std::sync::Arc<crate::session::mcp_client::McpClientManager>>,
 ) -> anyhow::Result<()> {
     // ── Terminal setup ──
+    // Read the startup config before terminal init so the mouse-capture
+    // gate (`display.mouse_enabled`) is honored on the very first frame.
+    let cfg_for_startup = crate::shared::read_shared_config(&shared_config).clone();
+    let active_model = adapter.model_info().name.clone();
+    let mouse_enabled = cfg_for_startup.display.mouse_enabled;
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
-    execute!(stdout, EnableMouseCapture)?;
+    if mouse_enabled {
+        execute!(stdout, EnableMouseCapture)?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let _guard = TerminalGuard;
-
-    let cfg_for_startup = crate::shared::read_shared_config(&shared_config).clone();
-    let active_model = adapter.model_info().name.clone();
 
     let mut state = init_app_state(
         &shared_config,
@@ -865,27 +870,10 @@ async fn dispatch_kb_events<'a>(
         Ok(())
     }
 
-    fn handle_mouse(state: &mut AppState, mouse: event::MouseEvent) {
-        use crossterm::event::MouseEventKind;
-        match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                state.conversation.auto_scroll = false;
-                state.conversation.scroll_offset =
-                    state.conversation.scroll_offset.saturating_sub(3);
-            }
-            MouseEventKind::ScrollDown => {
-                state.conversation.scroll_offset =
-                    (state.conversation.scroll_offset + 3).min(state.conversation.max_scroll);
-            }
-            _ => {}
-        }
-        state.mark_dirty();
-    }
-
     if let Some(ev) = first {
         match ev {
             Event::Key(key) => dispatch_one(state, key, key_ctx).await?,
-            Event::Mouse(mouse) => handle_mouse(state, mouse),
+            Event::Mouse(mouse) => handle_mouse_event(state, mouse),
             Event::Resize(_w, _h) => state.mark_dirty(),
             _ => {}
         }
@@ -894,7 +882,7 @@ async fn dispatch_kb_events<'a>(
     while let Ok(ev) = kb_rx.try_recv() {
         match ev {
             Event::Key(key) => dispatch_one(state, key, key_ctx).await?,
-            Event::Mouse(mouse) => handle_mouse(state, mouse),
+            Event::Mouse(mouse) => handle_mouse_event(state, mouse),
             Event::Resize(_w, _h) => state.mark_dirty(),
             _ => {}
         }

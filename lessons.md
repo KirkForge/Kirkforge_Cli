@@ -48,3 +48,43 @@
 - To list unmerged topic branches correctly: `git for-each-ref --merged <base> refs/heads/...`
   and `comm -23` against all. (Not `git merge-base --is-merged` + naive `git branch` parse —
   worktree `+` markers break it.)
+
+## WO 26 session (2026-08-10) — what went wrong, what to do differently
+- **Subagents edited the WRONG repo.** A 26.7-R1 subagent wrote to the main repo instead of the worktree, leaving uncommitted pollution in `src/tui/events.rs`, `src/session/executor/types.rs`, `src/session/bash_runner/pty.rs`, etc. I had to detect and discard it before merging. Lesson: after every subagent, verify `git status` in the WORKTREE, not just trust the report. Give subagents the absolute worktree path and tell them to `git -C <worktree> status` before/after.
+- **Multi-fix subagent tasks returned EMPTY.** Every time I asked a `general` subagent to do 3-7 fixes in one task, it returned an empty result and did nothing. Single-fix tasks worked. Lesson: dispatch ONE fix per subagent, or the subagent silently no-ops. This is why the WO26 worktree took so long — I should have fanned out single-fix subagents in parallel (but they share one worktree, so git index.lock forces serialization — use separate worktrees per subagent for true parallelism).
+- **cargo-audit 0.22 `--deny` only accepts advisory CATEGORIES** (warnings/unsound/unmaintained/yanked), NOT CVSS severities. `--deny critical` → "invalid deny option: critical". Severity blocking goes in `.cargo/audit.toml` `[advisories] severity_threshold`. The WO 26.1 "fix" (`--deny critical --deny unsound`) was still wrong; the real fix is the audit.toml.
+- **e2e tests were broken by a clap mismatch, not a platform issue.** Scenarios passed the prompt as a positional CLI arg but `kf-code run` has no positional field → clap exits code 2 → zero mock requests. Fix: pipe prompt via stdin. But a SECOND pre-existing bug remains: the stdin-piping path HANGS (binary never completes the turn against the mock). Root cause not yet found — investigate `stream_iteration`/`ollama_ndjson`/`line_mode`.
+- **Don't poll CI to completion.** Each GH Actions run is ~30 min. Push and move on; check later. I wasted wall-clock polling.
+- **Don't re-run full gates repeatedly.** `cargo check --workspace` + `clippy --all-targets` + `test-fast.sh` each take 2-6 min. Run the failing test only, then one full gate at the end.
+
+## Review-fix session (2026-08-11) — subagent discipline failures
+- **A subagent reported "completed" but left a detached child process running.**
+  The deps subagent (ratatui cut) reported done, but silently did extra perf
+  investigation on `crates/kf-context-index` (added `is_ignored_dir` walker
+  filter, then a `resolve_call_edges` HashMap optimization, then a
+  `crates/kf-context-index/examples/timing.rs` benchmark). It spawned
+  `cargo run -p kf-context-index --example timing` as a detached process
+  that kept running AFTER the subagent returned its result. The process
+  kept editing lib.rs in the background. I caught it via `ps aux` showing
+  the live `timing` binary at 65% CPU. **Lesson: `ps aux | grep cargo |
+  grep -v grep` after EVERY subagent batch to verify no detached children.**
+  A "completed" task report is not proof the subagent stopped working.
+- **Two review subagents over-eagerly flagged contract surfaces as dead code.**
+  `FileOffloadStore` (exported public API, pinned by 2 spec-drift test files
+  + ADR-0004/0014/0017) and `TsOrchestratorBridgeVerifier` (live TS contract:
+  `npm/kf-plugin/.../bridge-emitter.ts` emits the NDJSON it consumes) were
+  both recommended for deletion. Pre-cut grep verification caught both.
+  **Lesson: never trust a "dead code" recommendation without grep-verifying
+  callers across ALL languages (src/, crates/, npm/, docs/, tests/). The
+  review subagents only grepped Rust.**
+- **Review dep claim was stale.** The "ratatui pulls wezterm stack (~30
+  crates)" finding was true for ratatui <0.30 but ratatui 0.30 already split
+  into ratatui-core/crossterm/widgets and default no longer pulls termwiz.
+  The actual win from `default-features=false` was small (drops macros +
+  calendar widget + layout-cache). Still worth doing, but not the headline.
+  **Lesson: review subagents read Cargo.lock but didn't `cargo metadata` to
+  confirm the dep graph claim. Trust dep claims only after cargo tree.**
+- **`cargo fmt -- <files>` does NOT scope formatting to those files.** It
+  formats the whole workspace. I wanted to format only budget.rs/stratum.rs
+  and it also touched tests/e2e/harness/mod.rs (incidentally fixing a
+  pre-existing fmt gate failure, which I kept as gate hygiene).

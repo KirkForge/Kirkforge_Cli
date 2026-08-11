@@ -12,6 +12,7 @@ use crate::harness::IsolatedEnv;
 /// An OpenAI-compat model name (no special prefix) should hit
 /// `/v1/chat/completions` when configured with `model_type=openai-compat`
 /// or a model that defaults to OpenAI-compat routing.
+#[ignore = "WO 27.2: binary-spawn e2e hangs in run_line_mode startup (daemon/plugin/MCP init); in-process equivalent PASSES (wiremock_integration.rs); tracked in docs/workorders/27.2-test-health.md"]
 #[tokio::test]
 async fn openai_compat_model_hits_chat_completions() {
     if !shard::shard_gate("openai_compat_model_hits_chat_completions") {

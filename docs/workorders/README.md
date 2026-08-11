@@ -492,3 +492,29 @@ ordering/dependencies in [WO 25.0](25.0-wo25-test-infra-overview.md).
 - When a workorder is superseded, update its Status and link to the replacement.
 - The scratch `workplan.md` at the repo root (gitignored) is for the current
   task's working notes; the workorders here are the persistent plan.
+
+### Series 27 — Post-Deep-Review Hardening + TUI Polish
+
+Series 27 is the post-review follow-up to the 2026-08-11 deep codebase audit
+(8 parallel subagents; report at `kf-code-review.md` 5th edition). The review
+surfaced one CRITICAL (C1 landlock never applied), nine HIGH (H1-H9), and a
+cluster of MEDIUM findings. WO 26 + the review-fix session closed 7 of them;
+WO 27 closes the rest + adds TUI themes + mouse (the competitive polish gaps
+vs Cursor/Claude Code). See [WO 27.0](27.0-wo27-overview.md) for the full
+plan + ordering.
+
+| WO | Title | Status | Priority | Deps |
+|----|-------|--------|----------|------|
+| 27.0 | [Series overview](27.0-wo27-overview.md) | In Progress | — | — |
+| 27.1 | [Landlock default-on + actually applied (C1)](27.1-landlock-default-on.md) | Planned | P0 | — |
+| 27.2 | [Test health: CI green + triage 49 ignored + coverage gate (H6)](27.2-test-health.md) | In Progress | P0/P1 | — |
+| 27.3 | [Architecture debt: tools↔session cycle + god-objects (H7/H8)](27.3-architecture-debt.md) | Planned | P1 | — |
+| 27.4 | [Plugin trust default (H9)](27.4-plugin-trust.md) | Planned | P1 | — |
+| 27.5 | [Bash hardening: background jobs + deny-list posture (H3/H5)](27.5-bash-hardening.md) | Planned | P2 | 27.1 |
+| 27.6 | [TUI themes (polish)](27.6-tui-themes.md) | Planned | P2 | — |
+| 27.7 | [TUI mouse support (polish)](27.7-tui-mouse.md) | Planned | P2 | — |
+
+**8 sub-workorders.** Highest leverage: **27.2** (CI green is the unblock for
+everything) and **27.1** (C1 is the security moat vs codex-cli). 27.6/27.7 are
+the pure-TUI polish items safe to parallelize. Full ordering + dependency graph
+in [WO 27.0](27.0-wo27-overview.md).

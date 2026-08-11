@@ -89,7 +89,11 @@ impl IsolatedEnv {
     /// single line (then EOF). `kf-code run --non-interactive` reads each
     /// non-empty stdin line as one turn, so this is how a headless prompt
     /// is delivered. Returns the captured output.
-    pub fn run_with_prompt(&self, args: &[&str], prompt: &str) -> std::io::Result<std::process::Output> {
+    pub fn run_with_prompt(
+        &self,
+        args: &[&str],
+        prompt: &str,
+    ) -> std::io::Result<std::process::Output> {
         use std::io::Write;
         let mut cmd = self.command(args);
         cmd.stdin(Stdio::piped());

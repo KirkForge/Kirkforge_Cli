@@ -11,6 +11,11 @@ use crate::harness::IsolatedEnv;
 
 use std::time::Duration;
 
+// The session daemon uses a Unix-domain socket and is Unix-only per
+// cli_dispatch.rs ("session daemon is not supported on Windows"). The
+// test spawns `kf-code daemon --foreground` and polls for the .sock
+// file; on Windows the subcommand exits with an error before binding.
+#[cfg(unix)]
 #[test]
 fn daemon_creates_socket_and_exits_cleanly() {
     if !shard::shard_gate("daemon_creates_socket_and_exits_cleanly") {

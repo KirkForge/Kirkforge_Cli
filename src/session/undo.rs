@@ -845,6 +845,13 @@ mod tests {
     /// `cleanup_orphan_snaps` removes undo dirs whose session log is gone and
     /// whose mtime is older than the age threshold, and leaves active or young
     /// dirs alone.
+    // The fixture sets a directory's mtime by opening it as a File and
+    // calling set_times — that works on Unix (opening a directory yields
+    // a valid fd) but panics on Windows (CreateFile on a directory with
+    // default access is an error). The production `cleanup_orphan_snaps`
+    // is cross-platform; only this mtime-manipulation fixture is Unix-
+    // specific. Gate accordingly.
+    #[cfg(unix)]
     #[test]
     fn cleanup_orphan_snaps_removes_only_stale_orphans() {
         let _guard = DataDirGuard::new();

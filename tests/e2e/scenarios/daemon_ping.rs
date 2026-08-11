@@ -6,15 +6,20 @@
 //! Regression: C-006 (daemon crashed on startup when KF_CODE_DATA_DIR
 //! was set).
 
-use crate::harness::shard;
-use crate::harness::IsolatedEnv;
-
-use std::time::Duration;
-
 // The session daemon uses a Unix-domain socket and is Unix-only per
 // cli_dispatch.rs ("session daemon is not supported on Windows"). The
 // test spawns `kf-code daemon --foreground` and polls for the .sock
 // file; on Windows the subcommand exits with an error before binding.
+// All imports + the test are cfg(unix)-gated so Windows doesn't see
+// unused-import errors under -D warnings.
+#[cfg(unix)]
+use crate::harness::shard;
+#[cfg(unix)]
+use crate::harness::IsolatedEnv;
+
+#[cfg(unix)]
+use std::time::Duration;
+
 #[cfg(unix)]
 #[test]
 fn daemon_creates_socket_and_exits_cleanly() {

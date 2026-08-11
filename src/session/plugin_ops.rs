@@ -697,6 +697,10 @@ command = "tools/greet.sh"
         cfg.tools
             .plugin_sources
             .insert("demo".to_string(), plugin_dir.clone());
+        // WO 27.4: the demo plugin is unsigned; the trust gate now rejects
+        // unsigned workspace plugins by default. Opt in so this test still
+        // exercises the doctor's "missing tool command" path.
+        cfg.tools.plugin_trust_workspace = true;
         let out = doctor(&cfg);
         assert!(out.contains("Load warnings"), "{out}");
         assert!(out.contains("not accessible"), "{out}");

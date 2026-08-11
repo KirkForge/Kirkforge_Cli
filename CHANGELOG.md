@@ -46,8 +46,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - PONYTAIL-DEBT.md (debts tracked in state.md and ADRs).
 - benches/tasks/use_draw_render.toml (orphan referencing deleted draw_render tool).
 
-## [Unreleased]
-
 ### Changed
 - WO 20.2.0: `tool_choice` + `max_tokens` config + adapter trait wiring (`set_tool_choice`, `set_max_tokens`). `build_anthropic_body` is now 9-arg; extended-thinking kept separate from completion `max_tokens` (dedicated `budget_tokens` + `supports_thinking` guard). CONFIG_FIELD_COUNT 84→85. (#23)
 - WO 20.0.7: cache breakpoint cap holds at 4 with tools (CRIT-1); `store_get` resolves Stratum offload markers (CRIT-2). (#23)

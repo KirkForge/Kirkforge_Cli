@@ -30,7 +30,6 @@
   - `windows`: e2e tests fail. Root cause found: scenarios passed the prompt as a positional CLI arg, but `kf-code run` has no positional field → clap exits code 2 → zero mock requests. Fixed by `cdb3b42` (pipe prompt via stdin). **BUT a second pre-existing bug remains: the stdin-piping path HANGS** — the binary never completes the turn against the mock. Root cause NOT yet fixed. This is the blocker for green CI.
 - **Version bump to 0.3.7: NOT done.**
 - **`main` fast-forward: NOT done** (main still at e95c347).
-- **Review update at kf-code-review.md: NOT done.**
 - **WO 27 series: NOT started.**
 - **Local install at /home/henrik/own-code/kf-code: NOT done.**
 

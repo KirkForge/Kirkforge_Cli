@@ -45,12 +45,10 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-compress-core       ← context-compression pipeline library + ruleset filtering
 │   ├── kf-budget-core           ← budget/orchestrator/slicing data model
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
-├── plugins/                   ← 3 plugin manifests + shell tool/hook scripts
-│   ├── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
-│   ├── stratum/               ← compression plugin (5 tools, 2 hooks)
-│   └── kf-budget/     ← budget plugin (7 tools, 4 hooks)
+├── plugins/                   ← shell plugin manifests + tool/hook scripts
+│   └── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
 ├── benches/tasks/             ← 31 benchmark task definitions (TOML)
-└── docs/adr/                  ← 88 Architecture Decision Records
+└── docs/adr/                  ← 89 Architecture Decision Records
 ```
 
 The workspace has ~2,900 `#[test]` functions (~2,200 under `src/`,
@@ -573,8 +571,8 @@ downgraded. Optional minisign detached-signature verification (`.kf-code.sig`).
 | Plugin | Trust | Skills | Tools | Hooks | Source |
 |---|---|---|---|---|---|
 | `kf-plugin-sdk` | shell | `/kf-code` | 6 | 0 | External — Node SDK (`npm/kf-plugin`), not folded |
-| `stratum` | shell | `/stratum` | 5 | 2 | Compiled-in (`stratum` feature) or external (`stratum` binary) |
-| `kf-budget` | shell | `/budget` | 7 | 4 | Compiled-in (`budget` feature) or external (`kf-budget` binary) |
+| `stratum` | shell | `/stratum` | 5 | 2 | Compiled-in (`stratum` feature) — no shell manifest |
+| `kf-budget` | shell | `/budget` | 7 | 4 | Compiled-in (`budget` feature) — no shell manifest |
 
 Runtime toggles: `enabled_plugins` (Vec) and `plugin_sources` (HashMap) in
 `ToolConfig`. The `/plugins` TUI command set: `list`, `enable`, `disable`,

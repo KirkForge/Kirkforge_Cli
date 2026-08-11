@@ -417,18 +417,18 @@ not-triggered, evidenced by gate output on the closing commit.
 
 | # | Workorder | Status | Priority | Depends on |
 |---|---|---|---|---|
-| 21.0 | [WO 21 Series Overview](21.0-wo21-overview.md) | Planned | — | — |
-| 21.1 | [Scope-creep decisions: cut / spin-off / keep-and-finish](21.1-focus-scope.md) | Planned | High | — |
-| 21.2 | [Finish 3 incomplete rust-native plugins](21.2-plugins-rust-native.md) | Planned | High | 21.1 |
-| 21.3 | [Stratum compression: real content transforms](21.3-stratum-compression.md) | Planned | High | — |
-| 21.4 | [LLM adapter gaps](21.4-adapter-gaps.md) | Planned | High | — |
-| 21.5 | [Tools & MCP surface gaps](21.5-tools-mcp.md) | Planned | High | — |
-| 21.6 | [Context, retrieval & memory gaps](21.6-context-memory.md) | Planned | High | — |
-| 21.7 | [Sandbox & trust hardening](21.7-sandbox-trust.md) | Planned | High | — |
-| 21.8 | [TUI & agent-loop gaps](21.8-tui-agentloop.md) | Planned | High | — |
-| 21.9 | [Engineering-discipline debt](21.9-discipline-debt.md) | Planned | High | — |
- | 21.10 | [MCP-first migration](21.10-mcp-first-migration.md) | Planned | High | 21.5-R3/R4 |
- | 21.11 | [Plugin real-rebuild (budget/stratum/sdk) + draw/video yeet](21.11-plugin-real-rebuild.md) | Planned | High | supersedes 21.1-R1/R2, voids 21.2-R2/R3 |
+| 21.0 | [WO 21 Series Overview](21.0-wo21-overview.md) | Done | — | — |
+| 21.1 | [Scope-creep decisions: cut / spin-off / keep-and-finish](21.1-focus-scope.md) | Done | High | — |
+| 21.2 | [Finish 3 incomplete rust-native plugins](21.2-plugins-rust-native.md) | Done | High | 21.1 |
+| 21.3 | [Stratum compression: real content transforms](21.3-stratum-compression.md) | Done | High | — |
+| 21.4 | [LLM adapter gaps](21.4-adapter-gaps.md) | Done | High | — |
+| 21.5 | [Tools & MCP surface gaps](21.5-tools-mcp.md) | Done (R2/R4/R9 deferred) | High | — |
+| 21.6 | [Context, retrieval & memory gaps](21.6-context-memory.md) | Done | High | — |
+| 21.7 | [Sandbox & trust hardening](21.7-sandbox-trust.md) | Done | High | — |
+| 21.8 | [TUI & agent-loop gaps](21.8-tui-agentloop.md) | Done (AppState decomposition + themes deferred) | High | — |
+| 21.9 | [Engineering-discipline debt](21.9-discipline-debt.md) | Done | High | — |
+ | 21.10 | [MCP-first migration](21.10-mcp-first-migration.md) | Done | High | 21.5-R3/R4 |
+ | 21.11 | [Plugin real-rebuild (budget/stratum/sdk) + draw/video yeet](21.11-plugin-real-rebuild.md) | Done | High | supersedes 21.1-R1/R2, voids 21.2-R2/R3 |
  | 21.0.14 | [Deferred item tracker (all WO 21 series)](21.0.14-deferred-tracker.md) | In Progress | — | — |
  
  **12 sub-workorders, 72 items**, each with success + failure criteria. Highest-
@@ -455,26 +455,26 @@ deferral).
 
 | # | Workorder | Status | Priority | Depends on |
 |---|---|---|---|---|
-| 25.0 | [WO 25 Series Overview](25.0-wo25-test-infra-overview.md) | Planned | — | — |
-| 25.1 | [Fast test gate split](25.1-fast-test-gate.md) | Planned | P0 | — |
-| 25.2 | [Test speed optimization](25.2-test-speed-optimization.md) | Planned | P1 | 25.1 |
-| 25.3 | [kf-testdoctor optimization](25.3-testdoctor-optimization.md) | Planned | P1 | — |
-| 25.4 | [Coverage baseline tooling](25.4-coverage-baseline.md) | Planned | P2 | 25.1 |
-| 25.5 | [Release/install/CI script hygiene](25.5-release-hygiene.md) | Planned | P0 | — |
-| 25.6 | [Deadlock quarantine lift](25.6-deadlock-quarantine-lift.md) | Planned | P1 | — |
-| 25.7 | [Benchmark source of truth](25.7-benchmark-hygiene.md) | Planned | P1 | — |
-| 25.8 | [Historical residue cleanup](25.8-historical-residue-cleanup.md) | Planned | P2 | 25.5 |
-| 25.9 | [Dead code & non-Rust lint stub cleanup](25.9-dead-code-and-lint-stubs.md) | Planned | P1 | — |
-| 25.10 | [Stale binary/path refs + ADR path-literal enforcement](25.10-stale-refs-and-adr-path-enforcement.md) | Planned | P0 | 25.5 (coordinate) |
-| 25.11 | [TUI metrics & daemon push gaps](25.11-tui-metrics-and-daemon-push.md) | Planned | P1 | — |
-| 25.12 | [AppState decomposition + cached_tokens fork-reset](25.12-appstate-decomposition.md) | Planned | P2 | — |
-| 25.13 | [Process-global state scoping](25.13-process-global-state-scoping.md) | Planned | P2 | — |
-| 25.14 | [Verifier finding location data](25.14-verifier-finding-location.md) | Planned | P1 | — |
-| 25.15 | [MCP protocol consistency: roots + sampling](25.15-mcp-protocol-consistency.md) | Planned | P1 | — |
+| 25.0 | [WO 25 Series Overview](25.0-wo25-test-infra-overview.md) | Done | — | — |
+| 25.1 | [Fast test gate split](25.1-fast-test-gate.md) | Done | P0 | — |
+| 25.2 | [Test speed optimization](25.2-test-speed-optimization.md) | Done (R2+R4 deferred) | P1 | 25.1 |
+| 25.3 | [kf-testdoctor optimization](25.3-testdoctor-optimization.md) | Done (R3+R4 deferred) | P1 | — |
+| 25.4 | [Coverage baseline tooling](25.4-coverage-baseline.md) | Done (R3 deferred) | P2 | 25.1 |
+| 25.5 | [Release/install/CI script hygiene](25.5-release-hygiene.md) | Done | P0 | — |
+| 25.6 | [Deadlock quarantine lift](25.6-deadlock-quarantine-lift.md) | Done | P1 | — |
+| 25.7 | [Benchmark source of truth](25.7-benchmark-hygiene.md) | Done | P1 | — |
+| 25.8 | [Historical residue cleanup](25.8-historical-residue-cleanup.md) | Done (R4 deferred) | P2 | 25.5 |
+| 25.9 | [Dead code & non-Rust lint stub cleanup](25.9-dead-code-and-lint-stubs.md) | Done | P1 | — |
+| 25.10 | [Stale binary/path refs + ADR path-literal enforcement](25.10-stale-refs-and-adr-path-enforcement.md) | Done (R4 deferred) | P0 | 25.5 (coordinate) |
+| 25.11 | [TUI metrics & daemon push gaps](25.11-tui-metrics-and-daemon-push.md) | Done (R2 deferred) | P1 | — |
+| 25.12 | [AppState decomposition + cached_tokens fork-reset](25.12-appstate-decomposition.md) | Done (R1 deferred) | P2 | — |
+| 25.13 | [Process-global state scoping](25.13-process-global-state-scoping.md) | Done | P2 | — |
+| 25.14 | [Verifier finding location data](25.14-verifier-finding-location.md) | Done | P1 | — |
+| 25.15 | [MCP protocol consistency: roots + sampling](25.15-mcp-protocol-consistency.md) | Done (R2+R3 deferred) | P1 | — |
 | 25.16 | [Coverage push: src/session >75%](25.16-session-coverage-75.md) | Planned | P2 | 25.4 |
 | 25.17 | [Persona adapter Bedrock/Vertex + landlock default-on decision](25.17-persona-adapter-and-landlock.md) | DONE (R1 deferred, R2 opt-in) | P1 | — |
 | 25.18 | [Deferred capability carry-forward](25.18-deferred-capability-carryforward.md) | Planned | P2/P3 | — |
-| 25.19 | [AGENTS.md multistep workflow upgrade](25.19-agents-md-multistep-workflow.md) | Planned | P1 | — |
+| 25.19 | [AGENTS.md multistep workflow upgrade](25.19-agents-md-multistep-workflow.md) | Done | P1 | — |
 
 **19 sub-workorders** (8 test-infra + 10 deferred/audit + 1 process). Highest-leverage P0s:
 **25.5** (broken release/install scripts) and **25.10** (config.toml.example

@@ -9,7 +9,7 @@ use tokio::process::Command;
 #[cfg(feature = "pty")]
 pub mod pty;
 
-#[cfg(all(unix, feature = "landlock"))]
+#[cfg(target_os = "linux")]
 mod landlock;
 
 /// Per-stream cap for captured stdout / stderr from a single bash invocation.
@@ -123,11 +123,11 @@ pub(crate) fn shell_program() -> &'static str {
 /// this WO). Rlimits are always applied when present — the `harden`
 /// flag controls only bash sandbox settings (network, workdir), not
 /// resource limits (H3).
-#[cfg(all(unix, feature = "landlock"))]
+#[cfg(target_os = "linux")]
 pub(crate) fn setup_rlimits(
     cmd: &mut Command,
     cfg: &SandboxConfig,
-    _landlock_paths: Option<&landlock::LandlockPaths>,
+    landlock_paths: Option<landlock::LandlockPaths>,
 ) {
     use std::os::unix::process::CommandExt;
 
@@ -135,6 +135,7 @@ pub(crate) fn setup_rlimits(
     let as_bytes: u64 = cfg.memory_limit_mb.saturating_mul(1024 * 1024);
     let fsize_bytes: u64 = cfg.filesize_limit_mb.saturating_mul(1024 * 1024);
     let no_network = cfg.harden && cfg.no_network;
+    let accept_unsandboxed = cfg.accept_unsandboxed;
 
     unsafe {
         cmd.as_std_mut().pre_exec(move || {
@@ -160,8 +161,33 @@ pub(crate) fn setup_rlimits(
 
                 if no_network {
                     // CLONE_NEWNET: place child in empty network namespace.
-                    // Only effective on Linux; other Unixes ignore.
                     libc::unshare(libc::CLONE_NEWNET);
+                }
+            }
+
+            // WO 27.1: apply landlock filesystem confinement. This is the
+            // actual sandbox — rlimits above bound CPU/memory/filesize but
+            // NOT filesystem reach. Without this, a model-driven bash call
+            // can read/write anything the user can.
+            //
+            // Fail-closed: if restrict_self errors on a kernel that should
+            // support it, refuse the spawn (return Err). The caller's
+            // --i-accept-unsandboxed flag is the documented escape hatch
+            // for WSL2/old-container kernels that trip restrict_self
+            // despite being nominally supported.
+            if let Some(paths) = &landlock_paths {
+                match landlock::apply_landlock(paths) {
+                    Ok(()) => {}
+                    Err(e) if accept_unsandboxed => {
+                        // Operator explicitly accepted the risk. Log to
+                        // stderr (the only channel in pre_exec) + continue
+                        // unconfined. The spawn proceeds without landlock.
+                        eprintln!(
+                            "landlock: {e}; --i-accept-unsandboxed set, \
+                             continuing WITHOUT filesystem confinement"
+                        );
+                    }
+                    Err(e) => return Err(std::io::Error::other(e)),
                 }
             }
             Ok(())
@@ -169,7 +195,7 @@ pub(crate) fn setup_rlimits(
     }
 }
 
-#[cfg(all(unix, not(feature = "landlock")))]
+#[cfg(all(unix, not(target_os = "linux")))]
 pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig, _landlock_paths: Option<&()>) {
     use std::os::unix::process::CommandExt;
 
@@ -465,11 +491,11 @@ pub async fn run_shell_with_token(
 
     setup_process_group(&mut proc);
     if let Some(cfg) = sandbox {
-        #[cfg(all(unix, feature = "landlock"))]
+        #[cfg(target_os = "linux")]
         let lp = landlock::resolve_paths(workdir);
-        #[cfg(not(all(unix, feature = "landlock")))]
+        #[cfg(not(target_os = "linux"))]
         let lp: Option<()> = None;
-        setup_rlimits(&mut proc, cfg, lp.as_ref());
+        setup_rlimits(&mut proc, cfg, lp);
     }
 
     let mut child = proc

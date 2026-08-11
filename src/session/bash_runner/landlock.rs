@@ -12,16 +12,12 @@
 
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
 use std::os::unix::ffi::OsStrExt;
 
 const LANDLOCK_CREATE_RULESET: libc::c_long = 444;
 
-#[cfg(test)]
 const LANDLOCK_ADD_RULE: libc::c_long = 445;
-#[cfg(test)]
 const LANDLOCK_RESTRICT_SELF: libc::c_long = 446;
-#[cfg(test)]
 const RULE_PATH_BENEATH: libc::c_long = 1;
 
 #[repr(C, packed)]
@@ -29,7 +25,6 @@ struct landlock_ruleset_attr {
     handled_access_fs: u64,
 }
 
-#[cfg(test)]
 #[repr(C, packed)]
 struct landlock_path_beneath_attr {
     allowed_access: u64,
@@ -89,7 +84,6 @@ fn landlock_available() -> Option<libc::c_int> {
     Some(fd as libc::c_int)
 }
 
-#[cfg(test)]
 unsafe fn landlock_add_path_rule(
     ruleset_fd: libc::c_int,
     dir_fd: libc::c_int,
@@ -108,12 +102,10 @@ unsafe fn landlock_add_path_rule(
     ) == 0
 }
 
-#[cfg(test)]
 unsafe fn landlock_restrict(ruleset_fd: libc::c_int) -> bool {
     libc::syscall(LANDLOCK_RESTRICT_SELF, ruleset_fd as libc::c_long, 0u32) == 0
 }
 
-#[cfg(test)]
 unsafe fn add_path(ruleset_fd: libc::c_int, path: &Path, access: u64) -> bool {
     let fd = match libc::open(
         path.as_os_str().as_bytes().as_ptr() as *const _,
@@ -127,7 +119,6 @@ unsafe fn add_path(ruleset_fd: libc::c_int, path: &Path, access: u64) -> bool {
     ok
 }
 
-#[cfg(test)]
 static SYSTEM_READ_DIRS: &[&str] = &[
     "/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/nix", "/snap", "/var/lib", "/tmp",
     "/dev", "/proc",
@@ -174,8 +165,9 @@ pub(crate) fn resolve_paths(workspace: &Path) -> Option<LandlockPaths> {
 /// function only opens fds and makes syscalls, no heap allocation.
 ///
 /// Returns Err if workspace cannot be added or restrict_self fails
-/// (per WO 21.7-R5: refuse to launch unsandboxed).
-#[cfg(test)]
+/// (per WO 21.7-R5 + WO 27.1: refuse to launch unsandboxed on supported
+/// kernels; the caller checks `accept_unsandboxed` to decide whether to
+/// fall back with a warning or hard-fail the spawn).
 pub(crate) fn apply_landlock(paths: &LandlockPaths) -> Result<(), String> {
     let ruleset_fd = match landlock_available() {
         Some(fd) => fd,

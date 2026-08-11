@@ -11,6 +11,8 @@ use crate::shared::permission::{evaluate, PermissionAction};
 use crate::shared::{
     read_shared_config, Config, Message, Role, StreamEvent, ToolDef, ToolInvocation, ToolOutcome,
 };
+use futures_util::future::FutureExt;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -2051,14 +2053,35 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
         event_tx: prep.event_tx,
     };
     let start = Instant::now();
-    let outcome = tokio::time::timeout(
+    // catch_unwind so a panicking tool returns a clean Failure outcome
+    // instead of unwinding through the executor loop. This matters for
+    // the direct-call paths (deterministic mode at line ~1309, Phase 2.5
+    // deferred file calls at line ~1450) which run run_prepared_call on
+    // the executor task rather than in a spawned task. The spawned path
+    // (line ~1314) also benefits: the panic message is preserved in the
+    // Internal error rather than being discarded as a JoinError.
+    let outcome = match tokio::time::timeout(
         prep.timeout,
-        prep.tool.run(&ctx, prep.invocation.arguments.clone()),
+        AssertUnwindSafe(prep.tool.run(&ctx, prep.invocation.arguments.clone())).catch_unwind(),
     )
     .await
-    .unwrap_or(ToolOutcome::Failure(crate::shared::ToolError::Timeout {
-        after_secs: prep.timeout.as_secs(),
-    }));
+    {
+        Err(_) => ToolOutcome::Failure(crate::shared::ToolError::Timeout {
+            after_secs: prep.timeout.as_secs(),
+        }),
+        Ok(Err(panic_payload)) => {
+            let msg = panic_payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_string());
+            tracing::warn!("tool {} panicked: {msg}", prep.invocation.name);
+            ToolOutcome::Failure(crate::shared::ToolError::Internal {
+                message: format!("tool panicked: {msg}"),
+            })
+        }
+        Ok(Ok(outcome)) => outcome,
+    };
     let duration_ms = start.elapsed().as_millis() as u64;
     Some((prep.invocation, outcome, duration_ms))
 }

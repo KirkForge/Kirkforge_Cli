@@ -30,6 +30,15 @@ impl WebFetch {
         let client = reqwest::Client::builder()
             .timeout(FETCH_TIMEOUT)
             .user_agent(USER_AGENT)
+            // ponytail: do not follow redirects. The top-level SSRF checks
+            // (scheme allowlist, literal-internal-IP rejection, DNS resolve,
+            // DNS pinning) run only on the initial URL; reqwest would
+            // follow a 302 to an internal IP (e.g. 169.254.169.254) without
+            // re-validating. Surfacing 3xx to the model costs one extra
+            // round-trip on legitimate redirects but closes the bypass.
+            // Upgrade path: a custom Policy that re-runs host checks on
+            // each Location (requires sync DNS lookup in the policy).
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self { deny_list, client }

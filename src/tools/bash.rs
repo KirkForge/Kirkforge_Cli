@@ -622,9 +622,8 @@ mod tests {
     /// A cancelled foreground `Bash` tool invocation returns a structured
     /// `ToolError::Cancelled` and does not leave a long sleep running.
     #[cfg(unix)]
-    // ignore: known-broken — see state.md
+    // WO 27.2-R2: un-ignored after SandboxConfig::default() fix (838e611)
     #[tokio::test]
-    #[ignore]
     async fn bash_tool_respects_cancellation_token() {
         let tmp = std::env::temp_dir();
         let marker = tmp.join(format!("kf_code_bash_cancel_marker_{}", std::process::id()));
@@ -672,9 +671,8 @@ mod tests {
     /// The Bash tool surfaces internal timeouts as a structured
     /// `ToolError::Timeout` rather than an opaque string.
     #[cfg(unix)]
-    // ignore: known-broken — see state.md
+    // WO 27.2-R2: un-ignored after SandboxConfig::default() fix (838e611)
     #[tokio::test]
-    #[ignore]
     async fn bash_tool_surfaces_structured_timeout() {
         let tool = Bash::new(
             DenyList::default(),
@@ -702,9 +700,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    // ignore: known-broken — see state.md
+    // WO 27.2-R2: un-ignored after SandboxConfig::default() fix (838e611)
     #[tokio::test]
-    #[ignore]
     async fn bash_timeout_clamped_to_max() {
         let bash = Bash::new(
             DenyList::default(),
@@ -1212,9 +1209,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    // ignore: known-broken — see state.md
+    // WO 27.2-R2: un-ignored after SandboxConfig::default() fix (838e611)
     #[tokio::test]
-    #[ignore]
     async fn bash_failing_command_reports_nonzero_exit_code() {
         let tool = Bash::new(
             DenyList::default(),

@@ -68,9 +68,8 @@ async fn wrapper_for_plugin_tool() {
 }
 
 #[cfg(unix)]
-// ignore: known-broken — see state.md
+// WO 27.2-R2: un-ignored after SandboxConfig::default() fix (838e611)
 #[tokio::test]
-#[ignore]
 async fn sandbox_uses_configured_sandbox_dir() {
     let (tmp, reg, cfg) = make_greet_plugin();
     let sandbox = tmp.path().join("sandbox");
@@ -118,9 +117,8 @@ async fn sandbox_uses_configured_sandbox_dir() {
 }
 
 #[cfg(unix)]
-// ignore: known-broken — see state.md
+// WO 27.2-R2: un-ignored after SandboxConfig::default() fix (838e611)
 #[tokio::test]
-#[ignore]
 async fn sandbox_uses_current_dir_when_sandbox_dir_empty() {
     let (_tmp, reg, cfg) = make_greet_plugin();
     {
@@ -173,9 +171,8 @@ async fn sandbox_uses_current_dir_when_sandbox_dir_empty() {
 }
 
 #[cfg(unix)]
-// ignore: known-broken — see state.md
+// WO 27.2-R2: un-ignored after SandboxConfig::default() fix (838e611)
 #[tokio::test]
-#[ignore]
 async fn curated_env_blocks_unlisted_vars() {
     let (_tmp, reg, cfg) = make_greet_plugin();
     let plugin_dir = reg
@@ -218,9 +215,8 @@ async fn curated_env_blocks_unlisted_vars() {
 /// resolve standard utilities even when kf-code is launched with a minimal
 /// or world-writable PATH.
 #[cfg(unix)]
-// ignore: known-broken — see state.md
+// WO 27.2-R2: un-ignored after SandboxConfig::default() fix (838e611)
 #[tokio::test]
-#[ignore]
 async fn curated_env_sanitizes_path_for_plugin_tools() {
     let (_tmp, reg, cfg) = make_greet_plugin();
     let plugin_dir = reg
@@ -508,12 +504,16 @@ fn copy_dir_all(
 
 /// Installed-layout regression: when the data directory contains a copy of
 /// the bundled `plugins/` tree (as `install.sh` produces), the plugin host
-/// loads every bundled plugin from that directory without warnings. This
-/// catches packaging mistakes that leave tools referenced by a manifest
+/// loads every bundled shell plugin from that directory without warnings.
+/// This catches packaging mistakes that leave tools referenced by a manifest
 /// missing from the installed plugin root.
-// ignore: known-broken — see state.md
+///
+/// Only `kf-plugin` ships as a shell plugin source. The folded plugins
+/// (`stratum`, `kf-budget`) are compiled-in behind cargo features (see
+/// `folded_feature_enabled`) and do not ship in the bundled `plugins/` tree.
+// WO 27.2-R2: un-ignored after rewriting stale premise (stratum/kf-budget
+// are compiled-in, not shell-shipped).
 #[test]
-#[ignore]
 fn bundled_plugins_load_from_data_dir() {
     let tmp = tempfile::tempdir().unwrap();
     let installed_plugins = tmp.path().join("plugins");
@@ -531,16 +531,23 @@ fn bundled_plugins_load_from_data_dir() {
         load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
-    let names: Vec<_> = registry
+    let names: Vec<String> = registry
         .active_plugins()
         .iter()
         .map(|p| p.plugin.manifest().name.clone())
         .collect();
-    let expected = vec!["stratum", "kf-budget", "kf-plugin"];
-    for expected in expected {
+    // Only kf-plugin ships as a shell plugin source.
+    assert!(
+        names.contains(&"kf-plugin".to_string()),
+        "expected bundled plugin \"kf-plugin\" to load from data dir; got {names:?}"
+    );
+    // Folded plugins (stratum, kf-budget) are compiled-in behind cargo
+    // features; they must NOT shell-load from the bundled tree (no shell
+    // source dir ships, and the shell loader skips them when feature-on).
+    for folded in ["stratum", "kf-budget"] {
         assert!(
-            names.contains(&expected.to_string()),
-            "expected bundled plugin {expected:?} to load from data dir; got {names:?}"
+            !names.contains(&folded.to_string()),
+            "folded plugin {folded:?} should not shell-load from bundled tree (compiled-in); got {names:?}"
         );
     }
 }
@@ -699,58 +706,70 @@ async fn bundled_node_sdk_tool_executes_via_host() {
 }
 
 /// Verify the built-in workspace plugin sources are registered by default,
-/// exist on disk, and can be loaded by the plugin host under the default
-/// trust policy. Folded plugins (stratum, budget) are skipped by the shell
-/// loader when their feature is ON — they're served compiled-in.
-/// The Node SDK plugin (`kf-plugin-sdk`) is always shell-loaded.
-// ignore: known-broken — see state.md
+/// exist on disk, and can be loaded by the plugin host.
+///
+/// Only `kf-plugin` ships as a shell plugin source. The folded plugins
+/// (`stratum`, `kf-budget`) are compiled-in behind cargo features; their
+/// presence in `enabled_plugins` is governed by `folded_feature_enabled`,
+/// not by `plugin_sources`.
+// WO 27.2-R2: un-ignored after rewriting stale premise (stratum/kf-budget
+// are compiled-in, not in default plugin_sources).
 #[test]
-#[ignore]
 fn default_plugin_sources_are_present_and_loadable() {
-    let mut all_expected = vec!["stratum", "kf-budget", "kf-plugin"];
-    all_expected.sort();
-
     let base = Config::default();
-    for name in &all_expected {
+
+    // Only kf-plugin ships as a shell plugin source.
+    let mut shell_sources: Vec<&str> = base
+        .tools
+        .plugin_sources
+        .keys()
+        .map(|s| s.as_str())
+        .collect();
+    shell_sources.sort();
+    assert_eq!(
+        shell_sources,
+        vec!["kf-plugin"],
+        "default plugin_sources should contain only kf-plugin; got {shell_sources:?}"
+    );
+    // The folded plugins must NOT appear in plugin_sources — they're
+    // compiled-in (feature on) or have no shell fallback (feature off).
+    for folded in &["stratum", "kf-budget"] {
         assert!(
-            base.tools.plugin_sources.contains_key(*name),
-            "built-in plugin source '{name}' is missing from default config"
+            !base.tools.plugin_sources.contains_key(*folded),
+            "folded plugin {folded:?} should not be in default plugin_sources"
         );
     }
 
+    // Folded plugins' presence in enabled_plugins tracks the feature flag.
+    for folded in &["stratum", "kf-budget"] {
+        let in_enabled = base.tools.enabled_plugins.iter().any(|n| n == folded);
+        assert_eq!(
+            in_enabled,
+            crate::session::plugin_tools::folded_feature_enabled(folded),
+            "enabled_plugins membership for {folded:?} must match folded_feature_enabled"
+        );
+    }
+
+    // Load with signature checks disabled — this test pins source presence
+    // + loadability, not signature verification (covered elsewhere).
     let mut cfg = Config::default();
-    cfg.tools.plugin_sources = base.tools.plugin_sources;
-    cfg.tools.enabled_plugins = all_expected.iter().map(|s| s.to_string()).collect();
+    cfg.tools.plugin_signature_validation = false;
+    cfg.tools.plugin_trust_workspace = true;
 
     let mut registry = PluginRegistry::new();
     let warnings = load_workspace_plugins(&mut registry, &cfg);
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
-    // Plugins that are always shell-loaded (not folded, or folded but feature off).
-    let mut shell_loaded: Vec<&str> = all_expected
-        .iter()
-        .copied()
-        .filter(|name| !crate::session::plugin_tools::folded_feature_enabled(name))
-        .collect();
-    shell_loaded.sort();
-
-    for name in &shell_loaded {
+    // kf-plugin is always shell-loaded from its default source.
+    assert!(
+        registry.find_active_by_name("kf-plugin").is_some(),
+        "kf-plugin should shell-load from default sources"
+    );
+    // Folded plugins are never shell-loaded (compiled-in or no source).
+    for folded in &["stratum", "kf-budget"] {
         assert!(
-            registry.find_active_by_name(name).is_some(),
-            "shell plugin '{name}' did not load"
-        );
-    }
-
-    // Folded plugins with feature ON are skipped by the shell loader.
-    let compiled_in: Vec<&str> = all_expected
-        .iter()
-        .copied()
-        .filter(|name| crate::session::plugin_tools::folded_feature_enabled(name))
-        .collect();
-    for name in &compiled_in {
-        assert!(
-            registry.find_active_by_name(name).is_none(),
-            "folded plugin '{name}' was shell-loaded but should be compiled-in only"
+            registry.find_active_by_name(folded).is_none(),
+            "folded plugin {folded:?} should not shell-load (compiled-in or no source)"
         );
     }
 }
@@ -1004,9 +1023,8 @@ command = "verifiers/check.sh"
         chmod_x(&verifier_dir.join("check.sh"));
     }
 
-    // ignore: known-broken — see state.md
+    // WO 27.2-R2: un-ignored after SandboxConfig::default() fix (838e611)
     #[tokio::test]
-    #[ignore]
     async fn e2e_plugin_all_four_capability_kinds() {
         let tmp = tempfile::tempdir().unwrap();
         let plugins_dir = tmp.path().join("plugins");

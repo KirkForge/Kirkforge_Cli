@@ -626,10 +626,9 @@ mod wrapper_tests {
     /// bucketlist 3.39: cancelling the `ToolContext` token while a plugin
     /// tool is running takes the `Finish::Cancelled` branch — the child is
     /// killed/reaped and the outcome is `Failure(ToolError::Cancelled)`.
-    // ignore: known-broken — see state.md
+    // WO 27.2-R2: un-ignored after SandboxConfig::default() fix (838e611)
     #[cfg(unix)]
     #[tokio::test]
-    #[ignore]
     async fn run_returns_cancelled_when_token_fires() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("sleep.sh");

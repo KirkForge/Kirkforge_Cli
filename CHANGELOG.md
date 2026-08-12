@@ -6,6 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- WO 29.1: Fold the bundled `kf-plugin` shell scripts into compiled-in Rust tools behind the `kf-plugin-tools` feature (default on). `doctor`, `health`, and `tools` run as native Rust calls (no shell hop, no Node hop); `verify`, `verify_workspace`, and `audit_verify` emit an explicit "deferred to WO 29.7" message. The `/kf-code` skill is registered inline when the feature is on. Eliminates the Rust→shell→Node→linter chain for the three diagnostic tools.
 - WO 28.5: Landlock FS confinement on background bash jobs. `resolve_paths` is re-exported `pub(crate)` from `bash_runner` and the background spawn path now resolves a canonical workspace and passes it to `setup_rlimits`. Previously background jobs got rlimits + `CLONE_NEWNET` but not landlock. Closes the WO 27.5-R1 deferral.
 - WO 28.2: `shared::session_mode` module — the per-session Stratum mode global moved out of `session::stratum` to break the `budget ↔ stratum` production cycle. Stratum re-exports the accessors for back-compat.
 

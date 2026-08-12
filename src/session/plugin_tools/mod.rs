@@ -27,11 +27,17 @@
 pub mod loader;
 pub mod wrapper;
 
+#[cfg(feature = "kf-plugin-tools")]
+pub mod native;
+
 pub use loader::{
     all_plugin_tools, folded_feature, folded_feature_enabled, is_folded, load_plugin_registry,
     load_workspace_plugins, plugins_dir, spawn_plugin_watcher, trust_policy_from_config,
 };
 pub use wrapper::PluginToolWrapper;
+
+#[cfg(feature = "kf-plugin-tools")]
+pub use native::all_plugin_sdk_tools;
 
 // Test-only re-export so the in-tree test module can call `npm_bin_dirs()`
 // via `use super::*;` without widening the crate's public API.

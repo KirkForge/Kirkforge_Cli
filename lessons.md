@@ -49,6 +49,14 @@
   and `comm -23` against all. (Not `git merge-base --is-merged` + naive `git branch` parse —
   worktree `+` markers break it.)
 
+## WO 29.1 fold session (2026-08-12)
+
+- **The fold-in pattern is 4 edits:** (1) `Cargo.toml` feature, (2) `loader.rs` `FOLDED_PLUGINS` + `folded_feature_enabled` arm, (3) a `native.rs` with the tool impls + `all_<name>_tools()` aggregator, (4) a `run_session.rs` registration block mirroring stratum/budget. Mirror it exactly — don't invent a new registration path.
+- **`all_plugin_tools` in `loader.rs` had NO folded-skip guard.** It only checked `disabled_plugins`. For stratum/budget this was latent (they're not shipped as shell plugins in the data dir), but `kf-plugin` IS shipped there — so when the feature is on AND the plugin is installed in `~/.local/share/kf-code/plugins/`, the manifest loads via `load_from_dir` (no folded check there) and `all_plugin_tools` would double-register shell wrappers alongside the compiled-in tools. Added a `folded_feature_enabled(plugin_name)` skip in `all_plugin_tools`. This is the real ADR-050 collision guard; the `load_workspace_plugins` skip only covers the workspace-source path, not the data-dir path.
+- **Skills need explicit preservation when folding.** `load_workspace_plugins` skips folded plugins → their manifest doesn't load → the skill is dropped. Added `register_folded_skills` in `skills.rs::scan_and_load` that re-registers the `/kf-code` skill inline (prompt body copied from the manifest). Check `get_by_trigger("/kf-code").is_none()` first so a manifest-loaded skill (feature off) isn't duplicated.
+- **`cargo check`/`clippy --tests` and `cargo test --lib` build DIFFERENT dep sets.** clippy `--tests` finished in 2m44s but `cargo test --lib` recompiled `headless_chrome` and others from scratch (~7min). The task gate was check+clippy+fmt (all green in ~8min); the test run was extra confidence. Budget the time or trust the gate.
+- **Ponytail on the 3 verify tools:** chose "not yet implemented" message over Node shell-out fallback. The fallback = re-implementing the shell wrapper in Rust (~100 lines) that KEEPS the Node hop alive, defeating the workorder goal. The deferral message is 5 lines, explicit, in-band to the user, and WO 29.7 replaces it natively. Workorder Step 1 explicitly offered both options.
+
 ## WO 27.6 themes session (2026-08-11)
 
 - **`Color::DarkYellow` / `Color::DarkRed` do NOT exist in ratatui.** The

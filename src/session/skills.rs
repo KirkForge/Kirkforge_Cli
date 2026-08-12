@@ -157,7 +157,29 @@ impl SkillRegistry {
             count += self.load_from_dir(base)?;
         }
         count += self.load_plugins(cfg)?;
+        count += self.register_folded_skills(cfg);
         Ok(count)
+    }
+
+    /// Register skills for folded plugins whose shell-plugin dir is skipped
+    /// when their cargo feature is ON. Without this, folding a plugin would
+    /// silently drop its skills (the manifest no longer loads). Currently
+    /// covers the `kf-plugin` `/kf-code` skill (WO 29.1).
+    fn register_folded_skills(&mut self, cfg: &crate::shared::Config) -> usize {
+        let mut count = 0;
+        #[cfg(feature = "kf-plugin-tools")]
+        {
+            if crate::session::plugin_tools::folded_feature_enabled("kf-plugin")
+                && cfg.tools.enabled_plugins.iter().any(|n| n == "kf-plugin")
+                && !cfg.tools.disabled_plugins.contains("kf-plugin")
+                && self.get_by_trigger("/kf-code").is_none()
+            {
+                self.register(kf_plugin_skill());
+                count += 1;
+            }
+        }
+        let _ = cfg;
+        count
     }
 
     /// Load plugins from the canonical data-directory plugins folder, any
@@ -581,6 +603,50 @@ pub fn builtin_skills() -> Vec<Skill> {
             source_dir: PathBuf::from("."),
         },
     ]
+}
+
+/// The `/kf-code` skill for the folded `kf-plugin` (WO 29.1).
+///
+/// When the `kf-plugin-tools` feature is on, the shell-plugin manifest no
+/// longer loads, so this inlines the skill prompt that the manifest used to
+/// declare. The prompt body mirrors `plugins/kf-plugin/kf-code.toml`.
+#[cfg(feature = "kf-plugin-tools")]
+fn kf_plugin_skill() -> Skill {
+    Skill {
+        meta: SkillMeta {
+            name: "kf-plugin-kf-code".into(),
+            description: "KirkForge-Plugin SDK verification assistant [shell plugin]".into(),
+            trigger: "/kf-code".into(),
+            model: Some("default".into()),
+            plugin_name: Some("kf-plugin".into()),
+        },
+        prompt_body: "You are a KirkForge-Plugin SDK assistant. The SDK provides \
+                      deterministic LLM output verification, workspace verification, \
+                      and audit-chain integrity checks.\n\
+                      \n\
+                      When the user asks for verification, diagnostics, or audit \
+                      checks, use the following tools:\n\
+                      \n\
+                      1. `plugin_doctor` with {} to report which external \
+                      verification tools are available.\n\
+                      2. `plugin_tools` with {} to list the built-in lint engines \
+                      and type checkers.\n\
+                      3. To verify the current workspace, call \
+                      `plugin_verify_workspace` with {\"workspace\": \"<absolute \
+                      path>\"}. Optionally pass `language`, `description`, or \
+                      `taskId`.\n\
+                      4. For a quick verification summary without a workspace path, \
+                      call `plugin_verify` with {\"task\": \"<description>\"}.\n\
+                      5. To check an audit log's chain integrity, call \
+                      `plugin_audit_verify` with {\"file\": \"<audit.jsonl path>\"}.\n\
+                      6. To check orchestrator health, call `plugin_health` with \
+                      {}.\n\
+                      \n\
+                      Always report the tool output verbatim, highlighting any \
+                      CRITICAL or FAILED results first.\n"
+            .into(),
+        source_dir: PathBuf::from("."),
+    }
 }
 
 #[cfg(test)]

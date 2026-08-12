@@ -28,7 +28,11 @@ use super::wrapper::PluginToolWrapper;
 /// When the corresponding feature is enabled, these are served by compiled-in
 /// Rust code and their shell plugin dirs are skipped during filesystem loading.
 /// When the feature is disabled, the shell plugin dir is loaded as fallback.
-const FOLDED_PLUGINS: &[(&str, &str)] = &[("stratum", "stratum"), ("kf-budget", "budget")];
+const FOLDED_PLUGINS: &[(&str, &str)] = &[
+    ("stratum", "stratum"),
+    ("kf-budget", "budget"),
+    ("kf-plugin", "kf-plugin-tools"),
+];
 
 /// Check if a plugin name is folded and whether its feature is compiled in.
 pub fn folded_feature_enabled(name: &str) -> bool {
@@ -37,6 +41,8 @@ pub fn folded_feature_enabled(name: &str) -> bool {
         "stratum" => true,
         #[cfg(feature = "budget")]
         "kf-budget" => true,
+        #[cfg(feature = "kf-plugin-tools")]
+        "kf-plugin" => true,
         _ => false,
     }
 }
@@ -228,6 +234,17 @@ pub fn all_plugin_tools(
 
     for hosted in registry.active_plugins() {
         let plugin_name = hosted.plugin.manifest.name.as_str();
+        // Folded plugins with feature ON are served by compiled-in Rust tools
+        // (registered in main/run_session.rs). Skip shell-wrapper creation so
+        // a manifest loaded from the data dir can't double-register the same
+        // tool names as the compiled-in impls (ADR-050).
+        if folded_feature_enabled(plugin_name) {
+            tracing::trace!(
+                plugin = plugin_name,
+                "skipping shell-wrapper for folded plugin (compiled-in)"
+            );
+            continue;
+        }
         if disabled.contains(plugin_name) {
             tracing::trace!(plugin = plugin_name, "skipping disabled plugin tools");
             continue;

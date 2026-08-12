@@ -625,9 +625,9 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
 
     // ── kf-plugin in-process tools (feature-gated, WO 29.1) ──
     // When the `kf-plugin-tools` feature is enabled, the six plugin tools
-    // register as direct Rust calls instead of shell→Node subprocesses.
-    // doctor/health/tools run natively; the three verify commands defer to
-    // WO 29.7 and emit an explicit "use the Node SDK" message.
+    // register as direct Rust calls. doctor/health/tools run natively; the
+    // three verify commands emit a "not yet implemented" message pending a
+    // real model client in the orchestrator crate (WO 29.7 shipped a stub).
     #[cfg(feature = "kf-plugin-tools")]
     {
         let cfg = kf_code::shared::read_shared_config(&shared_config);

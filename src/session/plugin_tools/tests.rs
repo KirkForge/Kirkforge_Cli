@@ -339,13 +339,6 @@ impl DataDirGuard {
         std::env::set_var("KF_CODE_DATA_DIR", value);
         Self { prior, _lock }
     }
-
-    async fn set_async(value: &str) -> Self {
-        let _lock = crate::session::test_data_dir_lock().lock().await;
-        let prior = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", value);
-        Self { prior, _lock }
-    }
 }
 
 impl Drop for DataDirGuard {
@@ -357,42 +350,10 @@ impl Drop for DataDirGuard {
     }
 }
 
-/// `npm_bin_dirs()` must include the source-layout Node SDK bin directory
-/// when the running binary lives under the workspace `target/` tree, even if
-/// the data directory has no Node SDK installed. This lets developers run
-/// Node SDK plugin tools from a source build without a global `tsc`/`pyright`.
-#[test]
-fn npm_bin_dirs_includes_source_layout_from_target_binary() {
-    let tmp = tempfile::tempdir().unwrap();
-    let _guard = DataDirGuard::set(tmp.path().to_string_lossy().as_ref());
-
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let source_bin = repo_root.join("npm/kf-plugin/node_modules/.bin");
-    // The source-layout Node SDK install only exists after `npm ci`, which
-    // the Rust CI jobs don't run. The detection logic is what we're testing,
-    // not whether a sibling language's install happened, so ensure the
-    // gitignored dir is present before reading. `create_dir_all` is a no-op
-    // when an install already exists; otherwise it makes an empty `.bin`
-    // (node_modules is gitignored, so this never pollutes the tree).
-    std::fs::create_dir_all(&source_bin).unwrap();
-
-    let dirs = npm_bin_dirs();
-    assert!(
-        dirs.contains(&source_bin),
-        "expected npm_bin_dirs to contain source-layout bin {source_bin:?}; got {dirs:?}"
-    );
-
-    // The temporary data directory has no npm install, so no data-dir entry
-    // should be present.
-    let data_bin = tmp.path().join("npm/kf-plugin/node_modules/.bin");
-    assert!(
-        !dirs.contains(&data_bin),
-        "unexpected data-dir bin {data_bin:?} in {dirs:?}"
-    );
-}
-
 /// When the data directory contains a bundled Node SDK install, its bin
-/// directory is also included alongside the source-layout candidate.
+/// directory is included so plugin tools can resolve `tsc`/`pyright` without
+/// a global install. (WO 29.9 removed the source-layout walk; only the
+/// data-dir layout remains.)
 #[test]
 fn npm_bin_dirs_includes_data_dir_install() {
     let tmp = tempfile::tempdir().unwrap();
@@ -460,288 +421,36 @@ command = "hello.sh"
     );
 }
 
-/// Recursively copy `src` into `dst`, preserving permissions on Unix and
-/// symlinks where possible. Used by installed-layout regression tests.
-fn copy_dir_all(
-    src: impl AsRef<std::path::Path>,
-    dst: impl AsRef<std::path::Path>,
-) -> std::io::Result<()> {
-    std::fs::create_dir_all(&dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let dest_path = dst.as_ref().join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_all(entry.path(), &dest_path)?;
-        } else if ty.is_symlink() {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::symlink;
-                let target = std::fs::read_link(entry.path())?;
-                symlink(target, dest_path)?;
-            }
-            #[cfg(not(unix))]
-            {
-                // On Windows follow the symlink; bundled plugins contain
-                // no symlinks that matter at load time.
-                if entry.path().is_dir() {
-                    copy_dir_all(entry.path(), &dest_path)?;
-                } else {
-                    std::fs::copy(entry.path(), &dest_path)?;
-                }
-            }
-        } else {
-            std::fs::copy(entry.path(), &dest_path)?;
-            #[cfg(unix)]
-            {
-                let perms = entry.metadata()?.permissions();
-                std::fs::set_permissions(&dest_path, perms)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Installed-layout regression: when the data directory contains a copy of
-/// the bundled `plugins/` tree (as `install.sh` produces), the plugin host
-/// loads every bundled shell plugin from that directory without warnings.
-/// This catches packaging mistakes that leave tools referenced by a manifest
-/// missing from the installed plugin root.
-///
-/// Only `kf-plugin` ships as a shell plugin source. The folded plugins
-/// (`stratum`, `kf-budget`) are compiled-in behind cargo features (see
-/// `folded_feature_enabled`) and do not ship in the bundled `plugins/` tree.
-// WO 27.2-R2: un-ignored after rewriting stale premise (stratum/kf-budget
-// are compiled-in, not shell-shipped).
-#[test]
-fn bundled_plugins_load_from_data_dir() {
-    let tmp = tempfile::tempdir().unwrap();
-    let installed_plugins = tmp.path().join("plugins");
-
-    // Copy the in-repo bundled plugins into a temp data directory so we
-    // exercise the same code path an installed release uses.
-    let repo_plugins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins");
-    copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
-
-    let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
-    let mut cfg = Config::default();
-    cfg.tools.plugin_signature_validation = false;
-    cfg.tools.plugin_trust_workspace = true;
-    let (registry, warnings) =
-        load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
-    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-
-    let names: Vec<String> = registry
-        .active_plugins()
-        .iter()
-        .map(|p| p.plugin.manifest().name.clone())
-        .collect();
-    // Only kf-plugin ships as a shell plugin source.
-    assert!(
-        names.contains(&"kf-plugin".to_string()),
-        "expected bundled plugin \"kf-plugin\" to load from data dir; got {names:?}"
-    );
-    // Folded plugins (stratum, kf-budget) are compiled-in behind cargo
-    // features; they must NOT shell-load from the bundled tree (no shell
-    // source dir ships, and the shell loader skips them when feature-on).
-    for folded in ["stratum", "kf-budget"] {
-        assert!(
-            !names.contains(&folded.to_string()),
-            "folded plugin {folded:?} should not shell-load from bundled tree (compiled-in); got {names:?}"
-        );
-    }
-}
-
-/// Every declared tool command file must exist in the installed plugin root.
-/// This catches manifest drift and packaging mistakes that omit a tool
-/// script from a release archive.
-#[test]
-fn bundled_plugin_tool_commands_exist_in_data_dir() {
-    let tmp = tempfile::tempdir().unwrap();
-    let installed_plugins = tmp.path().join("plugins");
-    let repo_plugins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins");
-    copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
-
-    let _guard = DataDirGuard::set(&tmp.path().to_string_lossy());
-    let mut cfg = Config::default();
-    cfg.tools.plugin_signature_validation = false;
-    cfg.tools.plugin_trust_workspace = true;
-    let (registry, warnings) =
-        load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
-    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-
-    for hosted in registry.active_plugins() {
-        let root = hosted.plugin.root().to_path_buf();
-        for cap in hosted.plugin.tools() {
-            if let kf_plugin_sdk::Capability::Tool {
-                name,
-                command: Some(cmd),
-                ..
-            } = cap
-            {
-                let path = root.join(cmd);
-                assert!(
-                    path.exists(),
-                    "tool {name:?} command missing: {}",
-                    path.display()
-                );
-            }
-        }
-    }
-}
-
-/// End-to-end installed-layout regression for a Rust-binary-backed plugin:
-/// `stratum_mode` must return the active mode through the host's
-/// `PluginToolWrapper`. Skipped when the workspace `stratum` binary is not
-/// built (e.g. a bare `cargo test -p kf-code`).
-#[tokio::test]
-async fn bundled_stratum_mode_tool_executes_via_host() {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let stratum_bin = [
-        repo_root.join("target/debug/stratum"),
-        repo_root.join("target/release/stratum"),
-    ]
-    .into_iter()
-    .find(|p| p.exists());
-    let Some(stratum_bin) = stratum_bin else {
-        eprintln!("skipping stratum_mode end-to-end test: stratum binary not built");
-        return;
-    };
-
-    let tmp = tempfile::tempdir().unwrap();
-    let installed_plugins = tmp.path().join("plugins");
-    let repo_plugins = repo_root.join("plugins");
-    copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
-
-    // Copy the stratum binary next to the plugin scripts so the installed
-    // layout can resolve it without mutating the global PATH (which would
-    // race with other concurrent tests).
-    let installed_stratum_tools = installed_plugins.join("stratum/tools");
-    std::fs::copy(&stratum_bin, installed_stratum_tools.join("stratum")).unwrap();
-
-    let _data_guard = DataDirGuard::set_async(&tmp.path().to_string_lossy()).await;
-    let mut cfg = Config::default();
-    cfg.tools.plugin_signature_validation = false;
-    cfg.tools.plugin_trust_workspace = true;
-    let (registry, warnings) =
-        load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
-    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-
-    let tools = all_plugin_tools(
-        &registry,
-        Arc::new(std::sync::RwLock::new(Config::default())),
-        None,
-    );
-    let tool = tools
-        .iter()
-        .find(|t| t.def().name == "stratum_mode")
-        .expect("stratum_mode should be registered");
-
-    let outcome = tool.run(&ToolContext::new(), serde_json::json!({})).await;
-    assert!(
-        matches!(outcome, ToolOutcome::Success { ref content } if content.trim() == "full"),
-        "expected stratum_mode to return 'full', got {outcome:?}"
-    );
-}
-
-/// End-to-end installed-layout regression for the Node SDK plugin: the
-/// Skipped when node or the built SDK is not available (e.g. a bare
-/// `cargo test -p kf-code` without `npm ci`). Marked #[ignore]
-/// because without the SDK build step the test silently no-ops and
-/// provides no coverage.
-#[tokio::test]
-#[ignore]
-async fn bundled_node_sdk_tool_executes_via_host() {
-    fn which_node() -> Option<PathBuf> {
-        std::env::var("PATH").ok().and_then(|path| {
-            path.split(':').find_map(|dir| {
-                let candidate = PathBuf::from(dir).join("node");
-                if candidate.is_file() {
-                    Some(candidate)
-                } else {
-                    None
-                }
-            })
-        })
-    }
-
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_sdk = repo_root.join("npm/kf-plugin/apps/cli/dist/index.js");
-    if which_node().is_none() || !repo_sdk.exists() {
-        eprintln!("skipping Node SDK end-to-end test: node or built SDK not available");
-        return;
-    }
-
-    let tmp = tempfile::tempdir().unwrap();
-    let installed_plugins = tmp.path().join("plugins");
-    let installed_npm = tmp.path().join("npm/kf-plugin");
-    let repo_plugins = repo_root.join("plugins");
-    let repo_npm = repo_root.join("npm/kf-plugin");
-    copy_dir_all(&repo_plugins, &installed_plugins).unwrap();
-    copy_dir_all(&repo_npm, &installed_npm).unwrap();
-
-    let _guard = DataDirGuard::set_async(&tmp.path().to_string_lossy()).await;
-    let mut cfg = Config::default();
-    cfg.tools.plugin_signature_validation = false;
-    cfg.tools.plugin_trust_workspace = true;
-    let (registry, warnings) =
-        load_plugin_registry(&cfg).expect("loading installed plugins should not fail");
-    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-
-    let tools = all_plugin_tools(
-        &registry,
-        Arc::new(std::sync::RwLock::new(Config::default())),
-        None,
-    );
-    let tool = tools
-        .iter()
-        .find(|t| t.def().name == "plugin_tools")
-        .expect("plugin_tools should be registered");
-
-    let outcome = tool.run(&ToolContext::new(), serde_json::json!({})).await;
-    assert!(
-        matches!(outcome, ToolOutcome::Success { ref content } if content.contains("KirkForge Native Lint Engines")),
-        "expected plugin_tools to list native lint engines, got {outcome:?}"
-    );
-}
-
 /// Verify the built-in workspace plugin sources are registered by default,
 /// exist on disk, and can be loaded by the plugin host.
 ///
-/// Only `kf-plugin` ships as a shell plugin source. The folded plugins
-/// (`stratum`, `kf-budget`) are compiled-in behind cargo features; their
-/// presence in `enabled_plugins` is governed by `folded_feature_enabled`,
-/// not by `plugin_sources`.
+/// WO 29.9: `kf-plugin` no longer ships a shell source (the TS tree and
+/// `plugins/kf-plugin/` were deleted). It is compiled-in behind the
+/// `kf-plugin-tools` feature; its presence in `enabled_plugins` is governed
+/// by `folded_feature_enabled`, not by `plugin_sources`. The folded plugins
+/// (`stratum`, `kf-budget`) likewise have no shell source.
 // WO 27.2-R2: un-ignored after rewriting stale premise (stratum/kf-budget
 // are compiled-in, not in default plugin_sources).
 #[test]
 fn default_plugin_sources_are_present_and_loadable() {
     let base = Config::default();
 
-    // Only kf-plugin ships as a shell plugin source.
-    let mut shell_sources: Vec<&str> = base
+    // WO 29.9: no default shell plugin sources. kf-plugin/stratum/kf-budget
+    // are all compiled-in behind their respective features; their membership
+    // in `enabled_plugins` is governed by `folded_feature_enabled`.
+    let shell_sources: Vec<&str> = base
         .tools
         .plugin_sources
         .keys()
         .map(|s| s.as_str())
         .collect();
-    shell_sources.sort();
-    assert_eq!(
-        shell_sources,
-        vec!["kf-plugin"],
-        "default plugin_sources should contain only kf-plugin; got {shell_sources:?}"
+    assert!(
+        shell_sources.is_empty(),
+        "default plugin_sources should be empty (all plugins compiled-in); got {shell_sources:?}"
     );
-    // The folded plugins must NOT appear in plugin_sources — they're
-    // compiled-in (feature on) or have no shell fallback (feature off).
-    for folded in &["stratum", "kf-budget"] {
-        assert!(
-            !base.tools.plugin_sources.contains_key(*folded),
-            "folded plugin {folded:?} should not be in default plugin_sources"
-        );
-    }
 
-    // Folded plugins' presence in enabled_plugins tracks the feature flag.
-    for folded in &["stratum", "kf-budget"] {
+    // Each folded plugin's presence in enabled_plugins tracks its feature flag.
+    for folded in &["kf-plugin", "stratum", "kf-budget"] {
         let in_enabled = base.tools.enabled_plugins.iter().any(|n| n == folded);
         assert_eq!(
             in_enabled,
@@ -750,8 +459,8 @@ fn default_plugin_sources_are_present_and_loadable() {
         );
     }
 
-    // Load with signature checks disabled — this test pins source presence
-    // + loadability, not signature verification (covered elsewhere).
+    // Load with signature checks disabled — confirms the default config
+    // produces no warnings and no shell-loaded plugins.
     let mut cfg = Config::default();
     cfg.tools.plugin_signature_validation = false;
     cfg.tools.plugin_trust_workspace = true;
@@ -760,13 +469,8 @@ fn default_plugin_sources_are_present_and_loadable() {
     let warnings = load_workspace_plugins(&mut registry, &cfg);
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
-    // kf-plugin is always shell-loaded from its default source.
-    assert!(
-        registry.find_active_by_name("kf-plugin").is_some(),
-        "kf-plugin should shell-load from default sources"
-    );
-    // Folded plugins are never shell-loaded (compiled-in or no source).
-    for folded in &["stratum", "kf-budget"] {
+    // No folded plugin shell-loads (all compiled-in or no source).
+    for folded in &["kf-plugin", "stratum", "kf-budget"] {
         assert!(
             registry.find_active_by_name(folded).is_none(),
             "folded plugin {folded:?} should not shell-load (compiled-in or no source)"
@@ -812,7 +516,7 @@ fn folded_plugin_shell_fallback_when_feature_off() {
 fn folded_plugin_identification() {
     assert!(crate::session::plugin_tools::is_folded("stratum"));
     assert!(crate::session::plugin_tools::is_folded("kf-budget"));
-    assert!(!crate::session::plugin_tools::is_folded("kf-plugin"));
+    assert!(crate::session::plugin_tools::is_folded("kf-plugin"));
     assert!(!crate::session::plugin_tools::is_folded("custom-plugin"));
 
     assert_eq!(
@@ -825,7 +529,7 @@ fn folded_plugin_identification() {
     );
     assert_eq!(
         crate::session::plugin_tools::folded_feature("kf-plugin"),
-        None
+        Some("kf-plugin-tools")
     );
 }
 

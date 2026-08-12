@@ -77,14 +77,18 @@ fn default_doom_loop_action() -> String {
 }
 
 fn default_plugin_sources() -> HashMap<String, PathBuf> {
-    let mut sources = HashMap::new();
-    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    sources.insert("kf-plugin".into(), base.join("plugins/kf-plugin"));
-    sources
+    // No default filesystem sources: `kf-plugin` is compiled-in behind the
+    // `kf-plugin-tools` feature (WO 29.1), and stratum/kf-budget are folded
+    // behind their own features. The shell-plugin tree that used to live at
+    // `plugins/kf-plugin/` was deleted in WO 29.9. Users can still add custom
+    // v1 (`PluginToolWrapper`) plugin sources via `[plugin_sources]` in config.
+    HashMap::new()
 }
 
 fn default_enabled_plugins() -> Vec<String> {
     let mut names: Vec<String> = default_plugin_sources().keys().cloned().collect();
+    #[cfg(feature = "kf-plugin-tools")]
+    names.push("kf-plugin".into());
     #[cfg(feature = "stratum")]
     names.push("stratum".into());
     #[cfg(feature = "budget")]

@@ -37,40 +37,22 @@ const BASELINE_ENV_VARS: &[&str] = &[
     "LC_MESSAGES",
 ];
 
-/// Return the Node SDK `node_modules/.bin` directories that should be
-/// prepended to the plugin tool PATH.
+/// Return the Node `node_modules/.bin` directories that should be prepended
+/// to the plugin tool PATH.
 ///
-/// Two layouts are supported:
-///   1. Installed/data-directory layout (`~/.local/share/kf-code/npm/...`).
-///   2. Source layout: when the running binary is under `<repo>/target/`,
-///      the workspace sibling `<repo>/npm/kf-plugin/node_modules/.bin`
-///      is also included so development builds resolve `tsc`/`pyright` without
-///      a global install.
+/// Only the data-directory layout (`~/.local/share/kf-code/npm/...`) is
+/// recognised: a user may install a Node-based plugin SDK into the data dir
+/// for v1 (`PluginToolWrapper`) plugin tools to resolve `tsc`/`pyright`
+/// without a global install. The source-layout walk was retired with the
+/// bundled TS SDK (WO 29.9 deleted `npm/kf-plugin/`).
 pub(crate) fn npm_bin_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-
     if let Ok(data_dir) = crate::session::data_dir() {
         let installed = data_dir.join("npm/kf-plugin/node_modules/.bin");
         if installed.is_dir() {
             dirs.push(installed);
         }
     }
-
-    if let Ok(exe) = std::env::current_exe() {
-        // Walk up from the binary looking for a workspace/source-layout Node SDK.
-        // Handles both release/debug binaries at `<repo>/target/{release,debug}/kf-code`
-        // and test binaries at `<repo>/target/{release,debug}/deps/kf-code-<hash>`.
-        let mut current = exe.parent();
-        while let Some(dir) = current {
-            let candidate = dir.join("npm/kf-plugin/node_modules/.bin");
-            if candidate.is_dir() && !dirs.contains(&candidate) {
-                dirs.push(candidate);
-                break;
-            }
-            current = dir.parent();
-        }
-    }
-
     dirs
 }
 
@@ -165,9 +147,9 @@ impl PluginToolWrapper {
             if let Ok(v) = std::env::var(key) {
                 // PATH gets sanitized so plugin wrappers don't fail when the
                 // host launches kf-code with a minimal or world-writable PATH.
-                // Prepend any bundled Node SDK `node_modules/.bin` directories
-                // (data-directory install or source-layout sibling) so Node SDK
-                // tools like tsc and pyright resolve without a global install.
+                // Prepend any data-directory `node_modules/.bin` so Node-based
+                // plugin tools (e.g. a user-installed SDK) resolve `tsc`/
+                // `pyright` without a global install.
                 let value = if *key == "PATH" {
                     let sanitized = crate::session::bash_runner::sanitized_path(&v);
                     let npm_bins = npm_bin_dirs();

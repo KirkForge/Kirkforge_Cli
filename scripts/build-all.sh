@@ -1,23 +1,20 @@
 #!/usr/bin/env bash
-# Build every component of the unified KirkForge workspace.
+# Build the Rust workspace of KirkForge-Cli.
 #
 # Usage:
-#   scripts/build-all.sh           # debug build of Rust + Node SDK
-#   scripts/build-all.sh --release # release build of Rust + Node SDK
-#   scripts/build-all.sh --rust    # build Rust workspace only
-#   scripts/build-all.sh --node    # build Node SDK only
-#   scripts/build-all.sh --test    # run Node SDK tests too
+#   scripts/build-all.sh           # debug build
+#   scripts/build-all.sh --release # release build
 #
 # Produces:
 #   - target/<profile>/kf-code
-#   - npm/kf-plugin/apps/cli/dist/index.js
+#
+# WO 29.9: the Node SDK build path (--node/--test) was removed when the
+# npm/kf-plugin TS tree was deleted. The Rust binary is now the sole
+# build artifact.
 
 set -euo pipefail
 
 PROFILE="debug"
-BUILD_RUST=true
-BUILD_NODE=true
-RUN_NODE_TESTS=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -26,17 +23,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --rust)
-            BUILD_RUST=true
-            BUILD_NODE=false
             shift
             ;;
-        --node)
-            BUILD_RUST=false
-            BUILD_NODE=true
-            shift
-            ;;
-        --test)
-            RUN_NODE_TESTS=true
+        --node|--test)
+            echo "scripts/build-all.sh: '$1' no longer applies (Node SDK deleted, WO 29.9)" >&2
             shift
             ;;
         --help|-h)
@@ -50,29 +40,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-
-if [ "$BUILD_RUST" = true ]; then
-    if [ "$PROFILE" = "release" ]; then
-        echo "==> Building Rust workspace (release)"
-        cargo build --workspace --release --locked
-    else
-        echo "==> Building Rust workspace (debug)"
-        cargo build --workspace --locked
-    fi
-fi
-
-if [ "$BUILD_NODE" = true ]; then
-    echo "==> Building Node SDK"
-    cd "$ROOT/npm/kf-plugin"
-    if [ ! -d node_modules ]; then
-        npm ci
-    fi
-    npm run build
-    if [ "$RUN_NODE_TESTS" = true ]; then
-        echo "==> Running Node SDK tests"
-        npm test
-    fi
+if [ "$PROFILE" = "release" ]; then
+    echo "==> Building Rust workspace (release)"
+    cargo build --workspace --release --locked
+else
+    echo "==> Building Rust workspace (debug)"
+    cargo build --workspace --locked
 fi
 
 echo "==> Done"

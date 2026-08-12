@@ -129,13 +129,6 @@ jobs:
         # Same rationale as Clippy: include the e2e crate in the typecheck.
         run: cargo check --workspace --all-targets --features e2e-tests --locked
 
-      - name: Lint Node SDK (eslint)
-        run: |
-          set -euo pipefail
-          cd npm/kf-plugin
-          npm ci
-          npm run lint
-
   windows:
     runs-on: windows-latest
     needs: fmt

@@ -25,6 +25,49 @@
 - **New deps:** `kf-routing`, `kf-memory-store` (workspace path), `async-trait`, `base64`, `sha2`, `hex`, `tempfile`, `regex`. No new external deps beyond what the workspace already uses elsewhere.
 - Gate green at HEAD `5a6c32d` + this branch: `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check`, `cargo test -p kf-orchestrator` (61/61), `cargo test -p kf-budget-core --test readme_drift` (2/2).
 
+## WO 29.8 — Port health-server (branch `wo29h`: SKIPPED)
+
+- **SKIPPED (not needed for CLI use case):** The Rust daemon
+  (`src/daemon/server.rs`) is a Unix-socket session registry (NDJSON JSON-RPC
+  over `UnixListener`), not an HTTP server. The CLI is process-per-invocation;
+  no Kubernetes liveness or SLO-dashboard consumer needs an HTTP health
+  endpoint. Porting the TS health-server (axum/hyper + JWT auth + rate-limit +
+  Prometheus) would add a heavy HTTP framework to a size-optimized binary for
+  a feature with no consumer. Re-open only if kf-code grows a long-running
+  HTTP-serving mode.
+
+## WO 29.9 — Delete npm/kf-plugin + remove TS CI (branch `wo29h`)
+
+- **DONE:** TS→Rust migration made permanent.
+  - Deleted `npm/kf-plugin/` (~3.2 MB / ~16k LOC TS tree) and the dead
+    `plugins/kf-plugin/` shell-plugin tree (its `tools/*.sh` scripts `exec node`
+    against the deleted TS CLI).
+  - Removed the `Lint Node SDK (eslint)` CI step, the `ci-local.sh` Node SDK
+    pass, the `build-all.sh` Node build path, and the `check-artifact-consistency.sh`
+    `plugins/kf-plugin` dir check.
+  - `wrapper.rs::npm_bin_dirs()` simplified (source-layout walk dropped; only
+    the data-dir layout remains for user-installed Node plugin SDKs).
+  - `src/shared/config/tools.rs`: `kf-plugin` removed from
+    `default_plugin_sources()` (compiled-in needs no filesystem source) and
+    added to `default_enabled_plugins()` behind `kf-plugin-tools`.
+  - `native.rs` deferred messages updated — no Node SDK fallback to point at;
+    verify tools remain stubs pending the WO 29.7 `ModelClient` production impl.
+  - Dead tests deleted (3 `bundled_*` tests referencing the deleted `plugins/`
+    tree, `bundled_node_sdk_tool_executes_via_host`, and
+    `npm_bin_dirs_includes_source_layout_from_target_binary`). Fixed pre-existing
+    `folded_plugin_identification` bug (assertured `kf-plugin` was NOT folded
+    even though the loader listed it as folded since WO 29.1).
+  - Docs synced: TECHNICAL.md (plugin table, feature flags, non-Rust lint
+    para), config.toml.example, Cargo.toml feature comment, run_session.rs /
+    loader.rs doc-comments. WO 28.4 marked superseded.
+  - **Scope creep (mandatory):** resolved pre-existing unresolved merge
+    markers in `Cargo.toml:73` and `Cargo.lock:3750` (left by the WO 29.6/29.7
+    merge). No gate could run until these were fixed. Kept `kf-orchestrator`
+    workspace dep (WO 29.7) and newer thiserror 2.0.20.
+- Gate green: `cargo check --workspace --all-targets`, `cargo clippy
+  --workspace --all-targets -- -D warnings`, `cargo fmt --check`,
+  `scripts/check-artifact-consistency.sh`.
+
 ## WO 29.6 — Port memory-palace to kf-memory-store crate (branch `wo29f`, not yet merged)
 
 - **DONE (R1+R2+R3):** Ported `@kirkforge/memory-palace` to a new `crates/kf-memory-store/` workspace member.

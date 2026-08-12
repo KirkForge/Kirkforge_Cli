@@ -1,5 +1,5 @@
-//! Rust-native security emitter — ports the 14 regex rules from
-//! `npm/kf-plugin/packages/orchestrator/src/security-emitter.ts`.
+//! Rust-native security emitter — ports the 14 regex rules from the former
+//! TS orchestrator's `security-emitter.ts` (deleted in WO 29.9).
 //!
 //! WO 29.2: replaces the `bridge-emitter.ts` Node subprocess. The
 //! verifier bus calls [`emit_security_findings`] directly and gets typed

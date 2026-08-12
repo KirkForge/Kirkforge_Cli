@@ -201,6 +201,20 @@ warning). It is ignored when `--docker` is set (Docker already enforces
 ADR-054 — it needs a BPF compiler that's too heavy for the
 size-optimized binary.
 
+**Security posture — tripwire vs boundary (WO 28.17 R1):** the bash
+deny-list + dangerous-pattern scan (`src/shared/bash_safety.rs`) is a
+**tripwire**, not a boundary. It narrows the obvious-payload surface and
+catches naive evasion (`${IFS}`, `$()`, backticks), but a determined payload
+evades via encoding (base64/hex + eval) or variable indirection — no
+substring/regex blocklist can resolve runtime state. The **boundary** is
+landlock filesystem confinement (caps the blast radius to allow-listed
+paths) plus `--no-network` (`unshare(CLONE_NEWNET)`, blocks exfiltration).
+Do not mistake the deny-list for a boundary: it raises the bar for trivial
+payloads, it does not confine. The only non-theatrical command gate is an
+allowlist (`bash.require_allowlist`, WO 28.17 R2 — deferred pending operator
+input on glob/prefix/regex semantics); an allowlist is the only
+blocklist-shape that isn't theater.
+
 **Operator guidance for unattended runs (WO 27.5 R3):** for headless / CI /
 scheduled-job execution, run with `--harden --no-network`. `--no-network` is
 the only thing that blocks data exfiltration like

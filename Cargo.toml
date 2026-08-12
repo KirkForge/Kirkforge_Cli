@@ -19,6 +19,7 @@ members = [
     "crates/kf-plugin-host",
     "crates/kf-plugin-sdk",
     "crates/kf-rbac",
+    "crates/kf-orchestrator",
     "crates/kf-routing",
     "crates/kf-testdoctor",
     "crates/kf-workflow",
@@ -30,6 +31,7 @@ default-members = [
     "crates/kf-context-index",
     "crates/kf-lsp",
     "crates/kf-memory-store",
+    "crates/kf-orchestrator",
     "crates/kf-plugin-host",
     "crates/kf-plugin-sdk",
     "crates/kf-rbac",
@@ -66,12 +68,9 @@ kf-compress-core = { path = "crates/kf-compress-core" }
 kf-testdoctor = { path = "crates/kf-testdoctor" }
 kf-budget-core = { path = "crates/kf-budget-core" }
 kf-routing = { path = "crates/kf-routing" }
-<<<<<<< HEAD
 kf-rbac = { path = "crates/kf-rbac" }
-||||||| 1320e7b
-=======
 kf-memory-store = { path = "crates/kf-memory-store" }
->>>>>>> wo29f
+kf-orchestrator = { path = "crates/kf-orchestrator" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

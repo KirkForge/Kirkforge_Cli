@@ -6,6 +6,14 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
+## WO 29.3 — Port pure orchestrator modules to Rust (branch `wo29c`, not yet merged)
+
+- **DONE:** New workspace crate `crates/kf-routing/` (~1,750 LOC impl + tests). Ports the orchestrator's pure TS modules: `routing-engine.ts` (FNV-1a vectorizer, cosine, family classifier, recommendation builder), `classifier.ts` + `classifier-nlp.ts` (regex scoring + TF-IDF NLP fallback + archetypes), `correction-loop.ts` + `truth-model.ts` (decide_correction single-precedence truth table), `task-profile.ts` + `cost.ts` (language profiles, provider cost rates), `path-safety.ts` (sha256, sandbox containment, symlink guards, atomic writes). 7 modules, 100 unit tests, deps `serde` + `sha2` + `regex` only.
+- **DEFERRED → WO 29.6/29.7:** `ClassifierMemory.getLearnedExamples` (classifier persistence — not in 29.3 scope; `classify_nlp` builds from static archetypes only). The real `buildCorrectionPrompt` template (lives in correction-core; 29.3 ports the pure decision only; `correction_prompt: Some(marker)` until 29.7 swaps it in).
+- **NOT unified (intentional):** `src/session/access/mod.rs::PathGuard` (async, config/DenyList-coupled, used by live agent loop) vs `kf-routing::path_safety` (sync, pure, artifact-emission policy for orchestrator). Both documented in module docs; unification is a separate refactor.
+- Gate green: `cargo check --workspace --all-targets` (4m25s), `cargo clippy -p kf-routing --all-targets -- -D warnings`, `cargo fmt --check`, `cargo test -p kf-routing` (100 passed). Also bumped `crates/kf-budget-core/README.md` `Tests | 638 → 738` (readme_drift fudge is 2; added exactly 100).
+- **PRE-EXISTING RED (not caused by 29.3):** `cargo test -p kf-budget-core --test adr_xref_drift` → `status_counts_match_index_table_summary` fails: ADR-054 file header says `Accepted (WO 27.1 added landlock — see amendment below)` but the `docs/adr/README.md` index table row says just `Accepted`. Verified by `git stash` + re-run on clean `wo29c` HEAD — fails identically without my changes. Tracked for a separate fix.
+
 ## WO 29.1 — Fold bundled plugin into compiled-in Rust tools (branch `wo29b`, not yet merged)
 
 - **DONE (Phase 1):** Added `kf-plugin-tools` cargo feature (default on). `src/session/plugin_tools/native.rs` implements the 6 plugin tools as compiled-in Rust calls: `doctor` (probes eslint/tsc/ruff/pyright/bandit via `tokio::process::Command --version` + derives languages), `health`, and `tools` run fully native (no shell hop, no Node hop). Registered in `run_session.rs` mirroring the stratum/budget pattern. The `/kf-code` skill is registered inline in `skills.rs::scan_and_load` when the feature is on (the manifest no longer loads). Added a folded-skip guard in `all_plugin_tools` so a data-dir-loaded manifest can't double-register with the compiled-in tools. `docs/TECHNICAL.md` plugin-section updated.

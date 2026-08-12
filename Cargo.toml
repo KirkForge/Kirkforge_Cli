@@ -17,6 +17,7 @@ members = [
     "crates/kf-lsp",
     "crates/kf-plugin-host",
     "crates/kf-plugin-sdk",
+    "crates/kf-routing",
     "crates/kf-testdoctor",
     "crates/kf-workflow",
 ]
@@ -28,6 +29,7 @@ default-members = [
     "crates/kf-lsp",
     "crates/kf-plugin-host",
     "crates/kf-plugin-sdk",
+    "crates/kf-routing",
     "crates/kf-testdoctor",
     "crates/kf-workflow",
     ".",
@@ -59,6 +61,7 @@ kf-bench = { path = "crates/kf-bench" }
 kf-compress-core = { path = "crates/kf-compress-core" }
 kf-testdoctor = { path = "crates/kf-testdoctor" }
 kf-budget-core = { path = "crates/kf-budget-core" }
+kf-routing = { path = "crates/kf-routing" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

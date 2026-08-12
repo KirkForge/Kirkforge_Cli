@@ -567,7 +567,7 @@ biggest target. See [WO 29.0](29.0-wo29-overview.md) for the full phased plan.
 | 29.0 | [Series overview](29.0-wo29-overview.md) | Planned | — | — |
 | 29.1 | [Fold bundled plugin into compiled-in Rust tools](29.1-fold-bundled-plugin.md) | Planned | M | 1 |
 | 29.2 | [Rust security emitter (replace bridge-emitter.ts)](29.2-rust-security-emitter.md) | Planned | S | 1 |
-| 29.3 | [Port pure modules (classifier + routing + correction + truth-model)](29.3-pure-module-ports.md) | Planned | M | 2 |
+| 29.3 | [Port pure modules (classifier + routing + correction + truth-model)](29.3-pure-module-ports.md) | Done (branch `wo29c`) | M | 2 |
 | 29.4 | [Port EventBus + AuditLogger (core-events)](29.4-event-bus-audit-logger.md) | Planned | M | 3 |
 | 29.5 | [Port RBAC + JWT verification (core-rbac)](29.5-rbac-jwt-port.md) | Planned | M | 3 |
 | 29.6 | [Port memory-palace (routing store + adapters)](29.6-memory-palace-port.md) | Planned | M | 3 |

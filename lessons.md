@@ -126,3 +126,52 @@
   formats the whole workspace. I wanted to format only budget.rs/stratum.rs
   and it also touched tests/e2e/harness/mod.rs (incidentally fixing a
   pre-existing fmt gate failure, which I kept as gate hygiene).
+
+# Lessons — WO 29.3 (port pure modules to kf-routing crate)
+
+## What worked
+- One crate (`kf-routing`) for all 5 R-items — modules share types
+  (`DelegationMode`, `VerifierPolicy`); spreading across crates would have
+  created circular deps for the shared enums.
+- `LazyLock<RegexSet>` for MODE_SCORING + archetypes: one compile, fast
+  per-call `matches()`. clippy's `type_complexity` lint forced the right
+  shape — store just the `RegexSet` in one LazyLock and iterate the static
+  `MODE_RULES` slice by index; don't bundle `(RegexSet, Vec<…>)`.
+- Inlining `diff_paths` + `normalize_lexical` (~50 LOC) avoided the
+  `pathdiff` dep. They're ~the pathdiff algorithm; reinventing saved a dep
+  and gave lexical-normalization control for `..`-escape tests.
+- Per-module test-as-I-go: caught the FNV-1a signed-abs subtlety, the
+  array-literal `&[...]` need, the lifetime unification on `diff_paths`,
+  and the `cost / 1000` formula bug before batching.
+
+## Gotchas (fold into AGENTS.md if they recur)
+- **FNV-1a in JS vs Rust:** `Math.imul(h, 16777619)` returns a *signed*
+  i32 and `Math.abs` is taken before `% dim`. In Rust: `hash.wrapping_mul`
+  → `(hash as i32).wrapping_abs() as usize % dim`. Plain `hash % dim` on a
+  u32 gives different bucket indices when the high bit is set — silent
+  divergence from the TS vectorizer.
+- **`std::path::is_absolute(&str)` doesn't exist** — it's a method on
+  `Path`: `Path::new(s).is_absolute()`.
+- **`Path::join` does NOT normalize `..`.** TS's `path.resolve` does. For
+  path-traversal safety, you must lexically normalize *before* containment
+  checks — otherwise `foo/../../bar` slips through `safe_relative_path`.
+- **readme_drift test counts ALL `#[test]` under `crates/`**, not just
+  kf-budget-core's. Adding ~100 tests in a new crate requires bumping the
+  README's `| Tests | N passing |` row by the same amount (fudge is 2).
+- **`adr_xref_drift::status_counts_match_index_table_summary` is RED on
+  the wo29c branch HEAD** — pre-existing (ADR-054 landlock header vs
+  index table). Not caused by 29.3; verified by `git stash` + retest.
+
+## Ponytail
+- Considered `pathdiff`, `tempfile`, `once_cell` deps. Used none in prod:
+  inlined `diff_paths` (~25 LOC), `std::sync::LazyLock` (rust-version is
+  1.88), `tempfile` only as dev-dep. Smaller dependency surface.
+- Considered pre-compiling a `Regex` per `ModeRule`. Used `RegexSet`
+  (one automaton for all 8 patterns) — faster and simpler.
+- Considered unifying `PathGuard` (src/session/access) with the new
+  `path_safety`. Didn't — different shapes (async/sync, coupled/pure);
+  unification is its own refactor. Documented as intentional overlap.
+- **`lessons.md` is gitignored by .gitignore default BUT tracked in this
+  repo** (a prior session did `git add -f`). `write` overwrites — use
+  `cat >>` to append, not `write`, when extending a tracked lessons.md.
+  (I lost the WO 20 lessons on first pass and had to `git checkout`.)

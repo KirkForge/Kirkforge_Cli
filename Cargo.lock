@@ -2098,6 +2098,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kf-routing"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "kf-testdoctor"
 version = "0.1.0"
 dependencies = [

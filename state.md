@@ -6,22 +6,14 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
-## E2E binary-spawn hang fix session (2026-08-12) — WO 27.2 RESOLVED
+## Session 2026-08-12 — ADR drift gate fix (branch `adr-fix`, worktree `.worktrees/adr`)
 
-Branch `e2e-debug` (worktree `.worktrees/e2e`). The 7 `#[ignore]`'d binary-spawn e2e scenarios in `tests/e2e/scenarios/` now pass (~5s total for all 7). Root causes found via `eprintln!` checkpoint instrumentation (the prior "binary never reaches adapter / ZERO output" diagnosis was a false negative — tracing writes to the log FILE by default, not stderr, so the captured stderr was empty while the binary worked past the real block).
-
-**Two bugs fixed:**
-1. **Context-index build wedges non-interactive startup** (`src/main/run_session.rs`): `freeze_launch_sandbox` sets `sandbox_dir = cwd`, then `ContextIndex::index_dir` runs an unbounded `WalkDir` + tree-sitter parse over it (645 indexable files in this repo took >90s). Now gated on `!non_interactive` — scripted/CI runs skip the index (the in-process equivalent never built one either). Interactive TUI runs keep the index.
-2. **Daemon inherits parent's piped stdio** (`src/daemon/client.rs::start_daemon` + `src/daemon/mod.rs::daemonize`): the auto-started `kf-code daemon --foreground` grandchild held the parent's stdout/stderr write-ends, so after the parent exited, any piped caller (CI, shell pipelines, the test harness) hung forever on `read_to_end`. Both spawn sites now set stdin/stdout/stderr to `Stdio::null()`.
-
-**Harness hardening** (`tests/e2e/harness/mod.rs`): post-exit pipe drain bounded by a 5s `read_with_deadline` (so any future fd-inheritance regression surfaces as a named `TimedOut` instead of an infinite hang); seed `[adapter_routing] "e2e-" = "Ollama"` in the isolated config (mirrors the in-process `wiremock_integration.rs`, fixes the routing mismatch that 404'd). The 7 `#[ignore]` reasons updated from "hangs" (now false) to "slow binary-spawn; opt-in via `--ignored`".
-
-**Precondition fix:** the worktree HEAD (`7a0de4d`, WO 29.7 merge) committed git conflict markers in `Cargo.toml` + `Cargo.lock` (same class as the 5a6c32d incident in lessons.md). Resolved by taking the wo29g side (`kf-orchestrator` workspace dep + `thiserror 2.0.20`).
-
-**DEFERRED (disclosed):** the underlying `index_dir` pathological slowness on large repos (gap #27 in TECHNICAL.md) is *masked*, not fixed — interactive TUI users on big repos still pay it. Remaining work: (a) profile `index_dir`/`resolve_imports`/`resolve_call_edges` (suspected O(n²)); (b) add a `.gitignore`/`target`/`node_modules` filter to the `WalkDir` (it currently walks everything). Tracked here + gap #27.
-
-### Pending
-- Decide whether the 7 e2e scenarios should drop `#[ignore]` entirely (they're fast now) or stay opt-in for the binary-spawn cost. Currently kept `#[ignore]` to preserve the `required-features = ["e2e-tests"]` + `--ignored` opt-in contract.
+- **Task:** make `cargo test -p kf-budget-core --test adr_xref_drift` green (4/4); fix ADR-054 status drift; check all ADRs + TECHNICAL.md count.
+- **Finding (honest):** the ADR-054 header↔README status drift the workorder cited was **already fixed** in a prior merge — file header and README index row are byte-identical (`Accepted (WO 27.1 added landlock — see amendment below)`). No ADR content edit was needed.
+- **Real blocker (pre-existing, scope creep — disclosed):** the WO 29.7 merge (`7a0de4d`) left committed merge-conflict markers in `Cargo.toml` (workspace.dep `kf-orchestrator`) and `Cargo.lock` (`thiserror` 2.0.19↔2.0.20). `cargo` could not parse the workspace, so the gate was unrunnable. `git status` showed clean because the broken file was the committed state (same regression class as the WO 29.6 one noted below). Resolved: kept `kf-orchestrator` dep (crate exists, intended by merge) + took `thiserror 2.0.20`. This finishes the cleanup the WO 29.7 CHANGELOG entry had already claimed.
+- **Doc drift fixed:** `docs/TECHNICAL.md` ADR count 89 → 90 (matches `ls docs/adr/*.md | grep -v README | wc -l`). Not caught by `adr_xref_drift` (the test enforces header↔index agreement, not the prose count).
+- **Gate:** `cargo test -p kf-budget-core --test adr_xref_drift` → 4/4 PASS.
+- **Pending:** none from this task. Note for future merges: the WO 29.x merge series keeps re-introducing committed conflict markers (29.6, then 29.7) — worth a pre-commit hook that rejects `^<<<<<<<`/`^>>>>>>>` in tracked files.
 
 ## WO 29.7 — Port orchestrator to kf-orchestrator crate (branch `wo29g`, not yet merged)
 
@@ -41,49 +33,6 @@ Branch `e2e-debug` (worktree `.worktrees/e2e`). The 7 `#[ignore]`'d binary-spawn
 - **Deviation disclosed (DEFERRED per workorder):** R6 SLO monitor (`slo-monitor.ts`) — workorder explicitly defers; low CLI value. R7 security-emitter integration — tracked in WO 29.9 per state.md.
 - **New deps:** `kf-routing`, `kf-memory-store` (workspace path), `async-trait`, `base64`, `sha2`, `hex`, `tempfile`, `regex`. No new external deps beyond what the workspace already uses elsewhere.
 - Gate green at HEAD `5a6c32d` + this branch: `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check`, `cargo test -p kf-orchestrator` (61/61), `cargo test -p kf-budget-core --test readme_drift` (2/2).
-
-## WO 29.8 — Port health-server (branch `wo29h`: SKIPPED)
-
-- **SKIPPED (not needed for CLI use case):** The Rust daemon
-  (`src/daemon/server.rs`) is a Unix-socket session registry (NDJSON JSON-RPC
-  over `UnixListener`), not an HTTP server. The CLI is process-per-invocation;
-  no Kubernetes liveness or SLO-dashboard consumer needs an HTTP health
-  endpoint. Porting the TS health-server (axum/hyper + JWT auth + rate-limit +
-  Prometheus) would add a heavy HTTP framework to a size-optimized binary for
-  a feature with no consumer. Re-open only if kf-code grows a long-running
-  HTTP-serving mode.
-
-## WO 29.9 — Delete npm/kf-plugin + remove TS CI (branch `wo29h`)
-
-- **DONE:** TS→Rust migration made permanent.
-  - Deleted `npm/kf-plugin/` (~3.2 MB / ~16k LOC TS tree) and the dead
-    `plugins/kf-plugin/` shell-plugin tree (its `tools/*.sh` scripts `exec node`
-    against the deleted TS CLI).
-  - Removed the `Lint Node SDK (eslint)` CI step, the `ci-local.sh` Node SDK
-    pass, the `build-all.sh` Node build path, and the `check-artifact-consistency.sh`
-    `plugins/kf-plugin` dir check.
-  - `wrapper.rs::npm_bin_dirs()` simplified (source-layout walk dropped; only
-    the data-dir layout remains for user-installed Node plugin SDKs).
-  - `src/shared/config/tools.rs`: `kf-plugin` removed from
-    `default_plugin_sources()` (compiled-in needs no filesystem source) and
-    added to `default_enabled_plugins()` behind `kf-plugin-tools`.
-  - `native.rs` deferred messages updated — no Node SDK fallback to point at;
-    verify tools remain stubs pending the WO 29.7 `ModelClient` production impl.
-  - Dead tests deleted (3 `bundled_*` tests referencing the deleted `plugins/`
-    tree, `bundled_node_sdk_tool_executes_via_host`, and
-    `npm_bin_dirs_includes_source_layout_from_target_binary`). Fixed pre-existing
-    `folded_plugin_identification` bug (assertured `kf-plugin` was NOT folded
-    even though the loader listed it as folded since WO 29.1).
-  - Docs synced: TECHNICAL.md (plugin table, feature flags, non-Rust lint
-    para), config.toml.example, Cargo.toml feature comment, run_session.rs /
-    loader.rs doc-comments. WO 28.4 marked superseded.
-  - **Scope creep (mandatory):** resolved pre-existing unresolved merge
-    markers in `Cargo.toml:73` and `Cargo.lock:3750` (left by the WO 29.6/29.7
-    merge). No gate could run until these were fixed. Kept `kf-orchestrator`
-    workspace dep (WO 29.7) and newer thiserror 2.0.20.
-- Gate green: `cargo check --workspace --all-targets`, `cargo clippy
-  --workspace --all-targets -- -D warnings`, `cargo fmt --check`,
-  `scripts/check-artifact-consistency.sh`.
 
 ## WO 29.6 — Port memory-palace to kf-memory-store crate (branch `wo29f`, not yet merged)
 

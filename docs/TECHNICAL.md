@@ -982,7 +982,7 @@ not the root binary.
 
 ## ADRs
 
-89 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+90 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
 execution replay (039), VFS minification (053), coverage-gate threshold

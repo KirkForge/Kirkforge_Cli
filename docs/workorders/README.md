@@ -551,3 +551,30 @@ See [WO 28.0](28.0-wo28-overview.md) for the full plan + ordering.
 | 28.15 | [Memory semantic dedup](28.15-memory-semantic-dedup.md) | Planned | M |
 | 28.16 | [Anthropic computer_use beta](28.16-anthropic-computer-use-beta.md) | Planned | L |
 | 28.17 | [Bash evasion tripwire posture (H3)](28.17-bash-evasion-tripwire-posture.md) | Planned | S |
+
+### Series 29 — TS→Rust SDK Migration (Eliminate the Node Runtime)
+
+Series 29 migrates the entire `npm/kf-plugin/` TypeScript plugin SDK to Rust.
+Three exhaustive inventory subagents (2026-08-12) mapped every TS function/type/
+class + the Rust plugin architecture. Key findings: NO JSON-RPC exists (plugins
+are env-var + exit-code + stdout); `core-sandbox` is DEAD (delete, don't port);
+the Rust host calls exactly ONE TS path (bridge-emitter.ts NDJSON); ~1700 LOC of
+pure modules are ready for direct translation; the orchestrator (7955 LOC) is the
+biggest target. See [WO 29.0](29.0-wo29-overview.md) for the full phased plan.
+
+| WO | Title | Status | Est | Phase |
+|----|-------|--------|-----|-------|
+| 29.0 | [Series overview](29.0-wo29-overview.md) | Planned | — | — |
+| 29.1 | [Fold bundled plugin into compiled-in Rust tools](29.1-fold-bundled-plugin.md) | Planned | M | 1 |
+| 29.2 | [Rust security emitter (replace bridge-emitter.ts)](29.2-rust-security-emitter.md) | Planned | S | 1 |
+| 29.3 | [Port pure modules (classifier + routing + correction + truth-model)](29.3-pure-module-ports.md) | Planned | M | 2 |
+| 29.4 | [Port EventBus + AuditLogger (core-events)](29.4-event-bus-audit-logger.md) | Planned | M | 3 |
+| 29.5 | [Port RBAC + JWT verification (core-rbac)](29.5-rbac-jwt-port.md) | Planned | M | 3 |
+| 29.6 | [Port memory-palace (routing store + adapters)](29.6-memory-palace-port.md) | Planned | M | 3 |
+| 29.7 | [Port orchestrator delegation + decompose + correction loop](29.7-orchestrator-port.md) | Planned (dep: 29.3+29.4+29.6) | L | 4 |
+| 29.8 | [Port health-server (HTTP + auth + Prometheus)](29.8-health-server-port.md) | Planned (dep: 29.4+29.5) — OPTIONAL | M | 4 |
+| 29.9 | [Delete npm/kf-plugin/ + remove TS CI + deps](29.9-delete-npm-cleanup.md) | Planned (LAST) | S | 5 |
+
+**9 sub-workorders.** Phase 1 (29.1-29.2) ships independently — eliminates the
+bundled-plugin Node hop + the last Rust→TS call path. Phase 2-3 port the
+foundation. Phase 4 is the orchestrator. Phase 5 deletes everything TS.

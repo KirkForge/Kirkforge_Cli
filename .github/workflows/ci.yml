@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Lint repo files (conflict markers + TOML validity)
+      - name: Lint repo files (conflict markers + TOML validity + bench schema)
         run: |
           set -euo pipefail
           # 1. No unresolved git merge-conflict markers in ANY tracked file.
@@ -33,8 +33,11 @@ jobs:
             echo "::error::Unresolved git merge-conflict markers in tracked files."
             exit 1
           fi
-          # 2. Every benches/tasks/*.toml must parse as valid TOML.
-          #    Catches the broken-TOML regression directly.
+          # 2. Every benches/tasks/*.toml must parse as valid TOML AND carry
+          #    the required keys (WO 28.11 R2). The required-key set is
+          #    pinned from real tasks (`name`, `difficulty`, `prompt`) —
+          #    ponytail: heuristic ceiling; bump this set when a legitimate
+          #    task lands without one of these keys (none today).
           python3 - <<'PY'
           import pathlib, sys
           try:
@@ -43,18 +46,25 @@ jobs:
               print("::error::tomllib unavailable (need Python >=3.11 on the runner)")
               sys.exit(1)
           root = pathlib.Path("benches/tasks")
+          required = ("name", "difficulty", "prompt")
           bad = []
+          checked = 0
           if root.is_dir():
               for f in sorted(root.glob("*.toml")):
+                  checked += 1
                   try:
-                      tomllib.loads(f.read_text(encoding="utf-8"))
+                      data = tomllib.loads(f.read_text(encoding="utf-8"))
                   except Exception as e:
-                      bad.append((str(f), str(e)))
+                      bad.append((str(f), f"Invalid TOML: {e}"))
+                      continue
+                  missing = [k for k in required if k not in data]
+                  if missing:
+                      bad.append((str(f), f"missing required keys: {missing}"))
           if bad:
               for f, e in bad:
-                  print(f"::error file={f}::Invalid TOML: {e}")
+                  print(f"::error file={f}::{e}")
               sys.exit(1)
-          print("benches/tasks/: all TOML files parse OK")
+          print(f"benches/tasks/: {checked} TOML files parse OK with required keys {required}")
           PY
 
       - name: Check artifact/install/release consistency
@@ -97,6 +107,9 @@ jobs:
               --config 'profile.default.timeout-period="60s"' \
               --config 'profile.default.fail-timeout="10s"'
           else
+            # --workspace no longer picks up the e2e suite since WO 28.10
+            # gated it behind the `e2e-tests` feature. The dedicated `e2e`
+            # job below runs it with the feature on every push to dev.
             cargo nextest run --locked --workspace --no-fail-fast \
               --config 'profile.default.timeout-period="60s"' \
               --config 'profile.default.fail-timeout="10s"'
@@ -108,10 +121,13 @@ jobs:
           fi
 
       - name: Run Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        # --features e2e-tests keeps the gated e2e crate under the lint
+        # gate so it cannot silently rot behind the feature flag (WO 28.10).
+        run: cargo clippy --all-targets --features e2e-tests --locked -- -D warnings
 
       - name: Typecheck all targets
-        run: cargo check --workspace --all-targets --locked
+        # Same rationale as Clippy: include the e2e crate in the typecheck.
+        run: cargo check --workspace --all-targets --features e2e-tests --locked
 
       - name: Lint Node SDK (eslint)
         run: |
@@ -146,6 +162,10 @@ jobs:
 
       - name: Run tests on Windows (nextest; 60s per-test timeout)
         shell: bash
+        # `--workspace` no longer picks up the e2e suite since WO 28.10
+        # gated it behind `required-features = ["e2e-tests"]`. The e2e
+        # binary-spawn scenarios were the historic Windows-flake source;
+        # they now run only in the dedicated `e2e` job below (Linux).
         run: |
           cargo nextest run --locked --workspace --no-fail-fast \
             --config 'profile.default.timeout-period="60s"' \
@@ -153,6 +173,38 @@ jobs:
 
       - name: Build release binary on Windows
         run: cargo build --release --locked
+
+  # Dedicated e2e suite (WO 28.10). The `e2e` integration test crate is
+  # feature-gated (`required-features = ["e2e-tests"]`) so the default
+  # `--workspace` runs above skip it. This job turns the feature on so
+  # the full e2e suite still runs on every push to dev/main/merge —
+  # without making every other job pay the compile + run cost.
+  e2e:
+    runs-on: ubuntu-latest
+    needs: quality
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: e2e
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run e2e suite
+        run: |
+          cargo nextest run --locked --test e2e --features e2e-tests --no-fail-fast \
+            --config 'profile.default.timeout-period="60s"' \
+            --config 'profile.default.fail-timeout="10s"'
 
   integration:
     runs-on: ubuntu-latest

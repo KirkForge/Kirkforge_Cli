@@ -239,11 +239,17 @@ wiremock = "0.6"
 [[test]]
 name = "e2e"
 path = "tests/e2e/main.rs"
+required-features = ["e2e-tests"]
 
 [features]
 default = ["stratum", "budget", "kf-plugin-tools"]
 stratum = ["dep:kf-compress-core"]
 budget = ["dep:kf-budget-core"]
+# e2e-tests: gate the slow e2e integration suite (tests/e2e/) behind an
+# opt-in feature so `cargo test --workspace` / `cargo check --all-targets`
+# skip it by default (WO 28.10). CI runs it in a dedicated job with
+# --features e2e-tests.
+e2e-tests = []
 # kf-plugin-tools: fold the bundled `plugins/kf-plugin/` shell scripts into
 # compiled-in Rust tool impls (WO 29.1). doctor/health/tools run natively;
 # verify/verify-workspace/audit-verify defer to WO 29.7 (Node SDK fallback).

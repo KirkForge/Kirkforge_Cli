@@ -90,6 +90,42 @@ if [ "$MISSING" -eq 0 ]; then
   PASS=$((PASS+1))
 fi
 
+# 9. bench task count matches docs/TECHNICAL.md benchmark table rows
+# (WO 28.11 R1). The README count check (#3) already covers README.md;
+# this guards the per-task row table in TECHNICAL.md against silent
+# add/rename drift.
+TECHNICAL_ROWS=$(grep -cE '^\| `[^`]+\.toml` \|' docs/TECHNICAL.md 2>/dev/null || echo 0)
+if [ "$TECHNICAL_ROWS" -eq "$EXPECTED_BENCHES" ]; then
+  echo "✓ TECHNICAL.md bench row count ($TECHNICAL_ROWS) matches directory"
+  PASS=$((PASS+1))
+else
+  echo "✗ TECHNICAL.md bench row count mismatch (rows=$TECHNICAL_ROWS, files=$EXPECTED_BENCHES)"
+  FAIL=$((FAIL+1))
+fi
+
+# 10. dead/retired identifier firewall extends to src/ + crates/ (WO 28.12).
+# Existing checks #2/#5/#6 cover scripts/, .github/, install.sh, docs/RELEASE.md.
+# This check covers ACTIVE SOURCE. To avoid false positives on historical
+# prose (comments, doc-tests, string literals, test fn names that mention a
+# retired name), the grep is restricted to identifier positions that are
+# unambiguous live refs: `use`/`mod`/`extern crate` declarations, and
+# Cargo.toml dep entries under crates/.
+# `stratum` is intentionally NOT in the dead set — it is a live feature.
+DEAD_IDENTS='plugin3|kfd|kf_code_video|kf_code_draw|kf_code_plugin'
+DEAD_CARGO_NAMES='plugin3|kfd|kf-code-video|kf-code-draw|kf-code-plugin'
+LIVE_HITS=$(grep -rEn "^[[:space:]]*(use|mod|extern[[:space:]]+crate)[[:space:]]+(${DEAD_IDENTS})\b" src/ crates/ 2>/dev/null | wc -l | tr -d ' ' || true)
+CARGO_HITS=$(find crates -name Cargo.toml -exec grep -EHn "^(${DEAD_CARGO_NAMES})[[:space:]]*=" {} \; 2>/dev/null | wc -l | tr -d ' ' || true)
+TOTAL_DEAD=$((LIVE_HITS + CARGO_HITS))
+if [ "$TOTAL_DEAD" -eq 0 ]; then
+  echo "✓ no live retired-identifier refs in src/ or crates/"
+  PASS=$((PASS+1))
+else
+  echo "✗ $TOTAL_DEAD live retired-identifier refs in src/ or crates/ ($LIVE_HITS use/mod, $CARGO_HITS Cargo deps):"
+  grep -rEn "^[[:space:]]*(use|mod|extern[[:space:]]+crate)[[:space:]]+(${DEAD_IDENTS})\b" src/ crates/ 2>/dev/null || true
+  find crates -name Cargo.toml -exec grep -EHn "^(${DEAD_CARGO_NAMES})[[:space:]]*=" {} \; 2>/dev/null || true
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 if [ "$FAIL" -gt 0 ]; then

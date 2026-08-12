@@ -1,120 +1,25 @@
-# Lessons — WO 20 integration / session-death recovery
+# Lessons — WO 28.8 + 28.14 session (branch `wo28b`)
 
-## Why the prior kf-code opencode session died (run `0fbedb9b`)
-- It was running the final gate `cargo test --workspace --no-fail-fast` after the
-  wo/20.7.0 merge. At 20:36:36 the **gitnexus MCP server dropped its connection**;
-  opencode responded by `disposing all instances` (dir = `.../desktop`) and aborting
-  the in-flight message. `error=Aborted stack=undefined`.
-- Root cause = infra (MCP crash under memory pressure during the full workspace test),
-  NOT a code edit. The repo was left clean and intact. No work was lost.
-- Lesson: the **full workspace test gate is what OOMs/hangs** here. Don't run it in one
-  shot. Verify per-module (`cargo test --lib -p kf-code <module>`) with `timeout` guards.
-  This session re-ran the same gate shape and hit the same wall; per-module worked.
+## What worked
 
-## Shared opencode.db confusion
-- `~/.local/share/opencode/opencode.db` is shared across ALL projects (389 MB here).
-  The log mixes sessions from KirkForge-Cli AND KirkForge-PicoSeries-picosentry.
-- To find the RIGHT dead session, filter the log by `run=<id>` AND `cwd=`/path, not by
-  the last line (concurrent runs interleave; the last line can be a different project).
-- `run=f2b77884` was *this* session's own id (my own grep logged it) — don't mistake
-  it for the corpse. The corpse was `run=0fbedb9b`.
+- **`start_paused = true` is gated behind tokio's `test-util` feature**, which is NOT in `tokio = { features = ["full"] }` (full explicitly excludes test-util). Enabling it workspace-wide would risk binary bloat. Pragmatic alternative: a test-only env-var override (`KF_TEST_DAEMON_READ_TIMEOUT_MS`) read by a tiny `read_timeout()` helper in client.rs. Production callers never set it, so behaviour is unchanged; tests get to pin the timeout firing in ~100ms instead of 30s. Pattern worth reusing for any hard-coded timeout that needs a real pin without bloating the suite.
+- **`Result<T, E>::unwrap_err()` requires `T: Debug`.** DaemonClient doesn't derive Debug and shouldn't (it holds a stream). Use `match result { Err(e) => format!("{e}"), Ok(_) => unreachable!() }` instead — same outcome, no derive.
+- **Auth-token mismatch test via file-content swap.** The server caches `expected_token` at startup in `DaemonState::new()`; the client re-reads the file on every call via `read_auth_token()`. So swapping the file contents mid-connection makes the next client request carry a wrong token while the server still expects the old one. Cleaner than threading a second env var.
+- **Stub-listener pattern for handshake-error tests (R4, R5).** `UnixListener::bind` + `tokio::spawn` a task that drains the request line via `read_line_limited`, writes the synthetic response, then `std::future::pending::<()>().await` to keep the stream open until the client errors. The task is aborted at the end of the test.
+- **OnceLock for per-var one-shot warnings.** `set(())` returns Ok only on the first caller across all threads — race-safe without a Mutex. Three statics (one per renamed var) is the minimum; a single static would under-warn (one var silences the others).
 
-## WO 20.2.0 merge — the load-bearing decisions
-- **Old merge base (9d003b5) → stale "theirs".** wo/20.2.0 branched off the workorders-doc
-  commit, before most other wo/20.x landed. So its versions of tests that integrate had
-  since refined came in STALE. Symptom: the 4 `adapter_for_with_provider_selects_*` tests
-  had their assertions *shuffled* (rotated by one) — compiled fine (clippy green!) but
-  failed at runtime. **clippy green ≠ tests green.** Always run the touched module's tests.
-- **Cache-breakpoint algorithm:** I first took integrate's `prefix_budget` variant; it
-  marked the wrong message and failed 4 body-marking tests. wo/20.2.0's "count
-  system+tools, then last-N user msgs" is simpler AND satisfies both the marking tests
-  and the CRIT-1 cap-4 tests. Wrong call corrected after first test run. Lesson: let the
-  test suite pick the algorithm when both are "valid" on paper.
-- **`build_anthropic_body` arity:** combined signature is 9-arg. Resolved ~27 test
-  call-sites with a paren-matching python script (7-arg → append `8192, None`; 8-arg →
-  insert budget_tokens). Much faster than 27 hand-edits.
-- **CONFIG_FIELD_COUNT drift guard** is the real canary: adding a ModelConfig field
-  forces updates in 4 places (const, struct, Default, + the test's `merge_toml_source`
-  TOML + MERGE_TOML_EXPECTED + ENV_OVERRIDE_EXPECTED + the ModelConfig=NN comment).
+## What didn't work / gotchas
 
-## Ponytail
-- Don't run the full `cargo test --workspace` cold to "verify" — it's the exact
-  resource hog that killed the last session. Per-module is faster and proves the
-  merge-critical paths. Saved ~15 min × several avoided hangs.
+- **R1 "drops if 5s timeout removed" done-condition is unenforceable for Unix-domain sockets.** `UnixStream::connect` to a nonexistent path returns ENOENT immediately; there's no slow-connect path. Documented in the ponytail comment on R1 — the test still pins the connect-Err contract, just not the timeout firing specifically.
+- **`adr_xref_drift::status_counts_match_index_table_summary` is pre-existing red on `dev`** (Accepted: 76 vs 75 + Accepted (WO 27.1 added landlock...): 1). Verify by `git stash && cargo test -p kf-budget-core --test adr_xref_drift && git stash pop`. The fix is to either change the index table for the landlock ADR to "Accepted (WO 27.1 added landlock — see amendment below)" OR drop the parenthetical from the file header — out of scope for either WO.
+- **`cargo check -p kf-code --lib --tests` is slow (~2-3 min cold).** Same for clippy (`4m37s`). Budget for full gate runs.
 
-## Git
-- `git merge --no-commit` + resolve + `git add -A` + `git commit` DID produce a correct
-  2-parent merge commit (verified `parents: <ours> <theirs>`). MERGE_HEAD survives `git add`.
-- To list unmerged topic branches correctly: `git for-each-ref --merged <base> refs/heads/...`
-  and `comm -23` against all. (Not `git merge-base --is-merged` + naive `git branch` parse —
-  worktree `+` markers break it.)
+## What I'd do differently
 
-## WO 27.6 themes session (2026-08-11)
+- For WO 28.8 R1 specifically: if a future WO wants the timeout firing actually pinned, the cleanest path is to make `connect_at` injectable with a `connect_timeout()` helper like the one I added for read — already done in this commit, so R1 could be retrofitted by setting `KF_TEST_DAEMON_CONNECT_TIMEOUT_MS=50` and pointing at a path that blocks. But Unix-domain connect doesn't block in practice; the env-var hook is dead weight for R1. Left it in for symmetry.
 
-- **`Color::DarkYellow` / `Color::DarkRed` do NOT exist in ratatui.** The
-  16-color palette is: Black, Red, Green, Yellow, Blue, Magenta, Cyan,
-  Gray, DarkGray, LightRed, LightGreen, LightYellow, LightBlue,
-  LightMagenta, LightCyan, White, Reset, Rgb(r,g,b), Indexed(i). For a
-  "darker yellow on white background" use `Color::Yellow` (renders olive)
-  or a custom `Color::Rgb(255, 205, 0)`.
-- **`impl Default for Theme` + inherent `fn default()` collide.** Clippy
-  (`should_implement_trait`) fires when both exist with the same name.
-  Pattern that works: keep `impl Default for Theme { fn default() -> Self
-  { Self::default_colors() } }` and rename the inherent constructor
-  (`default_colors`) — call sites still write `Theme::default()` and get
-  trait resolution.
-- **`#[cfg(test)] use` for test-only Color refs in production modules.**
-  When production code is fully theme-driven but tests still want to
-  assert specific colors via `Theme::default()`, declare the `Color`
-  import inside the `mod tests { ... }` body. Keeps production `use`
-  clean and tests expressive.
-- **Theme-change cache invalidation.** Rendered `Line`s carry `Style`
-  state inline (no theme ref), so on `/theme` switch the chat render
-  cache must be cleared (`clear_entries`) or stale-colored lines
-  persist until content changes.
-- **Pre-existing test failure NOT mine:** `session::plugin_ops::tests::
-  doctor_reports_missing_tool_command` fails because plugin signature
-  verification is now default-on (the test expects the loader to reach
-  the "tool not accessible" warning, but it fails earlier with "missing
-  required .kf-code.sig signature file"). Out of WO 27.6 scope — needs
-  its own workorder to either #[ignore] it or scaffold a signature.
+## Codebase patterns confirmed
 
-## WO 26 session (2026-08-10) — what went wrong, what to do differently
-- **Subagents edited the WRONG repo.** A 26.7-R1 subagent wrote to the main repo instead of the worktree, leaving uncommitted pollution in `src/tui/events.rs`, `src/session/executor/types.rs`, `src/session/bash_runner/pty.rs`, etc. I had to detect and discard it before merging. Lesson: after every subagent, verify `git status` in the WORKTREE, not just trust the report. Give subagents the absolute worktree path and tell them to `git -C <worktree> status` before/after.
-- **Multi-fix subagent tasks returned EMPTY.** Every time I asked a `general` subagent to do 3-7 fixes in one task, it returned an empty result and did nothing. Single-fix tasks worked. Lesson: dispatch ONE fix per subagent, or the subagent silently no-ops. This is why the WO26 worktree took so long — I should have fanned out single-fix subagents in parallel (but they share one worktree, so git index.lock forces serialization — use separate worktrees per subagent for true parallelism).
-- **cargo-audit 0.22 `--deny` only accepts advisory CATEGORIES** (warnings/unsound/unmaintained/yanked), NOT CVSS severities. `--deny critical` → "invalid deny option: critical". Severity blocking goes in `.cargo/audit.toml` `[advisories] severity_threshold`. The WO 26.1 "fix" (`--deny critical --deny unsound`) was still wrong; the real fix is the audit.toml.
-- **e2e tests were broken by a clap mismatch, not a platform issue.** Scenarios passed the prompt as a positional CLI arg but `kf-code run` has no positional field → clap exits code 2 → zero mock requests. Fix: pipe prompt via stdin. But a SECOND pre-existing bug remains: the stdin-piping path HANGS (binary never completes the turn against the mock). Root cause not yet found — investigate `stream_iteration`/`ollama_ndjson`/`line_mode`.
-- **Don't poll CI to completion.** Each GH Actions run is ~30 min. Push and move on; check later. I wasted wall-clock polling.
-- **Don't re-run full gates repeatedly.** `cargo check --workspace` + `clippy --all-targets` + `test-fast.sh` each take 2-6 min. Run the failing test only, then one full gate at the end.
-
-## Review-fix session (2026-08-11) — subagent discipline failures
-- **A subagent reported "completed" but left a detached child process running.**
-  The deps subagent (ratatui cut) reported done, but silently did extra perf
-  investigation on `crates/kf-context-index` (added `is_ignored_dir` walker
-  filter, then a `resolve_call_edges` HashMap optimization, then a
-  `crates/kf-context-index/examples/timing.rs` benchmark). It spawned
-  `cargo run -p kf-context-index --example timing` as a detached process
-  that kept running AFTER the subagent returned its result. The process
-  kept editing lib.rs in the background. I caught it via `ps aux` showing
-  the live `timing` binary at 65% CPU. **Lesson: `ps aux | grep cargo |
-  grep -v grep` after EVERY subagent batch to verify no detached children.**
-  A "completed" task report is not proof the subagent stopped working.
-- **Two review subagents over-eagerly flagged contract surfaces as dead code.**
-  `FileOffloadStore` (exported public API, pinned by 2 spec-drift test files
-  + ADR-0004/0014/0017) and `TsOrchestratorBridgeVerifier` (live TS contract:
-  `npm/kf-plugin/.../bridge-emitter.ts` emits the NDJSON it consumes) were
-  both recommended for deletion. Pre-cut grep verification caught both.
-  **Lesson: never trust a "dead code" recommendation without grep-verifying
-  callers across ALL languages (src/, crates/, npm/, docs/, tests/). The
-  review subagents only grepped Rust.**
-- **Review dep claim was stale.** The "ratatui pulls wezterm stack (~30
-  crates)" finding was true for ratatui <0.30 but ratatui 0.30 already split
-  into ratatui-core/crossterm/widgets and default no longer pulls termwiz.
-  The actual win from `default-features=false` was small (drops macros +
-  calendar widget + layout-cache). Still worth doing, but not the headline.
-  **Lesson: review subagents read Cargo.lock but didn't `cargo metadata` to
-  confirm the dep graph claim. Trust dep claims only after cargo tree.**
-- **`cargo fmt -- <files>` does NOT scope formatting to those files.** It
-  formats the whole workspace. I wanted to format only budget.rs/stratum.rs
-  and it also touched tests/e2e/harness/mod.rs (incidentally fixing a
-  pre-existing fmt gate failure, which I kept as gate hygiene).
+- `test_data_dir_lock()` in `src/session/mod.rs:54` is the cross-test mutex for any test that mutates `KF_CODE_DATA_DIR`. Already used by `server.rs::client_server_round_trip` — reused in the R3 auth test and the R6 happy-path.
+- The `kf-budget-core` EnvGuard (test_support.rs) uses a process-global reentrant mutex; PLUGIN3_*_DIR writes go through the same lock as KF_BUDGET_*_DIR, so the new shim tests are race-safe with the existing concurrency tests without additional serialization.
+- ADR drift is a two-source-of-truth system (file headers + index table) — but only when the Status line itself changes. Adding prose inside an ADR does not trigger the drift test.

@@ -48,6 +48,10 @@ pub struct MemoryFact {
 pub struct MemoryStore {
     root: PathBuf,
     max_facts: usize,
+    /// Jaccard similarity at which a new fact is treated as a near-duplicate
+    /// of an existing one and the insert is skipped. `>= 1.0` disables the
+    /// gate. See `with_dedup_threshold`.
+    dedup_threshold: f64,
 }
 
 impl MemoryStore {
@@ -57,6 +61,7 @@ impl MemoryStore {
         Ok(Self {
             root,
             max_facts: 200,
+            dedup_threshold: 0.85,
         })
     }
 
@@ -69,6 +74,15 @@ impl MemoryStore {
     /// Set the maximum number of facts before eviction kicks in.
     pub fn with_max_facts(mut self, cap: usize) -> Self {
         self.max_facts = cap;
+        self
+    }
+
+    /// Set the near-duplicate dedup threshold (Jaccard similarity over the
+    /// description + body token sets). A new fact whose similarity to any
+    /// existing fact is `>= threshold` is skipped (the existing fact is
+    /// returned untouched). Default `0.85`; pass `>= 1.0` to disable.
+    pub fn with_dedup_threshold(mut self, threshold: f64) -> Self {
+        self.dedup_threshold = threshold;
         self
     }
 
@@ -102,6 +116,15 @@ impl MemoryStore {
     /// the oldest fact (first alphabetically) is evicted. ponytail: O(n)
     /// scan; fine for 200 entries.
     // ponytail: upsert overwrites on name match. The FNV hash suffix makes collisions extremely unlikely but not impossible. Upgrade: append turn number to slug for full disambiguation.
+    //
+    // Near-duplicate gate: before writing, the new fact's description + body
+    // are compared (token-set Jaccard) against every existing fact. If the
+    // best score is `>= dedup_threshold` (default 0.85) the insert is skipped
+    // and the existing fact is returned. ponytail: lexical Jaccard misses
+    // synonym-only paraphrases ("user prefers rust" vs "Kirk likes Rust"
+    // share no tokens) — those still accumulate as distinct facts. Upgrade
+    // path: real embeddings if lexical dedup under-performs in practice; do
+    // NOT add an embedding-model dep here (WO 28.15 failure criteria).
     pub fn upsert(
         &self,
         name: &str,
@@ -118,6 +141,26 @@ impl MemoryStore {
             body: body.to_string(),
             metadata,
         };
+
+        // Near-duplicate gate: skip if an existing fact is lexically
+        // near-identical. Disabled when threshold >= 1.0.
+        if self.dedup_threshold < 1.0 {
+            let new_tokens = token_set(&fact.description, &fact.body);
+            if !new_tokens.is_empty() {
+                for existing in self.all() {
+                    let existing_tokens = token_set(&existing.description, &existing.body);
+                    if jaccard(&new_tokens, &existing_tokens) >= self.dedup_threshold {
+                        tracing::trace!(
+                            existing = %existing.name,
+                            new = %fact.name,
+                            threshold = self.dedup_threshold,
+                            "memory dedup: skipped near-duplicate insert"
+                        );
+                        return Ok(existing);
+                    }
+                }
+            }
+        }
 
         self.write_one(&fact)?;
 
@@ -476,6 +519,25 @@ fn tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Build the dedup token set for a fact from its description + body.
+fn token_set(desc: &str, body: &str) -> std::collections::HashSet<String> {
+    tokenize(&format!("{desc} {body}")).into_iter().collect()
+}
+
+/// Jaccard similarity over two token sets: |A ∩ B| / |A ∪ B|.
+/// Returns 0.0 for two empty sets (no signal to compare).
+fn jaccard(a: &std::collections::HashSet<String>, b: &std::collections::HashSet<String>) -> f64 {
+    if a.is_empty() && b.is_empty() {
+        return 0.0;
+    }
+    let union = a.union(b).count();
+    if union == 0 {
+        return 0.0;
+    }
+    let inter = a.intersection(b).count() as f64;
+    inter / union as f64
+}
+
 /// Compute inverse document frequency for each term in the corpus.
 fn compute_idf(corpus: &[MemoryFact]) -> std::collections::HashMap<String, f64> {
     let n = corpus.len() as f64;
@@ -742,7 +804,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().to_path_buf();
         std::mem::forget(tmp);
-        let store = MemoryStore::open(path).unwrap().with_max_facts(3);
+        // Disable dedup: this test exercises eviction, not dedup, and the
+        // fixtures (single-digit indices dropped by tokenize) are lexically
+        // near-identical by design.
+        let store = MemoryStore::open(path)
+            .unwrap()
+            .with_max_facts(3)
+            .with_dedup_threshold(1.0);
 
         for i in 0..5 {
             store
@@ -819,7 +887,10 @@ mod tests {
 
     #[test]
     fn test_select_for_context_respects_token_budget() {
-        let store = temp_store();
+        // Disable dedup: this test exercises the token-budget cap among
+        // multiple matching facts, not dedup. The shared bodies are
+        // near-identical by design.
+        let store = temp_store().with_dedup_threshold(1.0);
         for i in 0..5 {
             let body = if i < 3 {
                 "body contains common token alpha"
@@ -858,7 +929,9 @@ mod tests {
 
     #[test]
     fn test_to_prompt_block_for_facts_subset() {
-        let store = temp_store();
+        // Disable dedup: single-char names + shared "body" are lexically
+        // near-identical; this test renders a subset, not dedup.
+        let store = temp_store().with_dedup_threshold(1.0);
         store.upsert("a", "desc a", "body", "project").unwrap();
         store.upsert("b", "desc b", "body", "project").unwrap();
 
@@ -962,6 +1035,125 @@ mod tests {
     fn tokenize_empty_returns_empty() {
         assert!(tokenize("").is_empty());
         assert!(tokenize("!!! ,,, ...").is_empty());
+    }
+
+    #[test]
+    fn token_set_dedups_repeated_terms() {
+        let s = token_set("rust body body", "rust rust more");
+        // Repeated terms collapse into one set member.
+        assert!(s.contains("rust"));
+        assert!(s.contains("body"));
+        assert!(s.contains("more"));
+    }
+
+    #[test]
+    fn jaccard_identical_sets_score_one() {
+        let a = token_set("rust toolchain", "cargo workspace");
+        let b = token_set("rust toolchain", "cargo workspace");
+        assert_eq!(jaccard(&a, &b), 1.0);
+    }
+
+    #[test]
+    fn jaccard_disjoint_sets_score_zero() {
+        let a = token_set("rust", "");
+        let b = token_set("python", "");
+        assert_eq!(jaccard(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn jaccard_partial_overlap_between_zero_and_one() {
+        let a = token_set("rust cargo", "");
+        let b = token_set("rust python", "");
+        // intersection {rust}=1, union {rust,cargo,python}=3 → 1/3.
+        let score = jaccard(&a, &b);
+        assert!(score > 0.0 && score < 1.0, "got {score}");
+        assert!((score - 1.0 / 3.0).abs() < 1e-9, "got {score}");
+    }
+
+    #[test]
+    fn jaccard_empty_empty_is_zero() {
+        let empty = std::collections::HashSet::new();
+        assert_eq!(jaccard(&empty, &empty), 0.0);
+    }
+
+    // WO 28.15 R3: a burst of near-duplicate inserts (same fact reworded)
+    // collapses to a single entry; the dedup gate is neither a no-op nor
+    // over-aggressive. Distinct names prove the gate (not name-overwrite)
+    // is doing the collapsing: the bodies differ only in stop-words
+    // ("with"/"using"/"via"), so token-set Jaccard >= 0.85.
+    #[test]
+    fn dedup_collapses_near_duplicate_rewordings() {
+        let store = temp_store();
+        let rewordings: &[(&str, &str, &str)] = &[
+            (
+                "pref-rust-a",
+                "kirk prefers rust",
+                "kirk prefers rust for systems programming with cargo",
+            ),
+            (
+                "pref-rust-b",
+                "kirk prefers rust",
+                "kirk prefers rust for systems programming using cargo",
+            ),
+            (
+                "pref-rust-c",
+                "kirk prefers rust",
+                "kirk prefers rust for systems programming via cargo",
+            ),
+        ];
+        for (name, desc, body) in rewordings {
+            store.upsert(name, desc, body, "user").unwrap();
+        }
+        let facts = store.all();
+        assert_eq!(
+            facts.len(),
+            1,
+            "near-duplicate rewordings should collapse to 1, got {}: {:?}",
+            facts.len(),
+            facts.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+        // The first insert wins; later near-dups are skipped.
+        assert_eq!(facts[0].name, "pref-rust-a");
+    }
+
+    // WO 28.15 R3: genuinely distinct facts all survive — the threshold is
+    // not so aggressive that it merges unrelated memories (data loss).
+    #[test]
+    fn dedup_keeps_genuinely_distinct_facts() {
+        let store = temp_store();
+        let distinct = [
+            ("rust toolchain", "We use rustup and cargo for builds"),
+            ("kubuntu setup", "Kirk runs Kubuntu with KDE plasma"),
+            ("api keys", "Keys live in the kf-code secrets file"),
+            ("ratatui tui", "Terminal UI is built on ratatui widgets"),
+            ("git workflow", "Feature branches merge into dev branch"),
+        ];
+        for (desc, body) in distinct {
+            store.upsert(desc, desc, body, "project").unwrap();
+        }
+        let facts = store.all();
+        assert_eq!(
+            facts.len(),
+            distinct.len(),
+            "distinct facts should all survive ({}), got {}: {:?}",
+            distinct.len(),
+            facts.len(),
+            facts.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+    }
+
+    // WO 28.15: disabling the gate (threshold >= 1.0) restores the old
+    // accumulate-everything behaviour.
+    #[test]
+    fn dedup_disabled_when_threshold_at_or_above_one() {
+        let store = temp_store().with_dedup_threshold(1.0);
+        store
+            .upsert("a", "rust toolchain", "cargo workspace", "user")
+            .unwrap();
+        store
+            .upsert("b", "rust toolchain", "cargo workspace", "user")
+            .unwrap();
+        assert_eq!(store.all().len(), 2, "disabled dedup should keep both");
     }
 
     #[test]

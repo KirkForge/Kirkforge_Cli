@@ -5,6 +5,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- WO 29.2: Rust security emitter — the 14 regex security rules from `security-emitter.ts` are ported to `src/session/verifier/security_emitter.rs`. The verifier bus (`TsOrchestratorBridgeVerifier`) now calls `emit_security_findings()` directly instead of spawning `bridge-emitter.ts` as a Node subprocess. Eliminates the last Rust→TS call path. The ADR-028 NDJSON wire format is retired with the TS bridge (Rust returns typed `VerdictEntry`s). Deleting the now-dead TS sources is deferred to WO 29.9.
+
 ### Fixed
 - Review-2026-08-11: Budget/stratum mutex-poison cascade — 26 sites of `.lock().expect("…poisoned")` in `src/session/budget.rs` + `src/session/stratum.rs` converted to `.unwrap_or_else(|e| e.into_inner())`, matching the convention already used 35+ times in `config/mod.rs`. A single poisoned mutex previously panicked on every subsequent turn.
 - Review-2026-08-11 (CI red blocker): Stream-drain hang — adapter parsers parked on `stream.next().await` with no idle timeout; reqwest's `.timeout(120s)` does not reliably bound the streaming-body phase, so a wedged HTTP body hung the agent loop forever. New shared `next_chunk_or_idle_timeout()` helper in `adapters/mod.rs` wraps `stream.next()` in `tokio::time::timeout(STREAM_IDLE_TIMEOUT=90s)`; on timeout emits `StreamEvent::Error` and closes the channel. Applied to anthropic, anthropic_bedrock, ollama_ndjson, openai_compat parsers.

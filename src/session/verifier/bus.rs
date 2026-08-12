@@ -28,7 +28,6 @@ use kf_plugin_host::PluginVerifier;
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::process::Command;
 
 /// Which verifier produced this finding.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,175 +302,32 @@ pub fn default_verifier_bus() -> VerifierBus {
     VerifierBus::new()
 }
 
-// ── WO 10.8: TS orchestrator NDJSON bridge ─────────────────────────────
+// ── WO 29.2: Rust-native security emitter ──────────────────────────────
 //
-// ADR-028 §5: the cross-language NDJSON wire bridge. The
-// `TsOrchestratorBridgeVerifier` implements `BusVerifier` by shelling
-// out to the TS orchestrator's bridge emitter (a Node script that runs
-// the orchestrator's security/lint/types/graph/imports emitters on the
-// changed files and writes one JSON object per line to stdout). Each
-// NDJSON line is parsed into a `VerdictEntry`. Malformed lines become
-// `Severity::Warning` verdicts (never silently dropped).
+// The TS orchestrator NDJSON bridge (WO 10.8) is retired. The 14 regex
+// security rules now live in Rust (`security_emitter.rs`) and produce
+// `VerdictEntry`s directly — no Node subprocess, no NDJSON round-trip.
+// This was the last Rust→TS call path (WO 29.2). The ADR-028 NDJSON wire
+// format is retired alongside the TS bridge; the Rust emitter returns
+// typed structs. If a future plugin needs an NDJSON emitter, the format
+// is documented in ADR-028 and can be re-added then (YAGNI for now).
 
-/// NDJSON wire format: one JSON object per line.
+/// A `BusVerifier` that runs the Rust security emitter over the changed
+/// files. Originally (WO 10.8) this shelled out to the TS
+/// `bridge-emitter.ts` and parsed NDJSON; WO 29.2 replaced the subprocess
+/// with a compiled-in function. The name is retained for bus-wiring
+/// stability (verifiers register by name).
 ///
-/// ```jsonc
-/// {"verifier": "security", "severity": "error", "file": "src/foo.rs",
-///  "line": 42, "message": "eval() call detected", "rule": "no-eval"}
-/// ```
-///
-/// The `verifier` field maps to `VerifierSource::Custom(name)`; the
-/// `severity` field is case-insensitive ("error"/"warning"/"info");
-/// `file` and `line` are optional; `rule` is appended to the message
-/// when present. Unknown fields are ignored (forward-compatible).
-#[derive(serde::Deserialize)]
-struct NdjsonVerdict {
-    verifier: String,
-    severity: String,
-    message: String,
-    #[serde(default)]
-    file: Option<String>,
-    #[serde(default)]
-    line: Option<u32>,
-    #[serde(default)]
-    rule: Option<String>,
-}
-
-/// Parse the severity string from the NDJSON verdict. Unknown values
-/// default to `Warning` (the caller should not silently drop a verdict
-/// it cannot classify).
-fn parse_severity(s: &str) -> Severity {
-    match s.to_ascii_lowercase().as_str() {
-        "error" | "critical" | "high" => Severity::Error,
-        "warning" | "medium" => Severity::Warning,
-        "info" | "low" => Severity::Info,
-        _ => Severity::Warning,
-    }
-}
-
-/// A `BusVerifier` that shells out to the TS orchestrator's bridge
-/// emitter and parses NDJSON verdicts from stdout. The bridge command
-/// is a Node script (or any executable) that accepts the changed files
-/// as arguments (or via the `KF_CHANGED_FILES` env var, like
-/// `PluginBusVerifier`) and writes one JSON verdict per line to stdout.
-///
-/// The verifier is registered on the bus only when the TS orchestrator
-/// plugin is loaded (the executor setup gates this). Malformed NDJSON
-/// lines produce `Severity::Warning` verdicts with a descriptive
-/// message; they are never silently dropped (ADR-028 §5).
+/// `ceiling:` the struct name still says "TsOrchestratorBridge" for
+/// historical continuity — the TS dependency is gone. Rename in a later
+/// sweep if desired (not done here to keep the diff small).
 pub struct TsOrchestratorBridgeVerifier {
-    /// Display name for the bridge (used in `name()` and
-    /// `VerifierSource::Custom`).
     name: String,
-    /// The command to run (resolved relative to `plugin_root`).
-    command: PathBuf,
-    /// The plugin root directory (cwd of the subprocess).
-    plugin_root: PathBuf,
 }
 
 impl TsOrchestratorBridgeVerifier {
-    pub fn new(name: String, command: PathBuf, plugin_root: PathBuf) -> Self {
-        Self {
-            name,
-            command,
-            plugin_root,
-        }
-    }
-
-    /// Run the bridge command and capture stdout. The changed files are
-    /// passed via the `KF_CHANGED_FILES` env var (newline-separated,
-    /// matching `PluginBusVerifier`) and as command-line arguments.
-    fn run_bridge(&self, ctx: &VerifyContext) -> Result<String, String> {
-        let cmd_path = self.plugin_root.join(&self.command);
-        if !cmd_path.exists() {
-            return Err(format!("bridge command not found: {}", cmd_path.display()));
-        }
-
-        let mut env = HashMap::new();
-        env.insert("KF_VERIFIER_NAME".to_string(), self.name.clone());
-        env.insert(
-            "KF_CHANGED_FILES".to_string(),
-            ctx.changed_files
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
-
-        let mut attempts = 0;
-        let output = loop {
-            let mut cmd = Command::new(&cmd_path);
-            cmd.env_clear();
-            for (k, v) in kf_plugin_host::env::curated_env(&env) {
-                cmd.env(k, v);
-            }
-            cmd.current_dir(&self.plugin_root);
-            // Pass changed files as args too (the bridge script may
-            // prefer argv over env).
-            for f in &ctx.changed_files {
-                cmd.arg(f);
-            }
-            match cmd.output() {
-                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 3 => {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    attempts += 1;
-                    continue;
-                }
-                other => break other.map_err(|e| format!("bridge execution failed: {e}"))?,
-            }
-        };
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!(
-                "bridge exited with {:?}: {}",
-                output.status.code(),
-                stderr.trim()
-            ));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    }
-
-    /// Parse NDJSON stdout into `VerdictEntry`s. Malformed lines become
-    /// `Severity::Warning` verdicts so the operator sees the bridge is
-    /// producing bad output (never silently dropped).
-    fn parse_ndjson(&self, stdout: &str, ctx: &VerifyContext) -> Vec<VerdictEntry> {
-        let mut entries = Vec::new();
-        for (lineno, line) in stdout.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            match serde_json::from_str::<NdjsonVerdict>(line) {
-                Ok(v) => {
-                    let message = if let Some(rule) = &v.rule {
-                        format!("[{rule}] {}", v.message)
-                    } else {
-                        v.message
-                    };
-                    entries.push(VerdictEntry {
-                        source: VerifierSource::Custom(format!("ts:{}", v.verifier)),
-                        severity: parse_severity(&v.severity),
-                        message,
-                        file: v.file.as_ref().map(PathBuf::from),
-                        line: v.line,
-                    });
-                }
-                Err(e) => {
-                    entries.push(VerdictEntry {
-                        source: VerifierSource::Custom(format!("ts:{}", self.name)),
-                        severity: Severity::Warning,
-                        message: format!(
-                            "malformed NDJSON verdict on line {}: {e} — raw: {line}",
-                            lineno + 1
-                        ),
-                        file: ctx.changed_files.first().cloned(),
-                        line: None,
-                    });
-                }
-            }
-        }
-        entries
+    pub fn new(name: String) -> Self {
+        Self { name }
     }
 }
 
@@ -481,16 +337,20 @@ impl BusVerifier for TsOrchestratorBridgeVerifier {
     }
 
     fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
-        match self.run_bridge(ctx) {
-            Ok(stdout) => self.parse_ndjson(&stdout, ctx),
-            Err(e) => vec![VerdictEntry {
-                source: VerifierSource::Custom(format!("ts:{}", self.name)),
-                severity: Severity::Warning,
-                message: format!("TS orchestrator bridge failed: {e}"),
-                file: None,
-                line: None,
-            }],
-        }
+        // Resolve relative changed-file paths against the sandbox dir
+        // (mirrors the old TS bridge, which resolved against its cwd).
+        let resolved: Vec<PathBuf> = ctx
+            .changed_files
+            .iter()
+            .map(|f| {
+                if f.is_absolute() {
+                    f.clone()
+                } else {
+                    ctx.sandbox_dir.join(f)
+                }
+            })
+            .collect();
+        super::security_emitter::emit_security_findings(&resolved)
     }
 }
 
@@ -719,182 +579,62 @@ mod tests {
         assert!(bus.has_errors());
     }
 
-    // ── WO 10.8: TsOrchestratorBridgeVerifier tests ──
+    // ── WO 29.2: TsOrchestratorBridgeVerifier delegates to the Rust emitter ──
 
-    #[cfg(unix)]
-    fn make_bridge_script(dir: &std::path::Path, body: &str) -> PathBuf {
-        let script = dir.join("bridge.sh");
-        std::fs::write(&script, format!("#!/bin/sh\n{body}")).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&script).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script, perms).unwrap();
-        script
-    }
-
-    /// WO 10.8: a mock TS orchestrator bridge emits one `security`
-    /// error verdict via NDJSON → the bridge verifier produces a
-    /// `VerdictEntry` with `Severity::Error`.
-    #[cfg(unix)]
+    /// WO 29.2: the verifier no longer spawns a Node subprocess. It scans
+    /// the changed files with the Rust security emitter and returns the
+    /// findings as typed `VerdictEntry`s.
     #[test]
-    fn ts_orchestrator_bridge_verifier() {
-        let tmp = tempfile::tempdir().unwrap();
-        let _ = make_bridge_script(
-            tmp.path(),
-            "echo '{\"verifier\":\"security\",\"severity\":\"error\",\"file\":\"src/secret.rs\",\"line\":42,\"message\":\"eval() call detected\",\"rule\":\"no-eval\"}'\nexit 0\n",
-        );
-        let mut bus = VerifierBus::new();
-        bus.register(Box::new(TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("bridge.sh"),
-            tmp.path().to_path_buf(),
-        )));
-
-        bus.run(&make_verify_ctx());
-        assert_eq!(bus.verdicts().len(), 1, "one NDJSON line → one verdict");
-        let v = &bus.verdicts()[0];
-        assert_eq!(
-            v.severity,
-            Severity::Error,
-            "severity field 'error' → Severity::Error"
-        );
+    fn ts_orchestrator_bridge_verifier_delegates_to_rust_emitter() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("evil.py");
+        std::fs::write(&target, "eval('1+1')\n").unwrap();
+        let ctx = VerifyContext {
+            sandbox_dir: dir.path().to_path_buf(),
+            changed_files: vec![target.clone()],
+        };
+        let v = TsOrchestratorBridgeVerifier::new("ts-bridge".into());
+        let entries = v.verify(&ctx);
         assert!(
-            v.message.contains("eval() call detected"),
-            "message should carry the NDJSON message: {}",
-            v.message
+            entries.iter().any(|e| e.message.contains("[py-eval]")),
+            "delegation should surface the py-eval finding: {entries:?}"
         );
+        assert!(entries
+            .iter()
+            .all(|e| matches!(e.source, VerifierSource::Custom(ref s) if s == "ts:security")));
+        assert_eq!(v.name(), "ts-bridge");
+    }
+
+    /// WO 29.2: relative changed-file paths are resolved against the
+    /// sandbox dir before scanning (mirrors the old TS bridge cwd).
+    #[test]
+    fn ts_orchestrator_bridge_verifier_resolves_relative_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("rel.py"), "eval('x')\n").unwrap();
+        let ctx = VerifyContext {
+            sandbox_dir: dir.path().to_path_buf(),
+            changed_files: vec![PathBuf::from("rel.py")],
+        };
+        let v = TsOrchestratorBridgeVerifier::new("ts-bridge".into());
+        let entries = v.verify(&ctx);
         assert!(
-            v.message.contains("[no-eval]"),
-            "rule field should be prefixed to the message: {}",
-            v.message
-        );
-        assert_eq!(
-            v.file,
-            Some(PathBuf::from("src/secret.rs")),
-            "file field should map to VerdictEntry.file"
-        );
-        assert_eq!(
-            v.line,
-            Some(42),
-            "line field should map to VerdictEntry.line"
-        );
-        assert!(
-            matches!(v.source, VerifierSource::Custom(ref s) if s == "ts:security"),
-            "verifier field should map to VerifierSource::Custom(\"ts:security\"): {:?}",
-            v.source
-        );
-        assert!(bus.has_errors(), "an Error verdict → has_errors()");
-    }
-
-    /// WO 10.8: a bridge that emits multiple NDJSON lines produces
-    /// multiple verdicts (one per line). Empty lines are skipped.
-    #[cfg(unix)]
-    #[test]
-    fn ts_orchestrator_bridge_verifier_multiple_lines() {
-        let tmp = tempfile::tempdir().unwrap();
-        let _ = make_bridge_script(
-            tmp.path(),
-            "echo '{\"verifier\":\"lint\",\"severity\":\"warning\",\"message\":\"unused import\"}'\necho ''\necho '{\"verifier\":\"types\",\"severity\":\"error\",\"message\":\"type mismatch\"}'\nexit 0\n",
-        );
-        let mut bus = VerifierBus::new();
-        bus.register(Box::new(TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("bridge.sh"),
-            tmp.path().to_path_buf(),
-        )));
-
-        bus.run(&make_verify_ctx());
-        assert_eq!(
-            bus.verdicts().len(),
-            2,
-            "two non-empty NDJSON lines → two verdicts (empty line skipped)"
-        );
-        assert_eq!(bus.verdicts()[0].severity, Severity::Warning);
-        assert_eq!(bus.verdicts()[1].severity, Severity::Error);
-    }
-
-    /// WO 10.8: malformed NDJSON lines become `Severity::Warning`
-    /// verdicts (never silently dropped).
-    #[cfg(unix)]
-    #[test]
-    fn ts_orchestrator_bridge_verifier_malformed_ndjson_becomes_warning() {
-        let tmp = tempfile::tempdir().unwrap();
-        let _ = make_bridge_script(
-            tmp.path(),
-            "echo 'this is not json'\necho '{\"verifier\":\"security\",\"severity\":\"error\",\"message\":\"real finding\"}'\nexit 0\n",
-        );
-        let mut bus = VerifierBus::new();
-        bus.register(Box::new(TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("bridge.sh"),
-            tmp.path().to_path_buf(),
-        )));
-
-        bus.run(&make_verify_ctx());
-        assert_eq!(bus.verdicts().len(), 2, "malformed + valid → 2 verdicts");
-        assert_eq!(
-            bus.verdicts()[0].severity,
-            Severity::Warning,
-            "malformed line → Warning verdict"
-        );
-        assert!(
-            bus.verdicts()[0].message.contains("malformed NDJSON"),
-            "malformed verdict message should explain the issue: {}",
-            bus.verdicts()[0].message
-        );
-        assert_eq!(bus.verdicts()[1].severity, Severity::Error);
-    }
-
-    /// WO 10.8: a bridge command that fails (non-zero exit) produces a
-    /// single `Severity::Warning` verdict with the error.
-    #[cfg(unix)]
-    #[test]
-    fn ts_orchestrator_bridge_verifier_command_failure_yields_warning() {
-        let tmp = tempfile::tempdir().unwrap();
-        let _ = make_bridge_script(tmp.path(), "echo 'bridge crashed' >&2\nexit 1\n");
-        let mut bus = VerifierBus::new();
-        bus.register(Box::new(TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("bridge.sh"),
-            tmp.path().to_path_buf(),
-        )));
-
-        bus.run(&make_verify_ctx());
-        assert_eq!(bus.verdicts().len(), 1);
-        assert_eq!(bus.verdicts()[0].severity, Severity::Warning);
-        assert!(
-            bus.verdicts()[0].message.contains("bridge crashed"),
-            "failure verdict should carry stderr: {}",
-            bus.verdicts()[0].message
-        );
-        assert!(!bus.has_errors(), "a Warning is not an Error");
-    }
-
-    /// WO 10.8: severity string parsing covers the TS emitter
-    /// severities (critical/high → Error, medium → Warning, low → Info).
-    #[test]
-    fn parse_severity_maps_ts_emitter_levels() {
-        assert_eq!(parse_severity("critical"), Severity::Error);
-        assert_eq!(parse_severity("high"), Severity::Error);
-        assert_eq!(parse_severity("error"), Severity::Error);
-        assert_eq!(parse_severity("medium"), Severity::Warning);
-        assert_eq!(parse_severity("warning"), Severity::Warning);
-        assert_eq!(parse_severity("low"), Severity::Info);
-        assert_eq!(parse_severity("info"), Severity::Info);
-        assert_eq!(
-            parse_severity("unknown"),
-            Severity::Warning,
-            "unknown severity defaults to Warning (not dropped)"
+            entries.iter().any(|e| e.message.contains("[py-eval]")),
+            "relative path should resolve against sandbox_dir: {entries:?}"
         );
     }
 
+    /// WO 29.2: clean files produce no findings through the wrapper.
     #[test]
-    fn parse_severity_is_case_insensitive() {
-        assert_eq!(parse_severity("ERROR"), Severity::Error);
-        assert_eq!(parse_severity("Error"), Severity::Error);
-        assert_eq!(parse_severity("WARNING"), Severity::Warning);
-        assert_eq!(parse_severity("INFO"), Severity::Info);
-        assert_eq!(parse_severity("High"), Severity::Error);
+    fn ts_orchestrator_bridge_verifier_clean_file_yields_no_findings() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("clean.ts");
+        std::fs::write(&target, "export const x = 1;\n").unwrap();
+        let ctx = VerifyContext {
+            sandbox_dir: dir.path().to_path_buf(),
+            changed_files: vec![target],
+        };
+        let v = TsOrchestratorBridgeVerifier::new("ts-bridge".into());
+        assert!(v.verify(&ctx).is_empty());
     }
 
     #[test]
@@ -1029,142 +769,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_ndjson_empty_string_returns_no_verdicts() {
-        let v = TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("bridge.sh"),
-            PathBuf::from("/tmp"),
-        );
-        assert!(v.parse_ndjson("", &make_verify_ctx()).is_empty());
-    }
-
-    #[test]
-    fn parse_ndjson_skips_blank_lines() {
-        let v = TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("bridge.sh"),
-            PathBuf::from("/tmp"),
-        );
-        let entries = v.parse_ndjson("\n  \n\t\n", &make_verify_ctx());
-        assert!(entries.is_empty(), "blank lines should be skipped");
-    }
-
-    #[test]
-    fn parse_ndjson_verdict_without_rule_has_plain_message() {
-        let v = TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("bridge.sh"),
-            PathBuf::from("/tmp"),
-        );
-        let stdout =
-            "{\"verifier\":\"lint\",\"severity\":\"warning\",\"message\":\"unused import\"}";
-        let entries = v.parse_ndjson(stdout, &make_verify_ctx());
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].message, "unused import");
-        assert!(!entries[0].message.contains("["));
-    }
-
-    #[test]
-    fn parse_ndjson_verdict_with_missing_optional_fields_uses_none() {
-        let v = TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("bridge.sh"),
-            PathBuf::from("/tmp"),
-        );
-        let stdout = "{\"verifier\":\"x\",\"severity\":\"info\",\"message\":\"hi\"}";
-        let entries = v.parse_ndjson(stdout, &make_verify_ctx());
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].file.is_none());
-        assert!(entries[0].line.is_none());
-    }
-
-    #[test]
-    fn parse_ndjson_malformed_line_becomes_warning_verdict() {
-        let v = TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("bridge.sh"),
-            PathBuf::from("/tmp"),
-        );
-        let stdout = "not valid json at all";
-        let entries = v.parse_ndjson(stdout, &make_verify_ctx());
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].severity, Severity::Warning);
+    fn parse_ndjson_contract_is_retired() {
+        // WO 29.2: the NDJSON wire format + NdjsonVerdict/parse_severity/
+        // parse_ndjson were retired with the TS bridge. The Rust emitter
+        // returns typed VerdictEntry structs directly. This test guards
+        // against an accidental re-introduction of the old field shape.
+        let v = TsOrchestratorBridgeVerifier::new("ts-bridge".into());
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("x.ts");
+        std::fs::write(&target, "vm.runInNewContext(c)\n").unwrap();
+        let ctx = VerifyContext {
+            sandbox_dir: dir.path().to_path_buf(),
+            changed_files: vec![target],
+        };
+        let entries = v.verify(&ctx);
         assert!(
-            entries[0].message.contains("malformed NDJSON"),
-            "got: {}",
-            entries[0].message
+            entries.iter().all(|e| e.severity == Severity::Error),
+            "findings from the Rust emitter are already typed VerdictEntry"
         );
-        assert!(entries[0].message.contains("line 1"));
-    }
-
-    #[test]
-    fn parse_ndjson_malformed_line_includes_line_number() {
-        let v = TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("bridge.sh"),
-            PathBuf::from("/tmp"),
-        );
-        let stdout =
-            "{\"verifier\":\"ok\",\"severity\":\"info\",\"message\":\"good\"}\nbroken line";
-        let entries = v.parse_ndjson(stdout, &make_verify_ctx());
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[1].severity, Severity::Warning);
-        assert!(
-            entries[1].message.contains("line 2"),
-            "got: {}",
-            entries[1].message
-        );
-    }
-
-    #[test]
-    fn parse_ndjson_rule_is_prefixed_to_message_in_brackets() {
-        let v = TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("bridge.sh"),
-            PathBuf::from("/tmp"),
-        );
-        let stdout =
-            "{\"verifier\":\"sec\",\"severity\":\"error\",\"message\":\"bad\",\"rule\":\"no-eval\"}";
-        let entries = v.parse_ndjson(stdout, &make_verify_ctx());
-        assert_eq!(entries.len(), 1);
-        assert!(
-            entries[0].message.contains("[no-eval]"),
-            "got: {}",
-            entries[0].message
-        );
-        assert!(entries[0].message.contains("bad"));
-    }
-
-    #[test]
-    fn parse_ndjson_source_is_ts_prefixed_verifier_name() {
-        let v = TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("bridge.sh"),
-            PathBuf::from("/tmp"),
-        );
-        let stdout = "{\"verifier\":\"security\",\"severity\":\"info\",\"message\":\"x\"}";
-        let entries = v.parse_ndjson(stdout, &make_verify_ctx());
-        assert!(matches!(
-            entries[0].source,
-            VerifierSource::Custom(ref s) if s == "ts:security"
-        ));
-    }
-
-    #[test]
-    fn run_bridge_missing_command_returns_error() {
-        let v = TsOrchestratorBridgeVerifier::new(
-            "ts-bridge".into(),
-            PathBuf::from("does-not-exist.sh"),
-            PathBuf::from("/tmp/nonexistent-bridge-dir"),
-        );
-        let result = v.run_bridge(&make_verify_ctx());
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.contains("bridge command not found"), "got: {err}");
-    }
-
-    #[test]
-    fn parse_severity_empty_string_defaults_to_warning() {
-        assert_eq!(parse_severity(""), Severity::Warning);
     }
 }

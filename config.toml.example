@@ -142,8 +142,8 @@
 # filesize_limit_mb = 512   # SIGXFSZ on a write past this file size
 
 # When true, write_file/edit_file reject paths that resolve inside dotfile
-# directories (e.g. ~/.ssh). Default: false.
-# block_dotfiles = false
+# directories (e.g. ~/.ssh). Default: true.
+# block_dotfiles = true
 
 # When true, write_file/edit_file also reject paths inside git-ignored dotfile
 # directories such as .env files. Default: true.

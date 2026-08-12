@@ -16,7 +16,7 @@ use std::sync::Mutex;
 // timeout, so the test inherently waits ~5s for the timeout to fire. Genuine
 // timeout-wait, not unnecessary setup. Run with `cargo test -- --ignored`.
 #[tokio::test]
-#[ignore]
+#[ignore = "5s hook-timeout wait"]
 async fn test_pre_tool_hook_timeout_allows_and_warns() {
     let captured = Arc::new(Mutex::new(None));
     let tool = MockTool {

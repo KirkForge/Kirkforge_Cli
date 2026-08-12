@@ -301,12 +301,15 @@ impl McpClient {
         }
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args);
-        for (k, v) in &config.env_vars {
-            cmd.env(k, v);
-        }
+        // Harden the subprocess env: clear the inherited parent env (which
+        // includes API keys), then forward only a curated baseline
+        // (PATH/HOME/USER/locale/…) plus the server's explicit `env_vars`.
+        // Mirrors the kf-plugin-host curated_env pattern.
+        cmd.env_clear();
+        cmd.envs(kf_plugin_host::env::curated_env(&config.env_vars));
         // Sanitize PATH before spawning so a minimal or world-writable host
         // PATH cannot shadow standard system directories (e.g. a relative
-        // entry that looks like `bash` or `npx`).
+        // entry that looks like `bash` or `npx`). Overrides the baseline PATH.
         let path = std::env::var("PATH").unwrap_or_default();
         cmd.env("PATH", crate::session::bash_runner::sanitized_path(&path));
         cmd.stdin(std::process::Stdio::piped());

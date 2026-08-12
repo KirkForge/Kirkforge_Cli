@@ -697,7 +697,7 @@ mod tests {
     /// subprocess-management cost, not unnecessary setup. Run explicitly with
     /// `cargo test -- --ignored` when validating the job cap.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "spawns MAX_JOBS subprocesses"]
     async fn test_job_cap_enforced_when_all_running() {
         let reg = BashJobRegistry::new();
         for i in 0..MAX_JOBS {

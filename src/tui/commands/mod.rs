@@ -351,7 +351,7 @@ mod tests {
     // job races the cancel/reap path and intermittently reports a status
     // other than Cancelled/Failed. Run with `cargo test -- --ignored`.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "timing-sensitive job-cancel race"]
     async fn handle_jobs_command_cancel_running_job_succeeds() {
         let _guard = test_registry_lock().lock().await;
         let registry = crate::session::bash_jobs::global_registry();

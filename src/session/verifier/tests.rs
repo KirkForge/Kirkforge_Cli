@@ -648,3 +648,56 @@ async fn handler_drain_corrections_empty_after_drain() {
     let corrections = handler.drain_corrections().await;
     assert!(corrections.is_empty(), "second drain should be empty");
 }
+
+// A verifier that never resolves — simulates a wedged `cargo build`. The
+// test build shrinks `VERIFIER_TIMEOUT` to 50ms so this fires fast without
+// tokio's `test-util` mock clock.
+struct HangingVerifier;
+
+#[async_trait::async_trait]
+impl Verifier for HangingVerifier {
+    fn name(&self) -> &str {
+        "hanging"
+    }
+    fn priority(&self) -> u8 {
+        1
+    }
+    async fn verify(&self, _event: &BusEvent) -> Verdict {
+        std::future::pending::<()>().await;
+        Verdict::Clean
+    }
+}
+
+#[tokio::test]
+async fn handler_verify_event_times_out_slow_verifier() {
+    // A wedged verifier is bounded by `VERIFIER_TIMEOUT` (50ms in tests), so
+    // it must NOT hang the turn or starve sibling verifiers. We register a
+    // HangingVerifier alongside a Fixable one: if the timeout works, the
+    // hanging verifier is skipped (→ no finding) and the sibling still runs,
+    // yielding a Fixable aggregate. Without the timeout, `verify_event`
+    // would hang on the pending verifier and the test would time out.
+    let mut s = VerifierSlots::new();
+    let _ = s.register(Arc::new(HangingVerifier));
+    let _ = s.register(Arc::new(MockVerifier {
+        name: "lint".into(),
+        prio: 2,
+        verdict: Verdict::Fixable(FixSuggestion {
+            description: "unused import".into(),
+            file: PathBuf::from("test.rs"),
+            original: "use foo;".into(),
+            replacement: "".into(),
+            severity: "low".into(),
+            command: None,
+            line: None,
+        }),
+    }));
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+    let event = make_edit_event();
+    let (verdict, name) = handler.verify_event(&event).await;
+    match verdict {
+        Verdict::Fixable(_) => assert_eq!(name, "lint"),
+        other => panic!("expected Fixable from the sibling, got {other:?}"),
+    }
+}

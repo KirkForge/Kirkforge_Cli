@@ -4,7 +4,18 @@
 
 ## Branch
 
-**`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
+**`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
+
+## Session 2026-08-13 — MEDIUM security hardening (branch `wo28h`)
+
+Knocked down the MEDIUM findings from the deep review (worktree `.worktrees/wo28h`, 3 commits, not pushed):
+1. **Per-verifier timeout** — `verifier/handler.rs` wraps each `verify()` in `tokio::time::timeout` (30s prod / 50ms under `cfg(test)`); a wedged `cargo build` no longer hangs the turn. On elapsed → `Verdict::Skipped`.
+2. **Audit-log records `read_file`** — `executor/turn.rs` + `dispatch.rs` audit gate renamed `is_destructive`→`should_audit` and now includes `read_file` (path kept by `redact_args`, content N/A).
+3. **MCP stdio env hardening** — `mcp_client/mod.rs connect()` does `env_clear()` + `kf_plugin_host::env::curated_env` so MCP subprocesses no longer inherit parent API keys.
+4. **`block_dotfiles` default true + deny-list expansion** — `config/security.rs` default false→true (+ serde default); `deny_list.rs` adds `~/.config`, `~/.docker`, `~/.netrc`, `~/.gitconfig` (`.aws` already present). Belt-and-suspenders behind landlock.
+5. **Bare `#[ignore]` reasons** — 9 bare attributes across `web_fetch.rs`×5, `tui/commands/mod.rs`, `executor/tests/approval/timeout.rs`, `bash_jobs.rs`, `kf-testdoctor/gaps.rs` now carry `= "reason"` strings.
+6. **This state.md refresh** (item 6).
+- Gate per item green: `cargo check`/`clippy -D warnings`/`fmt --check` (`-p kf-code --lib --tests`); verifier (8) + access (69) + config (88) + executor (157) + audit (26) + mcp (83) tests pass; new deny-list credential/netrc/gitconfig tests pass.
 
 ## Session 2026-08-12 — ADR drift gate fix (branch `adr-fix`, worktree `.worktrees/adr`)
 
@@ -90,21 +101,20 @@
 | 26.9 | DONE (partial) | R1: top-10 slowest tests fixed/skipped; R3+R4: testdoctor parallel scan + caching |
 | 26.10 | NOT STARTED | provider hardening (mocks, Plugin3 shim, landlock default, memory dedup) |
 
-## Current state / where the session stopped (2026-08-10)
+## Current state (refreshed 2026-08-13, branch `wo28h`)
 
-- WO 26 series merged into `dev` (commit `cb82b05`), pushed to origin/dev.
-- Two follow-up commits on `dev` NOT yet pushed: `76e037a` (cargo-audit severity blocking via `.cargo/audit.toml`) and `cdb3b42` (e2e scenarios deliver prompt via stdin).
-- **CI is still RED.** Last run (31408134938) failed on `audit` and `windows` jobs:
-  - `audit`: fixed by `76e037a` (cargo-audit 0.22 rejects `--deny critical` — severity blocking moved to `.cargo/audit.toml` `severity_threshold`). Needs a re-run to confirm.
-  - `windows`: e2e tests fail. Root cause found: scenarios passed the prompt as a positional CLI arg, but `kf-code run` has no positional field → clap exits code 2 → zero mock requests. Fixed by `cdb3b42` (pipe prompt via stdin). A second pre-existing bug — **the stdin-piping path hung, the binary never completed the turn against the mock** — is now **RESOLVED** (commit `260e7d8`: 90s `STREAM_IDLE_TIMEOUT` via a shared `next_chunk_or_idle_timeout` helper across the 4 adapter parsers, plus an `[adapter_routing] "e2e-" = "Ollama"` seed fixing the e2e routing mismatch; see the RESOLVED block below). CI should clear once `260e7d8` + `cdb3b42`/`76e037a` are pushed.
-- **Version bump to 0.3.7: NOT done.**
-- **`main` fast-forward: NOT done** (main still at e95c347).
-- **WO 27 series: STARTED.** Overview at `docs/workorders/27.0-wo27-overview.md`; 7 detail workorders (27.1 landlock, 27.2 test-health, 27.3 architecture, 27.4 plugin-trust, 27.5 bash-hardening, 27.6 themes, 27.7 mouse). **27.1 landlock DONE** (Phases 1-3 at `91a2365`, Phases 4-6 this commit); 27.2 is In Progress (7 binary-spawn e2e scenarios `#[ignore]`-gated to unblock CI green); 27.6 themes IN PROGRESS; **27.7 mouse IN PROGRESS** (R1 capture + click/drag/scroll in `events::handle_mouse_event`, R3 `display.mouse_enabled` gate + `KF_CODE_MOUSE_ENABLED`, R4 docs landed; R2 click-to-position caret DEFERRED to 27.7-R2-later — LineReader lacks a set-position API); the rest Planned.
-- **Local install at /home/henrik/own-code/kf-code: NOT done.**
+*The 2026-08-10 block below was stale (it predated the WO 27/28/29 merges). This refresh uses [`docs/workorders/30.0.0-wo30-overview.md`](docs/workorders/30.0.0-wo30-overview.md) — the living master index of unfinished work — as the source of truth.*
+
+- **WO 27 / 28 / 29 shipped.** The 2026-08-10 block listed WO 27 as "STARTED" and the version as 0.3.7-not-done; both were wrong. WO 27 (landlock default-on + plugin-trust + test-health + themes + mouse), WO 28.x (cycle cuts, turn.rs split 2087→1191 LOC, budget/TS cleanup), and WO 29.x (the `kf-routing` / `kf-rbac` / `kf-memory-store` / `kf-orchestrator` ports, Rust security emitter, EventBus + AuditLogger, delete of the `npm/kf-plugin/` TS tree) have all merged. See the WO 30 overview CLOSED table for per-item closing evidence.
+- **CI is green** (the 5th-ed CI-red debt is closed). The e2e stdin-piping hang that kept the `windows` job red is RESOLVED (`260e7d8`: 90s `STREAM_IDLE_TIMEOUT` across the 4 adapter parsers + `[adapter_routing] "e2e-" = "Ollama"`). The WO 29.7 merge-conflict markers in `Cargo.toml`/`Cargo.lock` are resolved.
+- **`main` fast-forward: still pending.** `origin/main` sits at `d848b37` (WO 27.2 CI fix); HEAD is several WO merges ahead. Needs an ff to current.
+- **Version: still `0.3.6`** (`Cargo.toml`). The old "0.3.7 NOT done" target was itself stale — WO 27/28/29 shipped without a bump. Next release number TBD (WO 30 overview, CI/ops table).
+- **Local install at `/home/henrik/own-code/kf-code`: not done** (carryover; not code debt).
+- **Where the remaining work lives:** `docs/workorders/30.0.0-wo30-overview.md` is now the master index. Headline open items: WO 28.6 (7 binary-spawn e2e → in-process), WO 28.7→28.9 (coverage gate + session 75%), WO 29.7 residuals (`ModelClient` prod impl + `ValidatorConfig` execution), WO 29.8 (health-server), plus the MEDIUM security hardening this session (`wo28h`) is knocking down.
 
 ### Pending / blocked
-- **RESOLVED (was CI red blocker):** e2e stdin-piping hang. Root cause was TWO bugs: (1) adapter parsers parked on `stream.next().await` with no idle timeout — reqwest's `.timeout(120s)` does not reliably bound the streaming-body phase, so a server that opens the connection and never sends EOF hangs the agent loop forever; (2) e2e routing mismatch — `e2e-test-model` fell through `adapter_kind_for_default` to OpenAiCompat while scenarios asserted the Ollama `/api/chat` path. Both fixed in commit `260e7d8` (90s `STREAM_IDLE_TIMEOUT` via shared `next_chunk_or_idle_timeout` helper across 4 adapter parsers + `[adapter_routing] "e2e-" = "Ollama"` seeded in e2e config fixtures). The windows CI job should clear once `260e7d8` + prior `cdb3b42`/`76e037a` are pushed.
-- **PENDING:** push this session's commits + prior `cdb3b42`/`76e037a`; confirm CI green; fast-forward `main`; bump to 0.3.7; start WO 27; install locally.
+- **PENDING:** fast-forward `main` to current HEAD; pick + bump the next version; push.
+- **Deferred items** are tracked in the "Deferred items" ledger below and in the WO 30 overview capabilities/security tables — not in this current-state block.
 
 ## Review-fix session (2026-08-11) — 7 commits on dev
 

@@ -518,3 +518,36 @@ plan + ordering.
 everything) and **27.1** (C1 is the security moat vs codex-cli). 27.6/27.7 are
 the pure-TUI polish items safe to parallelize. Full ordering + dependency graph
 in [WO 27.0](27.0-wo27-overview.md).
+
+### Series 28 — Open Issues + Tech Debt + Deferred Work (the full ledger)
+
+Series 28 is the "close everything open" series: every remaining deep-review
+finding (H3/H5/H7/H8), every gitnexus-surfaced cycle (2 Rust + 5 TS), every
+state.md deferred item that's still genuinely open (verified against code at
+`5296f41`), + the WO 27 follow-ups (e2e hang, coverage gate, background
+landlock). 17 workorders, each with root cause + file:line + R-items + gates.
+See [WO 28.0](28.0-wo28-overview.md) for the full plan + ordering.
+
+**Quickest wins:** 28.5 (pub(crate) re-export, ~5 lines), 28.2 (move one type),
+28.14 (env shim). **Highest leverage:** 28.1 (tools↔session cycle break),
+28.6 (real e2e coverage), 28.7+28.9 (coverage enforcement).
+
+| WO | Title | Status | Est |
+|----|-------|--------|-----|
+| 28.1 | [Break tools↔session cycle (H7)](28.1-tools-session-cycle.md) | Planned | L |
+| 28.2 | [Break budget↔stratum cycle](28.2-budget-stratum-cycle.md) | Planned | S |
+| 28.3 | [Split turn.rs god-object (H8)](28.3-turn-rs-split.md) | Planned | M |
+| 28.4 | [Fix TS plugin-SDK cycles](28.4-ts-plugin-cycles.md) | Planned (may be superseded by WO 29) | M |
+| 28.5 | [Landlock on background bash jobs](28.5-background-landlock.md) | Planned | S |
+| 28.6 | [e2e binary-spawn hang debug/convert](28.6-e2e-hang-debug.md) | Planned | M |
+| 28.7 | [Coverage regression gate](28.7-coverage-gate.md) | Planned | M |
+| 28.8 | [daemon/client.rs tests](28.8-daemon-client-tests.md) | Planned | M |
+| 28.9 | [Session coverage >75%](28.9-session-coverage-75.md) | Planned (dep: 28.7) | XL |
+| 28.10 | [Slow-test feature-flag split](28.10-slow-test-split.md) | Planned | S-M |
+| 28.11 | [Bench manifest validation](28.11-bench-manifest-validation.md) | Planned | S |
+| 28.12 | [Dead-ref CI gate for src/](28.12-dead-ref-ci-gate.md) | Planned | S-M |
+| 28.13 | [Bedrock/Vertex test mocks](28.13-bedrock-vertex-test-mocks.md) | Planned | M |
+| 28.14 | [Plugin3 env backward-compat shim](28.14-plugin3-env-shim.md) | Planned | S |
+| 28.15 | [Memory semantic dedup](28.15-memory-semantic-dedup.md) | Planned | M |
+| 28.16 | [Anthropic computer_use beta](28.16-anthropic-computer-use-beta.md) | Planned | L |
+| 28.17 | [Bash evasion tripwire posture (H3)](28.17-bash-evasion-tripwire-posture.md) | Planned | S |

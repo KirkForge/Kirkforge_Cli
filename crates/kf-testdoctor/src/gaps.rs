@@ -413,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "coverage-gate targets dict not yet in ci.yml"]
     // ponytail: #[ignore] until coverage-gate targets dict is restored in ci.yml — upgrade path: remove #[ignore] when coverage gate lands (WO 26.x or manual).
     fn default_thresholds_match_ci_yml() {
         // Drift guard: DEFAULT_THRESHOLDS must match the thresholds

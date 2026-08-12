@@ -380,16 +380,16 @@ is tagged `VerifierSource::Plugin(name)`. The executor's
 `emit_tool_event_and_correct` converts each `Severity::Error` verdict into a
 `CorrectionResult`, so a single correction path handles built-in and plugin
 verdicts. The legacy event-driven `PluginVerifierAdapter` path is retained
-for backward compatibility. The cross-language NDJSON wire bridge (Rust ↔ TS
-orchestrator) shipped in WO 10.8: the `TsOrchestratorBridgeVerifier` in
-`bus.rs` shells out to the TS orchestrator's bridge emitter
-(`bridge-emitter.ts`), reads NDJSON verdicts from stdout, and translates
-each line to a `VerdictEntry`. The wire format is one JSON object per line
-(`{"verifier":"security","severity":"error","file":"...","line":N,"message":"...","rule":"..."}`);
-malformed lines become `Severity::Warning` verdicts (never silently dropped).
-The Rust `VerifierBus` is authoritative: built-in verifiers register
-directly, plugin verifiers register via `register_plugin_verifiers_into_bus`,
-and TS orchestrator emitters register via the `TsOrchestratorBridgeVerifier`.
+for backward compatibility. The cross-language NDJSON wire bridge from WO
+10.8 (a Node `bridge-emitter.ts` subprocess) is **retired as of WO 29.2**:
+the 14 regex security rules now live in Rust
+(`src/session/verifier/security_emitter.rs`) and the
+`TsOrchestratorBridgeVerifier` is a thin `BusVerifier` wrapper that calls
+`security_emitter::emit_security_findings(&changed_files)` directly — no
+subprocess, no NDJSON round-trip. This was the last Rust→TS call path. The
+Rust `VerifierBus` is authoritative: built-in verifiers register directly,
+plugin verifiers register via `register_plugin_verifiers_into_bus`, and the
+security scan registers via the `TsOrchestratorBridgeVerifier` wrapper.
 
 ### Correction loop
 

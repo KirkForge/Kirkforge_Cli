@@ -30,6 +30,7 @@ pub mod lint;
 pub mod plugin;
 pub mod rustfmt;
 pub mod security;
+pub mod security_emitter;
 pub mod test;
 
 pub mod correction;

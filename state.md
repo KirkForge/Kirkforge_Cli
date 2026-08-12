@@ -6,6 +6,12 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
+## WO 29.2 — Rust security emitter (branch `wo29-impl`, not yet merged)
+
+- **DONE (R1+R2):** Ported the 14 regex security rules from `security-emitter.ts` to `src/session/verifier/security_emitter.rs`. `TsOrchestratorBridgeVerifier` is now a thin wrapper calling `emit_security_findings()` directly — no Node subprocess, no NDJSON. Last Rust→TS call path eliminated. ADR-028 NDJSON wire format retired (Rust returns typed `VerdictEntry`s).
+- **DEFERRED → WO 29.9:** R3 — delete the now-dead `bridge-emitter.ts` + `security-emitter.ts` + `tests/bridge-emitter.test.ts` (out of scope for 29.2; TS sources left in place, dead). Remaining: `rm` the 3 files + drop the `SecurityEmitter`/`EventBus` imports once WO 29.7 (orchestrator port) confirms nothing else uses them.
+- Gate green: check, clippy `-D warnings`, fmt, `verifier::` (210 passed), `security_emitter::` (25 passed).
+
 ## WO 26 series (merged into dev, commit cb82b05)
 
 | WO | Status | Items |

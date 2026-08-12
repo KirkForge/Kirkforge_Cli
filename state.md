@@ -6,6 +6,16 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
+## WO 28.3 — Split turn.rs god-object (branch `wo28d`, not yet merged)
+
+- **DONE (R1+R2+R3):** Pure-move refactor of `src/session/executor/turn.rs` (2087 LOC god-object). No behavior change; all 157 executor tests pass unchanged.
+  - **R1:** `dispatch_tool_call_batch` is now a 28-line orchestrator in `turn.rs`. The three phases moved to `executor/dispatch.rs` as `prepare_batch` (Phase 1 pre-gate), `spawn_batch` (Phase 2 + 2.5 spawn + file-call sequence + mid-batch checkpoint), `collect_batch` (Phase 3 record). Helper types `PreparedCall`/`SkippedCall`/`ToolResult`/`RunningTask` + free fn `run_prepared_call` also moved to `dispatch.rs`. `record_tool_result` visibility bumped `fn` → `pub(super)` (now called cross-file by `spawn_batch`/`collect_batch`).
+  - **R2:** `pre_run_verdict` + `PreRunVerdict` enum moved to a new `executor/pre_run.rs` (kept `dispatch.rs` under ~660 LOC instead of ~940).
+  - **R3:** `stream_iteration`'s 170-line preamble (memory-context + config snapshot + top-files + system/messages build + cache-stem record + stem_tokens) extracted into `build_stream_preamble` in a new `executor/stream.rs` returning a `StreamPreamble { messages, tool_defs, stem_tokens }`. The SSE-driver loop stays in `turn.rs` (high-risk, low-reward to move — per WO).
+- **LOC:** `turn.rs` 2087→1195 (−892, −43%). `dispatch.rs` 165→656. New `pre_run.rs` 303. New `stream.rs` 202.
+- **Scope creep (disclosed):** `Cargo.toml` + `Cargo.lock` arrived on `wo28d` HEAD with unresolved git merge-conflict markers (WO 29.5 `kf-rbac` ↔ WO 29.6 `kf-memory-store` merge, both purely additive). Resolved manually (kept both sides) to unblock the build — the gate could not run otherwise. No version pinning changes.
+- Gate green at HEAD: `cargo check -p kf-code --lib --tests`, `cargo clippy -p kf-code --lib --tests -- -D warnings`, `cargo fmt --check`, `cargo test --lib -p kf-code session::executor::` (157 passed, 1 pre-existing ignored).
+
 ## WO 29.6 — Port memory-palace to kf-memory-store crate (branch `wo29f`, not yet merged)
 
 - **DONE (R1+R2+R3):** Ported `@kirkforge/memory-palace` to a new `crates/kf-memory-store/` workspace member.

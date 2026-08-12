@@ -6,7 +6,19 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
-## Session 2026-08-12 — ADR drift gate fix (branch `adr-fix`, worktree `.worktrees/adr`)
+## Session 2026-08-13 — WO 28.7 coverage regression gate (branch `wo28f`, worktree `.worktrees/wo28f`)
+
+- **DONE (R1+R2+R3+R4-local):** per-crate coverage regression gate shipped.
+  - **R1 script:** `scripts/check-cov-regression.sh` — runs `cargo llvm-cov --workspace --lcov`, parses lcov SF:/DA: per-crate (path-prefix mapping: `crates/<name>/src/`→sub-crate, root `src/`→`kf-code`; tests/benches/build.rs excluded), compares vs `docs/coverage-baseline.md` with -1% tolerance. Standalone: warns + exits 0 if llvm-cov absent. `COV_TEST_ARGS` env var (optional) forwards extra test-runner flags.
+  - **R2 baseline:** filled all 6 `TBD` rows in `docs/coverage-baseline.md` from a real llvm-cov run (kf-code 78.4, kf-budget-core 86.5, kf-testdoctor 71.2, kf-compress-core 95.2, kf-plugin-host 88.8, kf-bench 88.3).
+  - **R3 self-guard:** un-ignored `default_thresholds_match_ci_yml` → renamed `default_thresholds_match_local_gate`, re-pinned to parse the `scripts/ci-local.sh` tarpaulin `targets={}` dict (the ci.yml dict it used to parse was removed). Updated the `ponytail:`-adjacent comment.
+  - **R4-local:** wired the script into `scripts/ci-local.sh full` (after the tarpaulin block).
+- **Honest disclosure — 12 env-incompatible tests (NOT mine):** the full llvm-cov run fails in THIS worktree because 9 kf-code bash/jobs spawn tests hit `os error 22 (EINVAL)` on the WO 28.5 landlock+rlimit spawn path, 2 daemon/TUI-jobs tests depend on it, and 1 `kf-plugin-host` test needs the `plugins/` dir deleted in WO 29.9. They pass on CI's ubuntu-latest. Baseline captured with those 12 skipped (via `COV_TEST_ARGS`); the `kf-code` floor is therefore conservatively low relative to a full CI run. Gate demonstrated green end-to-end with the same skips (exit 0).
+- **DEFERRED (R4-ci.yml):** the `.github/workflows/ci.yml` `coverage` job does NOT yet call the script — task scope was ci-local.sh only. Remaining: add a `Check coverage regression` step after the artifact upload. Tracked in workorder 28.7 + here.
+- **Gate (pasted):** `bash scripts/check-cov-regression.sh` → exit 0 (6/6 crates OK); `cargo test -p kf-testdoctor --lib -- default_thresholds_match_local_gate` → 1 passed; `cargo test -p kf-budget-core --test adr_xref_drift` → 4 passed. `cargo fmt --check` clean; `cargo clippy -p kf-testdoctor --all-targets -- -D warnings` clean.
+- **Tooling note:** `cargo-llvm-cov` was not installed in this env; installed taiki-e prebuilt v0.8.7 to `~/.cargo/bin` + `rustup component add llvm-tools-preview` to capture the baseline. The script warns+skips for users without it.
+
+
 
 - **Task:** make `cargo test -p kf-budget-core --test adr_xref_drift` green (4/4); fix ADR-054 status drift; check all ADRs + TECHNICAL.md count.
 - **Finding (honest):** the ADR-054 header↔README status drift the workorder cited was **already fixed** in a prior merge — file header and README index row are byte-identical (`Accepted (WO 27.1 added landlock — see amendment below)`). No ADR content edit was needed.

@@ -413,31 +413,32 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    // ponytail: #[ignore] until coverage-gate targets dict is restored in ci.yml — upgrade path: remove #[ignore] when coverage gate lands (WO 26.x or manual).
-    fn default_thresholds_match_ci_yml() {
-        // Drift guard: DEFAULT_THRESHOLDS must match the thresholds
-        // enforced by the coverage gate in .github/workflows/ci.yml.
-        // Parses the gate's `targets = { ... }` dict so a bump on one
-        // side that forgets the other fails here instead of drifting.
+    // Drift guard: DEFAULT_THRESHOLDS must match the inline `targets = { ... }`
+    // dict in scripts/ci-local.sh (the local tarpaulin gate). The per-crate
+    // floor in docs/coverage-baseline.md is enforced by a SEPARATE gate
+    // (scripts/check-cov-regression.sh, WO 28.7) at a different granularity,
+    // so it is not compared here. Ponytail: pinned to ci-local.sh because
+    // that is where the per-directory thresholds are duplicated; if the
+    // tarpaulin gate is removed, this test must move to wherever the
+    // per-directory numbers next land (or be deleted if they cease to exist).
+    fn default_thresholds_match_local_gate() {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let ci_yml = manifest
+        let gate = manifest
             .join("..")
             .join("..")
-            .join(".github")
-            .join("workflows")
-            .join("ci.yml");
-        let text = std::fs::read_to_string(&ci_yml)
-            .unwrap_or_else(|e| panic!("read {}: {e}", ci_yml.display()));
+            .join("scripts")
+            .join("ci-local.sh");
+        let text = std::fs::read_to_string(&gate)
+            .unwrap_or_else(|e| panic!("read {}: {e}", gate.display()));
         let line = text
             .lines()
             .find(|l| l.contains("targets = {"))
-            .expect("ci.yml coverage-gate `targets = {` line not found");
+            .expect("scripts/ci-local.sh tarpaulin `targets = {` line not found");
         let start = line.find('{').expect("`{` in targets dict");
         let end = line.find('}').expect("`}` in targets dict");
         let dict = &line[start + 1..end];
 
-        let mut ci: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
+        let mut gate: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
         for entry in dict.split(',') {
             let mut parts = entry.split(':');
             let key = parts
@@ -450,22 +451,21 @@ mod tests {
                 key.is_empty(),
                 parts.next().unwrap_or("").trim().parse::<f64>(),
             ) {
-                ci.insert(key, v);
+                gate.insert(key, v);
             }
         }
         assert!(
-            !ci.is_empty(),
-            "parsed no thresholds from ci.yml targets dict"
+            !gate.is_empty(),
+            "parsed no thresholds from scripts/ci-local.sh targets dict"
         );
 
         for (dir, threshold) in DEFAULT_THRESHOLDS {
-            let ci_val = ci
-                .get(*dir)
-                .copied()
-                .unwrap_or_else(|| panic!("ci.yml coverage gate has no threshold for `{dir}`"));
+            let gate_val = gate.get(*dir).copied().unwrap_or_else(|| {
+                panic!("scripts/ci-local.sh tarpaulin gate has no threshold for `{dir}`")
+            });
             assert!(
-                (ci_val - threshold).abs() < 1e-9,
-                "DEFAULT_THRESHOLDS[{dir}] = {threshold} but ci.yml coverage gate = {ci_val} (drift)",
+                (gate_val - threshold).abs() < 1e-9,
+                "DEFAULT_THRESHOLDS[{dir}] = {threshold} but scripts/ci-local.sh gate = {gate_val} (drift)",
             );
         }
     }

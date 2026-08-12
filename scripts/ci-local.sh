@@ -4,7 +4,7 @@
 # Usage:
 #   scripts/ci-local.sh           # run all checks
 #   scripts/ci-local.sh quick     # run fmt + test + clippy (skip release build and audit)
-#   scripts/ci-local.sh full      # quick + release + audit + adr_xref_drift + tarpaulin coverage gate
+#   scripts/ci-local.sh full      # quick + release + audit + adr_xref_drift + tarpaulin + llvm-cov regression gate
 #
 # Exit code: non-zero on first failure.
 
@@ -120,6 +120,11 @@ PY
         echo -e "${YELLOW}WARNING${NC}: cargo-tarpaulin not installed; skipping coverage gate."
         echo "         Install it (cargo install cargo-tarpaulin) to mirror the CI coverage job."
     fi
+
+    # Per-crate coverage regression gate (WO 28.7). Uses cargo-llvm-cov —
+    # the SAME tool CI's coverage job uses — so local and CI numbers match.
+    # Warns + exits 0 if llvm-cov is absent (see scripts/check-cov-regression.sh).
+    run_step "Coverage regression gate" bash scripts/check-cov-regression.sh
 fi
 
 echo

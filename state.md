@@ -6,6 +6,17 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
+## WO 29.5 — Port RBAC + JWT verification (core-rbac) to Rust (branch `wo29e`, not yet merged)
+
+- **DONE (R1+R2+R3+R4):** Ported `@kirkforge/core-rbac` (425 LOC index.ts + 161 LOC jwt-verify.ts) to `crates/kf-rbac/` (new workspace member).
+  - **R1 RBAC:** `src/rbac.rs` — `Role` (4, enum + `FromStr`), `Permission` (16, enum), `Actor`, `AuthMethod`, `has_permission`, `authorize`, `authorize_tenant`, `resolve_role`, `GroupRoleMapping`, `DEFAULT_GROUP_ROLE_MAPPING`. Permissions are `&'static [Permission]` slices (no HashSet alloc). `authorize_tenant` inlined (not delegating to `authorize`) to keep the audit-hook wiring simple.
+  - **R2 API key:** `src/api_key.rs` — `actor_from_api_key` with `subtle::ConstantTimeEq` + right-aligned padding mirroring the TS timing-safe compare.
+  - **R3 JWT:** `src/jwt.rs` — `verify_jwt` (async; OIDC discovery + JWKS fetch via `reqwest`, or local JWKS set for tests), `validate_jwt_claims`, `actor_from_jwt`, `OidcConfig`, `JwtClaims`, `VerifyJwtOptions`, `clear_jwks_cache` (global `LazyLock<Mutex<HashMap>>`), `ALLOWED_ALGORITHMS` (10 strings, verbatim TS policy). `Validation::algorithms` derived **per key family** from the JWK — jsonwebtoken requires every listed alg to share the key's family.
+  - **R4 tests:** 58 ported (46 RBAC + 12 JWT). TS "unknown role denies" tests adapted to `Role::from_str` rejection tests (the enum makes invalid roles unconstructable — security property moves to the parse boundary, documented in test comments).
+- **DEFERRED — ES512 verifier coverage:** ES512 stays in `ALLOWED_ALGORITHMS` (no algorithm dropped from policy), but `jsonwebtoken` (all versions through 11.x) bundles only `p256`/`p384` — no `ES512` variant exists. ES512 tokens fail at `decode_header` with `INVALID_TOKEN` rather than being verified. Remaining work: add `p521` crate + manual ES512 branch in `algorithms_for_key`, OR switch to openssl-backed JOSE crate. Not exercised by the TS suite (tests RS256 + ES256). Tracked here + WO 29.5.
+- **New deps:** `jsonwebtoken = "9"` (ring-based, no openssl), `subtle = "2"`, `reqwest` (local crate decl; already workspace-standard). Dev-only: `rsa`, `p256`, `rand`, `base64` (keygen for JWT tests; no binary-size impact).
+- Gate green: `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check`, `cargo test -p kf-rbac` (58 passed).
+
 ## WO 29.4 — Port EventBus + AuditLogger (core-events) to Rust (branch `wo29d`, not yet merged)
 
 - **DONE (R1+R2+R3):** Ported the LIVE surface of `@kirkforge/core-events` to Rust.

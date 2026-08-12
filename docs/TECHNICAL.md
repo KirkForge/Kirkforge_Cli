@@ -45,6 +45,7 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-compress-core       ← context-compression pipeline library + ruleset filtering
 │   ├── kf-budget-core           ← budget/orchestrator/slicing data model
 │   ├── kf-routing              ← pure Rust port of orchestrator pure modules (classifier, routing, correction, path safety) — foundation for WO 29.7
+│   ├── kf-rbac                 ← RBAC (4 roles × 16 perms), timing-safe API-key auth, OIDC JWT/JWKS verification — port of @kirkforge/core-rbac (WO 29.5)
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── plugins/                   ← shell plugin manifests + tool/hook scripts
 │   └── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
@@ -89,6 +90,7 @@ When the feature is off, the shell plugin dir loads as a fallback
 | `kf-testdoctor` | quality | Test-performance diagnostics | Active |
 | `kf-budget-core` | session | Budget/orchestrator/slicing data model | Active |
 | `kf-routing` | session | Pure orchestrator modules: classifier, routing, correction, truth model, profiles, cost, path safety (WO 29.3) | Active |
+| `kf-rbac` | security | RBAC (roles/permissions/actor), timing-safe API-key auth, OIDC JWT/JWKS verification — port of `@kirkforge/core-rbac` (WO 29.5). ES512 verify deferred (jsonwebtoken has no ES512 variant). | Active |
 
 "Excluded" crates exist on disk but are not built by default.
 

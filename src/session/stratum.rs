@@ -16,7 +16,12 @@ use kf_compress_core::rules::build_rules;
 use kf_compress_core::store::InMemoryOffloadStore;
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
+
+// WO 28.2: session-mode global + accessors moved to shared/session_mode.rs
+// to break the budget↔stratum production cycle. Re-exported here so all
+// existing callers (executor, tests, TUI) compile unchanged.
+pub use crate::shared::session_mode::{current_session_mode, set_session_mode};
 
 #[derive(Debug)]
 struct MinifyTransform;
@@ -77,34 +82,6 @@ pub fn compress_with_store(content: &str, mode: Mode, store: &InMemoryOffloadSto
 // process-global state (separate from the config-derived
 // `active_mode()`) so the auto-escalation can outlive a single
 // `StratumSessionStartHook` call.
-
-/// Per-session Stratum mode. Distinct from the config-derived
-/// `active_mode()`: `SESSION_MODE` is the *resolved* mode for the
-/// current session and can be mutated by the budget's auto-escalation
-/// path. The config-derived mode is read-only; the session mode wins
-/// when both are consulted.
-///
-/// ceiling: process-global OnceLock. Intentional for env-driven config:
-/// a single CLI process has one active session, and auto-escalation
-/// must outlive `StratumSessionStartHook`. Multi-session support would
-/// require scoping into SessionStores.
-static SESSION_MODE: OnceLock<Mutex<Mode>> = OnceLock::new();
-
-fn session_mode() -> &'static Mutex<Mode> {
-    SESSION_MODE.get_or_init(|| Mutex::new(Mode::Full))
-}
-
-/// Read the current per-session Stratum mode.
-pub fn current_session_mode() -> Mode {
-    *session_mode().lock().unwrap_or_else(|e| e.into_inner())
-}
-
-/// Set the per-session Stratum mode. Intended for the budget's
-/// auto-escalation path. The new mode takes effect for the next
-/// compression call.
-pub fn set_session_mode(mode: Mode) {
-    *session_mode().lock().unwrap_or_else(|e| e.into_inner()) = mode;
-}
 
 // ── Sliced-event coordination (WO 8.6) ─────────────────────────────────
 

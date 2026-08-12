@@ -12,6 +12,13 @@ pub mod pty;
 #[cfg(target_os = "linux")]
 mod landlock;
 
+// WO 28.5: re-export resolve_paths so background bash jobs (a sibling
+// module under session/) can resolve landlock paths. The rest of the
+// landlock module stays private; LandlockPaths is never named across the
+// boundary (callers use type inference).
+#[cfg(target_os = "linux")]
+pub(crate) use landlock::resolve_paths;
+
 /// Per-stream cap for captured stdout / stderr from a single bash invocation.
 ///
 /// Without this, a single `cat /dev/urandom` or `find / -print` against a

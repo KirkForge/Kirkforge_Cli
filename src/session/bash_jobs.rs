@@ -94,10 +94,8 @@ impl BashJobRegistry {
     /// reaches MAX_JOBS (64).
     ///
     /// When `sandbox` is `Some`, the same rlimits + (Linux) network namespace
-    /// caps as the foreground path are applied to the spawned shell so a
-    /// background fork bomb or runaway `find /` cannot exhaust the host
-    /// (WO 27.5 R1 / H5). Filesystem landlock is not yet applied here — see
-    /// the `ponytail:` note at the call site.
+    /// caps + filesystem landlock confinement as the foreground path are
+    /// applied to the spawned shell (WO 27.5 R1 / H5 + WO 28.5).
     #[allow(clippy::too_many_arguments)]
     pub async fn spawn(
         &self,
@@ -176,28 +174,40 @@ impl BashJobRegistry {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         setup_process_group(&mut proc);
+
+        // Resolve the working directory to a canonical absolute path before
+        // fork: (a) the child's cwd is stable even if the parent's cwd
+        // changes after spawn (F15), and (b) the landlock allow-list must
+        // match the path the child will actually access (WO 28.5). When
+        // workdir is None the child inherits the parent cwd, so we pass
+        // that to landlock resolution and leave current_dir unset.
+        let canonical_workdir = match workdir {
+            Some(wd) => {
+                let expanded = shellexpand::tilde(wd);
+                let canonical = std::fs::canonicalize(expanded.as_ref())
+                    .map_err(|e| anyhow::anyhow!("cannot resolve working directory '{wd}': {e}"))?;
+                proc.current_dir(&canonical);
+                Some(canonical)
+            }
+            None => None,
+        };
+
         if let Some(cfg) = sandbox {
-            // ponytail: rlimits only — filesystem landlock is NOT applied to
-            // background jobs yet. resolve_paths() lives in the private
-            // bash_runner::landlock module; re-exporting it requires editing
-            // bash_runner/mod.rs (owned by WO 27.1). Passing None gives us
-            // CPU/AS/FSIZE caps + CLONE_NEWNET (when --no-network) — enough to
-            // kill a fork bomb (the H5 finding) without the FS confinement.
-            // ceiling: a background job can still read/write anywhere the user
-            // can until landlock is plumbed through; tracked as WO 27.5 R1
-            // remaining work. upgrade path: re-export resolve_paths from
-            // bash_runner (WO 27.1 follow-up) and pass Some(paths) here.
-            setup_rlimits(&mut proc, cfg, None);
-        }
-        if let Some(ref wd) = workdir {
-            // Resolve the working directory to a canonical absolute path
-            // before forking so the child's cwd is stable even if the
-            // parent's cwd changes after spawn (F15). A relative or
-            // nonexistent path is rejected with a clear error.
-            let expanded = shellexpand::tilde(wd);
-            let canonical = std::fs::canonicalize(expanded.as_ref())
-                .map_err(|e| anyhow::anyhow!("cannot resolve working directory '{wd}': {e}"))?;
-            proc.current_dir(canonical);
+            // WO 28.5: landlock FS confinement mirrors the foreground path
+            // (bash_runner/mod.rs:494-503). Resolve against the same canonical
+            // workspace used for current_dir so the allow-list matches.
+            let workspace = canonical_workdir
+                .clone()
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_default();
+            #[cfg(target_os = "linux")]
+            let lp = crate::session::bash_runner::resolve_paths(&workspace, &[]);
+            #[cfg(not(target_os = "linux"))]
+            let lp: Option<()> = {
+                let _ = workspace;
+                None
+            };
+            setup_rlimits(&mut proc, cfg, lp);
         }
 
         let child = proc.spawn()?;

@@ -12,7 +12,7 @@
 //! returns a clear `Error` outcome naming the missing language — it never
 //! fakes results (matches the `web_search` precedent).
 
-use crate::session::access::{GuardVerdict, PathGuard};
+use crate::shared::access::{GuardVerdict, PathGuard};
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use kf_lsp::{uri_to_path, LspPool};
@@ -654,7 +654,7 @@ fn short_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::access::PathGuard;
+    use crate::shared::access::PathGuard;
     use kf_lsp::{LanguageConfig, LspPool};
     use tokio_util::sync::CancellationToken;
 

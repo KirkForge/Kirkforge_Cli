@@ -1,4 +1,4 @@
-use crate::session::access::DenyList;
+use crate::shared::access::DenyList;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use percent_encoding::percent_decode_str;

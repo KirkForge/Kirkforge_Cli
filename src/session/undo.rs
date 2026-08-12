@@ -100,21 +100,9 @@ pub struct UndoOp {
     pub timestamp: chrono::DateTime<chrono::Local>,
 }
 
-/// Kind of edit. Display only — restore is identical for both.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum UndoKind {
-    Edit,
-    Write,
-}
-
-impl UndoKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            UndoKind::Edit => "edit",
-            UndoKind::Write => "write",
-        }
-    }
-}
+// WO 28.1: UndoKind now lives in shared::undo (pure enum). Re-exported here so
+// existing `session::undo::UndoKind` callers (UndoOp/UndoSummary, tui) resolve.
+pub use crate::shared::undo::UndoKind;
 
 /// A human-readable summary of an undo entry. Used by `/undo list`.
 #[derive(Debug, Clone)]

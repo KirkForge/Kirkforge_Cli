@@ -1,4 +1,4 @@
-use crate::session::access::{GuardVerdict, PathGuard};
+use crate::shared::access::{GuardVerdict, PathGuard};
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use globset::{Glob as GlobPattern, GlobSet, GlobSetBuilder};

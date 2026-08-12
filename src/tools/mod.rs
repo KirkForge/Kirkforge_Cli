@@ -18,6 +18,7 @@ pub mod web_search;
 pub mod workflow;
 pub mod write_file;
 
+pub mod toolset;
 pub use registry::{ToolContextBuilder, ToolRegistry};
 
 pub fn validate_tool_args(tool: &dyn Tool, args: &serde_json::Value) -> Result<(), String> {
@@ -85,8 +86,8 @@ fn value_type_name(val: &serde_json::Value) -> &'static str {
     }
 }
 
-use crate::session::toolset::CompositeToolset;
 use crate::shared::{ToolDef, ToolOutcome};
+use crate::tools::toolset::CompositeToolset;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -323,8 +324,8 @@ mod tests {
         let ctx = ToolContextBuilder {
             undo_stack: None,
             supports_images: false,
-            deny_list: crate::session::access::DenyList::default(),
-            path_guard: crate::session::access::PathGuard::default(),
+            deny_list: crate::shared::access::DenyList::default(),
+            path_guard: crate::shared::access::PathGuard::default(),
             bash_sandbox_workdir: false,
             minify_write_side: false,
             minify_above_bytes: 0,
@@ -378,8 +379,8 @@ mod tests {
         let ctx = ToolContextBuilder {
             undo_stack: None,
             supports_images: true,
-            deny_list: crate::session::access::DenyList::default(),
-            path_guard: crate::session::access::PathGuard::default(),
+            deny_list: crate::shared::access::DenyList::default(),
+            path_guard: crate::shared::access::PathGuard::default(),
             bash_sandbox_workdir: false,
             minify_write_side: false,
             minify_above_bytes: 0,
@@ -415,8 +416,8 @@ mod tests {
         let ctx = ToolContextBuilder {
             undo_stack: None,
             supports_images: false,
-            deny_list: crate::session::access::DenyList::default(),
-            path_guard: crate::session::access::PathGuard::default(),
+            deny_list: crate::shared::access::DenyList::default(),
+            path_guard: crate::shared::access::PathGuard::default(),
             bash_sandbox_workdir: false,
             minify_write_side: false,
             minify_above_bytes: 0,
@@ -443,7 +444,7 @@ mod tests {
     #[test]
     fn schema_validation_rejects_missing_required_arg() {
         use crate::tools::grep::Grep;
-        let grep = Grep::new(crate::session::access::PathGuard::default());
+        let grep = Grep::new(crate::shared::access::PathGuard::default());
         let err = validate_tool_args(&grep, &serde_json::json!({}));
         assert!(err.is_err(), "should reject missing 'pattern'");
         assert!(err.unwrap_err().contains("pattern"));
@@ -452,7 +453,7 @@ mod tests {
     #[test]
     fn schema_validation_accepts_valid_args() {
         use crate::tools::grep::Grep;
-        let grep = Grep::new(crate::session::access::PathGuard::default());
+        let grep = Grep::new(crate::shared::access::PathGuard::default());
         let result = validate_tool_args(
             &grep,
             &serde_json::json!({"pattern": "hello", "path": "/tmp"}),
@@ -463,7 +464,7 @@ mod tests {
     #[test]
     fn schema_validation_rejects_wrong_type() {
         use crate::tools::grep::Grep;
-        let grep = Grep::new(crate::session::access::PathGuard::default());
+        let grep = Grep::new(crate::shared::access::PathGuard::default());
         let err = validate_tool_args(
             &grep,
             &serde_json::json!({"pattern": "hello", "context_lines": "not_a_number"}),

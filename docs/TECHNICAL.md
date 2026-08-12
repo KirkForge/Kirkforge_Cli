@@ -45,18 +45,24 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-compress-core       ← context-compression pipeline library + ruleset filtering
 │   ├── kf-budget-core           ← budget/orchestrator/slicing data model
 │   ├── kf-routing              ← pure Rust port of orchestrator pure modules (classifier, routing, correction, path safety) — foundation for WO 29.7
-<<<<<<< HEAD
 │   ├── kf-rbac                 ← RBAC (4 roles × 16 perms), timing-safe API-key auth, OIDC JWT/JWKS verification — port of @kirkforge/core-rbac (WO 29.5)
-||||||| 1320e7b
-=======
 │   ├── kf-memory-store ← routing-oriented memory store (MemoryStore facade + InMemory/File/SQLite adapters) — port of @kirkforge/memory-palace (WO 29.6)
->>>>>>> wo29f
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── plugins/                   ← shell plugin manifests + tool/hook scripts
 │   └── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
 ├── benches/tasks/             ← 30 benchmark task definitions (TOML)
-└── docs/adr/                  ← 89 Architecture Decision Records
+└── docs/adr/                  ← 90 Architecture Decision Records
 ```
+
+**Module layering (ADR-073):** `tools` depends on `shared`, not `session`. The
+pure access surface (`PathGuard`/`DenyList`/`GuardVerdict`), the bash
+command-string safety gate (`check_bash_command_str`), `UndoKind`, and the
+toolset composition types live in `shared` / `tools`; `session` re-exports them
+for legacy callers. The single intentional tools↔session seam is the
+`TaskSpawner` port (defined in `tools::task`, implemented by
+`session::task_spawner::InProcessTaskSpawner`) — where the agent loop plugs into
+the `task` tool. Residual `tools → session` edges (bash shell-runner, bash job
+registry, memory store) are non-cyclic and need their own port traits to cut.
 
 The workspace has ~3,000 `#[test]` functions (~2,200 under `src/`,
 ~772 under `crates/`). The `crates/` count is pinned by the
@@ -95,12 +101,8 @@ When the feature is off, the shell plugin dir loads as a fallback
 | `kf-testdoctor` | quality | Test-performance diagnostics | Active |
 | `kf-budget-core` | session | Budget/orchestrator/slicing data model | Active |
 | `kf-routing` | session | Pure orchestrator modules: classifier, routing, correction, truth model, profiles, cost, path safety (WO 29.3) | Active |
-<<<<<<< HEAD
 | `kf-rbac` | security | RBAC (roles/permissions/actor), timing-safe API-key auth, OIDC JWT/JWKS verification — port of `@kirkforge/core-rbac` (WO 29.5). ES512 verify deferred (jsonwebtoken has no ES512 variant). | Active |
-||||||| 1320e7b
-=======
 | `kf-memory-store` | session | Routing-oriented memory store: MemoryStore facade + InMemory/File/SQLite adapters (port of `@kirkforge/memory-palace`, WO 29.6) | Active |
->>>>>>> wo29f
 
 "Excluded" crates exist on disk but are not built by default.
 
@@ -972,7 +974,7 @@ not the root binary.
 
 ## ADRs
 
-89 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+90 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
 execution replay (039), VFS minification (053), coverage-gate threshold

@@ -43,6 +43,16 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 pub mod config;
 
+// WO 28.1: access (PathGuard/DenyList/GuardVerdict) relocated from session —
+// pure data/logic with no session state. session re-exports it for legacy callers.
+pub mod access;
+// WO 28.1: bash command-string safety gate relocated from session/bash_runner —
+// pure static analysis (no I/O). session::bash_runner re-exports for legacy callers.
+pub mod bash_safety;
+// WO 28.1: UndoKind relocated from session::undo — pure enum. session::undo
+// re-exports it for its own callers (UndoOp/UndoStack stay in session).
+pub mod undo;
+
 pub use config::{Config, DisplayConfig, ModelConfig, SecurityConfig, SessionConfig, ToolConfig};
 
 /// Thread-safe shared configuration. Used by both the TUI and the executor

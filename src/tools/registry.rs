@@ -1,4 +1,4 @@
-use crate::session::access::{DenyList, PathGuard};
+use crate::shared::access::{DenyList, PathGuard};
 use crate::shared::{ComputerUseConfig, DockerConfig, SandboxConfig};
 use crate::tools::computer_use::{ChromeTab, SessionLauncher};
 use crate::tools::task::TaskConcurrencyMode;

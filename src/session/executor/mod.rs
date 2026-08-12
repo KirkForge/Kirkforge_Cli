@@ -398,13 +398,15 @@ impl Executor {
         let ollama_host = shared_cfg.read().unwrap().model.ollama_host.clone();
         let undo_stack = self.undo_stack.clone();
         let supports_images = self.adapter.model_info().supports_images;
-        self.task_spawner = Some(Arc::new(crate::tools::task::InProcessTaskSpawner::new(
-            shared_cfg,
-            model_name,
-            ollama_host,
-            undo_stack,
-            supports_images,
-        )));
+        self.task_spawner = Some(Arc::new(
+            crate::session::task_spawner::InProcessTaskSpawner::new(
+                shared_cfg,
+                model_name,
+                ollama_host,
+                undo_stack,
+                supports_images,
+            ),
+        ));
     }
 
     /// Replace the shared config with `new` and rebuild access-control

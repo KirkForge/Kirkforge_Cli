@@ -1,5 +1,5 @@
-use crate::session::access::PathGuard;
-use crate::session::undo::UndoKind;
+use crate::shared::access::PathGuard;
+use crate::shared::undo::UndoKind;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{atomic_write, Tool, ToolContext, UndoStackRef};
 use std::path::PathBuf;
@@ -55,7 +55,7 @@ impl Tool for NotebookEdit {
             }
         };
 
-        if let crate::session::access::GuardVerdict::Denied(msg) =
+        if let crate::shared::access::GuardVerdict::Denied(msg) =
             self.path_guard.check_write(&path).await
         {
             return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });

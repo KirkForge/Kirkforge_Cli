@@ -13,11 +13,11 @@
 //! (e.g. inside a sandboxed bench run that does not wire up a spawner),
 //! the tool returns `ToolOutcome::Error` rather than silently no-op'ing.
 
-use crate::session::access::{DenyList, PathGuard};
-use crate::session::bash_runner::check_bash_command_str;
-use crate::session::toolset::{CompositeToolset, Toolset};
+use crate::shared::access::{DenyList, PathGuard};
+use crate::shared::bash_safety::check_bash_command_str;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::task::TaskSpawner;
+use crate::tools::toolset::{CompositeToolset, Toolset};
 use crate::tools::{Tool, ToolContext};
 use anyhow::{bail, Context, Result};
 use kf_workflow::{StepOutput, StepRequest, StepRunner, Workflow, WorkflowExecutor};

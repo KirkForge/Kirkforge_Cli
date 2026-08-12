@@ -1,4 +1,4 @@
-use crate::session::access::{GuardVerdict, PathGuard};
+use crate::shared::access::{GuardVerdict, PathGuard};
 use crate::shared::{Match as SearchMatch, ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;

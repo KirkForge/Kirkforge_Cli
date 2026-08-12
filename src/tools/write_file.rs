@@ -1,5 +1,5 @@
-use crate::session::access::PathGuard;
-use crate::session::undo::UndoKind;
+use crate::shared::access::PathGuard;
+use crate::shared::undo::UndoKind;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext, UndoStackRef};
 use std::path::PathBuf;
@@ -77,7 +77,7 @@ impl Tool for WriteFile {
 
         // Enforce deny_paths, deny_extensions, block_dotfiles,
         // allowed_write_dirs, and sandbox containment before any write.
-        if let crate::session::access::GuardVerdict::Denied(msg) =
+        if let crate::shared::access::GuardVerdict::Denied(msg) =
             self.path_guard.check_write(&path).await
         {
             return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
@@ -230,7 +230,7 @@ mod tests {
 
         let tool = WriteFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -253,7 +253,7 @@ mod tests {
 
         let tool = WriteFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -274,9 +274,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("key.pem");
 
-        let guard = crate::session::access::PathGuard {
+        let guard = crate::shared::access::PathGuard {
             deny_extensions: vec![".pem".to_string()],
-            deny_list: crate::session::access::DenyList::new(vec![], vec![]),
+            deny_list: crate::shared::access::DenyList::new(vec![], vec![]),
             ..Default::default()
         };
         let tool = WriteFile::new(None, guard, false, false);
@@ -306,7 +306,7 @@ mod tests {
         let big = "x".repeat(2048);
         std::fs::write(&path, &big).unwrap();
 
-        let guard = crate::session::access::PathGuard {
+        let guard = crate::shared::access::PathGuard {
             max_overwrite_size: 1024,
             ..Default::default()
         };
@@ -343,7 +343,7 @@ mod tests {
 
         let tool = WriteFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -379,7 +379,7 @@ mod tests {
 
         let tool = WriteFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             true,
             false,
         );
@@ -419,7 +419,7 @@ mod tests {
 
         let tool = WriteFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -452,7 +452,7 @@ mod tests {
 
         let tool = WriteFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             true,
             false,
         );
@@ -472,7 +472,7 @@ mod tests {
     async fn missing_path_arg_is_invalid_args() {
         let tool = WriteFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -494,7 +494,7 @@ mod tests {
         std::fs::write(&path, "old").unwrap();
         let tool = WriteFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -519,7 +519,7 @@ mod tests {
         let path = dir.path().join("nested/deep/file.txt");
         let tool = WriteFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -541,7 +541,7 @@ mod tests {
             crate::shared::minify::wrap_minified_envelope("rust", "fn main(){println!(\"hi\");}");
         let tool = WriteFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             true,
             false,
         );
@@ -577,7 +577,7 @@ mod tests {
             std::sync::Arc::new(std::sync::Mutex::new(UndoStack::for_session(&id).unwrap()));
         let tool = WriteFile::new(
             Some(stack.clone()),
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -607,7 +607,7 @@ mod tests {
     async fn def_has_correct_name_and_required_args() {
         let tool = WriteFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );

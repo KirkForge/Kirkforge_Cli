@@ -796,6 +796,63 @@ fn parse_plugin_sources_env(value: &str) -> std::collections::HashMap<String, Pa
 mod tests {
     use super::*;
 
+    // WO 28.1: moved from shared/access/mod.rs. This test exercises the
+    // composition of `freeze_launch_sandbox` (defined here in session::config)
+    // with `access_from_config` (now in shared::access). It reaches up to the
+    // launch-freeze policy, so it lives with that policy — keeping shared free
+    // of any session dependency (required for the kf-shared extraction goal).
+    /// **Contract:** `Config::default()` now sandboxes to the current
+    /// working directory. Operators who want unsandboxed operation must
+    /// explicitly opt out via `sandbox_dir = ""` in the config file (or
+    /// `KF_CODE_SANDBOX_DIR=""` env var); `access_from_config` treats
+    /// the empty string as `None`.
+    #[test]
+    fn test_launch_path_sandboxes_to_cwd_by_default() {
+        // Default Config has no sandbox_dir — operator didn't set it.
+        let mut config = Config::default();
+        assert!(
+            config.security.sandbox_dir.is_none(),
+            "Config::default() must NOT pre-resolve cwd — resolution happens \
+             at launch time in `freeze_launch_sandbox`."
+        );
+
+        // Launch path. In the unit-test runtime, cwd is always present.
+        freeze_launch_sandbox(&mut config);
+        let (_deny, guard, _gate) = crate::shared::access::access_from_config(&config);
+        assert!(
+            guard.is_sandboxed(),
+            "After freeze_launch_sandbox, the launch path must produce a \
+             sandboxed guard."
+        );
+
+        // Explicit escape hatch: empty string in config = unsandboxed.
+        let mut config_unsandboxed = Config::default();
+        config_unsandboxed.security.sandbox_dir = Some(String::new());
+        freeze_launch_sandbox(&mut config_unsandboxed);
+        let (_deny, guard_unsandboxed, _gate) =
+            crate::shared::access::access_from_config(&config_unsandboxed);
+        assert!(
+            !guard_unsandboxed.is_sandboxed(),
+            "Setting sandbox_dir = Some(\"\") is the explicit escape hatch; \
+             freeze_launch_sandbox must not overwrite it"
+        );
+        assert_eq!(
+            config_unsandboxed.security.sandbox_dir.as_deref(),
+            Some(""),
+            "freeze_launch_sandbox must leave an explicit-empty sandbox_dir alone"
+        );
+
+        // `None` is also the escape hatch.
+        let mut config_none = Config::default();
+        freeze_launch_sandbox(&mut config_none);
+        config_none.security.sandbox_dir = None;
+        let (_deny, guard_none, _gate) = crate::shared::access::access_from_config(&config_none);
+        assert!(
+            !guard_none.is_sandboxed(),
+            "sandbox_dir = None must produce an unsandboxed guard"
+        );
+    }
+
     /// Serialize tests that mutate process-wide environment variables.
     /// Rust unit tests run in parallel by default; `std::env::set_var` is
     /// process-wide, so concurrent env tests can observe each other's state

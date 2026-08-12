@@ -13,6 +13,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - WO 28.2: `shared::session_mode` module — the per-session Stratum mode global moved out of `session::stratum` to break the `budget ↔ stratum` production cycle. Stratum re-exports the accessors for back-compat.
 
 ### Changed
+- WO 28.1: Broke the `tools ↔ session` circular dependency (H7). Production `use crate::session::` in `src/tools/` drops 26 → 3. Relocated the pure access surface to `shared::access` (PathGuard/DenyList/GuardVerdict), `check_bash_command_str` to `shared::bash_safety`, `UndoKind` to `shared::undo`, and the toolset types to `tools::toolset`; `InProcessTaskSpawner` (which constructs the nested Executor) moved to `session::task_spawner` while the `TaskSpawner` port trait stays in `tools::task`. Cuts the cycle `tools/mod → session::toolset → tools::Tool` and unblocks a future `kf-tools` crate. R1 used relocation rather than a `Guard` trait (lower risk, better layering; trait deferred — YAGNI, single impl). See ADR-073. The 3 residuals (bash shell-runner, bash job registry, memory store) are non-cyclic and need their own port traits.
 - WO 29.2: Rust security emitter — the 14 regex security rules from `security-emitter.ts` are ported to `src/session/verifier/security_emitter.rs`. The verifier bus now calls `emit_security_findings()` directly instead of spawning `bridge-emitter.ts` as a Node subprocess. Eliminates the last Rust→TS call path. Deleting the now-dead TS sources is deferred to WO 29.9.
 
 ### Fixed

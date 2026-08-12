@@ -7,6 +7,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - WO 28.5: Landlock FS confinement on background bash jobs. `resolve_paths` is re-exported `pub(crate)` from `bash_runner` and the background spawn path now resolves a canonical workspace and passes it to `setup_rlimits` (mirroring the foreground `run_shell_with_token` path). Previously background jobs got rlimits + `CLONE_NEWNET` but not landlock. Closes the WO 27.5-R1 deferral.
+- WO 28.2: `shared::session_mode` module — the per-session Stratum mode global (`SESSION_MODE` + `current_session_mode`/`set_session_mode`) moved out of `session::stratum` to break the `budget ↔ stratum` production cycle. Stratum re-exports the accessors for back-compat; the budget auto-escalation path now calls `shared::session_mode` directly.
 
 ### Fixed
 - Review-2026-08-11: Budget/stratum mutex-poison cascade — 26 sites of `.lock().expect("…poisoned")` in `src/session/budget.rs` + `src/session/stratum.rs` converted to `.unwrap_or_else(|e| e.into_inner())`, matching the convention already used 35+ times in `config/mod.rs`. A single poisoned mutex previously panicked on every subsequent turn.

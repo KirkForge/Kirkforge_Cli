@@ -350,9 +350,12 @@ fn maybe_escalate_stratum() {
     #[cfg(feature = "stratum")]
     {
         use kf_compress_core::mode::Mode;
-        let current = crate::session::stratum::current_session_mode();
+        // WO 28.2: read/mutate the session mode via shared::session_mode
+        // (where the global now lives) instead of reaching into the
+        // stratum module. This cuts the budget→stratum production edge.
+        let current = crate::shared::session_mode::current_session_mode();
         if current == Mode::Lite {
-            crate::session::stratum::set_session_mode(Mode::Full);
+            crate::shared::session_mode::set_session_mode(Mode::Full);
             tracing::info!(
                 from = "lite",
                 to = "full",

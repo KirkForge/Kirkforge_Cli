@@ -26,6 +26,11 @@ pub mod audit;
 pub mod metrics;
 pub mod minify;
 pub mod permission;
+// WO 28.2: gated on the stratum feature because session_mode uses
+// kf_compress_core::mode::Mode, and kf-compress-core is only a dep when
+// stratum is enabled (mirrors `pub mod stratum;` gating in session/mod.rs).
+#[cfg(feature = "stratum")]
+pub mod session_mode;
 
 #[cfg(test)]
 pub mod test_util;

@@ -5,6 +5,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- WO 28.5: Landlock FS confinement on background bash jobs. `resolve_paths` is re-exported `pub(crate)` from `bash_runner` and the background spawn path now resolves a canonical workspace and passes it to `setup_rlimits` (mirroring the foreground `run_shell_with_token` path). Previously background jobs got rlimits + `CLONE_NEWNET` but not landlock. Closes the WO 27.5-R1 deferral.
+
 ### Fixed
 - Review-2026-08-11: Budget/stratum mutex-poison cascade — 26 sites of `.lock().expect("…poisoned")` in `src/session/budget.rs` + `src/session/stratum.rs` converted to `.unwrap_or_else(|e| e.into_inner())`, matching the convention already used 35+ times in `config/mod.rs`. A single poisoned mutex previously panicked on every subsequent turn.
 - Review-2026-08-11 (CI red blocker): Stream-drain hang — adapter parsers parked on `stream.next().await` with no idle timeout; reqwest's `.timeout(120s)` does not reliably bound the streaming-body phase, so a wedged HTTP body hung the agent loop forever. New shared `next_chunk_or_idle_timeout()` helper in `adapters/mod.rs` wraps `stream.next()` in `tokio::time::timeout(STREAM_IDLE_TIMEOUT=90s)`; on timeout emits `StreamEvent::Error` and closes the channel. Applied to anthropic, anthropic_bedrock, ollama_ndjson, openai_compat parsers.

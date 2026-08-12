@@ -311,10 +311,19 @@ Personas currently route through Anthropic-direct only. Bedrock/Vertex-configure
 `Config` (decomposed into 5 `#[serde(flatten)]` sub-structs: `ModelConfig`,
 `SecurityConfig`, `ToolConfig`, `SessionConfig`, `DisplayConfig`), `Message`,
 `Role`, `StreamEvent`, `ToolDef`, `ToolOutcome`, `ModelInfo`, `ContentPart`,
-metrics, backoff, permissions, minify, audit. The audit log records
+metrics, backoff, permissions, minify, audit, event_bus. The audit log records
 destructive tool calls (`AuditEntry::Tool`) and hook denials / fail-open
 failures (`AuditEntry::Hook`, WO 11.6 / ADR-061) as append-only NDJSON
-with a `"kind"` tag.
+with a `"kind"` tag. WO 29.4 added the tamper-evident hash-chained audit
+trail alongside the existing log: `AuditEvent` (29-literal `AuditAction`
++ `AuditOutcome`), `initial_hash`/`chain_hash_of` (SHA-256, or HMAC-SHA256
+when keyed via `KIRKFORGE_AUDIT_KEY`), `MemoryAuditSink`, `FileAuditSink`
+(size-based rotation, default 50 MB / 10 files), `AuditLogger`, and a
+`create_audit_sink` factory for `{memory, file}`. The `event_bus` module
+ports `@kirkforge/core-events`'s `EventBus`: async `emit` with idempotency
+cache (TTL + size cap) and bounded buffer, `on` returning an unsub
+callable, `drain_buffer`, `shutdown`, and `graceful_shutdown`. Dead sinks
+(http/syslog/worm) are deliberately not ported — zero production consumers.
 
 `ToolConfig.max_continuation_rounds` (default 5, clamped 0–50) caps how many
 times the turn loop will continue after `FinishReason::Length`. When the cap

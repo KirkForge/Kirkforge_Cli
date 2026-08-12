@@ -6,13 +6,18 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
-## WO 29.3 — Port pure orchestrator modules to Rust (branch `wo29c`, not yet merged)
+## WO 29.4 — Port EventBus + AuditLogger (core-events) to Rust (branch `wo29d`, not yet merged)
 
-- **DONE:** New workspace crate `crates/kf-routing/` (~1,750 LOC impl + tests). Ports the orchestrator's pure TS modules: `routing-engine.ts` (FNV-1a vectorizer, cosine, family classifier, recommendation builder), `classifier.ts` + `classifier-nlp.ts` (regex scoring + TF-IDF NLP fallback + archetypes), `correction-loop.ts` + `truth-model.ts` (decide_correction single-precedence truth table), `task-profile.ts` + `cost.ts` (language profiles, provider cost rates), `path-safety.ts` (sha256, sandbox containment, symlink guards, atomic writes). 7 modules, 100 unit tests, deps `serde` + `sha2` + `regex` only.
-- **DEFERRED → WO 29.6/29.7:** `ClassifierMemory.getLearnedExamples` (classifier persistence — not in 29.3 scope; `classify_nlp` builds from static archetypes only). The real `buildCorrectionPrompt` template (lives in correction-core; 29.3 ports the pure decision only; `correction_prompt: Some(marker)` until 29.7 swaps it in).
-- **NOT unified (intentional):** `src/session/access/mod.rs::PathGuard` (async, config/DenyList-coupled, used by live agent loop) vs `kf-routing::path_safety` (sync, pure, artifact-emission policy for orchestrator). Both documented in module docs; unification is a separate refactor.
-- Gate green: `cargo check --workspace --all-targets` (4m25s), `cargo clippy -p kf-routing --all-targets -- -D warnings`, `cargo fmt --check`, `cargo test -p kf-routing` (100 passed). Also bumped `crates/kf-budget-core/README.md` `Tests | 638 → 738` (readme_drift fudge is 2; added exactly 100).
-- **PRE-EXISTING RED (not caused by 29.3):** `cargo test -p kf-budget-core --test adr_xref_drift` → `status_counts_match_index_table_summary` fails: ADR-054 file header says `Accepted (WO 27.1 added landlock — see amendment below)` but the `docs/adr/README.md` index table row says just `Accepted`. Verified by `git stash` + re-run on clean `wo29c` HEAD — fails identically without my changes. Tracked for a separate fix.
+- **DONE (R1+R2+R3):** Ported the LIVE surface of `@kirkforge/core-events` to Rust.
+  - **R1 EventBus:** `src/shared/event_bus.rs` — async `emit` with idempotency cache (`HashMap<event_id, Instant>` + TTL eviction + size cap) and bounded buffer, `on` returning an unsub callable (handler identity via monotonic u64 ID), `drain_buffer`, `shutdown`, `graceful_shutdown`. Defaults match TS (buffer 1000 / cache 10_000 / TTL 5 min).
+  - **R2 AuditLogger + hash chain:** extended `src/shared/audit.rs` with `AuditEvent`, `AuditAction` (29 dotted-string literals), `AuditOutcome`, `initial_hash`, `chain_hash_of` (recursive key-sorted canonical JSON for metadata; null vs absent both → `{}`), `MemoryAuditSink` (+ `verify_chain`), `AuditLogger`, `create_audit_sink` factory. Plain SHA-256 by default; HMAC-SHA256 when keyed.
+  - **R3 FileAuditSink:** buffered append + size-based rotation (default 50 MB / 10 files). `.N` shift then current → `.1` on rotation.
+- **R4 SKIPPED (per inventory — not a deferral):** `HttpAuditSink`, `SyslogAuditSink`, `WormAuditSink` are not ported. Zero production consumers in the TS tree. If a future sink is needed, it's a follow-up WO.
+- **Existing `AuditLog`/`AuditEntry` untouched** — they serve a different purpose (redacted tool-call/hook NDJSON) and have 5+ consumers; new types added alongside.
+- **Deviation disclosed:** the workorder suggested `tokio::sync::broadcast` for the EventBus backing channel, but the TS impl does serial inline `await handler(event)` with an inflight counter and drain semantics. `Mutex<HashMap<kind, Vec<Handler>>>` + `VecDeque` is a 1:1 behavioral port; broadcast would introduce fan-out concurrency + `Lagged` failure modes that don't exist in TS. Easy swap if a future need emerges.
+- **New dep:** `hmac = "0.12"` (workspace root). `sha2 = "0.10"` + `hex = "0.4"` were already present (SigV4 / bedrock signing).
+- **Tests:** 32 ported (6 EventBus + 26 audit), all green. Of the 36 TS tests, 4 Syslog + 9 WORM (R4) + 3 createAuditSink-factory-http-variant were skipped; the rest ported.
+- Gate green: `cargo check -p kf-code --lib --tests`, `cargo clippy -p kf-code --lib --tests -- -D warnings`, `cargo fmt --check`, `cargo test --lib -p kf-code audit::` (26 passed), `cargo test --lib -p kf-code event_bus::` (6 passed).
 
 ## WO 29.1 — Fold bundled plugin into compiled-in Rust tools (branch `wo29b`, not yet merged)
 

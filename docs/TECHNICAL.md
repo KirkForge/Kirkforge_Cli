@@ -928,13 +928,20 @@ second `ollama pull` adds 2-5 minutes per model and the PR job is
 latency-sensitive. The scheduled leaderboard covers multi-model
 comparison.
 
-### Coverage gate (WO 12.9, ADR-065)
+### Coverage gate (WO 12.9, ADR-065; per-crate regression gate WO 28.7)
 
-The `coverage` job (when enabled) runs `cargo llvm-cov --workspace --lcov
---output-path lcov.info`. A regression gate compares per-crate coverage
-against a baseline threshold. `src/tools` (≈76.5%) and `src/adapters`
-(≈84%) clear the 75% floor; `src/session` (~68.6%) is honestly deferred
-to WO 25.16. The gate is a regression guard, not a vanity number.
+The CI `coverage` job runs `cargo llvm-cov --workspace --lcov
+--output-path lcov.info` and uploads `lcov.info` as an artifact.
+`scripts/check-cov-regression.sh` (WO 28.7) parses that lcov per-crate
+(by source-path prefix) and fails if any crate drops >1% below its floor
+in `docs/coverage-baseline.md`. Current floors (measured 2026-08-13):
+`kf-code` 78.4%, `kf-budget-core` 86.5%, `kf-testdoctor` 71.2%,
+`kf-compress-core` 95.2%, `kf-plugin-host` 88.8%, `kf-bench` 88.3%. The
+local `ci-local.sh full` runs the same gate; a separate per-directory
+tarpaulin gate (`src/session` 68.5%, `src/tools` 76.0%, `src/adapters`
+75.0%) is drift-guarded by the kf-testdoctor `default_thresholds_match_local_gate`
+test. The gate is a regression guard, not a vanity number — the -1%
+tolerance absorbs run-to-run llvm-cov variance.
 
 ### Non-Rust linting (WO 26.6-R3)
 

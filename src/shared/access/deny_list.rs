@@ -66,6 +66,12 @@ impl Default for DenyList {
                 "**/.ssh/**".into(),
                 "**/.gnupg/**".into(),
                 "**/.aws/**".into(),
+                // Belt-and-suspenders behind landlock: credential/config files
+                // the model must never read or overwrite.
+                "**/.config/**".into(),
+                "**/.docker/**".into(),
+                "**/.netrc".into(),
+                "**/.gitconfig".into(),
                 "**/.git/**".into(),
                 "**/__pycache__/**".into(),
                 "**/.env*".into(),
@@ -96,6 +102,21 @@ mod tests {
     fn default_deny_list_blocks_ssh() {
         let dl = DenyList::default();
         assert!(dl.is_path_denied(std::path::Path::new("/home/user/.ssh/id_rsa")));
+    }
+
+    #[test]
+    fn default_deny_list_blocks_credential_dirs() {
+        let dl = DenyList::default();
+        assert!(dl.is_path_denied(std::path::Path::new("/home/user/.aws/credentials")));
+        assert!(dl.is_path_denied(std::path::Path::new("/home/user/.config/foo/bar")));
+        assert!(dl.is_path_denied(std::path::Path::new("/home/user/.docker/config.json")));
+    }
+
+    #[test]
+    fn default_deny_list_blocks_netrc_and_gitconfig() {
+        let dl = DenyList::default();
+        assert!(dl.is_path_denied(std::path::Path::new("/home/user/.netrc")));
+        assert!(dl.is_path_denied(std::path::Path::new("/home/user/.gitconfig")));
     }
 
     #[test]

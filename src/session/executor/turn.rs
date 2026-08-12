@@ -584,7 +584,10 @@ impl Executor {
         _cancelled: &AtomicBool,
         event_tx: &mpsc::Sender<TurnEvent>,
     ) -> anyhow::Result<()> {
-        let is_destructive = matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
+        let should_audit = matches!(
+            tc.name.as_str(),
+            "write_file" | "edit_file" | "bash" | "read_file"
+        );
         let max_tool_result_chars = read_shared_config(&self.config).tools.max_tool_result_chars;
 
         if matches!(
@@ -614,7 +617,7 @@ impl Executor {
                         GuardVerdict::Allowed(r) => r,
                         GuardVerdict::Denied(msg) => {
                             let denied = format!("🔒 Access denied: {msg}");
-                            if is_destructive {
+                            if should_audit {
                                 self.audit_log.log_destructive(
                                     &tc.name,
                                     &tc.arguments,
@@ -658,7 +661,7 @@ impl Executor {
             if needs_read_gate {
                 if let GuardVerdict::Denied(msg) = self.sandbox.check_edit(path, &resolved) {
                     let denied = format!("🔒 Access denied: {msg}");
-                    if is_destructive {
+                    if should_audit {
                         self.audit_log.log_destructive(
                             &tc.name,
                             &tc.arguments,
@@ -707,7 +710,7 @@ impl Executor {
                 .await
             {
                 let denied = format!("❌ Hook denied {}: {}", tc.name, reason);
-                if is_destructive {
+                if should_audit {
                     self.audit_log
                         .log_destructive(&tc.name, &tc.arguments, false, Some(&denied));
                 }
@@ -857,7 +860,7 @@ impl Executor {
         let outcome = outcome;
         let outcome_for_emit = outcome.clone();
         let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
-        if is_destructive {
+        if should_audit {
             self.audit_log.log_destructive(
                 &tc.name,
                 &tc.arguments,

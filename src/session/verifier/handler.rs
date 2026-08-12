@@ -6,6 +6,19 @@ use crate::shared::metrics::{record, MetricEvent};
 use futures_util::future::FutureExt;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::time::Duration;
+
+// Per-verifier wall-clock cap. A wedged verifier (e.g. `cargo build` stuck on
+// a broken pipe) would otherwise hang the whole turn. Skipped, not failed, so
+// a slow verifier doesn't poison an otherwise-clean result.
+//
+// In tests the cap is shrunk to 50ms so the timeout path is exercisable
+// without waiting 30s of real time (and without pulling in tokio's
+// `test-util` mock-clock feature).
+#[cfg(not(test))]
+const VERIFIER_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const VERIFIER_TIMEOUT: Duration = Duration::from_millis(50);
 
 // ponytail: thin pass-through between CorrectionLoop and VerifierSlots; merge if handler gains no more logic
 /// Wraps a [`VerifierSlots`] and runs verification on tool events.
@@ -73,12 +86,14 @@ impl VerifierHandler {
         let (verdict, decisive_name) = {
             let mut all_findings: Vec<(String, Verdict)> = Vec::new();
             for verifier in &verifiers {
-                let v = match AssertUnwindSafe(verifier.verify(event))
-                    .catch_unwind()
-                    .await
+                let v = match tokio::time::timeout(
+                    VERIFIER_TIMEOUT,
+                    AssertUnwindSafe(verifier.verify(event)).catch_unwind(),
+                )
+                .await
                 {
-                    Ok(result) => result,
-                    Err(panic_payload) => {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(panic_payload)) => {
                         let msg = panic_payload
                             .downcast_ref::<&str>()
                             .map(|s| s.to_string())
@@ -86,6 +101,14 @@ impl VerifierHandler {
                             .unwrap_or_else(|| "unknown panic".to_string());
                         tracing::warn!("verifier {} panicked: {msg}", verifier.name());
                         Verdict::Skipped(format!("verifier panicked: {msg}"))
+                    }
+                    Err(_elapsed) => {
+                        tracing::warn!(
+                            "verifier {} timed out after {:?}",
+                            verifier.name(),
+                            VERIFIER_TIMEOUT
+                        );
+                        Verdict::Skipped(format!("verifier timed out after {VERIFIER_TIMEOUT:?}"))
                     }
                 };
                 match &v {

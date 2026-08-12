@@ -518,8 +518,10 @@ impl Executor {
             if let ToolOutcome::Failure(crate::shared::ToolError::AccessDenied { message }) =
                 &outcome
             {
-                let is_destructive =
-                    matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
+                let is_destructive = matches!(
+                    tc.name.as_str(),
+                    "write_file" | "edit_file" | "bash" | "read_file"
+                );
                 if is_destructive {
                     self.audit_log
                         .log_destructive(&tc.name, &tc.arguments, false, Some(message));

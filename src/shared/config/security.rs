@@ -9,6 +9,10 @@ fn default_block_gitignored_dotfiles() -> bool {
     true
 }
 
+fn default_block_dotfiles() -> bool {
+    true
+}
+
 fn default_max_file_read_size() -> usize {
     1024 * 1024
 }
@@ -45,7 +49,7 @@ pub struct SecurityConfig {
     pub allowed_write_dirs: Vec<String>,
     #[serde(default)]
     pub sandbox_dir: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_block_dotfiles")]
     pub block_dotfiles: bool,
     #[serde(default = "default_block_gitignored_dotfiles")]
     pub block_gitignored_dotfiles: bool,
@@ -89,7 +93,7 @@ impl Default for SecurityConfig {
             deny_extensions: vec![],
             allowed_write_dirs: vec![],
             sandbox_dir: None,
-            block_dotfiles: false,
+            block_dotfiles: default_block_dotfiles(),
             block_gitignored_dotfiles: default_block_gitignored_dotfiles(),
             max_file_read_size: default_max_file_read_size(),
             max_overwrite_size: default_max_overwrite_size(),

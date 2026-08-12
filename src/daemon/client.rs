@@ -304,6 +304,15 @@ mod unix_imp {
         let current_exe = std::env::current_exe().context("get current executable")?;
         let mut cmd = std::process::Command::new(current_exe);
         cmd.arg("daemon");
+        // Detach the daemon from the parent's stdio so it cannot hold the
+        // parent's piped stdout/stderr open. Without this, any caller that
+        // pipes kf-code's output (CI, test harnesses, shell pipelines) hangs
+        // forever on read_to_end after the parent exits, because the daemon
+        // grandchild inherits — and keeps open — the pipe write end. The
+        // daemon writes its own log via tracing, not via inherited stdio.
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
         cmd.spawn().context("spawn daemon process")?;
         Ok(())
     }

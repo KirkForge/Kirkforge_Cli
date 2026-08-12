@@ -435,6 +435,11 @@ cached as JSON at `.kf-code/context-index/cache.json`, keyed on git HEAD for
 invalidation. This gives the agent graph-grounded context instead of relying on
 plain-text search.
 
+The index is built synchronously at session startup for interactive (TUI) runs.
+`--non-interactive` skips the build: the tree-sitter walk is unbounded on large
+working trees (gap #27) and scripted single-shot runs prioritize startup
+latency over symbol enrichment.
+
 Retrieval is hybrid (ADR-037 Phase 7): an exact symbol-name match triggers a
 BFS graph walk over the import + call-graph edges (both directions, deduped by
 `(file, name)` keeping the minimum hop, capped at 2 hops); a free-text query is

@@ -1,68 +1,73 @@
-# lessons.md — WO 28.10 / 28.11 / 28.12 session
+# lessons.md — WO 27.2 e2e hang fix session (2026-08-12)
 
 ## What I learned
 
-### Precondition: merge commits with conflict markers
-- The worktree HEAD `5a6c32d` ("merge: WO 29.6") had **three files with
-  unresolved git conflict markers actually committed**: `Cargo.toml`,
-  `Cargo.lock` (three regions), `docs/TECHNICAL.md` (two regions). The
-  existing `ci.yml` fmt job at `:32` does `git grep` for conflict markers
-  and would have rejected this commit on push. **Always grep for conflict
-  markers as the first precondition step** before starting any WO work:
-  `grep -rln '<<<<<<<\|>>>>>>>\|^|||||||' --include='*.toml' --include='*.lock' --include='*.md' .`
-  Excluding the regex itself in `ci.yml:32`, the prose in `docs/adr/012`,
-  and the test data in `src/session/git_sanitation.rs`.
-- Cargo.lock conflicts are mergeable by hand when both sides add different
-  packages — keep both, preserve exact versions, maintain alphabetical
-  order. Deleting + regenerating would risk version drift and breaks
-  `--locked` CI.
+### The "ZERO output / never reaches adapter" e2e diagnosis was a false negative
+- The prior session's conclusion ("daemon starts, session-index WARN, then
+  SILENCE... binary never reaches the adapter") was misleading. The binary DID
+  work past the daemon — the SILENCE was because `init_tracing` routes to the
+  log FILE (`$DATA_DIR/kf-code.log`) by default, NOT stderr. The harness
+  captures stderr, which was empty of trace. The log file had the real story.
+- **Lesson:** when an e2e binary produces "no output," check `$DATA_DIR/kf-code.log`
+  FIRST (or set `KF_CODE_LOG_STDERR=1`). Don't infer "binary is wedged" from
+  empty stderr when tracing is file-routed. `RUST_LOG=info` alone does nothing
+  if the subscriber's writer is the file layer.
+- Definitive diagnosis needs `eprintln!` checkpoints (unbuffered, stderr) OR
+  reading the log file. Tracing output is buffered/routed and lies to a
+  stderr-capturing harness.
 
-### WO 28.10 — feature-gating a `[[test]]` target
-- `required-features = ["..."]` on a `[[test]]` block is the one-line knob.
-  No need to move test files or set `harness = false`.
-- `cargo check --workspace --all-targets` (no feature) is green; `cargo
-  test --test <name>` (no feature) errors cleanly with
-  `target '<name>' in package '<pkg>' requires the features: '<feat>'`.
-- **Critical follow-up**: any CI job that lints or typechecks with
-  `--all-targets` must pass `--features <feat>` or the gated crate stops
-  being linted entirely. The failure mode is silent rot, not a red gate.
-  Wired into both the `quality` job's Clippy + typecheck steps.
+### The actual root cause: synchronous context-index build in startup
+- `freeze_launch_sandbox` sets `sandbox_dir = cwd`. `ContextIndex::index_dir`
+  then runs `WalkDir::new(cwd)` (NO `.gitignore`/`target`/`node_modules` filter)
+  + tree-sitter parse of every `.rs`/`.ts`/`.tsx`/`.py`/`.go` file. On this
+  repo (645 files) it took >90s — pathological for the file count, suggesting
+  O(n²) in `resolve_imports`/`resolve_call_edges`, not just slow parsing.
+  Biggest files were <100KB so it's not a single huge-file issue.
+- The in-process `wiremock_integration.rs` test passed because it calls
+  `run_turn_collecting` directly, bypassing the entire `run_session` setup
+  (including the index build). That's why the in-process path was green while
+  the binary-spawn path hung — they don't share the startup sequence.
 
-### WO 28.11 — bench schema validation
-- The worker task brief listed `("name", "difficulty", "language")` as
-  the required-key set. **Zero tasks have a `language` key.** Reality is
-  `("name", "difficulty", "prompt")` per ADR-038 + the WO's own R2
-  ("enumerate from an existing well-formed task"). Always grep the actual
-  files before pinning a required-key set; the user prompt is a paraphrase,
-  the WO R2 reality-check is the spec.
-- WO R3 (name-set manifest) was deferrable: the TECHNICAL.md row check
-  (R1) catches renames in practice because every task has a row keyed by
-  basename. Disclosed per AGENTS.md §11.
+### Secondary: daemon subprocess pipe inheritance
+- `std::process::Command::new(exe).spawn()` with no stdio redirection
+  INHERITS the parent's stdin/stdout/stderr. The long-lived `kf-code daemon
+  --foreground` grandchild then holds the parent's piped write-ends open. After
+  the parent exits, the harness's `read_to_end` blocks forever (no EOF until
+  the grandchild dies). This affects ANY piped caller (CI, shell pipelines),
+  not just tests.
+- **Fix pattern:** any spawn of a long-lived helper (daemon) MUST set
+  `.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())`. The
+  daemon has its own tracing log; it doesn't need the parent's stdio.
+- `std::process::Command` has no `kill_on_drop` (tokio-only); the stdio
+  inheritance + no-kill_on_drop combo is the universal "orphaned subprocess
+  hangs the test" pattern.
 
-### WO 28.12 — dead-ref firewall scope
-- The existing check #5 grep (`grep -rn 'plugin3\|...'`) for `scripts/`
-  + `.github/` works fine because those file types don't have legitimate
-  historical references. But the same regex on `src/`/`crates/` floods:
-  test fn names (`fn plugin3_legacy_alias_*`), comments, string literals.
-- The fix is **identifier-position regex**, not allowlist:
-  `^\s*(use|mod|extern\s+crate)\s+(plugin3|...)\b`. This naturally
-  excludes everything that isn't a live import/declaration. Allowlist
-  (R2) turned out to be unnecessary — the regex was sufficient.
-- `stratum` MUST NOT be in the dead set — it's still a live feature.
+### Committed conflict markers — AGAIN
+- The worktree HEAD (`7a0de4d`, WO 29.7 merge) had committed conflict markers
+  in `Cargo.toml` + `Cargo.lock`. This is the SECOND time (first was `5a6c32d`
+  per the prior lessons.md). The repo's `ci.yml` has a conflict-marker grep
+  but it clearly didn't run / wasn't enforced on these merges.
+- **Lesson:** ALWAYS run `grep -rln '<<<<<<<\|>>>>>>>\|^|||||||' Cargo.toml
+  Cargo.lock` as the FIRST precondition step. Don't trust that the latest
+  merge is clean. 30 seconds saves the build.
 
-## Scope creep / attribution mixing
-- **Single-edit bundling**: WO 28.11 and WO 28.12 both add adjacent checks
-  (#9 and #10) to `scripts/check-artifact-consistency.sh`. I wrote both
-  checks in one edit window before realizing they belonged in separate
-  WO commits. Rather than revert + reapply (busywork that risks the
-  working verified state), I committed both checks under WO 28.11 and
-  made the WO 28.12 commit only the status-flip + disclosure. Disclosed
-  in the WO 28.12 status line + commit message. Next time: do one WO's
-  edit + commit, then the next WO's edit + commit.
+### Test-harness read_to_end is a latent hang
+- A `try_wait` loop with a deadline is NOT sufficient if followed by an
+  unbounded `read_to_end`. The read must ALSO be deadline-bounded (via a
+  detached reader thread + `mpsc::recv_timeout`) so a grandchild holding the
+  pipe surfaces as a named `TimedOut` instead of an infinite hang.
 
 ## What I'd do differently
-- Before opening the workplan, run a single sweep:
-  `git log --merges -1 && grep -rln '<<<<<<<' .` to detect broken merge
-  commits up front.
-- Write the per-WO commit boundary *before* opening any edit, especially
-  when multiple WOs touch the same file.
+- Read `$DATA_DIR/kf-code.log` BEFORE adding checkpoints — one log read would
+  have shown the daemon-started/session-WARN trace and pointed at the
+  post-daemon block immediately, saving the instrumentation cycle.
+- Grep for conflict markers before `cargo build` — the first build died on
+  the markers; 30s of grep would have caught it pre-build.
+
+## Scope creep
+- `Cargo.toml` + `Cargo.lock` conflict-marker resolution: required to build
+  anything (precondition, not the e2e task). Took the wo29g side
+  (`kf-orchestrator` dep + `thiserror 2.0.20`) — both confirmed present in
+  the lock and crate list.
+- `docs/TECHICAL.md` context-index note: AGENTS.md §9 mandates doc-sync for
+  context-index changes. Added a 4-line note about the non-interactive skip.

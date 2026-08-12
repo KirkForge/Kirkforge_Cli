@@ -1,8 +1,7 @@
-use crate::session::access::{DenyList, PathGuard};
 use crate::session::bash_jobs::global_registry;
-use crate::session::bash_runner::{
-    check_bash_command_str, is_timeout_marker, run_shell_with_token, ShellError,
-};
+use crate::session::bash_runner::{is_timeout_marker, run_shell_with_token, ShellError};
+use crate::shared::access::{DenyList, PathGuard};
+use crate::shared::bash_safety::check_bash_command_str;
 use crate::shared::{DockerConfig, SandboxConfig, ToolDef, ToolError, ToolOutcome};
 use crate::tools::bash_minify;
 use crate::tools::{Tool, ToolContext};

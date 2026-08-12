@@ -6,6 +6,16 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
+## WO 28.1 — Break the tools↔session circular dependency (branch `wo28c`)
+
+- **DONE:** Cut the production cycle `tools/mod → session::toolset → tools::Tool` and all 24 `tools → session::access` edges. Relocations: `src/session/access/` → `src/shared/access/`; `check_bash_command_str` → `src/shared/bash_safety.rs`; `UndoKind` → `src/shared/undo.rs`; toolset types → `src/tools/toolset.rs`; `InProcessTaskSpawner` → `src/session/task_spawner.rs`. `session::{access,toolset,undo,bash_runner}` keep `pub use` re-export shims so non-tool callers (session, tui, main, jobs) need no edits.
+- **Production `use crate::session::` in `src/tools/`: 26 → 3** (total 34 → 8).
+- **R1 design deviation (disclosed, ADR-073):** WO prescribed a `tool::Guard` port trait; instead relocated the pure `access` surface to `shared` (lower risk + better layering; trait is YAGNI — single `PathGuard` impl). The `TaskSpawner` port (already in `tools::task`) is the intentional seam; `InProcessTaskSpawner` is its session-layer impl.
+- **Pending (deferred, tracked):** 3 non-cyclic residuals each need their own port trait to cut — `bash::bash_runner` shell-I/O (→ a `ShellRunner` port), `bash::bash_jobs` registry, `remember::memory` store (WO 29.6, → a `MemoryStore` port). The WO's "≤2" target undercounted `bash.rs` (it imports 4 symbols from `bash_runner`; only `check_bash_command_str` was movable).
+- **Scope creep (necessary):** the `wo28c` branch HEAD had a committed bad merge (WO 29.6) leaving `diff3` conflict markers in `Cargo.toml`, `Cargo.lock`, and `docs/TECHNICAL.md` — the tree could not compile. Resolved (kept both `kf-rbac` + `kf-memory-store` workspace members; regenerated `Cargo.lock` preserving the rustc-1.88-compatible pins). Also moved one `freeze_launch_sandbox` test from `shared/access` to `session/config` so `shared` has zero `session` deps (required for the kf-shared extraction goal).
+- **Gate:** `cargo check --workspace --all-targets` ✓, `cargo clippy --workspace --all-targets -- -D warnings` ✓, `cargo fmt --check` ✓, `cargo test --lib -p kf-code tools::` 536 passed / 7 failed — the 7 failures (5 `bash` spawn + 2 `plugin_tools`) are in **unchanged** code (environmental: `os error 22` on process spawn + missing built plugin binaries), not regressions. All 160 relocated-code tests pass (access/bash_safety/toolset/task_spawner/undo/launch-path).
+
+
 ## WO 29.6 — Port memory-palace to kf-memory-store crate (branch `wo29f`, not yet merged)
 
 - **DONE (R1+R2+R3):** Ported `@kirkforge/memory-palace` to a new `crates/kf-memory-store/` workspace member.

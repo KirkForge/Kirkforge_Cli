@@ -8,7 +8,7 @@
 //! goes through one gate. Extracted from `bash_runner` so the execution
 //! half is process/IO and this half is static analysis.
 
-use crate::session::access::{DenyList, PathGuard};
+use crate::shared::access::{DenyList, PathGuard};
 use std::path::Path;
 
 /// Dangerous shell commands. These are the exact raw-string patterns
@@ -480,6 +480,34 @@ pub fn check_bash_command(
 #[cfg(test)]
 mod private_tests {
     use super::*;
+
+    // WO 28.1: moved from session/bash_runner/mod.rs — these are direct unit
+    // tests for `word_boundary_match`, which relocated here with the rest of
+    // the safety gate. Keep them next to the function they exercise.
+    #[test]
+    fn word_boundary_match_exact() {
+        assert!(word_boundary_match("rm -rf /", "rm -rf /"));
+    }
+
+    #[test]
+    fn word_boundary_no_false_positive_trailing_slash() {
+        assert!(!word_boundary_match("rm -rf /home/user", "rm -rf /"));
+    }
+
+    #[test]
+    fn word_boundary_match_with_pipe_prefix() {
+        assert!(word_boundary_match("echo foo | rm -rf /", "rm -rf /"));
+    }
+
+    #[test]
+    fn word_boundary_match_with_semicolon() {
+        assert!(word_boundary_match("cd /; rm -rf /", "rm -rf /"));
+    }
+
+    #[test]
+    fn word_boundary_no_match_in_substring() {
+        assert!(!word_boundary_match("rm -rf /home", "rm -rf /"));
+    }
 
     #[test]
     fn normalize_strips_single_quotes() {

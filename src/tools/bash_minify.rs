@@ -23,7 +23,7 @@
 
 use std::path::PathBuf;
 
-use crate::session::access::{GuardVerdict, PathGuard};
+use crate::shared::access::{GuardVerdict, PathGuard};
 
 /// Minimum savings (as a fraction of the original char count) required for
 /// us to substitute the minified output. `0.20` = must save at least 20% of
@@ -498,7 +498,7 @@ fn looks_like_number(tok: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::access::PathGuard;
+    use crate::shared::access::PathGuard;
     use crate::shared::test_util::remove_test_file;
 
     // ── Command recognition ─────────────────────────────────────────

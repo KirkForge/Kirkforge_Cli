@@ -693,12 +693,13 @@ fn synth_status_killed() -> Result<std::process::ExitStatus, ShellError> {
     }
 }
 
-mod safety;
-pub use safety::{check_bash_command, check_bash_command_str};
+// WO 28.1: safety.rs relocated to `shared::bash_safety` (pure static analysis).
+// Re-exported here so existing `session::bash_runner::{check_bash_command,
+// check_bash_command_str}` callers keep resolving.
+pub use crate::shared::bash_safety::{check_bash_command, check_bash_command_str};
 
 #[cfg(test)]
 mod tests {
-    use super::safety::word_boundary_match;
     use super::*;
     use crate::session::access::{DenyList, PathGuard};
     #[cfg(unix)]
@@ -846,31 +847,6 @@ mod tests {
             &out.stdout[..out.stdout.len().min(200)]
         );
     }
-    #[test]
-    fn test_word_boundary_match_exact() {
-        assert!(word_boundary_match("rm -rf /", "rm -rf /"));
-    }
-
-    #[test]
-    fn test_word_boundary_no_false_positive_trailing_slash() {
-        assert!(!word_boundary_match("rm -rf /home/user", "rm -rf /"));
-    }
-
-    #[test]
-    fn test_word_boundary_match_with_pipe_prefix() {
-        assert!(word_boundary_match("echo foo | rm -rf /", "rm -rf /"));
-    }
-
-    #[test]
-    fn test_word_boundary_match_with_semicolon() {
-        assert!(word_boundary_match("cd /; rm -rf /", "rm -rf /"));
-    }
-
-    #[test]
-    fn test_word_boundary_no_match_in_substring() {
-        assert!(!word_boundary_match("rm -rf /home", "rm -rf /"));
-    }
-
     #[test]
     fn test_check_bash_command_blocks_dangerous_exact() {
         let args = serde_json::json!({"command": "rm -rf /"});

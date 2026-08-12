@@ -1,4 +1,7 @@
-pub mod access;
+// WO 28.1: access types now live in `shared::access` (pure data/logic).
+// This re-export keeps every existing `crate::session::access::*` path working
+// for session-internal and tui/main callers; tools/ repoints to shared directly.
+pub use crate::shared::access;
 pub mod adapter_swap;
 pub mod bash_jobs;
 pub mod bash_runner;
@@ -23,6 +26,9 @@ pub mod router;
 pub mod session_fork;
 pub mod session_index;
 pub mod skills;
+// WO 28.1: InProcessTaskSpawner moved here from tools::task (it constructs the
+// nested Executor — a session-layer concern). The TaskSpawner port stays in tools.
+pub mod task_spawner;
 pub mod toolset;
 pub mod undo;
 pub mod verifier;

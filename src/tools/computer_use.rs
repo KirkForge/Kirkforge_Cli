@@ -13,7 +13,7 @@
 //! `handle_tool_outcome` splices it back into the conversation as a vision
 //! input.
 
-use crate::session::access::DenyList;
+use crate::shared::access::DenyList;
 use crate::shared::{ComputerUseConfig, ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use base64::Engine as _;

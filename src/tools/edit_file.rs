@@ -1,5 +1,5 @@
-use crate::session::access::PathGuard;
-use crate::session::undo::UndoKind;
+use crate::shared::access::PathGuard;
+use crate::shared::undo::UndoKind;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext, UndoStackRef};
 use similar::{ChangeTag, TextDiff};
@@ -86,7 +86,7 @@ impl Tool for EditFile {
         // Path-guard check before any read or write. This enforces deny_paths,
         // deny_extensions, block_dotfiles, allowed_write_dirs, and sandbox
         // containment from a single source of truth in access.rs.
-        if let crate::session::access::GuardVerdict::Denied(msg) =
+        if let crate::shared::access::GuardVerdict::Denied(msg) =
             self.path_guard.check_write(&path).await
         {
             return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
@@ -528,7 +528,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -570,7 +570,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -625,7 +625,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -681,7 +681,7 @@ mod tests {
 
         let tool = EditFile::new(
             Some(stack.clone()),
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -717,7 +717,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -747,7 +747,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -775,7 +775,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -801,7 +801,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -836,7 +836,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             true,
             false,
         );
@@ -883,7 +883,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -922,7 +922,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             true,
             false,
         );
@@ -952,7 +952,7 @@ mod tests {
         let path = dir.path().join(".secret");
         std::fs::write(&path, "old").unwrap();
 
-        let guard = crate::session::access::PathGuard {
+        let guard = crate::shared::access::PathGuard {
             block_dotfiles: true,
             ..Default::default()
         };
@@ -982,7 +982,7 @@ mod tests {
         let big = "x".repeat(2048);
         std::fs::write(&path, &big).unwrap();
 
-        let guard = crate::session::access::PathGuard {
+        let guard = crate::shared::access::PathGuard {
             max_overwrite_size: 1024,
             ..Default::default()
         };
@@ -1023,7 +1023,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1060,7 +1060,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1097,7 +1097,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1131,7 +1131,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1162,7 +1162,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1214,7 +1214,7 @@ mod tests {
                 let path = dir.path().join("edit.txt");
                 std::fs::write(&path, content.as_bytes()).unwrap();
 
-                let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false, false);
+                let tool = EditFile::new(None, crate::shared::access::PathGuard::default(), false, false);
                 let ctx = ToolContext::new();
                 let args = serde_json::json!({
                     "path": path.to_string_lossy(),
@@ -1251,7 +1251,7 @@ mod tests {
                 let path = dir.path().join("edit.txt");
                 std::fs::write(&path, content.as_bytes()).unwrap();
 
-                let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false, false);
+                let tool = EditFile::new(None, crate::shared::access::PathGuard::default(), false, false);
                 let ctx = ToolContext::new();
                 let args = serde_json::json!({
                     "path": path.to_string_lossy(),
@@ -1297,7 +1297,7 @@ mod tests {
                 let path = dir.path().join("edit.txt");
                 std::fs::write(&path, content.as_bytes()).unwrap();
 
-                let tool = EditFile::new(None, crate::session::access::PathGuard::default(), false, false);
+                let tool = EditFile::new(None, crate::shared::access::PathGuard::default(), false, false);
                 let ctx = ToolContext::new();
                 let args = serde_json::json!({
                     "path": path.to_string_lossy(),
@@ -1325,7 +1325,7 @@ mod tests {
     async fn missing_path_arg_is_invalid_args() {
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1348,7 +1348,7 @@ mod tests {
         std::fs::write(&path, "content").unwrap();
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1371,7 +1371,7 @@ mod tests {
         std::fs::write(&path, "content").unwrap();
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1394,7 +1394,7 @@ mod tests {
         std::fs::write(&path, b"\xff\xfe invalid utf8").unwrap();
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1419,7 +1419,7 @@ mod tests {
         std::fs::write(&path, "existing content\n").unwrap();
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1451,7 +1451,7 @@ mod tests {
         std::fs::write(&path, "dup\ndup\ndup\n").unwrap();
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1483,7 +1483,7 @@ mod tests {
         std::fs::write(&path, "line one\nline two\n").unwrap();
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1516,7 +1516,7 @@ mod tests {
         std::fs::write(&path, "content\n").unwrap();
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1594,7 +1594,7 @@ mod tests {
             std::sync::Arc::new(std::sync::Mutex::new(UndoStack::for_session(&id).unwrap()));
         let tool = EditFile::new(
             Some(stack.clone()),
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1622,7 +1622,7 @@ mod tests {
         std::fs::write(&path, "fn old() {}\n").unwrap();
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1662,7 +1662,7 @@ mod tests {
     fn def_has_correct_name_and_required_args() {
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1686,7 +1686,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1714,7 +1714,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1751,7 +1751,7 @@ mod tests {
 
         let tool = EditFile::new(
             Some(stack.clone()),
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1789,7 +1789,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1820,7 +1820,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1851,7 +1851,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );
@@ -1877,7 +1877,7 @@ mod tests {
 
         let tool = EditFile::new(
             None,
-            crate::session::access::PathGuard::default(),
+            crate::shared::access::PathGuard::default(),
             false,
             false,
         );

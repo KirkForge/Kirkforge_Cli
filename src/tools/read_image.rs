@@ -33,7 +33,7 @@
 //! so `Config::max_file_read_size` and the binary-read guard are both
 //! enforced at the dispatch layer. The tool itself reads the raw bytes
 //! once the guard has approved the path and size.
-use crate::session::access::PathGuard;
+use crate::shared::access::PathGuard;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
@@ -119,7 +119,7 @@ impl Tool for ReadImage {
             }
         };
 
-        if let crate::session::access::GuardVerdict::Denied(reason) =
+        if let crate::shared::access::GuardVerdict::Denied(reason) =
             self.path_guard.check_read(&path)
         {
             return ToolOutcome::Failure(ToolError::AccessDenied { message: reason });
@@ -161,7 +161,7 @@ impl Tool for ReadImage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::access::PathGuard;
+    use crate::shared::access::PathGuard;
     use crate::tools::{Tool, ToolContext};
 
     const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];

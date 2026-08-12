@@ -1,4 +1,4 @@
-use crate::session::access::PathGuard;
+use crate::shared::access::PathGuard;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
@@ -62,7 +62,7 @@ impl Tool for ReadFile {
             }
         };
 
-        if let crate::session::access::GuardVerdict::Denied(reason) =
+        if let crate::shared::access::GuardVerdict::Denied(reason) =
             self.path_guard.check_read(&path)
         {
             return ToolOutcome::Failure(ToolError::AccessDenied { message: reason });

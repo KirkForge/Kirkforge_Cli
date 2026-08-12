@@ -263,7 +263,7 @@ struct TuiStepRunner {
 #[async_trait::async_trait]
 impl StepRunner for TuiStepRunner {
     async fn run_step(&self, name: &str, prompt: &str, persona: &str) -> Result<String> {
-        let spawner = Arc::new(crate::tools::task::InProcessTaskSpawner::new(
+        let spawner = Arc::new(crate::session::task_spawner::InProcessTaskSpawner::new(
             self.config.clone(),
             self.model_name.clone(),
             self.ollama_host.clone(),
@@ -311,7 +311,7 @@ pub struct LineStepRunner {
 #[async_trait::async_trait]
 impl StepRunner for LineStepRunner {
     async fn run_step(&self, name: &str, prompt: &str, persona: &str) -> Result<String> {
-        let spawner = Arc::new(crate::tools::task::InProcessTaskSpawner::new(
+        let spawner = Arc::new(crate::session::task_spawner::InProcessTaskSpawner::new(
             self.config.clone(),
             self.model_name.clone(),
             self.ollama_host.clone(),

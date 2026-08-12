@@ -518,7 +518,7 @@ dispatch paths (ADR-050):
    builds without a feature still gets the plugin via the shell plugin if its
    dir and satellite binary are available, at the cost of subprocess overhead.
 
-The two folded plugins (Stratum, Budget) use this two-path
+The folded plugins (Stratum, Budget, kf-plugin) use this two-path
 dispatch. A single toggle — `enabled_plugins` in `ToolConfig` — controls both
 paths: a folded plugin name enables the compiled-in path (feature on) or the
 shell path (feature off). As of WO 15.7 (item 5.1), the runtime toggle also
@@ -527,10 +527,13 @@ gates the compiled-in path: when a folded plugin name is absent from
 when the compile-time feature is on. So `/plugins disable stratum` removes
 "stratum" from `enabled_plugins` and the Stratum tools/hooks stay live only
 on the next `kf-code run` that re-registers them. `plugin_sources` is only
-needed for external/shell plugins. The `kf-plugin-sdk` self-plugin (Node
-SDK) is **not** folded; it stays an external shell-out under all
-configurations because its tools depend on the Node ecosystem (ESLint,
-TypeScript, Ruff, Pyright, Bandit).
+needed for external/shell plugins. The `kf-plugin` self-plugin (Node SDK) is
+folded behind the `kf-plugin-tools` feature (WO 29.1, Phase 1): `doctor`,
+`health`, and `tools` run as native Rust calls; `verify`,
+`verify_workspace`, and `audit_verify` defer to the Node SDK until the
+orchestrator pipeline ports in WO 29.7. The external linters themselves
+(ESLint, TypeScript, Ruff, Pyright, Bandit) stay external subprocesses under
+both paths (ADR-050).
 
 `/plugins list` shows the source (`compiled-in` / `external` /
 `external (feature off)`) and feature gate for each workspace plugin source.

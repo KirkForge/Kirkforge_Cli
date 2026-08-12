@@ -376,7 +376,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // ── Toolset assembly (Phase 2.2) ──
     // Compose built-in, MCP, plugin (shell), and folded (in-process) tools
     // into a single source-aware collection. Resolution order (first match
-    // wins): builtin > MCP > plugin > stratum > draw > video > budget.
+    // wins): builtin > MCP > plugin > stratum > draw > video > budget > kf-plugin.
     // ADR-050 prevents name collisions between shell and folded plugins.
     let tool_ctx = tools::ToolContextBuilder {
         undo_stack: undo_stack.clone(),
@@ -620,6 +620,27 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
                 budget_tool_list,
             )));
             tracing::info!(count, "budget in-process tools registered");
+        }
+    }
+
+    // ── kf-plugin in-process tools (feature-gated, WO 29.1) ──
+    // When the `kf-plugin-tools` feature is enabled, the six plugin tools
+    // register as direct Rust calls instead of shell→Node subprocesses.
+    // doctor/health/tools run natively; the three verify commands defer to
+    // WO 29.7 and emit an explicit "use the Node SDK" message.
+    #[cfg(feature = "kf-plugin-tools")]
+    {
+        let cfg = kf_code::shared::read_shared_config(&shared_config);
+        if cfg.tools.enabled_plugins.iter().any(|n| n == "kf-plugin")
+            && !cfg.tools.disabled_plugins.contains("kf-plugin")
+        {
+            let plugin_tool_list = session::plugin_tools::all_plugin_sdk_tools();
+            let count = plugin_tool_list.len();
+            toolset.add(Box::new(session::toolset::VecToolset::new(
+                "kf-plugin",
+                plugin_tool_list,
+            )));
+            tracing::info!(count, "kf-plugin in-process tools registered");
         }
     }
 

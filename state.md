@@ -6,6 +6,12 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
+## WO 29.1 — Fold bundled plugin into compiled-in Rust tools (branch `wo29b`, not yet merged)
+
+- **DONE (Phase 1):** Added `kf-plugin-tools` cargo feature (default on). `src/session/plugin_tools/native.rs` implements the 6 plugin tools as compiled-in Rust calls: `doctor` (probes eslint/tsc/ruff/pyright/bandit via `tokio::process::Command --version` + derives languages), `health`, and `tools` run fully native (no shell hop, no Node hop). Registered in `run_session.rs` mirroring the stratum/budget pattern. The `/kf-code` skill is registered inline in `skills.rs::scan_and_load` when the feature is on (the manifest no longer loads). Added a folded-skip guard in `all_plugin_tools` so a data-dir-loaded manifest can't double-register with the compiled-in tools. `docs/TECHNICAL.md` plugin-section updated.
+- **DEFERRED → WO 29.7 + WO 29.4:** `plugin_verify`, `plugin_verify_workspace`, `plugin_audit_verify` are registered as Rust tools but emit an explicit "not yet implemented in Rust; use the Node SDK" message. Blocker: the orchestrator verification pipeline ports in WO 29.7 and the audit hash-chain (`chainHashOf`/`initialHash`) in WO 29.4. Remaining work: port the pipeline + emitters, then replace the 3 deferral messages with native impls. R3 (delete `plugins/kf-plugin/tools/*.sh`) is also deferred until then, so the shell/Node fallback survives for users who rebuild with `--no-default-features`.
+- Gate green: `cargo check -p kf-code --lib --tests`, `cargo clippy -p kf-code --lib --tests -- -D warnings`, `cargo fmt --check`; 68 module tests passed (loader_tests + plugin_tools::native + skills).
+
 ## WO 29.2 — Rust security emitter (branch `wo29-impl`, not yet merged)
 
 - **DONE (R1+R2):** Ported the 14 regex security rules from `security-emitter.ts` to `src/session/verifier/security_emitter.rs`. `TsOrchestratorBridgeVerifier` is now a thin wrapper calling `emit_security_findings()` directly — no Node subprocess, no NDJSON. Last Rust→TS call path eliminated. ADR-028 NDJSON wire format retired (Rust returns typed `VerdictEntry`s).

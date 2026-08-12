@@ -544,13 +544,16 @@ gates the compiled-in path: when a folded plugin name is absent from
 when the compile-time feature is on. So `/plugins disable stratum` removes
 "stratum" from `enabled_plugins` and the Stratum tools/hooks stay live only
 on the next `kf-code run` that re-registers them. `plugin_sources` is only
-needed for external/shell plugins. The `kf-plugin` self-plugin (Node SDK) is
-folded behind the `kf-plugin-tools` feature (WO 29.1, Phase 1): `doctor`,
-`health`, and `tools` run as native Rust calls; `verify`,
-`verify_workspace`, and `audit_verify` defer to the Node SDK until the
-orchestrator pipeline ports in WO 29.7. The external linters themselves
-(ESLint, TypeScript, Ruff, Pyright, Bandit) stay external subprocesses under
-both paths (ADR-050).
+needed for external/shell plugins. The `kf-plugin` self-plugin is folded
+behind the `kf-plugin-tools` feature (WO 29.1): `doctor`, `health`, and
+`tools` run as native Rust calls; `verify`, `verify_workspace`, and
+`audit_verify` emit a "not yet implemented" message pending a real model
+client in the orchestrator crate (WO 29.7 shipped the crate with a stub
+`PanickingClient`). The external linters themselves (ESLint, TypeScript,
+Ruff, Pyright, Bandit) stay external subprocesses under both paths
+(ADR-050). The TS tree (`npm/kf-plugin/`) and shell-plugin tree
+(`plugins/kf-plugin/`) were deleted in WO 29.9 — the Rust path is the sole
+implementation.
 
 `/plugins list` shows the source (`compiled-in` / `external` /
 `external (feature off)`) and feature gate for each workspace plugin source.
@@ -619,7 +622,7 @@ downgraded. Optional minisign detached-signature verification (`.kf-code.sig`).
 
 | Plugin | Trust | Skills | Tools | Hooks | Source |
 |---|---|---|---|---|---|
-| `kf-plugin-sdk` | shell | `/kf-code` | 6 | 0 | External — Node SDK (`npm/kf-plugin`), not folded |
+| `kf-plugin` | shell | `/kf-code` | 6 | 0 | Compiled-in (`kf-plugin-tools` feature) — verify tools stub pending WO 29.7 model client |
 | `stratum` | shell | `/stratum` | 5 | 2 | Compiled-in (`stratum` feature) — no shell manifest |
 | `kf-budget` | shell | `/budget` | 7 | 4 | Compiled-in (`budget` feature) — no shell manifest |
 
@@ -930,10 +933,11 @@ to WO 25.16. The gate is a regression guard, not a vanity number.
 
 ### Non-Rust linting (WO 26.6-R3)
 
-The tracked Node SDK (`npm/kf-plugin`) is linted with ESLint. `npm run lint`
-runs in the `quality` CI job and in `scripts/ci-local.sh` (all modes). No
-Python source is linted in-tree; the only `.py` files are test fixtures and
-a release script, so `ruff` is not wired.
+The Rust workspace is linted with `cargo clippy`. The TS tree that used to
+live under `npm/kf-plugin/` (ESLint) was deleted in WO 29.9 when the TS→Rust
+migration completed; there is no in-tree JavaScript to lint. No Python source
+is linted in-tree; the only `.py` files are test fixtures and a release
+script, so `ruff` is not wired.
 
 ---
 
@@ -945,19 +949,26 @@ The root `Cargo.toml` exposes these features:
   direct Rust calls (ADR-046).
 - `budget` (default) — folds the token-budget guard in as direct
    Rust calls with full in-process event context (ADR-047).
+- `kf-plugin-tools` (default) — registers the six `kf-plugin` tools as
+  compiled-in Rust impls (WO 29.1). `doctor`/`health`/`tools` run natively;
+  the three verify tools emit a "not yet implemented" message pending a real
+  model client in the orchestrator crate (WO 29.7). With the feature off, no
+  `kf-plugin` tools are registered — the shell/Node fallback that lived under
+  `plugins/kf-plugin/` was deleted in WO 29.9.
 - `pty` (non-default) — PTY-backed interactive bash commands via `portable-pty`
   (WO 21.5-R2; opt in via `--features pty`).
-- `landlock` — no longer a Cargo feature (WO 27.1). The landlock module is
+- `landlock` – no longer a Cargo feature (WO 27.1). The landlock module is
   compiled unconditionally on Linux via `cfg(target_os = "linux")` and
   applied by default in the bash `pre_exec` hook (fail-closed). The
   `--features landlock` flag is a no-op kept only for backward compat.
 - `otel` (non-default) — OpenTelemetry span/metric export.
 
-Two plugins are feature-gated compiled-in modules, served as
-direct Rust calls when their feature is on and falling back to the shell
-plugin path when it is off (graceful degradation). ADR-050 pins the two-path
-dispatch consolidation design. The `dep:` optional-dependency pattern is
-what makes per-plugin opt-in possible.
+Three plugins are feature-gated compiled-in modules, served as direct Rust
+calls when their feature is on. `stratum` and `kf-budget` retain shell-plugin
+fallback sources for feature-off builds; `kf-plugin` does not (its shell tree
+was deleted in WO 29.9). ADR-050 pins the two-path dispatch consolidation
+design. The `dep:` optional-dependency pattern is what makes per-plugin
+opt-in possible.
 
 ADR-0017's "no `[features]` section" rule is scoped to `crates/kf-budget-core/`,
 not the root binary.

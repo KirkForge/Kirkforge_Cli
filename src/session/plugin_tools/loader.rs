@@ -6,11 +6,15 @@
 //!
 //! ## Two-path dispatch (ADR-050)
 //!
-//! Folded plugins (Stratum, Budget) can run as either:
+//! Folded plugins (Stratum, Budget, kf-plugin) can run as either:
 //! - **Compiled-in** (feature on): tools register as direct Rust calls in
 //!   `main/mod.rs`; the shell plugin dir is skipped here.
 //! - **External** (feature off): the shell plugin dir loads here as
 //!   `PluginToolWrapper` shell-outs (graceful degradation).
+//!
+//! Note: `kf-plugin`'s shell-plugin tree was deleted in WO 29.9, so with
+//! `kf-plugin-tools` off it simply has no source to load — no fallback.
+//! Stratum and kf-budget still ship shell sources for feature-off fallback.
 //!
 //! The `enabled_plugins` config is the single toggle for both paths.
 

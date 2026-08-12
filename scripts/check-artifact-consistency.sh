@@ -35,16 +35,9 @@ else
   FAIL=$((FAIL+1))
 fi
 
-# 4. plugin paths exist
-for dir in plugins/kf-plugin; do
-  if [ -d "$dir" ]; then
-    echo "✓ $dir exists"
-    PASS=$((PASS+1))
-  else
-    echo "✗ $dir missing"
-    FAIL=$((FAIL+1))
-  fi
-done
+# 4. (Removed WO 29.9: bundled plugins/kf-plugin/ tree deleted; kf-plugin is
+#    compiled-in behind the kf-plugin-tools feature. No filesystem plugin dir
+#    to check.)
 
 # 5. no retired binaries in active scripts
 RETIREDS=$(grep -rn 'plugin3\|kf-code-video\|kf-code-plugin\b' scripts/ .github/workflows/*.yml 2>/dev/null | grep -v '#' | grep -v 'check-artifact-consistency' | wc -l | tr -d ' ' || true)

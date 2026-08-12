@@ -44,16 +44,6 @@ run_step "Run unit tests" cargo test --locked --workspace -- --test-threads="$TE
 run_step "Run smoke tests" cargo test --test smoke_test
 run_step "Run Clippy" cargo clippy --all-targets -- -D warnings
 
-# Optional Node SDK pass when the vendored package is present.
-if [ -d "npm/kf-plugin" ] && [ -f "npm/kf-plugin/package.json" ]; then
-    if [ "$MODE" = "quick" ]; then
-        run_step "Build Node SDK" bash -c 'cd npm/kf-plugin && npm run build'
-    else
-        run_step "Run Node SDK tests" bash -c 'cd npm/kf-plugin && npm test'
-    fi
-    run_step "Lint Node SDK (eslint)" bash -c 'cd npm/kf-plugin && npm run lint'
-fi
-
 if [ "$MODE" != "quick" ]; then
     run_step "Build release binary" cargo build --release --locked
 

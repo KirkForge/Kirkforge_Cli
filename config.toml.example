@@ -366,11 +366,17 @@
 # Workspace plugin sources
 # ---------------------------------------------------------------------------
 #
-# The CLI ships with a built-in plugin source under the `plugins/` directory.
-# It is enabled by default when the directory exists.
-# Disable it at runtime with `/plugins toggle <name>` or remove it from
-# `enabled_plugins`. Relative paths resolve against the current working
-# directory; in an installed release the bundled plugin is looked up under
+# The built-in plugins (`kf-plugin`, `stratum`, `kf-budget`) are compiled-in
+# behind cargo features and need no filesystem source. The names listed in
+# `enabled_plugins` below gate the compiled-in registration: dropping a name
+# from the list disables that plugin's tools/hooks on the next `kf-code run`.
+# Disable at runtime with `/plugins toggle <name>` or remove it from
+# `enabled_plugins`.
+#
+# Custom v1 (`PluginToolWrapper`) plugins can still be added by pointing a
+# `plugin_sources` entry at a directory containing a `kf-code.toml` manifest.
+# Relative paths resolve against the current working directory; in an
+# installed release plugins are also looked up under
 # `~/.local/share/kf-code/plugins/<name>`.
 #
 # SECURITY (H9 / WO 27.4): workspace plugin dirs are NOT trust roots by
@@ -383,7 +389,7 @@
 # plugin_trust_workspace = false
 #
 # [plugin_sources]
-# kf-plugin = "plugins/kf-plugin"
+# my-custom-plugin = "path/to/plugin-dir"
 #
 enabled_plugins = ["kf-plugin"]
 

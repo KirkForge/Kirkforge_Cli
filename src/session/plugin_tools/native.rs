@@ -1,13 +1,16 @@
 //! Compiled-in Rust implementations of the `kf-plugin` tools (WO 29.1).
 //!
-//! Replaces the `plugins/kf-plugin/tools/*.sh` shell wrappers that each
-//! `exec node $CLI <cmd>`. Three of the six commands (`doctor`, `health`,
-//! `tools`) run fully natively here; the three verify commands defer to the
-//! Node SDK until the orchestrator pipeline is ported in WO 29.7.
+//! Replaces the former `plugins/kf-plugin/tools/*.sh` shell wrappers (deleted
+//! in WO 29.9) that each `exec node $CLI <cmd>`. Three of the six commands
+//! (`doctor`, `health`, `tools`) run fully natively here; the three verify
+//! commands still emit a "not yet implemented" message pending completion of
+//! the orchestrator pipeline (WO 29.7 shipped the crate with a stub
+//! `PanickingClient`; the real model-backed verify path is the remaining
+//! work to make these tools do real verification).
 //!
 //! Enabled by the `kf-plugin-tools` cargo feature (default on). When the
-//! feature is off, the shell-plugin dir loads via `PluginToolWrapper` as a
-//! graceful fallback (ADR-050).
+//! feature is off, no `kf-plugin` tools are registered — the shell/Node
+//! fallback was removed in WO 29.9 when the TS tree was deleted.
 
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
@@ -36,7 +39,7 @@ struct ToolCap {
 }
 
 /// Spawn `<name> --version` and treat a successful exit as available.
-/// Mirrors `probeTool` in `npm/kf-plugin/packages/plugin/src/index.ts`.
+/// Mirrors `probeTool` from the former TS plugin SDK (deleted in WO 29.9).
 /// ponytail: sequential probes — doctor is an on-demand diagnostic, not
 /// hot-path; 5 × ~50ms is acceptable and avoids a parallel-join fan-out.
 async fn probe_tool(name: &'static str) -> ToolCap {
@@ -175,14 +178,15 @@ impl Tool for PluginHealth {
     }
 
     async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
-        // The TS version bootstraps the Node orchestrator for SLO stats.
-        // The Rust runtime has no embedded orchestrator yet (WO 29.7), so
-        // report the folded-tool path as healthy and point at the SDK.
+        // The TS version bootstrapped the Node orchestrator for SLO stats.
+        // The Rust runtime has no embedded model-backed orchestrator yet
+        // (WO 29.7 shipped the crate with a stub client), so report the
+        // folded-tool path as healthy and flag the verify/SLO gap.
         ToolOutcome::Success {
             content:
                 "Status:         ok\n\
                       Tools:          native (compiled-in, kf-plugin-tools feature)\n\
-                      Orchestrator:   not embedded — verify/SLO stats need the Node SDK (WO 29.7)\n"
+                      Orchestrator:   crate present (WO 29.7); model-backed verify/SLO stats pending\n"
                     .to_string(),
         }
     }
@@ -201,7 +205,7 @@ impl Tool for PluginToolsList {
     }
 
     async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
-        // Ported verbatim from npm/kf-plugin/apps/cli/src/commands/tools.ts.
+        // Ported verbatim from the former TS CLI `tools` command (deleted WO 29.9).
         ToolOutcome::Success {
             content: "KirkForge Native Lint Engines (internal, always available):\n\
                       \x20 JS/TS:  tool-lint-ts (29 rules)\n\
@@ -225,10 +229,12 @@ impl Tool for PluginToolsList {
 fn deferred_message(cmd: &str, remaining: &str) -> String {
     format!(
         "{cmd}: not yet implemented as a native Rust call (WO 29.1 Phase 1).\n\
-         The verification pipeline ports in WO 29.7; the audit hash-chain lands in WO 29.4.\n\
+         The orchestrator crate landed in WO 29.7 but its model client is still a\n\
+         stub (`PanickingClient`); the verification pipeline + audit hash-chain\n\
+         need a real model-backed path before these tools do real verification.\n\
          Remaining work: {remaining}\n\
-         To run this now, rebuild with `--no-default-features` (shell/Node wrapper fallback)\n\
-         or invoke the Node SDK directly: `node <kf-plugin-cli> {cmd}`."
+         (The TS fallback that shelled out to `node <kf-plugin-cli>` was removed\n\
+         in WO 29.9 when the npm/kf-plugin tree was deleted.)"
     )
 }
 
@@ -419,7 +425,7 @@ mod tests {
             ToolOutcome::Success { content } => {
                 assert!(content.contains("not yet implemented"));
                 assert!(content.contains("WO 29.7"));
-                assert!(content.contains("--no-default-features"));
+                assert!(content.contains("PanickingClient"));
             }
             other => panic!("expected Success, got {other:?}"),
         }
@@ -434,7 +440,6 @@ mod tests {
         match out {
             ToolOutcome::Success { content } => {
                 assert!(content.contains("hash-chain"));
-                assert!(content.contains("WO 29.4"));
             }
             other => panic!("expected Success, got {other:?}"),
         }

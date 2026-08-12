@@ -131,10 +131,13 @@ fn resolve_credentials() -> anyhow::Result<AwsCredentials> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn env_lock() -> &'static std::sync::Mutex<()> {
+    // Shared crate-wide lock for tests that mutate the AWS env vars, so the
+    // bedrock_vertex_mocks wiremock tests and the offline signing tests don't
+    // race on AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
+    pub(crate) fn env_lock() -> &'static std::sync::Mutex<()> {
         static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         LOCK.get_or_init(|| std::sync::Mutex::new(()))
     }

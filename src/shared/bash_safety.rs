@@ -157,12 +157,16 @@ fn normalize_for_safety(cmd: &str) -> String {
 /// WO 27.5 R2 also catches `$(` command substitution and backticks
 /// `` ` ` `` here — both execute subcommands and can rebuild forbidden
 /// tokens at runtime (`eval $(echo cm0gLXJmIC8K | base64 -d)`).
-// ponytail: blocklist narrows the surface; the real boundary is landlock
-// per WO 27.1. $( and backticks also fire on legitimate bash
-// (`echo $(date)`, `for x in $(ls)`), but the model bash gate is
-// intentionally restrictive — operators who need unrestricted shell use the
-// `!` passthrough or --docker. A determined payload still evades via
-// encoding (base64/hex + eval) or variable indirection.
+// ponytail: this deny-list is a TRIPWIRE, not a boundary. It narrows the
+// obvious-payload surface; the real boundary is landlock (WO 27.1) which
+// confines the filesystem blast radius, plus `--no-network` for exfiltration.
+// $( and backticks also fire on legitimate bash (`echo $(date)`,
+// `for x in $(ls)`), but the model bash gate is intentionally restrictive —
+// operators who need unrestricted shell use the `!` passthrough or --docker.
+// A determined payload still evades via encoding (base64/hex + eval) or
+// variable indirection; catching that in a blocklist is theater
+// (AGENTS.md §5). Upgrade path: an allowlist is the only non-theatrical
+// command gate (WO 28.17 R2, deferred).
 fn contains_shell_expansion_evasion(cmd: &str) -> bool {
     cmd.contains("${IFS")
         || cmd.contains("$IFS")
@@ -291,6 +295,17 @@ fn tee_to_dangerous_path(cmd: &str) -> Option<&'static str> {
 /// This is shared between the model's `bash` tool, the `!` bang passthrough,
 /// the `/test` slash command, and lifecycle hooks so every shell execution
 /// goes through the same sandbox, deny-list, and dangerous-pattern gates.
+///
+/// ponytail: the deny-list + dangerous-pattern scan here is a TRIPWIRE, not a
+/// boundary. It narrows the obvious-payload surface and catches naive evasion
+/// (`${IFS}`, `$()`), but a determined payload evades via encoding
+/// (base64/hex + eval) or variable indirection — no substring/regex blocklist
+/// can resolve runtime state. The real boundary is landlock filesystem
+/// confinement (WO 27.1, default-on for Linux) which caps the blast radius to
+/// allow-listed paths, plus `--no-network` (`unshare(CLONE_NEWNET)`) which
+/// blocks exfiltration. Operators needing a non-theatrical command gate should
+/// use an allowlist (`bash.require_allowlist`, WO 28.17 R2 — deferred), since
+/// an allowlist is the only blocklist-shape that isn't theater.
 pub fn check_bash_command_str(
     cmd: &str,
     workdir: Option<&str>,

@@ -371,6 +371,9 @@ pub trait ModelAdapter: Send + Sync {
 #[cfg(test)]
 mod m5_tests;
 
+#[cfg(test)]
+mod bedrock_vertex_mocks;
+
 /// Per-provider API keys resolved from config, passed to
 /// [`adapter_for_with_provider`] so each adapter can authenticate.
 #[derive(Debug, Clone, Default)]

@@ -6,6 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- WO 28.14: PLUGIN3_* → KF_BUDGET_* env-var backward-compat shim. `crates/kf-budget-core/src/paths.rs` reads the legacy `PLUGIN3_CONFIG_DIR`/`PLUGIN3_DATA_DIR`/`PLUGIN3_RUNTIME_DIR` names when the canonical `KF_BUDGET_*_DIR` is unset, and emits a one-shot deprecation warning to stderr per var per process (three `OnceLock<()>` statics; `KF_BUDGET_*` wins silently when both are set). Doc lineage added to ADR-0015 + ADR-0016. Alias window is one release.
 - WO 28.8: `src/daemon/client.rs` test coverage — 6 new `#[tokio::test]`s in a new `mod tests` (R1 connect Err, R2 read-timeout firing via test-only `KF_TEST_DAEMON_READ_TIMEOUT_MS`/`KF_TEST_DAEMON_CONNECT_TIMEOUT_MS` overrides, R3 auth-token mismatch, R4 oversized line rejection, R5 version-mismatch bail, happy-path ping/touch/list/resolve). R6 (Windows stub) deferred — no Windows runner locally; remaining tracked in the WO.
 - WO 28.5: Landlock FS confinement on background bash jobs. `resolve_paths` is re-exported `pub(crate)` from `bash_runner` and the background spawn path now resolves a canonical workspace and passes it to `setup_rlimits`. Previously background jobs got rlimits + `CLONE_NEWNET` but not landlock. Closes the WO 27.5-R1 deferral.
 - WO 28.2: `shared::session_mode` module — the per-session Stratum mode global moved out of `session::stratum` to break the `budget ↔ stratum` production cycle. Stratum re-exports the accessors for back-compat.

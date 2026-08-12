@@ -222,6 +222,16 @@ relies on `~/.config/plugin3/` existing. The CLI tests set
 `PLUGIN3_RUNTIME_DIR` to tempdir paths before invoking the
 binary.
 
+> **Deprecation note (WO 28.14).** The `PLUGIN3_*_DIR` env var
+> names referenced in this ADR are **deprecated aliases** of
+> `KF_BUDGET_*_DIR`. The code-side test isolation pattern still
+> works (a one-release backward-compat shim in
+> `crates/kf-budget-core/src/paths.rs` reads `PLUGIN3_*_DIR`
+> when `KF_BUDGET_*_DIR` is unset and emits a one-shot stderr
+> warning); new tests and CI fixtures should export
+> `KF_BUDGET_*_DIR` directly. See ADR-0015 for the full mapping.
+> The alias is removed in a future release.
+
 ### Coverage gate
 
 CI runs `cargo llvm-cov --workspace --fail-under-lines 70`.

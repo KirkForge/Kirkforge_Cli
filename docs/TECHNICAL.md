@@ -28,14 +28,14 @@ synthesis with its own architectural contributions:
 
 ## Workspace layout
 
-The workspace has one binary crate (`kf-code`) and 9 satellite crates under
+The workspace has one binary crate (`kf-code`) and 10 satellite crates under
 `crates/`. The binary is the user-facing CLI; the satellites are libraries and
 standalone binaries.
 
 ```
 kf-code (root bin)          ← the CLI the user runs
 ├── src/                       ← agent core (session, tools, TUI, adapters, verifiers)
-├── crates/                    ← 9 satellite crates
+├── crates/                    ← 10 satellite crates
 │   ├── kf-plugin-sdk     ← plugin SDK: manifest types, trust tiers
 │   ├── kf-plugin-host  ← plugin runtime: registry, dispatch, signatures
 │   ├── kf-context-index← tree-sitter symbol/import/call-graph index
@@ -44,6 +44,7 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-bench        ← task-benchmark harness (types + verifier + reports)
 │   ├── kf-compress-core       ← context-compression pipeline library + ruleset filtering
 │   ├── kf-budget-core           ← budget/orchestrator/slicing data model
+│   ├── kf-routing              ← pure Rust port of orchestrator pure modules (classifier, routing, correction, path safety) — foundation for WO 29.7
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── plugins/                   ← shell plugin manifests + tool/hook scripts
 │   └── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
@@ -51,8 +52,8 @@ kf-code (root bin)          ← the CLI the user runs
 └── docs/adr/                  ← 89 Architecture Decision Records
 ```
 
-The workspace has ~2,900 `#[test]` functions (~2,200 under `src/`,
-~635 under `crates/`). The `crates/` count is pinned by the
+The workspace has ~3,000 `#[test]` functions (~2,200 under `src/`,
+~738 under `crates/`). The `crates/` count is pinned by the
 `readme_drift` test (`crates/kf-budget-core/README.md` State table).
 
 ### Compiled-in vs satellite
@@ -87,6 +88,7 @@ When the feature is off, the shell plugin dir loads as a fallback
 | `kf-compress-core` | session | Context-compression pipeline library + rules | Active |
 | `kf-testdoctor` | quality | Test-performance diagnostics | Active |
 | `kf-budget-core` | session | Budget/orchestrator/slicing data model | Active |
+| `kf-routing` | session | Pure orchestrator modules: classifier, routing, correction, truth model, profiles, cost, path safety (WO 29.3) | Active |
 
 "Excluded" crates exist on disk but are not built by default.
 

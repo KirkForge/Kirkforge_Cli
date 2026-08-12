@@ -6,6 +6,47 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
+## WO 28.10 / 28.11 / 28.12 — CI hardening (branch `wo28e`, not yet merged)
+
+- **Precondition fix (commit `0532fdd`):** HEAD `5a6c32d` (WO 29.5 + 29.6
+  merge) committed with unresolved git conflict markers in `Cargo.toml`,
+  `Cargo.lock` (3 regions), and `docs/TECHNICAL.md` (2 regions). Resolved
+  by keeping both sides of each region verbatim — both `kf-rbac` and
+  `kf-memory-store` are real workspace members.
+- **WO 28.10 (commit `7988543`):** e2e suite gated behind `e2e-tests`
+  cargo feature (`required-features` on `[[test]] e2e`). New dedicated
+  `e2e` CI job (Linux, `needs: quality`) runs the suite with
+  `--features e2e-tests`. Quality job's Clippy + typecheck pass the same
+  feature so the gated crate stays under the lint gate. Windows
+  `--workspace` run no longer picks e2e up. `scripts/ci-local.sh full`
+  runs e2e locally.
+- **WO 28.11 (commit `66ec44a`):** `scripts/check-artifact-consistency.sh`
+  check #9 — `docs/TECHNICAL.md` bench row count vs directory (30 == 30).
+  `ci.yml` fmt job — TOML parse step now also asserts required keys
+  `(name, difficulty, prompt)`. Worker brief's `language` example was
+  wrong (exists in 0 tasks); used reality per WO R2. **DEFERRED R3
+  (name-set manifest)** — TECHNICAL.md row check already catches renames;
+  tracked here + in WO 28.12 status.
+- **WO 28.12 (commit `0633947`):** `scripts/check-artifact-consistency.sh`
+  check #10 — identifier-position grep of `src/` + `crates/` for
+  `use|mod|extern crate` of retired idents. Identifier-position regex
+  excludes historical prose without an allowlist. `stratum` correctly
+  NOT in the dead set. Note: the script change itself was bundled into
+  the WO 28.11 commit (both add adjacent checks in one edit window);
+  the WO 28.12 commit is the status flip + disclosure only.
+
+### Pending
+- WO 28.11 R3 (name-set manifest for silent-rename detection) — deferred;
+  see WO 28.11 status line.
+
+### Gate green at HEAD `0633947`
+- `cargo check --workspace --all-targets`
+- `cargo check --workspace --all-targets --features e2e-tests`
+- `cargo fmt --check`
+- `bash scripts/check-artifact-consistency.sh` (10/10 pass)
+- Deliberate-injection tests: `use plugin3::foo; mod kfd;` → script
+  exits 1; `prompt` key removed from sample task → schema gate fires.
+
 ## WO 29.6 — Port memory-palace to kf-memory-store crate (branch `wo29f`, not yet merged)
 
 - **DONE (R1+R2+R3):** Ported `@kirkforge/memory-palace` to a new `crates/kf-memory-store/` workspace member.

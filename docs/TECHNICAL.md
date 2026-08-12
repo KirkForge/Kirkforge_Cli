@@ -950,6 +950,12 @@ The root `Cargo.toml` exposes these features:
   applied by default in the bash `pre_exec` hook (fail-closed). The
   `--features landlock` flag is a no-op kept only for backward compat.
 - `otel` (non-default) — OpenTelemetry span/metric export.
+- `e2e-tests` (non-default) — gates the `tests/e2e/` integration suite via
+  `required-features` on the `[[test]] e2e` target (WO 28.10). Without the
+  feature, `cargo test --workspace` and `cargo check --all-targets` skip
+  the e2e crate entirely. CI runs it in a dedicated `e2e` job with
+  `--features e2e-tests`; the `quality` job passes the same flag to its
+  Clippy/typecheck steps so the gated crate stays under the lint gate.
 
 Two plugins are feature-gated compiled-in modules, served as
 direct Rust calls when their feature is on and falling back to the shell

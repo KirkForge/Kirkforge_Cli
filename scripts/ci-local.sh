@@ -83,6 +83,15 @@ fi
 if [ "$MODE" = "full" ]; then
     run_step "ADR xref drift" cargo test -p kf-budget-core --test adr_xref_drift
 
+    # The e2e integration suite is feature-gated behind `e2e-tests`
+    # (WO 28.10); only `full` mode pulls it in for local reproduction.
+    if cargo test --test e2e --features e2e-tests --no-run --locked >/dev/null 2>&1; then
+        run_step "e2e suite" cargo test --test e2e --features e2e-tests --locked -- --test-threads="$TEST_THREADS"
+    else
+        echo
+        echo -e "${YELLOW}WARNING${NC}: e2e crate did not build locally; skipping e2e suite."
+    fi
+
     if command -v cargo-tarpaulin >/dev/null 2>&1; then
         run_step "Generate coverage" cargo tarpaulin --out Xml --locked --lib --timeout 120 -- --skip test_build_fork_tree_nests_children
         echo

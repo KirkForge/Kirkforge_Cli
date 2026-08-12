@@ -1,0 +1,27 @@
+[package]
+name = "kf-orchestrator"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/KirkForge/KirkForge-Cli"
+description = "Orchestrator delegation + decompose + correction pipeline + mode executors (port of @kirkforge/orchestrator)"
+
+[dependencies]
+kf-routing = { workspace = true }
+kf-memory-store = { workspace = true }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "fs", "io-util", "sync", "macros", "time"] }
+async-trait.workspace = true
+tracing.workspace = true
+tempfile = { workspace = true }
+regex = { workspace = true }
+base64 = "0.22"
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }

@@ -28,14 +28,14 @@ synthesis with its own architectural contributions:
 
 ## Workspace layout
 
-The workspace has one binary crate (`kf-code`) and 11 satellite crates under
+The workspace has one binary crate (`kf-code`) and 12 satellite crates under
 `crates/`. The binary is the user-facing CLI; the satellites are libraries and
 standalone binaries.
 
 ```
 kf-code (root bin)          ← the CLI the user runs
 ├── src/                       ← agent core (session, tools, TUI, adapters, verifiers)
-├── crates/                    ← 11 satellite crates
+├── crates/                    ← 12 satellite crates
 │   ├── kf-plugin-sdk     ← plugin SDK: manifest types, trust tiers
 │   ├── kf-plugin-host  ← plugin runtime: registry, dispatch, signatures
 │   ├── kf-context-index← tree-sitter symbol/import/call-graph index
@@ -47,22 +47,13 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-routing              ← pure Rust port of orchestrator pure modules (classifier, routing, correction, path safety) — foundation for WO 29.7
 │   ├── kf-rbac                 ← RBAC (4 roles × 16 perms), timing-safe API-key auth, OIDC JWT/JWKS verification — port of @kirkforge/core-rbac (WO 29.5)
 │   ├── kf-memory-store ← routing-oriented memory store (MemoryStore facade + InMemory/File/SQLite adapters) — port of @kirkforge/memory-palace (WO 29.6)
+│   ├── kf-orchestrator ← orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of @kirkforge/orchestrator (WO 29.7)
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── plugins/                   ← shell plugin manifests + tool/hook scripts
 │   └── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
 ├── benches/tasks/             ← 30 benchmark task definitions (TOML)
-└── docs/adr/                  ← 90 Architecture Decision Records
+└── docs/adr/                  ← 89 Architecture Decision Records
 ```
-
-**Module layering (ADR-073):** `tools` depends on `shared`, not `session`. The
-pure access surface (`PathGuard`/`DenyList`/`GuardVerdict`), the bash
-command-string safety gate (`check_bash_command_str`), `UndoKind`, and the
-toolset composition types live in `shared` / `tools`; `session` re-exports them
-for legacy callers. The single intentional tools↔session seam is the
-`TaskSpawner` port (defined in `tools::task`, implemented by
-`session::task_spawner::InProcessTaskSpawner`) — where the agent loop plugs into
-the `task` tool. Residual `tools → session` edges (bash shell-runner, bash job
-registry, memory store) are non-cyclic and need their own port traits to cut.
 
 The workspace has ~3,000 `#[test]` functions (~2,200 under `src/`,
 ~772 under `crates/`). The `crates/` count is pinned by the
@@ -103,6 +94,7 @@ When the feature is off, the shell plugin dir loads as a fallback
 | `kf-routing` | session | Pure orchestrator modules: classifier, routing, correction, truth model, profiles, cost, path safety (WO 29.3) | Active |
 | `kf-rbac` | security | RBAC (roles/permissions/actor), timing-safe API-key auth, OIDC JWT/JWKS verification — port of `@kirkforge/core-rbac` (WO 29.5). ES512 verify deferred (jsonwebtoken has no ES512 variant). | Active |
 | `kf-memory-store` | session | Routing-oriented memory store: MemoryStore facade + InMemory/File/SQLite adapters (port of `@kirkforge/memory-palace`, WO 29.6) | Active |
+| `kf-orchestrator` | session | Orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of `@kirkforge/orchestrator` (WO 29.7). Reducer + verifiers + ModelClient production impl deferred. | Active |
 
 "Excluded" crates exist on disk but are not built by default.
 
@@ -960,12 +952,6 @@ The root `Cargo.toml` exposes these features:
   applied by default in the bash `pre_exec` hook (fail-closed). The
   `--features landlock` flag is a no-op kept only for backward compat.
 - `otel` (non-default) — OpenTelemetry span/metric export.
-- `e2e-tests` (non-default) — gates the `tests/e2e/` integration suite via
-  `required-features` on the `[[test]] e2e` target (WO 28.10). Without the
-  feature, `cargo test --workspace` and `cargo check --all-targets` skip
-  the e2e crate entirely. CI runs it in a dedicated `e2e` job with
-  `--features e2e-tests`; the `quality` job passes the same flag to its
-  Clippy/typecheck steps so the gated crate stays under the lint gate.
 
 Two plugins are feature-gated compiled-in modules, served as
 direct Rust calls when their feature is on and falling back to the shell
@@ -980,7 +966,7 @@ not the root binary.
 
 ## ADRs
 
-90 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+89 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
 execution replay (039), VFS minification (053), coverage-gate threshold
@@ -1005,8 +991,10 @@ document known limitations. Removing these is a regression.
 | `kf-bench` | Active | Benchmark task types, loader, verifier, reports | `BenchTask`, `TaskResult` | root binary, bench CI |
 | `kf-compress-core` | Active | Context-compression pipeline library | `CompressionPipeline`, `Mode`, `rules::build_rules` | root binary (via `stratum` feature) |
 | `kf-budget-core` | Active | Budget/orchestrator/slicing data model | `TokenBudget`, `SlicingOrchestrator` | root binary (via `budget` feature) |
-| `kf-routing` | Active | Pure orchestrator modules (classifier, routing, correction, path safety) | `build_empirical_recommendation`, `tokenize`, `vectorize`, `cosine` | `kf-memory-store` |
-| `kf-memory-store` | Active | Routing-oriented memory store (port of `@kirkforge/memory-palace`) | `MemoryStore`, `MemoryAdapter`, `FileAdapter`, `SqliteAdapter`, `InMemoryAdapter` | standalone (foundation for WO 29.7) |
+| `kf-routing` | Active | Pure orchestrator modules (classifier, routing, correction, path safety) | `build_empirical_recommendation`, `tokenize`, `vectorize`, `cosine` | `kf-memory-store`, `kf-orchestrator` |
+| `kf-rbac` | Active | RBAC + JWT/JWKS verification (port of `@kirkforge/core-rbac`) | `Rbac`, `Actor`, `ApiKeys`, `OidcVerifier` | standalone (security surface) |
+| `kf-memory-store` | Active | Routing-oriented memory store (port of `@kirkforge/memory-palace`) | `MemoryStore`, `MemoryAdapter`, `FileAdapter`, `SqliteAdapter`, `InMemoryAdapter` | `kf-orchestrator` |
+| `kf-orchestrator` | Active | Orchestrator delegation + decompose + correction pipeline (port of `@kirkforge/orchestrator`) | `Orchestrator`, `delegate`, `run_correction_loop`, `ModelClient`, `WorkspaceManager` | standalone (foundation for full executor wiring) |
 | `kf-testdoctor` | Active | Test-performance diagnostics | `doctor` CLI | root binary (`kf-code doctor`) |
 
 "Excluded" crates exist on disk but are not built by default (`cargo build

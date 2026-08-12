@@ -189,7 +189,7 @@ A "completed" deps subagent left a detached `cargo run -p kf-context-index --exa
 13. **25.7-R3**: Benchmark manifest validation. NOT DONE — still open. Remaining: generate count from source in CI.
 14. **25.8-R4 / 25.10-R4**: CI enforcement gate for dead crate/binary refs. NOT DONE — still open. `scripts/check-artifact-consistency.sh` covers this partially. Remaining: extend to also grep active source (src/, crates/) for `plugin3`, `kfd`, `kf-code-video` as identifiers (not historical prose), fail CI on hit.
 15. **22.9-R4 / 25.18-R4**: Bedrock/Vertex test hardening. NOT DONE — still open (WO 26.10-R1, not started). Remaining: mock provider adapters for CI.
-16. **Plugin3 env var backward compat**: PLUGIN3_* env vars renamed to KF_BUDGET_* in kf-budget-core (WO review-fix). NOT DONE — still open (WO 26.10-R2, not started). Remaining: add a one-release backward-compat shim that checks PLUGIN3_* and warns, or document the breaking change in CHANGELOG + migration guide.
+16. **Plugin3 env var backward compat**: PLUGIN3_* env vars renamed to KF_BUDGET_* in kf-budget-core (WO review-fix). DONE (WO 28.14) — one-release backward-compat shim in `crates/kf-budget-core/src/paths.rs` reads `PLUGIN3_*_DIR` when `KF_BUDGET_*_DIR` is unset, emits a one-shot stderr deprecation warning per var per process (three `OnceLock<()>` statics; canonical name wins silently when both set). Doc lineage added to ADR-0015 + ADR-0016. Alias window is one release — remove after.
 
 ## Gate status
 

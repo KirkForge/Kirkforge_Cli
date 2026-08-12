@@ -1,6 +1,7 @@
 //! XDG path resolution. Per ADR-0014.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 pub struct Paths {
     pub config_dir: PathBuf,
@@ -21,12 +22,26 @@ impl Paths {
             None => (PathBuf::from("."), PathBuf::from("."), PathBuf::from(".")),
         };
         Self {
-            // Previously KF_BUDGET_CONFIG_DIR; renamed for kf-budget-core namespace consistency.
-            config_dir: std::env::var("KF_BUDGET_CONFIG_DIR").map_or(cfg_default, PathBuf::from),
-            // Previously KF_BUDGET_DATA_DIR; renamed for kf-budget-core namespace consistency.
-            data_dir: std::env::var("KF_BUDGET_DATA_DIR").map_or(data_default, PathBuf::from),
-            // Previously KF_BUDGET_RUNTIME_DIR; renamed for kf-budget-core namespace consistency.
-            runtime_dir: std::env::var("KF_BUDGET_RUNTIME_DIR").map_or(run_default, PathBuf::from),
+            // Renamed from PLUGIN3_CONFIG_DIR for kf-budget-core namespace
+            // consistency; legacy alias still honoured via `legacy_dir`.
+            config_dir: legacy_dir(
+                "KF_BUDGET_CONFIG_DIR",
+                "PLUGIN3_CONFIG_DIR",
+                &WARNED_CONFIG,
+                cfg_default,
+            ),
+            data_dir: legacy_dir(
+                "KF_BUDGET_DATA_DIR",
+                "PLUGIN3_DATA_DIR",
+                &WARNED_DATA,
+                data_default,
+            ),
+            runtime_dir: legacy_dir(
+                "KF_BUDGET_RUNTIME_DIR",
+                "PLUGIN3_RUNTIME_DIR",
+                &WARNED_RUNTIME,
+                run_default,
+            ),
         }
     }
 
@@ -58,6 +73,43 @@ impl Paths {
     pub fn config_file(&self) -> PathBuf {
         self.config_dir.join("config.toml")
     }
+}
+
+// ponytail: WO 28.14 backward-compat shim. PLUGIN3_*_DIR was renamed to
+// KF_BUDGET_*_DIR; the rename was complete on the read side but existing
+// operator workflows/CI envs still export the old names, and on upgrade
+// they silently fall through to the XDG default with no diagnostic. The
+// shim reads the legacy name when the new one is unset AND emits a
+// one-shot deprecation warning to stderr. One release window, then the
+// alias is removed (do NOT silently extend — WO 28.14 defer note).
+//
+// The three WARNED_* statics make the warning fire at most once per var
+// per process. OnceLock::set returns Ok only on the first caller; later
+// callers get Err and skip the eprintln. Race-safe under concurrency
+// (multiple threads may pass the env-var check, but only one wins set).
+static WARNED_CONFIG: OnceLock<()> = OnceLock::new();
+static WARNED_DATA: OnceLock<()> = OnceLock::new();
+static WARNED_RUNTIME: OnceLock<()> = OnceLock::new();
+
+fn legacy_dir(
+    new_var: &str,
+    legacy_var: &str,
+    warned: &'static OnceLock<()>,
+    default: PathBuf,
+) -> PathBuf {
+    if let Ok(v) = std::env::var(new_var) {
+        return PathBuf::from(v);
+    }
+    if let Ok(v) = std::env::var(legacy_var) {
+        if warned.set(()).is_ok() {
+            eprintln!(
+                "warning: ${legacy_var} is deprecated; use ${new_var} instead. \
+                 The {legacy_var} alias will be removed in a future release."
+            );
+        }
+        return PathBuf::from(v);
+    }
+    default
 }
 
 #[cfg(test)]
@@ -378,5 +430,76 @@ mod tests {
             // races other threads on Windows).
             assert_eq!(g_outer.prior(), None, "outer guard must have prior=None");
         }
+    }
+
+    // ponytail: WO 28.14 — when KF_BUDGET_CONFIG_DIR is unset and
+    // PLUGIN3_CONFIG_DIR (the legacy alias) is set, the shim must
+    // resolve to the legacy value. Skip if either var is already set
+    // in the developer's shell; we can't tell shell-set from test-set.
+    // Note: the one-shot deprecation warning to stderr is not asserted
+    // here — the OnceLock makes it impossible to test the warning
+    // contract twice in one process. The value resolution is the
+    // load-bearing assertion; the warning is a stderr side effect.
+    #[test]
+    fn plugin3_legacy_alias_resolves_when_kf_budget_unset() {
+        if std::env::var("KF_BUDGET_CONFIG_DIR").is_ok()
+            || std::env::var("PLUGIN3_CONFIG_DIR").is_ok()
+        {
+            eprintln!("skipping: CONFIG_DIR already set in this environment");
+            return;
+        }
+        let _g_legacy = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/legacy-cfg");
+        let p = Paths::resolve();
+        assert_eq!(
+            p.config_dir,
+            PathBuf::from("/tmp/legacy-cfg"),
+            "PLUGIN3_CONFIG_DIR must resolve when KF_BUDGET_CONFIG_DIR is unset"
+        );
+    }
+
+    // ponytail: WO 28.14 — when BOTH KF_BUDGET_*_DIR and PLUGIN3_*_DIR
+    // are set, the new canonical name must win silently. Warning on
+    // conflict would spam operators who already migrated.
+    #[test]
+    fn kf_budget_wins_over_plugin3_legacy_alias() {
+        if std::env::var("KF_BUDGET_DATA_DIR").is_ok() || std::env::var("PLUGIN3_DATA_DIR").is_ok()
+        {
+            eprintln!("skipping: DATA_DIR already set in this environment");
+            return;
+        }
+        let _g_new = EnvGuard::set("KF_BUDGET_DATA_DIR", "/tmp/new-data");
+        let _g_legacy = EnvGuard::set("PLUGIN3_DATA_DIR", "/tmp/legacy-data");
+        let p = Paths::resolve();
+        assert_eq!(
+            p.data_dir,
+            PathBuf::from("/tmp/new-data"),
+            "KF_BUDGET_DATA_DIR must win over PLUGIN3_DATA_DIR when both are set"
+        );
+    }
+
+    // ponytail: WO 28.14 — the legacy alias works for all three vars
+    // (config/data/runtime), not just the one exercised above. One
+    // test, three assertions: env-var writers are process-global and
+    // parallel tests on the same key race (same shape as
+    // `partial_env_override_takes_effect_independently_per_var`).
+    #[test]
+    fn plugin3_legacy_alias_resolves_for_all_three_dirs() {
+        if std::env::var("KF_BUDGET_RUNTIME_DIR").is_ok()
+            || std::env::var("PLUGIN3_RUNTIME_DIR").is_ok()
+            || std::env::var("KF_BUDGET_DATA_DIR").is_ok()
+            || std::env::var("PLUGIN3_DATA_DIR").is_ok()
+            || std::env::var("KF_BUDGET_CONFIG_DIR").is_ok()
+            || std::env::var("PLUGIN3_CONFIG_DIR").is_ok()
+        {
+            eprintln!("skipping: one of the *_DIR vars is already set in this environment");
+            return;
+        }
+        let _g1 = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/leg-cfg");
+        let _g2 = EnvGuard::set("PLUGIN3_DATA_DIR", "/tmp/leg-data");
+        let _g3 = EnvGuard::set("PLUGIN3_RUNTIME_DIR", "/tmp/leg-run");
+        let p = Paths::resolve();
+        assert_eq!(p.config_dir, PathBuf::from("/tmp/leg-cfg"));
+        assert_eq!(p.data_dir, PathBuf::from("/tmp/leg-data"));
+        assert_eq!(p.runtime_dir, PathBuf::from("/tmp/leg-run"));
     }
 }

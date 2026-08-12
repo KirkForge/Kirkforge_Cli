@@ -177,6 +177,23 @@ The chain is identical to Stratum ADR-0016, with `PLUGIN3_*`
 env var names instead of `STRATUM_*`. A contributor who
 memorises one chain has memorised both.
 
+> **Deprecation note (WO 28.14).** The `PLUGIN3_*_DIR` env var names
+> shown throughout this ADR are **deprecated aliases** of the canonical
+> `KF_BUDGET_*_DIR` names adopted at the kf-budget-core fold-in. A
+> one-release backward-compat shim in `crates/kf-budget-core/src/paths.rs`
+> reads `PLUGIN3_*_DIR` when `KF_BUDGET_*_DIR` is unset and emits a
+> one-shot deprecation warning to stderr. Mapping:
+>
+> | Deprecated (this ADR)        | Canonical (current)          |
+> |------------------------------|------------------------------|
+> | `PLUGIN3_CONFIG_DIR`         | `KF_BUDGET_CONFIG_DIR`       |
+> | `PLUGIN3_DATA_DIR`           | `KF_BUDGET_DATA_DIR`         |
+> | `PLUGIN3_RUNTIME_DIR`        | `KF_BUDGET_RUNTIME_DIR`      |
+>
+> When both are set, the canonical name wins silently (no warning — the
+> operator already migrated). The alias is removed in a future release;
+> do not write new workflows that depend on it.
+
 ### `--json` for every subcommand
 
 ```rust

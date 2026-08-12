@@ -26,6 +26,28 @@ mod unix_imp {
     /// surfaces to the caller rather than hanging the client forever.
     const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+    // ponytail: test-only override hooks. Production callers never set
+    // these env vars — when unset, the constants above are used. They
+    // exist so the timeout tests can pin the timeout firing without
+    // waiting the full 5s/30s (which would blow the test-fast.sh 60s
+    // budget). Done-condition for R2: dropping the
+    // `tokio::time::timeout(read_timeout(), ...)` wrap in `call()`
+    // makes the test hang past its own harness timeout.
+    fn connect_timeout() -> Duration {
+        std::env::var("KF_TEST_DAEMON_CONNECT_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(CONNECT_TIMEOUT)
+    }
+    fn read_timeout() -> Duration {
+        std::env::var("KF_TEST_DAEMON_READ_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(READ_TIMEOUT)
+    }
+
     /// Client handle to the session daemon.
     pub struct DaemonClient {
         stream: BufStream<UnixStream>,
@@ -41,11 +63,12 @@ mod unix_imp {
         /// Sends a version-gated Ping handshake and bails if the daemon
         /// version does not match the client version.
         pub async fn connect_at(path: PathBuf) -> anyhow::Result<Self> {
-            let stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&path))
+            let timeout = connect_timeout();
+            let stream = tokio::time::timeout(timeout, UnixStream::connect(&path))
                 .await
                 .with_context(|| {
                     format!(
-                        "timed out connecting to daemon socket at {} after {CONNECT_TIMEOUT:?}",
+                        "timed out connecting to daemon socket at {} after {timeout:?}",
                         path.display()
                     )
                 })?
@@ -107,12 +130,12 @@ mod unix_imp {
                 .context("write newline")?;
             self.stream.flush().await.context("flush daemon request")?;
 
+            let timeout = read_timeout();
             let mut line = String::new();
-            let n =
-                tokio::time::timeout(READ_TIMEOUT, read_line_limited(&mut self.stream, &mut line))
-                    .await
-                    .with_context(|| format!("daemon response timed out after {READ_TIMEOUT:?}"))?
-                    .context("read daemon response")?;
+            let n = tokio::time::timeout(timeout, read_line_limited(&mut self.stream, &mut line))
+                .await
+                .with_context(|| format!("daemon response timed out after {timeout:?}"))?
+                .context("read daemon response")?;
             if n == 0 {
                 anyhow::bail!("daemon closed connection before responding");
             }
@@ -395,11 +418,12 @@ mod unix_imp {
         use crate::daemon::InstanceEvent;
 
         let socket_path = paths::socket_path()?;
-        let stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&socket_path))
+        let connect_to = connect_timeout();
+        let stream = tokio::time::timeout(connect_to, UnixStream::connect(&socket_path))
             .await
             .with_context(|| {
                 format!(
-                    "timed out connecting to instance channel at {} after {CONNECT_TIMEOUT:?}",
+                    "timed out connecting to instance channel at {} after {connect_to:?}",
                     socket_path.display()
                 )
             })?
@@ -420,10 +444,11 @@ mod unix_imp {
         stream.flush().await.context("flush InstanceRegister")?;
 
         // Read handshake ack.
+        let read_to = read_timeout();
         let mut line = String::new();
-        let n = tokio::time::timeout(READ_TIMEOUT, read_line_limited(&mut stream, &mut line))
+        let n = tokio::time::timeout(read_to, read_line_limited(&mut stream, &mut line))
             .await
-            .with_context(|| format!("instance_register ack timed out after {READ_TIMEOUT:?}"))?
+            .with_context(|| format!("instance_register ack timed out after {read_to:?}"))?
             .context("read instance_register ack")?;
         if n == 0 {
             anyhow::bail!("daemon closed connection during instance register handshake");
@@ -547,3 +572,275 @@ mod windows_imp {
 pub use unix_imp::*;
 #[cfg(windows)]
 pub use windows_imp::*;
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::unix_imp::DaemonClient;
+    use crate::daemon::{read_line_limited, Response, MAX_FRAME_SIZE};
+    use tokio::io::{AsyncWriteExt, BufStream};
+    use tokio::net::UnixListener;
+    use tokio::time::{sleep, Duration};
+
+    /// Poll until `socket` appears on disk (the daemon bound it).
+    async fn wait_for_socket(socket: &std::path::Path) {
+        for _ in 0..50 {
+            if socket.exists() {
+                return;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+        panic!("daemon did not bind socket at {}", socket.display());
+    }
+
+    /// R1: `connect_at` against a path with no listener returns Err.
+    /// ponytail: a Unix-domain connect to a nonexistent socket returns
+    /// ENOENT immediately (it does not block for CONNECT_TIMEOUT), so
+    /// this pins the connect-failure-surfaces-to-caller contract. The
+    /// WO done-condition "dropping the 5s timeout breaks the test" is
+    /// not exactly enforceable for a fast-failing Unix-domain connect;
+    /// R2 below pins the timeout path itself.
+    #[tokio::test]
+    async fn connect_at_returns_err_for_nonexistent_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("never-bound.sock");
+        let result = DaemonClient::connect_at(socket).await;
+        assert!(
+            result.is_err(),
+            "expected Err for nonexistent socket, got Ok"
+        );
+    }
+
+    /// R2: `call()` returns a timeout error when the daemon accepts but
+    /// never writes a response. The test sets `KF_TEST_DAEMON_READ_TIMEOUT_MS`
+    /// so the inner `tokio::time::timeout` in `call()` fires in tens of
+    /// milliseconds rather than the production 30s. Done-condition: drop
+    /// the `tokio::time::timeout(read_timeout(), ...)` wrap in `call()`
+    /// and this test hangs past its own outer timeout.
+    #[tokio::test]
+    async fn call_times_out_when_daemon_never_responds() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("silent.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let accept_handle = tokio::spawn(async move {
+            // Accept the connection and park forever — no response.
+            let (_stream, _addr) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+
+        // Shrink the inner READ_TIMEOUT so the test does not wait 30s.
+        let prior = std::env::var("KF_TEST_DAEMON_READ_TIMEOUT_MS").ok();
+        // SAFETY: env var is read only by client.rs test helpers; setting
+        // it here only affects this test's connect_at call.
+        std::env::set_var("KF_TEST_DAEMON_READ_TIMEOUT_MS", "100");
+
+        // Outer bound so a regression (timeout wrap removed in call())
+        // fails the test instead of hanging the suite.
+        let connect = DaemonClient::connect_at(socket);
+        let result = tokio::time::timeout(Duration::from_secs(2), connect).await;
+
+        // Restore env before asserting so a panic does not leak.
+        match prior {
+            Some(v) => std::env::set_var("KF_TEST_DAEMON_READ_TIMEOUT_MS", v),
+            None => std::env::remove_var("KF_TEST_DAEMON_READ_TIMEOUT_MS"),
+        }
+        accept_handle.abort();
+
+        // Outer timeout should NOT have fired — connect_at should have
+        // returned Err with the timeout message well within 2s.
+        let connect_result = match result {
+            Err(_) => panic!("connect_at did not return within 2s — timeout wrap missing?"),
+            Ok(r) => r,
+        };
+        assert!(connect_result.is_err(), "expected timeout Err, got Ok");
+        let msg = match connect_result {
+            Err(e) => format!("{e}"),
+            Ok(_) => unreachable!(),
+        };
+        assert!(
+            msg.contains("timed out"),
+            "error should name the timeout, got: {msg}"
+        );
+    }
+
+    /// R3: a request carrying the wrong auth token is rejected. The
+    /// daemon is started with one token file; the file's contents are
+    /// then swapped so the client's next `read_auth_token()` returns a
+    /// different value than the server cached at startup.
+    #[tokio::test]
+    async fn request_with_wrong_auth_token_is_rejected() {
+        let _guard = crate::session::test_data_dir_lock().lock().await;
+        let dir = tempfile::tempdir().unwrap();
+
+        let token_path = dir.path().join("token");
+        std::fs::write(&token_path, "server-secret").unwrap();
+        let prior_token = std::env::var("KF_CODE_DAEMON_TOKEN_FILE").ok();
+        // SAFETY: test holds test_data_dir_lock; no neighbour test sets
+        // this var (server.rs's auth tests remove it on a different code
+        // path and don't run concurrently with this one).
+        std::env::set_var(
+            "KF_CODE_DAEMON_TOKEN_FILE",
+            token_path.to_string_lossy().as_ref(),
+        );
+
+        let socket = dir.path().join("auth.sock");
+        let pid = dir.path().join("auth.pid");
+        let server_handle = tokio::spawn(crate::daemon::server::run_daemon_at(
+            socket.clone(),
+            pid.clone(),
+        ));
+        wait_for_socket(&socket).await;
+
+        // Handshake passes — client reads the same token file.
+        let mut client = DaemonClient::connect_at(socket.clone()).await.unwrap();
+
+        // Swap the file contents so the client now reads a wrong token.
+        std::fs::write(&token_path, "wrong-secret").unwrap();
+        let result = client.list_recent().await;
+
+        // Restore env before asserting so a panic does not leak.
+        match &prior_token {
+            Some(v) => std::env::set_var("KF_CODE_DAEMON_TOKEN_FILE", v),
+            None => std::env::remove_var("KF_CODE_DAEMON_TOKEN_FILE"),
+        }
+
+        assert!(
+            result.is_err(),
+            "wrong auth token should be rejected, got Ok"
+        );
+        let msg = match result {
+            Err(e) => format!("{e}"),
+            Ok(_) => unreachable!(),
+        };
+        assert!(
+            msg.contains("authentication failed"),
+            "error should mention authentication, got: {msg}"
+        );
+
+        let _ = client.shutdown().await;
+        drop(client);
+        server_handle.abort();
+        let _ = std::fs::remove_file(&socket);
+        let _ = std::fs::remove_file(&pid);
+    }
+
+    /// R4: a response line longer than `MAX_FRAME_SIZE` is rejected by
+    /// `read_line_limited` (DoS guard on the wire format). A stub
+    /// listener drains the ping request then writes the oversized line.
+    #[tokio::test]
+    async fn oversized_response_line_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("oversized.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut buf = BufStream::new(stream);
+            // Drain the request line.
+            let mut line = String::new();
+            let _ = read_line_limited(&mut buf, &mut line).await;
+            // Write a response line larger than MAX_FRAME_SIZE.
+            let oversized = vec![b'x'; MAX_FRAME_SIZE + 1];
+            buf.write_all(&oversized).await.unwrap();
+            buf.write_all(b"\n").await.unwrap();
+            buf.flush().await.unwrap();
+            // Hold the stream open until the client reads + errors.
+            std::future::pending::<()>().await;
+        });
+
+        let result = DaemonClient::connect_at(socket).await;
+        assert!(
+            result.is_err(),
+            "oversized response should produce Err, got Ok"
+        );
+        server_handle.abort();
+    }
+
+    /// R5: `connect_at` bails when the daemon's `version` field does not
+    /// match `CARGO_PKG_VERSION`. A stub listener echoes a synthetic
+    /// `0.0.0-mismatch` version in its `Response::Ok` payload.
+    #[tokio::test]
+    async fn connect_at_bails_on_version_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("version.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut buf = BufStream::new(stream);
+            // Drain the ping request.
+            let mut line = String::new();
+            let _ = read_line_limited(&mut buf, &mut line).await;
+            // Respond with a version that cannot match CARGO_PKG_VERSION.
+            let resp = Response::Ok {
+                data: Some(serde_json::json!({ "version": "0.0.0-mismatch" })),
+            };
+            let out = serde_json::to_string(&resp).unwrap();
+            buf.write_all(out.as_bytes()).await.unwrap();
+            buf.write_all(b"\n").await.unwrap();
+            buf.flush().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+
+        let result = DaemonClient::connect_at(socket).await;
+        assert!(result.is_err(), "version mismatch should produce Err");
+        let msg = match result {
+            Err(e) => format!("{e}"),
+            Ok(_) => unreachable!(),
+        };
+        assert!(
+            msg.contains("version mismatch"),
+            "error should mention version mismatch, got: {msg}"
+        );
+        server_handle.abort();
+    }
+
+    /// R6 (happy-path round-trip): pin the client surface in client.rs's
+    /// own test module. `server.rs::client_server_round_trip` already
+    /// exercises the same path; this anchors coverage to the file the
+    /// WO targets and serves as a smoke test that connect/handshake
+    /// still work end-to-end.
+    #[tokio::test]
+    async fn client_round_trips_ping_touch_list_resolve() {
+        let _guard = crate::session::test_data_dir_lock().lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
+        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let touch_path = sessions_dir.join("rt-session.conv.ndjson");
+        std::fs::write(&touch_path, "").unwrap();
+
+        let socket = dir.path().join("rt.sock");
+        let pid = dir.path().join("rt.pid");
+        let server_handle = tokio::spawn(crate::daemon::server::run_daemon_at(
+            socket.clone(),
+            pid.clone(),
+        ));
+        wait_for_socket(&socket).await;
+
+        let mut client = DaemonClient::connect_at(socket.clone()).await.unwrap();
+        client.ping().await.unwrap();
+        client
+            .touch("rt-session", touch_path.clone())
+            .await
+            .unwrap();
+        let list = client.list_recent().await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "rt-session");
+        let resolved = client.resolve("rt-session").await.unwrap();
+        assert_eq!(resolved, Some(touch_path.clone()));
+        let resolved_prefix = client.resolve("rt").await.unwrap();
+        assert_eq!(resolved_prefix, Some(touch_path));
+        client.shutdown().await.unwrap();
+        server_handle.await.unwrap().unwrap();
+
+        assert!(!socket.exists(), "daemon left stale socket");
+        assert!(!pid.exists(), "daemon left stale pid file");
+
+        match previous {
+            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
+            None => std::env::remove_var("KF_CODE_DATA_DIR"),
+        }
+    }
+}

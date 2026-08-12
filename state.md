@@ -6,6 +6,19 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
+## WO 29.4 — Port EventBus + AuditLogger (core-events) to Rust (branch `wo29d`, not yet merged)
+
+- **DONE (R1+R2+R3):** Ported the LIVE surface of `@kirkforge/core-events` to Rust.
+  - **R1 EventBus:** `src/shared/event_bus.rs` — async `emit` with idempotency cache (`HashMap<event_id, Instant>` + TTL eviction + size cap) and bounded buffer, `on` returning an unsub callable (handler identity via monotonic u64 ID), `drain_buffer`, `shutdown`, `graceful_shutdown`. Defaults match TS (buffer 1000 / cache 10_000 / TTL 5 min).
+  - **R2 AuditLogger + hash chain:** extended `src/shared/audit.rs` with `AuditEvent`, `AuditAction` (29 dotted-string literals), `AuditOutcome`, `initial_hash`, `chain_hash_of` (recursive key-sorted canonical JSON for metadata; null vs absent both → `{}`), `MemoryAuditSink` (+ `verify_chain`), `AuditLogger`, `create_audit_sink` factory. Plain SHA-256 by default; HMAC-SHA256 when keyed.
+  - **R3 FileAuditSink:** buffered append + size-based rotation (default 50 MB / 10 files). `.N` shift then current → `.1` on rotation.
+- **R4 SKIPPED (per inventory — not a deferral):** `HttpAuditSink`, `SyslogAuditSink`, `WormAuditSink` are not ported. Zero production consumers in the TS tree. If a future sink is needed, it's a follow-up WO.
+- **Existing `AuditLog`/`AuditEntry` untouched** — they serve a different purpose (redacted tool-call/hook NDJSON) and have 5+ consumers; new types added alongside.
+- **Deviation disclosed:** the workorder suggested `tokio::sync::broadcast` for the EventBus backing channel, but the TS impl does serial inline `await handler(event)` with an inflight counter and drain semantics. `Mutex<HashMap<kind, Vec<Handler>>>` + `VecDeque` is a 1:1 behavioral port; broadcast would introduce fan-out concurrency + `Lagged` failure modes that don't exist in TS. Easy swap if a future need emerges.
+- **New dep:** `hmac = "0.12"` (workspace root). `sha2 = "0.10"` + `hex = "0.4"` were already present (SigV4 / bedrock signing).
+- **Tests:** 32 ported (6 EventBus + 26 audit), all green. Of the 36 TS tests, 4 Syslog + 9 WORM (R4) + 3 createAuditSink-factory-http-variant were skipped; the rest ported.
+- Gate green: `cargo check -p kf-code --lib --tests`, `cargo clippy -p kf-code --lib --tests -- -D warnings`, `cargo fmt --check`, `cargo test --lib -p kf-code audit::` (26 passed), `cargo test --lib -p kf-code event_bus::` (6 passed).
+
 ## WO 29.1 — Fold bundled plugin into compiled-in Rust tools (branch `wo29b`, not yet merged)
 
 - **DONE (Phase 1):** Added `kf-plugin-tools` cargo feature (default on). `src/session/plugin_tools/native.rs` implements the 6 plugin tools as compiled-in Rust calls: `doctor` (probes eslint/tsc/ruff/pyright/bandit via `tokio::process::Command --version` + derives languages), `health`, and `tools` run fully native (no shell hop, no Node hop). Registered in `run_session.rs` mirroring the stratum/budget pattern. The `/kf-code` skill is registered inline in `skills.rs::scan_and_load` when the feature is on (the manifest no longer loads). Added a folded-skip guard in `all_plugin_tools` so a data-dir-loaded manifest can't double-register with the compiled-in tools. `docs/TECHNICAL.md` plugin-section updated.

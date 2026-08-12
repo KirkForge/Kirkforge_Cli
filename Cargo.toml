@@ -197,8 +197,10 @@ aws-sigv4 = { version = "1", default-features = false, features = ["sign-http"] 
 aws-credential-types = { version = "1.2", default-features = false }
 aws-smithy-runtime-api = { version = "1.7.3", default-features = false }
 futures-util = "0.3"
-# SHA-256 hashing required by the custom SigV4 payload hash.
+# SHA-256 hashing required by the custom SigV4 payload hash + audit chain (WO 29.4).
 sha2 = "0.10"
+# HMAC-SHA256 for the keyed audit hash chain (WO 29.4).
+hmac = "0.12"
 hex = "0.4"
 # Google OAuth2 / service-account access tokens for Anthropic-on-Vertex.
 yup-oauth2 = { version = "12", default-features = false, features = ["hyper-rustls", "ring", "service-account"] }

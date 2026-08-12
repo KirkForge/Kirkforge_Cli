@@ -1,0 +1,456 @@
+//! In-process pub/sub event bus. Port of `@kirkforge/core-events` `EventBus`.
+//!
+//! Mirrors the TS surface: async `emit` with an idempotency cache +
+//! bounded buffer, `on` returning an unsub callable, `drain_buffer`,
+//! `shutdown`, and `graceful_shutdown`. The idempotency cache is a
+//! `HashMap<event_id, Instant>` with TTL eviction (default 5 min) and a
+//! max-size cap (default 10_000) — both matching the TS defaults.
+//!
+//! Design note: the TS impl fans handlers out serially (`for (const h of
+//! handlers) await h(event)`) with a single inflight counter; this port
+//! preserves that exact semantic (no parallel fan-out, no broadcast
+//! `RecvError::Lagged` failure mode). The workorder suggested
+//! `tokio::sync::broadcast` but that would diverge from the serial-await
+//! behavior the TS code relies on for its inflight/drain bookkeeping.
+
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use sha2::{Digest, Sha256};
+
+/// Boxed pinned future returned by an async event handler.
+type HandlerFut = Pin<Box<dyn Future<Output = HandlerResult> + Send + 'static>>;
+/// Async handler signature: takes the event, returns Ok/Err.
+pub type Handler = Arc<dyn Fn(Event) -> HandlerFut + Send + Sync + 'static>;
+/// Handler outcome. Ok = handled; Err = handler error (collected, not fatal).
+pub type HandlerResult = Result<(), HandlerError>;
+/// Reason a handler call failed. Mirrors `HandlerError` from core-errors.
+#[derive(Debug, Clone)]
+pub struct HandlerError {
+    pub source: &'static str,
+    pub message: String,
+}
+
+/// Monotonic handler ID. Each `on()` call grabs the next value; the unsub
+/// closure carries the same ID back into the registry to find its entry.
+static NEXT_HANDLER_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Options for constructing an [`EventBus`]. All fields optional; defaults
+/// match the TS `EventBusOptions` defaults.
+#[derive(Debug, Clone)]
+pub struct EventBusOptions {
+    pub buffer_capacity: usize,
+    pub idempotency_cache_size: usize,
+    pub idempotency_ttl_ms: u64,
+}
+
+impl Default for EventBusOptions {
+    fn default() -> Self {
+        Self {
+            buffer_capacity: 1000,
+            idempotency_cache_size: 10_000,
+            idempotency_ttl_ms: 300_000,
+        }
+    }
+}
+
+/// An event flowing through the bus. Generic shape covering the
+/// `KirkForgeEvent` union: `kind` discriminates, `sequence`/`stream_id`
+/// identify the stream, `value` carries the payload. The idempotency
+/// cache hashes `{kind, stream_id, sequence, value, timestamp}` so two
+/// emits of the same event dedupe.
+#[derive(Debug, Clone)]
+pub struct Event {
+    pub kind: String,
+    pub schema_version: String,
+    pub sequence: u64,
+    pub stream_id: String,
+    pub timestamp: String,
+    pub value: Option<serde_json::Value>,
+}
+
+impl Event {
+    /// Hash the identity fields → stable idempotency key. Same input
+    /// produces the same hash regardless of field declaration order in
+    /// the source. Matches the TS `makeEventId` shape (kind, streamId,
+    /// sequence, payload, timestamp).
+    fn id_key(&self) -> String {
+        let payload_str = self
+            .value
+            .as_ref()
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        let mut h = Sha256::new();
+        h.update(self.kind.as_bytes());
+        h.update([0u8]);
+        h.update(self.stream_id.as_bytes());
+        h.update([0u8]);
+        h.update(self.sequence.to_le_bytes());
+        h.update([0u8]);
+        h.update(payload_str.as_bytes());
+        h.update([0u8]);
+        h.update(self.timestamp.as_bytes());
+        hex::encode(h.finalize())
+    }
+}
+
+struct State {
+    handlers: HashMap<String, Vec<(u64, Handler)>>,
+    buffer: VecDeque<Event>,
+    buffer_capacity: usize,
+    idempotency: HashMap<String, Instant>,
+    idempotency_size: usize,
+    idempotency_ttl: Duration,
+    running: bool,
+    shutting_down: bool,
+    inflight: usize,
+    drain_waiters: Vec<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl State {
+    fn trim_idempotency(&mut self) {
+        let cutoff = Instant::now().checked_sub(self.idempotency_ttl);
+        if let Some(cutoff) = cutoff {
+            self.idempotency.retain(|_, ts| *ts >= cutoff);
+        }
+        while self.idempotency.len() > self.idempotency_size {
+            // Evict oldest insertion — `HashMap` has no order, so pop an
+            // arbitrary key. ponytail: this matches the TS LRU-ish intent
+            // well enough for the bounded cache; a true LRU would need a
+            // linked map (not justified by any test).
+            if let Some(key) = self.idempotency.keys().next().cloned() {
+                self.idempotency.remove(&key);
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+/// Inner shared state. Held inside an `Arc` so the unsub closure returned
+/// from `on` can capture a handle to the bus without a lifetime tie.
+#[derive(Clone)]
+pub struct EventBus {
+    inner: Arc<Mutex<State>>,
+}
+
+/// Why an `emit` was rejected.
+#[derive(Debug)]
+pub enum EmitError {
+    /// Bus is shut down — emit happened after `shutdown`/`graceful_shutdown`.
+    NotRunning,
+    /// Bounded buffer is full — emit would exceed `buffer_capacity`.
+    BufferFull,
+    /// Event already processed within the idempotency window.
+    Duplicate(String),
+}
+
+impl Default for EventBus {
+    fn default() -> Self {
+        Self::new(EventBusOptions::default())
+    }
+}
+
+impl EventBus {
+    pub fn new(options: EventBusOptions) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(State {
+                handlers: HashMap::new(),
+                buffer: VecDeque::new(),
+                buffer_capacity: options.buffer_capacity,
+                idempotency: HashMap::new(),
+                idempotency_size: options.idempotency_cache_size,
+                idempotency_ttl: Duration::from_millis(options.idempotency_ttl_ms),
+                running: true,
+                shutting_down: false,
+                inflight: 0,
+                drain_waiters: Vec::new(),
+            })),
+        }
+    }
+
+    /// Subscribe `handler` to events of `kind`. Returns an unsub callable;
+    /// calling it removes the handler. Dropping the callable without
+    /// calling it leaves the handler subscribed (matches TS semantics).
+    pub fn on<F, Fut>(&self, kind: &str, handler: F) -> Box<dyn FnOnce() + Send + Sync + 'static>
+    where
+        F: Fn(Event) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = HandlerResult> + Send + 'static,
+    {
+        let handler: Handler = Arc::new(move |e: Event| Box::pin(handler(e)));
+        let id = NEXT_HANDLER_ID.fetch_add(1, Ordering::Relaxed);
+        let kind_owned = kind.to_string();
+        {
+            let mut s = self.inner.lock().expect("event bus mutex poisoned");
+            s.handlers
+                .entry(kind_owned.clone())
+                .or_default()
+                .push((id, handler));
+        }
+        let inner = Arc::clone(&self.inner);
+        Box::new(move || {
+            let mut s = inner.lock().expect("event bus mutex poisoned");
+            if let Some(vec) = s.handlers.get_mut(&kind_owned) {
+                vec.retain(|(hid, _)| *hid != id);
+            }
+        })
+    }
+
+    /// Emit an event to all handlers registered for its `kind`.
+    ///
+    /// Returns `Err` if the bus is not running, the buffer is full, or the
+    /// event was already processed within the idempotency window. On
+    /// success, every registered handler is awaited serially; the first
+    /// handler error (if any) is returned as `Ok(Some(err))`.
+    pub async fn emit(&self, event: Event) -> Result<Option<HandlerError>, EmitError> {
+        let prepared = {
+            let mut s = self.inner.lock().expect("event bus mutex poisoned");
+            if !s.running || s.shutting_down {
+                return Err(EmitError::NotRunning);
+            }
+            if s.buffer.len() >= s.buffer_capacity {
+                return Err(EmitError::BufferFull);
+            }
+            let id = event.id_key();
+            if s.idempotency.contains_key(&id) {
+                return Err(EmitError::Duplicate(id));
+            }
+            s.idempotency.insert(id, Instant::now());
+            s.trim_idempotency();
+            s.buffer.push_back(event.clone());
+            s.inflight += 1;
+            let handlers = s
+                .handlers
+                .get(&event.kind)
+                .map(|v| v.iter().map(|(_, h)| Arc::clone(h)).collect::<Vec<_>>())
+                .unwrap_or_default();
+            (handlers, event)
+        };
+        let (handlers, event) = prepared;
+
+        let mut first_err: Option<HandlerError> = None;
+        for h in &handlers {
+            if let Err(e) = h(event.clone()).await {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+
+        let mut s = self.inner.lock().expect("event bus mutex poisoned");
+        s.inflight = s.inflight.saturating_sub(1);
+        // Remove the first buffer entry equal to this event by sequence+kind.
+        if let Some(idx) = s
+            .buffer
+            .iter()
+            .position(|e| e.sequence == event.sequence && e.kind == event.kind)
+        {
+            s.buffer.remove(idx);
+        }
+        if s.shutting_down && s.inflight == 0 {
+            let waiters = std::mem::take(&mut s.drain_waiters);
+            drop(s);
+            for tx in waiters {
+                let _ = tx.send(());
+            }
+        }
+        Ok(first_err)
+    }
+
+    /// Drop all buffered events without delivering them.
+    pub fn drain_buffer(&self) {
+        let mut s = self.inner.lock().expect("event bus mutex poisoned");
+        s.buffer.clear();
+    }
+
+    /// Returns whether the bus is still accepting emits.
+    pub fn running(&self) -> bool {
+        self.inner.lock().expect("event bus mutex poisoned").running
+    }
+
+    /// Number of events currently being dispatched (started but not yet
+    /// finished). Mostly useful for `graceful_shutdown` drain semantics.
+    pub fn inflight_count(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("event bus mutex poisoned")
+            .inflight
+    }
+
+    /// Current buffered event count.
+    pub fn buffer_size(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("event bus mutex poisoned")
+            .buffer
+            .len()
+    }
+
+    /// Configured buffer capacity.
+    pub fn buffer_capacity(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("event bus mutex poisoned")
+            .buffer_capacity
+    }
+
+    /// Stop accepting new emits immediately. Inflight handlers continue
+    /// to completion (use [`Self::graceful_shutdown`] to wait for them).
+    pub fn shutdown(&self) {
+        let mut s = self.inner.lock().expect("event bus mutex poisoned");
+        s.running = false;
+        s.shutting_down = true;
+    }
+
+    /// Stop accepting new emits, then wait for inflight handlers to
+    /// finish (or `drain_timeout_ms`, default 10 s).
+    pub async fn graceful_shutdown(&self, drain_timeout_ms: Option<u64>) {
+        let rx = {
+            let mut s = self.inner.lock().expect("event bus mutex poisoned");
+            s.shutting_down = true;
+            if s.inflight == 0 {
+                s.running = false;
+                return;
+            }
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            s.drain_waiters.push(tx);
+            rx
+        };
+        let timeout = drain_timeout_ms.unwrap_or(10_000);
+        let _ = tokio::time::timeout(Duration::from_millis(timeout), rx).await;
+        self.inner.lock().expect("event bus mutex poisoned").running = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn emits_events_to_registered_handlers() {
+        let bus = EventBus::default();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let recv_clone = Arc::clone(&received);
+        let _unsub = bus.on("verify.lint", move |e| {
+            recv_clone.lock().unwrap().push(e);
+            std::future::ready(Ok(()))
+        });
+        bus.emit(Event {
+            kind: "verify.lint".into(),
+            schema_version: "v3".into(),
+            sequence: 1,
+            stream_id: "s1".into(),
+            timestamp: "now".into(),
+            value: Some(serde_json::json!({
+                "errors": 0, "warnings": 0, "filesScanned": 0, "durationMs": 0, "details": []
+            })),
+        })
+        .await
+        .expect("emit ok");
+        assert_eq!(received.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn deduplicates_events_within_idempotency_window() {
+        let bus = EventBus::default();
+        let count = Arc::new(Mutex::new(0u32));
+        let count_clone = Arc::clone(&count);
+        let _unsub = bus.on("verify.types", move |_| {
+            *count_clone.lock().unwrap() += 1;
+            std::future::ready(Ok(()))
+        });
+        let event = Event {
+            kind: "verify.types".into(),
+            schema_version: "v3".into(),
+            sequence: 1,
+            stream_id: "s1".into(),
+            timestamp: "now".into(),
+            value: Some(serde_json::json!({ "errors": 0, "durationMs": 0, "details": [] })),
+        };
+        bus.emit(event.clone()).await.expect("first emit ok");
+        match bus.emit(event.clone()).await {
+            Err(EmitError::Duplicate(_)) => {}
+            other => panic!("expected Duplicate, got {other:?}"),
+        }
+        assert_eq!(*count.lock().unwrap(), 1, "handler must fire exactly once");
+    }
+
+    #[test]
+    fn tracks_running_state() {
+        let bus = EventBus::default();
+        assert!(bus.running());
+        bus.shutdown();
+        assert!(!bus.running());
+    }
+
+    #[test]
+    fn buffers_and_reports_stats() {
+        let bus = EventBus::new(EventBusOptions {
+            buffer_capacity: 500,
+            ..Default::default()
+        });
+        assert_eq!(bus.buffer_capacity(), 500);
+        assert_eq!(bus.buffer_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn unsub_callable_removes_handler() {
+        // `on` must return a callable that detaches the handler.
+        let bus = EventBus::default();
+        let count = Arc::new(Mutex::new(0u32));
+        let count_clone = Arc::clone(&count);
+        let unsub = bus.on("verify.lint", move |_| {
+            *count_clone.lock().unwrap() += 1;
+            std::future::ready(Ok(()))
+        });
+        bus.emit(Event {
+            kind: "verify.lint".into(),
+            schema_version: "v3".into(),
+            sequence: 1,
+            stream_id: "s1".into(),
+            timestamp: "now".into(),
+            value: None,
+        })
+        .await
+        .unwrap();
+        unsub();
+        bus.emit(Event {
+            kind: "verify.lint".into(),
+            schema_version: "v3".into(),
+            sequence: 2,
+            stream_id: "s1".into(),
+            timestamp: "now-2".into(),
+            value: None,
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            *count.lock().unwrap(),
+            1,
+            "second emit must not fire handler"
+        );
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_drains_inflight() {
+        // graceful_shutdown returns once inflight handlers complete.
+        let bus = EventBus::default();
+        bus.emit(Event {
+            kind: "no.handlers.kind".into(),
+            schema_version: "v3".into(),
+            sequence: 1,
+            stream_id: "s1".into(),
+            timestamp: "now".into(),
+            value: None,
+        })
+        .await
+        .unwrap();
+        // No inflight at this point — graceful_shutdown returns immediately.
+        bus.graceful_shutdown(None).await;
+        assert!(!bus.running());
+    }
+}

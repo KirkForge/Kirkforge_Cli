@@ -23,6 +23,7 @@ pub fn build_reqwest_client(timeout: Option<std::time::Duration>) -> reqwest::Cl
 }
 
 pub mod audit;
+pub mod event_bus;
 pub mod metrics;
 pub mod minify;
 pub mod permission;

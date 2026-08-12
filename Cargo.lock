@@ -1975,6 +1975,7 @@ dependencies = [
  "handlebars",
  "headless_chrome",
  "hex",
+ "hmac",
  "http 1.4.2",
  "ignore",
  "kf-bench",

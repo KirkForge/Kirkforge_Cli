@@ -126,7 +126,7 @@ impl ModelAdapter for AnthropicBedrockAdapter {
 /// Each event payload is a JSON object with the same shape as an Anthropic SSE
 /// `data:` payload. We strip the event-stream envelope and feed the inner JSON
 /// into the shared Anthropic parser.
-async fn parse_bedrock_event_stream<B, E>(
+pub(super) async fn parse_bedrock_event_stream<B, E>(
     tx: tokio::sync::mpsc::Sender<StreamEvent>,
     mut stream: impl tokio_stream::Stream<Item = Result<B, E>> + Unpin,
 ) where

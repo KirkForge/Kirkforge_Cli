@@ -6,15 +6,15 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
-## WO 28.1 — Break the tools↔session circular dependency (branch `wo28c`)
+## WO 28.3 — Split turn.rs god-object (branch `wo28d`, not yet merged)
 
-- **DONE:** Cut the production cycle `tools/mod → session::toolset → tools::Tool` and all 24 `tools → session::access` edges. Relocations: `src/session/access/` → `src/shared/access/`; `check_bash_command_str` → `src/shared/bash_safety.rs`; `UndoKind` → `src/shared/undo.rs`; toolset types → `src/tools/toolset.rs`; `InProcessTaskSpawner` → `src/session/task_spawner.rs`. `session::{access,toolset,undo,bash_runner}` keep `pub use` re-export shims so non-tool callers (session, tui, main, jobs) need no edits.
-- **Production `use crate::session::` in `src/tools/`: 26 → 3** (total 34 → 8).
-- **R1 design deviation (disclosed, ADR-073):** WO prescribed a `tool::Guard` port trait; instead relocated the pure `access` surface to `shared` (lower risk + better layering; trait is YAGNI — single `PathGuard` impl). The `TaskSpawner` port (already in `tools::task`) is the intentional seam; `InProcessTaskSpawner` is its session-layer impl.
-- **Pending (deferred, tracked):** 3 non-cyclic residuals each need their own port trait to cut — `bash::bash_runner` shell-I/O (→ a `ShellRunner` port), `bash::bash_jobs` registry, `remember::memory` store (WO 29.6, → a `MemoryStore` port). The WO's "≤2" target undercounted `bash.rs` (it imports 4 symbols from `bash_runner`; only `check_bash_command_str` was movable).
-- **Scope creep (necessary):** the `wo28c` branch HEAD had a committed bad merge (WO 29.6) leaving `diff3` conflict markers in `Cargo.toml`, `Cargo.lock`, and `docs/TECHNICAL.md` — the tree could not compile. Resolved (kept both `kf-rbac` + `kf-memory-store` workspace members; regenerated `Cargo.lock` preserving the rustc-1.88-compatible pins). Also moved one `freeze_launch_sandbox` test from `shared/access` to `session/config` so `shared` has zero `session` deps (required for the kf-shared extraction goal).
-- **Gate:** `cargo check --workspace --all-targets` ✓, `cargo clippy --workspace --all-targets -- -D warnings` ✓, `cargo fmt --check` ✓, `cargo test --lib -p kf-code tools::` 536 passed / 7 failed — the 7 failures (5 `bash` spawn + 2 `plugin_tools`) are in **unchanged** code (environmental: `os error 22` on process spawn + missing built plugin binaries), not regressions. All 160 relocated-code tests pass (access/bash_safety/toolset/task_spawner/undo/launch-path).
-
+- **DONE (R1+R2+R3):** Pure-move refactor of `src/session/executor/turn.rs` (2087 LOC god-object). No behavior change; all 157 executor tests pass unchanged.
+  - **R1:** `dispatch_tool_call_batch` is now a 28-line orchestrator in `turn.rs`. The three phases moved to `executor/dispatch.rs` as `prepare_batch` (Phase 1 pre-gate), `spawn_batch` (Phase 2 + 2.5 spawn + file-call sequence + mid-batch checkpoint), `collect_batch` (Phase 3 record). Helper types `PreparedCall`/`SkippedCall`/`ToolResult`/`RunningTask` + free fn `run_prepared_call` also moved to `dispatch.rs`. `record_tool_result` visibility bumped `fn` → `pub(super)` (now called cross-file by `spawn_batch`/`collect_batch`).
+  - **R2:** `pre_run_verdict` + `PreRunVerdict` enum moved to a new `executor/pre_run.rs` (kept `dispatch.rs` under ~660 LOC instead of ~940).
+  - **R3:** `stream_iteration`'s 170-line preamble (memory-context + config snapshot + top-files + system/messages build + cache-stem record + stem_tokens) extracted into `build_stream_preamble` in a new `executor/stream.rs` returning a `StreamPreamble { messages, tool_defs, stem_tokens }`. The SSE-driver loop stays in `turn.rs` (high-risk, low-reward to move — per WO).
+- **LOC:** `turn.rs` 2087→1195 (−892, −43%). `dispatch.rs` 165→656. New `pre_run.rs` 303. New `stream.rs` 202.
+- **Scope creep (disclosed):** `Cargo.toml` + `Cargo.lock` arrived on `wo28d` HEAD with unresolved git merge-conflict markers (WO 29.5 `kf-rbac` ↔ WO 29.6 `kf-memory-store` merge, both purely additive). Resolved manually (kept both sides) to unblock the build — the gate could not run otherwise. No version pinning changes.
+- Gate green at HEAD: `cargo check -p kf-code --lib --tests`, `cargo clippy -p kf-code --lib --tests -- -D warnings`, `cargo fmt --check`, `cargo test --lib -p kf-code session::executor::` (157 passed, 1 pre-existing ignored).
 
 ## WO 29.6 — Port memory-palace to kf-memory-store crate (branch `wo29f`, not yet merged)
 

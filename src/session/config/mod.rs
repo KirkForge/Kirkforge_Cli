@@ -612,6 +612,12 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
             .filter_map(|v| v.as_str().map(expand_tilde_str))
             .collect();
     }
+    if let Some(Value::Array(v)) = table.get("landlock_extra_paths") {
+        cfg.security.landlock_extra_paths = v
+            .iter()
+            .filter_map(|v| v.as_str().map(expand_tilde_str))
+            .collect();
+    }
 }
 
 /// Human-readable summary of config changes. Security/internal knobs
@@ -2095,10 +2101,10 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=31, SecurityConfig=19, ToolConfig=33,
-        // SessionConfig=8, DisplayConfig=7 → 98 total pub fields.
+        // ModelConfig=31, SecurityConfig=20, ToolConfig=33,
+        // SessionConfig=8, DisplayConfig=7 → 99 total pub fields.
         assert_eq!(
-            CONFIG_FIELD_COUNT, 98,
+            CONFIG_FIELD_COUNT, 99,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2179,6 +2185,7 @@ mod tests {
             deny_urls = ["x"]
             deny_extensions = [".x"]
             allowed_write_dirs = ["/x"]
+            landlock_extra_paths = ["/x"]
             plugin_allowed_env_vars = ["x"]
             plugin_sources = { x = "/x" }
             enabled_plugins = ["x"]
@@ -2205,9 +2212,9 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 68 top-level leaf keys + 7 array keys + 3 single-key inline
-        // tables + 7 computer_use sub-keys = 85
-        const MERGE_TOML_EXPECTED: usize = 85;
+        // 68 top-level leaf keys + 8 array keys + 3 single-key inline
+        // tables + 7 computer_use sub-keys = 86
+        const MERGE_TOML_EXPECTED: usize = 86;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2225,8 +2232,8 @@ mod tests {
             + env_overrides_src.matches("\"DEEPSEEK_API_KEY\"").count()
             + env_overrides_src.matches("\"GEMINI_API_KEY\"").count()
             + env_overrides_src.matches("\"KIMI_API_KEY\"").count();
-        // 76 KF_CODE_* literals + 5 API-key literals = 81
-        const ENV_OVERRIDE_EXPECTED: usize = 81;
+        // 77 KF_CODE_* literals + 5 API-key literals = 82
+        const ENV_OVERRIDE_EXPECTED: usize = 82;
         assert_eq!(
             env_var_count, ENV_OVERRIDE_EXPECTED,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"

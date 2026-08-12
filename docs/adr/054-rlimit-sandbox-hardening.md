@@ -1,6 +1,6 @@
 # ADR-054: rlimit sandbox hardening for the non-Docker bash path
 
-- **Status:** Accepted
+- **Status:** Accepted (WO 27.1 added landlock — see amendment below)
 - **Date:** 2026-07-26
 
 ## Context
@@ -107,6 +107,33 @@ add a Windows-specific code path that the project's Windows-parity ADR
 prints a one-shot `eprintln!` warning so a user who enables `--harden`
 on Windows knows it's a no-op, not a silent no-op. The warning uses a
 `OnceLock` so it fires once per process, not once per command.
+
+## WO 27.1 amendment — landlock filesystem confinement (2026-08-11)
+
+The rlimit layer this ADR specifies bounds CPU / address-space / filesize,
+but does **not** bound filesystem reach: a model-driven `bash` call could
+read/write anything the `kf-code` user could (the review's C1 finding). WO
+27.1 closes that gap by applying Linux landlock in the **same `pre_exec`
+hook** as the rlimits, in `setup_rlimits` (`src/session/bash_runner/mod.rs`).
+
+- **Default-on for Linux.** The module is compiled unconditionally under
+  `cfg(target_os = "linux")` — it is no longer a Cargo feature. There is no
+  opt-in; every non-Docker `bash` child gets confined on Linux 5.13+.
+- **Fail-closed.** If `restrict_self` errors on a kernel that should support
+  it, the spawn returns `Err` and the bash tool reports a failure rather
+  than silently running unconfined.
+- **Release escape hatch.** `--i-accept-unsandboxed` (previously debug-only
+  per WO 24.3) is now available in release builds. When set, a landlock
+  `restrict_self` error logs a loud warning and continues unconfined, and
+  the PathGuard production refusal (`refuse_if_production_unsandboxed`) is
+  bypassed in favour of `warn_if_unsandboxed`. The operator explicitly
+  accepts the risk — intended for WSL2 / old-container kernels where
+  `restrict_self` trips despite nominally being supported.
+- **Allow-list.** The workspace gets full r/w; system dirs get read-only;
+  `$HOME` and the XDG dirs get full r/w (cargo / rustup / npm need to write
+  there). Operators extend the list with `security.landlock_extra_paths` in
+  `config.toml` (array of strings) or `KF_CODE_LANDLOCK_EXTRA_PATHS` (colon-
+  separated); those paths get full r/w. See `src/session/bash_runner/landlock.rs`.
 
 ## Implementation
 

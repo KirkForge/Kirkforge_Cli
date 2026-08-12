@@ -139,7 +139,6 @@ pub async fn main() {
             harden,
             no_network,
             block_edits,
-            #[cfg(debug_assertions)]
             i_accept_unsandboxed,
             no_trace,
         } => {
@@ -164,7 +163,6 @@ pub async fn main() {
                 harden,
                 no_network,
                 block_edits,
-                #[cfg(debug_assertions)]
                 i_accept_unsandboxed,
                 no_trace,
             })

@@ -112,6 +112,12 @@ fn tools_for_persona(
         session_launcher: None,
         docker_config: Some(config.security.docker.clone()),
         sandbox_config: config.security.sandbox.clone(),
+        landlock_extra_paths: config
+            .security
+            .landlock_extra_paths
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect(),
         block_edits: config.security.sandbox.block_edits,
         max_background_tasks: config.tools.max_background_tasks,
         task_concurrency_mode: config
@@ -176,6 +182,12 @@ pub fn tools_for_scout(
         session_launcher: None,
         docker_config: Some(config.security.docker.clone()),
         sandbox_config: config.security.sandbox.clone(),
+        landlock_extra_paths: config
+            .security
+            .landlock_extra_paths
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect(),
         block_edits: config.security.sandbox.block_edits,
         max_background_tasks: config.tools.max_background_tasks,
         task_concurrency_mode: config

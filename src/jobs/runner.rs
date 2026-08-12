@@ -112,6 +112,7 @@ async fn run_bash_job(
             &deny_list,
             &path_guard,
             config.security.bash_sandbox_workdir,
+            Some(&config.security.sandbox),
         )
         .await
     {

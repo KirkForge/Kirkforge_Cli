@@ -4,6 +4,7 @@ use crate::tools::computer_use::{ChromeTab, SessionLauncher};
 use crate::tools::task::TaskConcurrencyMode;
 use crate::tools::{Tool, UndoStackRef};
 use kf_lsp::LspPool;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Holds the shared resources needed to construct all built-in tools.
@@ -27,6 +28,9 @@ pub struct ToolContextBuilder {
     pub session_launcher: Option<SessionLauncher>,
     pub docker_config: Option<DockerConfig>,
     pub sandbox_config: SandboxConfig,
+    /// Extra landlock allow-list paths (WO 27.1), sourced from
+    /// `config.security.landlock_extra_paths` (converted to PathBuf).
+    pub landlock_extra_paths: Vec<PathBuf>,
     pub block_edits: bool,
     pub max_background_tasks: usize,
     pub task_concurrency_mode: TaskConcurrencyMode,

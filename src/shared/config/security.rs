@@ -71,6 +71,12 @@ pub struct SecurityConfig {
     pub diff_review: bool,
     #[serde(default)]
     pub audit_log_path: Option<PathBuf>,
+    /// Extra filesystem paths to add to the landlock allow-list (WO 27.1).
+    /// Full read/write. Operators use this to grant the bash tool access to
+    /// trees outside the workdir (a sibling monorepo, a non-default cargo
+    /// cache). Env: `KF_CODE_LANDLOCK_EXTRA_PATHS` (colon-separated).
+    #[serde(default)]
+    pub landlock_extra_paths: Vec<String>,
 }
 
 impl Default for SecurityConfig {
@@ -95,6 +101,7 @@ impl Default for SecurityConfig {
             sandbox: SandboxConfig::default(),
             diff_review: true,
             audit_log_path: None,
+            landlock_extra_paths: vec![],
         }
     }
 }

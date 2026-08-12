@@ -272,6 +272,7 @@ mod tests {
                 &crate::session::access::DenyList::default(),
                 &crate::session::access::PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -302,6 +303,7 @@ mod tests {
                 &crate::session::access::DenyList::default(),
                 &crate::session::access::PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -363,6 +365,7 @@ mod tests {
                 &crate::session::access::DenyList::default(),
                 &crate::session::access::PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -396,6 +399,7 @@ mod tests {
                 &crate::session::access::DenyList::default(),
                 &crate::session::access::PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();

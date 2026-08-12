@@ -137,10 +137,11 @@ pub enum Command {
         #[arg(long, requires = "harden")]
         block_edits: bool,
 
-        #[cfg(debug_assertions)]
         /// Suppress the production-mode sandbox refusal when no sandbox
-        /// is configured (WO 21.7-R5). Debug builds only; release builds
-        /// always refuse unsandboxed.
+        /// is configured (WO 21.7-R5), and let landlock fail-closed fall
+        /// through to unconfined on kernels where `restrict_self` errors
+        /// (WO 27.1). The operator explicitly accepts unsandboxed
+        /// operation; a loud warning is logged either way.
         #[arg(long)]
         i_accept_unsandboxed: bool,
 

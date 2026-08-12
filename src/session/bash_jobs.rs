@@ -5,9 +5,11 @@
 /// The model or user can check job status, read output, or cancel jobs.
 use crate::session::access::{DenyList, PathGuard};
 use crate::session::bash_runner::{
-    cap_to_string, check_bash_command_str, drain_capped, shell_program, MAX_BASH_OUTPUT_BYTES,
+    cap_to_string, check_bash_command_str, drain_capped, setup_rlimits, shell_program,
+    MAX_BASH_OUTPUT_BYTES,
 };
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
+use crate::shared::SandboxConfig;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -90,6 +92,13 @@ impl BashJobRegistry {
     /// The child process handle is stored so that cancel() can kill it.
     /// Completed/failed jobs are evicted oldest-first when the registry
     /// reaches MAX_JOBS (64).
+    ///
+    /// When `sandbox` is `Some`, the same rlimits + (Linux) network namespace
+    /// caps as the foreground path are applied to the spawned shell so a
+    /// background fork bomb or runaway `find /` cannot exhaust the host
+    /// (WO 27.5 R1 / H5). Filesystem landlock is not yet applied here — see
+    /// the `ponytail:` note at the call site.
+    #[allow(clippy::too_many_arguments)]
     pub async fn spawn(
         &self,
         command: &str,
@@ -98,6 +107,7 @@ impl BashJobRegistry {
         deny_list: &DenyList,
         path_guard: &PathGuard,
         bash_sandbox_workdir: bool,
+        sandbox: Option<&SandboxConfig>,
     ) -> anyhow::Result<u64> {
         // Safety gate: every background bash command must pass the same
         // deny-list, dangerous-pattern, and sandbox-workdir checks as
@@ -166,6 +176,19 @@ impl BashJobRegistry {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         setup_process_group(&mut proc);
+        if let Some(cfg) = sandbox {
+            // ponytail: rlimits only — filesystem landlock is NOT applied to
+            // background jobs yet. resolve_paths() lives in the private
+            // bash_runner::landlock module; re-exporting it requires editing
+            // bash_runner/mod.rs (owned by WO 27.1). Passing None gives us
+            // CPU/AS/FSIZE caps + CLONE_NEWNET (when --no-network) — enough to
+            // kill a fork bomb (the H5 finding) without the FS confinement.
+            // ceiling: a background job can still read/write anywhere the user
+            // can until landlock is plumbed through; tracked as WO 27.5 R1
+            // remaining work. upgrade path: re-export resolve_paths from
+            // bash_runner (WO 27.1 follow-up) and pass Some(paths) here.
+            setup_rlimits(&mut proc, cfg, None);
+        }
         if let Some(ref wd) = workdir {
             // Resolve the working directory to a canonical absolute path
             // before forking so the child's cwd is stable even if the
@@ -464,6 +487,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -489,6 +513,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -510,6 +535,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -521,6 +547,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -555,6 +582,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -577,6 +605,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -595,6 +624,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -606,6 +636,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -634,6 +665,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await;
         assert!(
@@ -667,6 +699,7 @@ mod tests {
                     &DenyList::default(),
                     &PathGuard::default(),
                     false,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -681,6 +714,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await;
         assert!(
@@ -714,6 +748,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -748,6 +783,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -837,6 +873,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
             )
             .await
             .unwrap();

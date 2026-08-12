@@ -451,6 +451,12 @@ impl TaskSpawner for InProcessTaskSpawner {
             session_launcher: None,
             docker_config: Some(cfg.security.docker.clone()),
             sandbox_config: cfg.security.sandbox.clone(),
+            landlock_extra_paths: cfg
+                .security
+                .landlock_extra_paths
+                .iter()
+                .map(std::path::PathBuf::from)
+                .collect(),
             block_edits: cfg.security.sandbox.block_edits,
             max_background_tasks: cfg.tools.max_background_tasks,
             task_concurrency_mode: cfg

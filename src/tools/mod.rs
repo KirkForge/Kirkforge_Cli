@@ -227,13 +227,17 @@ pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
         ctx.undo_stack.clone(),
         ctx.path_guard.clone(),
     )));
-    registry.register(Arc::new(Bash::new(
+    let mut bash = Bash::new(
         ctx.deny_list.clone(),
         ctx.path_guard.clone(),
         ctx.bash_sandbox_workdir,
         ctx.docker_config.clone(),
         ctx.sandbox_config.clone(),
-    )));
+    );
+    // WO 27.1: populate landlock_extra_paths after construction so the
+    // Bash::new arity (and its ~20 test call sites) stay unchanged.
+    bash.landlock_extra_paths = ctx.landlock_extra_paths.clone();
+    registry.register(Arc::new(bash));
     registry.register(Arc::new(BashStatus));
     registry.register(Arc::new(BashCancel));
     registry.register(Arc::new(Grep::new(ctx.path_guard.clone())));
@@ -331,6 +335,7 @@ mod tests {
             session_launcher: None,
             docker_config: None,
             sandbox_config: crate::shared::SandboxConfig::default(),
+            landlock_extra_paths: Vec::new(),
             block_edits: false,
             max_background_tasks: 4,
             task_concurrency_mode: task::TaskConcurrencyMode::Queue,
@@ -385,6 +390,7 @@ mod tests {
             session_launcher: None,
             docker_config: None,
             sandbox_config: crate::shared::SandboxConfig::default(),
+            landlock_extra_paths: Vec::new(),
             block_edits: false,
             max_background_tasks: 4,
             task_concurrency_mode: task::TaskConcurrencyMode::Queue,
@@ -421,6 +427,7 @@ mod tests {
             session_launcher: None,
             docker_config: None,
             sandbox_config: crate::shared::SandboxConfig::default(),
+            landlock_extra_paths: Vec::new(),
             block_edits: false,
             max_background_tasks: 4,
             task_concurrency_mode: task::TaskConcurrencyMode::Queue,

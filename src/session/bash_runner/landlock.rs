@@ -131,11 +131,16 @@ pub(crate) struct LandlockPaths {
     pub workspace: PathBuf,
     pub home: Option<PathBuf>,
     pub xdg_dirs: Vec<PathBuf>,
+    /// Operator-supplied extra allow-list paths (config
+    /// `security.landlock_extra_paths` / `KF_CODE_LANDLOCK_EXTRA_PATHS`),
+    /// granted full read/write. Operators explicitly trust these.
+    pub extra: Vec<PathBuf>,
 }
 
 /// Resolve all env vars and path computations in the parent process.
 /// Returns None if landlock is not available on this kernel.
-pub(crate) fn resolve_paths(workspace: &Path) -> Option<LandlockPaths> {
+/// `extra` are operator-supplied paths added to the allow-list at full r/w.
+pub(crate) fn resolve_paths(workspace: &Path, extra: &[PathBuf]) -> Option<LandlockPaths> {
     landlock_available()?;
     let home = std::env::var("HOME").ok().map(PathBuf::from);
     let xdg_vars = [
@@ -157,6 +162,7 @@ pub(crate) fn resolve_paths(workspace: &Path) -> Option<LandlockPaths> {
         workspace: workspace.to_path_buf(),
         home,
         xdg_dirs,
+        extra: extra.to_vec(),
     })
 }
 
@@ -216,6 +222,18 @@ pub(crate) fn apply_landlock(paths: &LandlockPaths) -> Result<(), String> {
             unsafe {
                 if !add_path(ruleset_fd, xdg, ACCESS_FS_ALL) {
                     eprintln!("landlock: warning: cannot add XDG dir {xdg:?}");
+                }
+            }
+        }
+    }
+
+    // Operator-supplied extra paths: full r/w (WO 27.1). Operators explicitly
+    // trust these (e.g. a monorepo outside the workdir, a non-default cargo cache).
+    for path in &paths.extra {
+        if path != &paths.workspace {
+            unsafe {
+                if !add_path(ruleset_fd, path, ACCESS_FS_ALL) {
+                    eprintln!("landlock: warning: cannot add extra path {path:?}");
                 }
             }
         }
@@ -327,6 +345,7 @@ mod tests {
                     workspace: ws_for_closure.clone(),
                     home: None,
                     xdg_dirs: Vec::new(),
+                    extra: Vec::new(),
                 };
                 match apply_landlock(&paths) {
                     Ok(()) => Ok(()),
@@ -373,6 +392,7 @@ mod tests {
                     workspace: ws_for_closure.clone(),
                     home: None,
                     xdg_dirs: Vec::new(),
+                    extra: Vec::new(),
                 };
                 match apply_landlock(&paths) {
                     Ok(()) => Ok(()),
@@ -411,6 +431,7 @@ mod tests {
                     workspace: ws_for_closure.clone(),
                     home: None,
                     xdg_dirs: Vec::new(),
+                    extra: Vec::new(),
                 };
                 match apply_landlock(&paths) {
                     Ok(()) => Ok(()),

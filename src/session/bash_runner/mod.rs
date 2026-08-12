@@ -1,6 +1,6 @@
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use crate::shared::SandboxConfig;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
@@ -462,7 +462,7 @@ pub async fn run_shell(
     workdir: &Path,
     timeout_secs: u64,
 ) -> Result<ShellOutput, ShellError> {
-    run_shell_with_token(cmd, workdir, timeout_secs, None, None).await
+    run_shell_with_token(cmd, workdir, timeout_secs, None, None, &[]).await
 }
 
 /// Run a shell command with optional cancellation. The cancellation
@@ -479,6 +479,7 @@ pub async fn run_shell_with_token(
     timeout_secs: u64,
     token: Option<&tokio_util::sync::CancellationToken>,
     sandbox: Option<&SandboxConfig>,
+    landlock_extra_paths: &[PathBuf],
 ) -> Result<ShellOutput, ShellError> {
     let mut proc = Command::new(shell_program());
     proc.arg("-c")
@@ -492,9 +493,12 @@ pub async fn run_shell_with_token(
     setup_process_group(&mut proc);
     if let Some(cfg) = sandbox {
         #[cfg(target_os = "linux")]
-        let lp = landlock::resolve_paths(workdir);
+        let lp = landlock::resolve_paths(workdir, landlock_extra_paths);
         #[cfg(not(target_os = "linux"))]
-        let lp: Option<()> = None;
+        let lp: Option<()> = {
+            let _ = landlock_extra_paths;
+            None
+        };
         setup_rlimits(&mut proc, cfg, lp);
     }
 
@@ -1590,7 +1594,7 @@ mod tests {
         let token = CancellationToken::new();
         let token_clone = token.clone();
         let handle = tokio::spawn(async move {
-            run_shell_with_token("sleep 30", &tmp, 30, Some(&token_clone), None).await
+            run_shell_with_token("sleep 30", &tmp, 30, Some(&token_clone), None, &[]).await
         });
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         token.cancel();

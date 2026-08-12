@@ -21,12 +21,12 @@ use serde::{Deserialize, Serialize};
 ///
 /// Breakdown:
 ///   ModelConfig    31
-///   SecurityConfig 19  (16 direct + 3 sub-struct handles)
+///   SecurityConfig 20  (17 direct + 3 sub-struct handles)
 ///   ToolConfig     33
 ///   SessionConfig   8
 ///   DisplayConfig   7
 ///   Note: 1 field (seed) has #[serde(skip_serializing)], so serde
-///   produces 95 keys; ToolConfig.memory_auto_populate and
+///   produces 96 keys; ToolConfig.memory_auto_populate and
 ///   DisplayConfig.memory_auto_populate flatten to the same JSON key,
 ///   dropping 1 more. The drift-guard test accounts for both.
 //
@@ -34,7 +34,8 @@ use serde::{Deserialize, Serialize};
 // the actual struct count (doc claimed 33/20/33/9/8; reality is
 // 31/19/33/8/7). The "known-broken" drift-guard test hid the drift
 // for several WO cycles; un-ignoring it forced the correction.
-pub const CONFIG_FIELD_COUNT: usize = 98;
+// WO 27.1: bumped 98 → 99 (added SecurityConfig.landlock_extra_paths).
+pub const CONFIG_FIELD_COUNT: usize = 99;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

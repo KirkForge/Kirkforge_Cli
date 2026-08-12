@@ -191,6 +191,13 @@
 # If non-empty, write_file/edit_file outside these directories are rejected.
 # allowed_write_dirs = ["/home/me/projects"]
 
+# Extra filesystem paths added to the landlock allow-list (Linux only, WO 27.1).
+# The bash tool gets full read/write access to these in addition to the workdir
+# and home/XDG dirs. Use this to grant access to a sibling monorepo or a
+# non-default cargo/rustup cache that lives outside the workspace. Default: [].
+# Env: KF_CODE_LANDLOCK_EXTRA_PATHS (colon-separated, like PATH).
+# landlock_extra_paths = ["/home/me/other-monorepo", "/opt/cargo-cache"]
+
 # ---------------------------------------------------------------------------
 # Conversation context
 # ---------------------------------------------------------------------------

@@ -162,7 +162,14 @@ impl Executor {
         let (deny_list, path_guard, read_gate) = access_from_config(&cfg);
         if cfg.security.sandbox.harden {
             refuse_if_unsandboxed(&path_guard)?;
-        } else if cfg!(not(debug_assertions)) {
+        } else if cfg!(not(debug_assertions)) && !cfg.security.sandbox.accept_unsandboxed {
+            // WO 27.1: --i-accept-unsandboxed is the release escape hatch.
+            // When set, fall through to the warning instead of refusing, so
+            // an operator on a kernel where landlock restrict_self errors
+            // (or who intentionally runs without a write-scope sandbox) can
+            // still start the binary. PathGuard write-containment is off in
+            // that case; landlock fail-closed is independently escaped via
+            // the same flag in setup_rlimits.
             refuse_if_production_unsandboxed(&path_guard)?;
         } else {
             warn_if_unsandboxed(&path_guard);

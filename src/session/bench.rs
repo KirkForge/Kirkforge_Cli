@@ -104,6 +104,7 @@ fn build_bench_toolset(sandbox_path: &Path) -> super::toolset::CompositeToolset 
         session_launcher: None,
         docker_config: None,
         sandbox_config: crate::shared::SandboxConfig::default(),
+        landlock_extra_paths: Vec::new(),
         block_edits: false,
         max_background_tasks: 4,
         task_concurrency_mode: crate::tools::task::TaskConcurrencyMode::Queue,

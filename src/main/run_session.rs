@@ -28,7 +28,6 @@ pub(crate) struct RunArgs {
     pub(crate) harden: bool,
     pub(crate) no_network: bool,
     pub(crate) block_edits: bool,
-    #[cfg(debug_assertions)]
     pub(crate) i_accept_unsandboxed: bool,
     pub(crate) no_trace: bool,
 }
@@ -55,7 +54,6 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         harden,
         no_network,
         block_edits,
-        #[cfg(debug_assertions)]
         i_accept_unsandboxed,
         no_trace,
     } = args;
@@ -90,7 +88,6 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     if block_edits {
         config.security.sandbox.block_edits = true;
     }
-    #[cfg(debug_assertions)]
     if i_accept_unsandboxed {
         config.security.sandbox.accept_unsandboxed = true;
     }
@@ -396,6 +393,12 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         session_launcher,
         docker_config: Some(config.security.docker.clone()),
         sandbox_config: config.security.sandbox.clone(),
+        landlock_extra_paths: config
+            .security
+            .landlock_extra_paths
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect(),
         block_edits: config.security.sandbox.block_edits,
         max_background_tasks: config.tools.max_background_tasks,
         task_concurrency_mode: config

@@ -158,6 +158,16 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         cfg.security.bash_sandbox_workdir
     );
 
+    // KF_CODE_LANDLOCK_EXTRA_PATHS — colon-separated extra landlock allow-list
+    // paths (WO 27.1). Mirrors PATH-style splitting.
+    if let Ok(val) = std::env::var("KF_CODE_LANDLOCK_EXTRA_PATHS") {
+        cfg.security.landlock_extra_paths = val
+            .split(':')
+            .map(|s| expand_tilde_str(s.trim()))
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+
     // KF_CODE_BLOCK_GITIGNORED_DOTFILES
     env_bool!(
         "KF_CODE_BLOCK_GITIGNORED_DOTFILES",

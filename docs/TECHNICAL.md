@@ -28,14 +28,14 @@ synthesis with its own architectural contributions:
 
 ## Workspace layout
 
-The workspace has one binary crate (`kf-code`) and 10 satellite crates under
+The workspace has one binary crate (`kf-code`) and 11 satellite crates under
 `crates/`. The binary is the user-facing CLI; the satellites are libraries and
 standalone binaries.
 
 ```
 kf-code (root bin)          ← the CLI the user runs
 ├── src/                       ← agent core (session, tools, TUI, adapters, verifiers)
-├── crates/                    ← 10 satellite crates
+├── crates/                    ← 11 satellite crates
 │   ├── kf-plugin-sdk     ← plugin SDK: manifest types, trust tiers
 │   ├── kf-plugin-host  ← plugin runtime: registry, dispatch, signatures
 │   ├── kf-context-index← tree-sitter symbol/import/call-graph index
@@ -45,6 +45,7 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-compress-core       ← context-compression pipeline library + ruleset filtering
 │   ├── kf-budget-core           ← budget/orchestrator/slicing data model
 │   ├── kf-routing              ← pure Rust port of orchestrator pure modules (classifier, routing, correction, path safety) — foundation for WO 29.7
+│   ├── kf-memory-store ← routing-oriented memory store (MemoryStore facade + InMemory/File/SQLite adapters) — port of @kirkforge/memory-palace (WO 29.6)
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── plugins/                   ← shell plugin manifests + tool/hook scripts
 │   └── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
@@ -53,7 +54,7 @@ kf-code (root bin)          ← the CLI the user runs
 ```
 
 The workspace has ~3,000 `#[test]` functions (~2,200 under `src/`,
-~738 under `crates/`). The `crates/` count is pinned by the
+~772 under `crates/`). The `crates/` count is pinned by the
 `readme_drift` test (`crates/kf-budget-core/README.md` State table).
 
 ### Compiled-in vs satellite
@@ -89,6 +90,7 @@ When the feature is off, the shell plugin dir loads as a fallback
 | `kf-testdoctor` | quality | Test-performance diagnostics | Active |
 | `kf-budget-core` | session | Budget/orchestrator/slicing data model | Active |
 | `kf-routing` | session | Pure orchestrator modules: classifier, routing, correction, truth model, profiles, cost, path safety (WO 29.3) | Active |
+| `kf-memory-store` | session | Routing-oriented memory store: MemoryStore facade + InMemory/File/SQLite adapters (port of `@kirkforge/memory-palace`, WO 29.6) | Active |
 
 "Excluded" crates exist on disk but are not built by default.
 
@@ -985,6 +987,8 @@ document known limitations. Removing these is a regression.
 | `kf-bench` | Active | Benchmark task types, loader, verifier, reports | `BenchTask`, `TaskResult` | root binary, bench CI |
 | `kf-compress-core` | Active | Context-compression pipeline library | `CompressionPipeline`, `Mode`, `rules::build_rules` | root binary (via `stratum` feature) |
 | `kf-budget-core` | Active | Budget/orchestrator/slicing data model | `TokenBudget`, `SlicingOrchestrator` | root binary (via `budget` feature) |
+| `kf-routing` | Active | Pure orchestrator modules (classifier, routing, correction, path safety) | `build_empirical_recommendation`, `tokenize`, `vectorize`, `cosine` | `kf-memory-store` |
+| `kf-memory-store` | Active | Routing-oriented memory store (port of `@kirkforge/memory-palace`) | `MemoryStore`, `MemoryAdapter`, `FileAdapter`, `SqliteAdapter`, `InMemoryAdapter` | standalone (foundation for WO 29.7) |
 | `kf-testdoctor` | Active | Test-performance diagnostics | `doctor` CLI | root binary (`kf-code doctor`) |
 
 "Excluded" crates exist on disk but are not built by default (`cargo build

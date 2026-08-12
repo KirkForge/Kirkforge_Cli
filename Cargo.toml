@@ -15,6 +15,7 @@ members = [
     "crates/kf-compress-core",
     "crates/kf-context-index",
     "crates/kf-lsp",
+    "crates/kf-memory-store",
     "crates/kf-plugin-host",
     "crates/kf-plugin-sdk",
     "crates/kf-routing",
@@ -27,6 +28,7 @@ default-members = [
     "crates/kf-compress-core",
     "crates/kf-context-index",
     "crates/kf-lsp",
+    "crates/kf-memory-store",
     "crates/kf-plugin-host",
     "crates/kf-plugin-sdk",
     "crates/kf-routing",
@@ -62,6 +64,7 @@ kf-compress-core = { path = "crates/kf-compress-core" }
 kf-testdoctor = { path = "crates/kf-testdoctor" }
 kf-budget-core = { path = "crates/kf-budget-core" }
 kf-routing = { path = "crates/kf-routing" }
+kf-memory-store = { path = "crates/kf-memory-store" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

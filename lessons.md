@@ -175,3 +175,65 @@
   repo** (a prior session did `git add -f`). `write` overwrites — use
   `cat >>` to append, not `write`, when extending a tracked lessons.md.
   (I lost the WO 20 lessons on first pass and had to `git checkout`.)
+
+# Lessons — WO 29.6 (port memory-palace to kf-memory-store)
+
+## What worked
+- **Default-impl trait methods model TS duck-typing cleanly.** TS `adapter.writeRun?`
+  becomes a Rust trait method with a default impl returning a sentinel
+  (`Ok(())` for write-side, `Ok(None)`/`Ok(false)` for read/transactional).
+  SqliteAdapter overrides; FileAdapter/InMemoryAdapter accept defaults. No
+  downcasting, no split traits, no `dyn Any` — the store branches on the
+  sentinel. One-to-one with the TS duck-typing semantics.
+- **`rusqlite::backup::Backup::new(&from, &mut to)` not `conn.backup(...)`.**
+  The backup API is `Backup::new(from_conn, to_conn) -> Backup`, then
+  `backup.run_to_completion(pages, pause, None)`. Also requires the `backup`
+  cargo feature on rusqlite (gated `#[cfg(feature = "backup")]`).
+- **`Mutex::into_inner()` returns `Result` since Rust 1.68** (poison guard).
+  Need `.map_err(...)? ` before `.close()` on a `Mutex<Connection>`.
+- **Howard Hinnant's civil-from-days algorithm** inlines cleanly for ISO
+  timestamps — avoided a `chrono` dep for 2 callers. Single source of truth
+  in `src/time.rs`.
+- **Per-adapter test-as-you-go:** built InMemory first (5 tests), then File
+  (4), then Sqlite (8), then the store facade (17). Caught the `&[Value]`
+  vs `&Value` test arg mismatch, the format-string escape bug, and the
+  backup filename collision (second-precision timestamps) before batching.
+
+## Gotchas
+- **Backup filename timestamp precision:** TS `new Date().toISOString()` emits
+  ms precision (`YYYY-MM-DDTHH:MM:SS.mmmZ`); my Rust `iso_now()` was
+  second-precision. Two backups in the same second collided. Fixed with an
+  `iso_now_ms()` variant for backup filenames only (migration rows keep
+  second precision — sufficient).
+- **`rusqlite::ToSql` is not implemented for `usize`** — only `i64`, `i32`,
+  etc. Cast `usize` → `i64` before binding.
+- **`params![...]` with dynamic WHERE clauses:** build a
+  `Vec<Box<dyn ToSql>>`, push literals + user input, then collect
+  `Vec<&dyn ToSql>` references for `stmt.query_map(params_refs.as_slice(), ...)`.
+- **`std::path::PathBuf::with_extension("json.lock")`** would replace
+  `.json` → `.json.lock` is wrong (it gives `mem.json.lock` only if input is
+  `mem.json`? Actually it replaces the extension, so `mem.json` → `mem.json.lock`
+  doesn't work either — `with_extension` strips the existing extension).
+  Use `PathBuf::from(file_path.as_os_str().to_owned() + ".lock")` to append.
+- **`readme_drift` counts ALL `#[test]` under `crates/`** with a fudge of 2.
+  Adding 34 tests in `kf-memory-store` required bumping the README count
+  from 738 → 772.
+
+## Ponytail
+- Considered `chrono` dep. Used Howard Hinnant's civil-from-days algorithm
+  instead (~25 LOC) — 2 callers, both just need ISO UTC stamps. Smaller dep
+  surface.
+- Considered `rand` dep for unique observation IDs. Used `now_millis() ^
+  (pid * Knuth-mult)` — sufficient for id uniqueness inside one process.
+- Considered split trait (`RunBackedAdapter: MemoryAdapter`). Used default
+  trait impls returning sentinels — same semantics, one trait, less code.
+- Considered `RefCell` for single-threaded adapters. Used `Mutex<T>` —
+  keeps the door open for multi-threaded use without a trait change. Cost
+  is negligible (uncontended in the synchronous single-thread use case).
+
+## Doc scope creep
+- `docs/TECHNICAL.md` had TWO crate-map tables. The first (line ~80) had
+  `kf-routing`; the second (line ~978) was missing both `kf-routing` AND
+  `kf-memory-store`. The second was already stale from WO 29.3. Added both
+  rows to the second table to avoid leaving known-stale docs (2-line edit).
+- `state.md` carries the full WO 29.6 disclosure block per AGENTS.md doc-sync rule.

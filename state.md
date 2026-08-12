@@ -6,6 +6,22 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
+## WO 29.6 — Port memory-palace to kf-memory-store crate (branch `wo29f`, not yet merged)
+
+- **DONE (R1+R2+R3):** Ported `@kirkforge/memory-palace` to a new `crates/kf-memory-store/` workspace member.
+  - **R1 MemoryStore facade:** `store.rs` — 13 public methods (`create`, `evict_expired`, `evict_overflow`, `write_task_observation`, `write_decomposition`, `recall_decomposition`, `recall`, `write_emission_records`, `write_run_record`, `write_run_and_emissions`, `query_runs`, `query_emissions`, `query_emissions_for_run`). Reuses `kf-routing` for `tokenize`/`vectorize`/`detect_family`/`build_empirical_recommendation` (WO 29.3) — no duplication of routing-engine pure functions.
+  - **R2 FileAdapter:** `adapters/file.rs` — JSON-file with `tempfile::NamedTempFile` atomic rename, `.lock` exclusive-create retry loop (3s timeout), `.corrupt` backup on parse failure, lazy load with cached `load_error`.
+  - **R3 SqliteAdapter:** `adapters/sqlite.rs` — `rusqlite` 0.40 (`bundled` + `backup` features). Schema DDL, `SCHEMA_VERSION = 3`, prepared statements (re-prepared per call — rusqlite statements are tied to Connection borrow lifetime), migrations 2 (outcome_reason) + 3 (routing_bias), `backup`/`restore`/`list_backups` with SHA-256 + row counts.
+  - **`MemoryAdapter` trait:** single trait with default-impl optional methods (TS duck-typing `adapter.writeRun?` → Rust default `Ok(())`/`Ok(None)`/`Ok(false)`). `SqliteAdapter` overrides the specialized methods; `FileAdapter`/`InMemoryAdapter` accept defaults. No split trait, no downcasting.
+  - **`InMemoryAdapter`** also ported (it's in the TS barrel).
+- **R4 SKIPPED (per workorder — not a deferral):** `EncryptedAdapter` (AES-256-GCM) not ported. Not re-exported from the TS barrel; zero production consumers. Port only if explicitly requested.
+- **Design decisions:** sync trait (no async — both SQLite + file ops are sync in Rust; avoids the `tokio::task::block_in_place` panic risk). `Mutex<T>` for interior mutability (keeps multi-threaded use open without a trait change). Time helpers in `src/time.rs` (no `chrono` dep — Howard Hinnant civil-from-days for ISO timestamps).
+- **Deviation disclosed:** the TS adapter has 6 optional methods (`writeRun?`, `writeEmission?`, `queryRuns?`, `queryEmissionsForRun?`, `writeRunAndEmissions?`, `schemaVersion?`). The Rust port captures the same "specialized if available, generic fallback otherwise" semantics via trait default impls returning sentinel values (`Ok(())` / `Ok(None)` / `Ok(false)`). Avoids downcasting / split traits; the store branches on the sentinel. One-to-one with TS duck-typing.
+- **New deps:** `rusqlite = { version = "0.40", features = ["bundled", "backup"] }` (workspace root + crate), `sha2 = "0.10"`, `hex = "0.4"` (already present in root binary; added to crate), `tempfile = { workspace = true }` (already workspace). `kf-routing` path dep.
+- **Tests:** 34 ported (5 InMemory + 4 File + 8 Sqlite + 17 store facade), all green. `crates/kf-budget-core/README.md` test count bumped 738 → 772 (drift fudge is 2). `docs/TECHNICAL.md` crate count 10 → 11, both crate maps updated.
+- Gate green at HEAD `1320e7b0f`: `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check`, `cargo test -p kf-memory-store` (34/34), `cargo test -p kf-budget-core --test readme_drift` (2/2).
+- **Pre-existing (NOT mine, verified by stash):** `adr_xref_drift::status_counts_match_index_table_summary` is RED on HEAD (WO 29.3 lesson noted it). Also 13 `kf-code --lib` tests are flaky on shared-state when run in the full suite but pass in isolation on baseline (verified by stash). Neither is caused by WO 29.6.
+
 ## WO 29.4 — Port EventBus + AuditLogger (core-events) to Rust (branch `wo29d`, not yet merged)
 
 - **DONE (R1+R2+R3):** Ported the LIVE surface of `@kirkforge/core-events` to Rust.

@@ -6,6 +6,15 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
+## Session 2026-08-12 — ADR drift gate fix (branch `adr-fix`, worktree `.worktrees/adr`)
+
+- **Task:** make `cargo test -p kf-budget-core --test adr_xref_drift` green (4/4); fix ADR-054 status drift; check all ADRs + TECHNICAL.md count.
+- **Finding (honest):** the ADR-054 header↔README status drift the workorder cited was **already fixed** in a prior merge — file header and README index row are byte-identical (`Accepted (WO 27.1 added landlock — see amendment below)`). No ADR content edit was needed.
+- **Real blocker (pre-existing, scope creep — disclosed):** the WO 29.7 merge (`7a0de4d`) left committed merge-conflict markers in `Cargo.toml` (workspace.dep `kf-orchestrator`) and `Cargo.lock` (`thiserror` 2.0.19↔2.0.20). `cargo` could not parse the workspace, so the gate was unrunnable. `git status` showed clean because the broken file was the committed state (same regression class as the WO 29.6 one noted below). Resolved: kept `kf-orchestrator` dep (crate exists, intended by merge) + took `thiserror 2.0.20`. This finishes the cleanup the WO 29.7 CHANGELOG entry had already claimed.
+- **Doc drift fixed:** `docs/TECHNICAL.md` ADR count 89 → 90 (matches `ls docs/adr/*.md | grep -v README | wc -l`). Not caught by `adr_xref_drift` (the test enforces header↔index agreement, not the prose count).
+- **Gate:** `cargo test -p kf-budget-core --test adr_xref_drift` → 4/4 PASS.
+- **Pending:** none from this task. Note for future merges: the WO 29.x merge series keeps re-introducing committed conflict markers (29.6, then 29.7) — worth a pre-commit hook that rejects `^<<<<<<<`/`^>>>>>>>` in tracked files.
+
 ## WO 29.7 — Port orchestrator to kf-orchestrator crate (branch `wo29g`, not yet merged)
 
 - **DONE (R1+R2+R3+R4+R5):** Ported `@kirkforge/orchestrator` to a new `crates/kf-orchestrator/` workspace member.

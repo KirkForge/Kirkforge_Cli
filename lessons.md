@@ -1,5 +1,31 @@
 # lessons.md — WO 28.10 / 28.11 / 28.12 session
 
+## Session 2026-08-12 — ADR drift gate fix (adr-fix worktree)
+
+### Scope creep (disclosed): Cargo.toml + Cargo.lock
+- Task was scoped "docs only" but the workspace didn't parse: WO 29.7 merge
+  `7a0de4d` re-introduced committed conflict markers in `Cargo.toml`
+  (workspace.dep `kf-orchestrator`) + `Cargo.lock` (`thiserror` 2.0.19↔2.0.20).
+  The gate (`cargo test ... adr_xref_drift`) was literally unrunnable.
+- This is the **same regression class** the prior session fixed for WO 29.6
+  (see "Precondition" below). WO 29.x merge series keeps doing this.
+- Fix was unambiguous (kept `kf-orchestrator` dep — crate exists; took
+  `thiserror 2.0.20`). Decision: unblock + disclose prominently rather than
+  escalate, because (a) gate is a hard success criterion, (b) prior session
+  set the precedent, (c) AGENTS.md §7/§11 anticipate + bless disclosed scope
+  creep. Worked.
+- **Lesson:** before any WO merge is committed, run
+  `grep -rln '^<<<<<<<\|^=======\|^>>>>>>>\|^|||||||' Cargo.toml Cargo.lock`.
+  This repo needs a pre-commit/pre-merge hook rejecting these. The `ci.yml:32`
+  fmt job catches it on push but not on local commit/merge.
+
+### The workorder's premise was stale
+- Task claimed `adr_xref_drift::status_counts_match_index_table_summary` is RED
+  on ADR-054 drift. It wasn't — already fixed in a prior merge; header + README
+  row byte-identical. **Stale-cleanup-item risk again** (AGENTS.md §7): trust
+  but verify. Thirty seconds of running the test beats an hour of "fixing" a
+  non-existent bug.
+
 ## What I learned
 
 ### Precondition: merge commits with conflict markers

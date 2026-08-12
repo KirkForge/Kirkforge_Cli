@@ -425,7 +425,15 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // ADR-037 Phase 4: disk caching at .kf-code/context-index/cache.json.
     // On subsequent runs, if the cached index matches the current git HEAD,
     // we load from disk instead of rebuilding.
-    let mut context_index = {
+    // Non-interactive runs skip the repo-graph context index build: the
+    // synchronous tree-sitter walk can take long enough on large working
+    // trees to wedge scripted startup (WO 27.2 — the binary-spawn e2e suite
+    // hung here). Interactive TUI sessions still pay the cost because they
+    // benefit from symbol injection across many turns.
+    let mut context_index = if non_interactive {
+        tracing::info!("non-interactive mode: skipping repo-graph context index build");
+        None
+    } else {
         let cfg = kf_code::shared::read_shared_config(&shared_config);
         cfg.security.sandbox_dir.as_ref().and_then(|dir| {
             let path = std::path::Path::new(dir);

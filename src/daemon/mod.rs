@@ -127,6 +127,12 @@ where
     if let Ok(v) = std::env::var("KF_CODE_DATA_DIR") {
         cmd.env("KF_CODE_DATA_DIR", v);
     }
+    // Detach stdio: the daemonized child is long-lived and must not hold the
+    // caller's piped stdout/stderr open (same reason as `start_daemon` in
+    // client.rs — piped callers would hang on read_to_end after we exit).
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     // Create a new session so the daemon survives the closing of the
     // terminal/session that spawned it. Without setsid the daemon remains in
     // the parent's process group and gets SIGHUP when the user logs out or the

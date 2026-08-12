@@ -12,6 +12,7 @@ pub mod ui;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,13 @@ use std::time::{Duration, Instant};
 /// instead of a nextest hard-kill with no output. Real e2e turns complete in
 /// 2-5s against the mock; 30s is a generous ceiling that catches hangs.
 const E2E_TIMEOUT: Duration = Duration::from_secs(30);
+/// Ceiling for draining the child's stdout/stderr pipes AFTER the direct
+/// child has exited. Normally EOF arrives instantly on exit; the only way
+/// this ceiling is reached is a grandchild holding the pipe write-end open
+/// (the historical daemon pipe-inheritance bug). 5s is a generous bound
+/// that turns that regression into a named `TimedOut` error instead of the
+/// infinite hang a bare `read_to_end` would produce.
+const PIPE_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Wait for a child to exit, collecting stdout/stderr into an `Output`.
 /// If the child does not exit within `E2E_TIMEOUT`, it is killed and an
@@ -48,19 +56,46 @@ pub fn wait_with_timeout(child: &mut Child) -> std::io::Result<Output> {
             }
         }
     };
-    let mut stdout = Vec::new();
-    if let Some(mut s) = child.stdout.take() {
-        s.read_to_end(&mut stdout)?;
-    }
-    let mut stderr = Vec::new();
-    if let Some(mut s) = child.stderr.take() {
-        s.read_to_end(&mut stderr)?;
-    }
+    let stdout = read_with_deadline(child.stdout.take(), PIPE_READ_TIMEOUT)?;
+    let stderr = read_with_deadline(child.stderr.take(), PIPE_READ_TIMEOUT)?;
     Ok(Output {
         status,
         stdout,
         stderr,
     })
+}
+
+/// Drain a child pipe into a `Vec<u8>` with a hard deadline. `read_to_end`
+/// only EOFs when every writer holding the pipe's write-end has closed it —
+/// including inherited copies in spawned grandchildren. If a grandchild
+/// keeps the pipe open (the daemon pipe-inheritance regression), a direct
+/// `read_to_end` would block forever; this bounds it so the test surfaces a
+/// named `TimedOut` error. The reader thread is detached on timeout (it exits
+/// naturally when the pipe is eventually closed or the process tree reaped).
+fn read_with_deadline<R: Read + Send + 'static>(
+    pipe: Option<R>,
+    timeout: Duration,
+) -> std::io::Result<Vec<u8>> {
+    let mut s = match pipe {
+        Some(s) => s,
+        None => return Ok(Vec::new()),
+    };
+    let (tx, rx) = mpsc::channel::<std::io::Result<Vec<u8>>>();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = tx.send(s.read_to_end(&mut buf).map(|_| buf));
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(buf)) => Ok(buf),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!(
+                "e2e: child pipe did not EOF within {}s after exit — a grandchild likely holds the pipe open",
+                timeout.as_secs()
+            ),
+        )),
+    }
 }
 
 /// Isolated environment for one e2e test.  Creates a temp HOME + XDG
@@ -92,7 +127,10 @@ impl IsolatedEnv {
         let config_content = format!(
             "default_model = \"{model}\"\n\
              ollama_host = \"{mock_url}\"\n\
-             auto_approve = false\n"
+             auto_approve = false\n\
+             \n\
+             [adapter_routing]\n\
+             \"e2e-\" = \"Ollama\"\n"
         );
         std::fs::write(data_dir.join("config.toml"), config_content)
             .expect("e2e: write config.toml");

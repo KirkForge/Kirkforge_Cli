@@ -6,6 +6,23 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 series merged. See commit log for details.
 
+## E2E binary-spawn hang fix session (2026-08-12) — WO 27.2 RESOLVED
+
+Branch `e2e-debug` (worktree `.worktrees/e2e`). The 7 `#[ignore]`'d binary-spawn e2e scenarios in `tests/e2e/scenarios/` now pass (~5s total for all 7). Root causes found via `eprintln!` checkpoint instrumentation (the prior "binary never reaches adapter / ZERO output" diagnosis was a false negative — tracing writes to the log FILE by default, not stderr, so the captured stderr was empty while the binary worked past the real block).
+
+**Two bugs fixed:**
+1. **Context-index build wedges non-interactive startup** (`src/main/run_session.rs`): `freeze_launch_sandbox` sets `sandbox_dir = cwd`, then `ContextIndex::index_dir` runs an unbounded `WalkDir` + tree-sitter parse over it (645 indexable files in this repo took >90s). Now gated on `!non_interactive` — scripted/CI runs skip the index (the in-process equivalent never built one either). Interactive TUI runs keep the index.
+2. **Daemon inherits parent's piped stdio** (`src/daemon/client.rs::start_daemon` + `src/daemon/mod.rs::daemonize`): the auto-started `kf-code daemon --foreground` grandchild held the parent's stdout/stderr write-ends, so after the parent exited, any piped caller (CI, shell pipelines, the test harness) hung forever on `read_to_end`. Both spawn sites now set stdin/stdout/stderr to `Stdio::null()`.
+
+**Harness hardening** (`tests/e2e/harness/mod.rs`): post-exit pipe drain bounded by a 5s `read_with_deadline` (so any future fd-inheritance regression surfaces as a named `TimedOut` instead of an infinite hang); seed `[adapter_routing] "e2e-" = "Ollama"` in the isolated config (mirrors the in-process `wiremock_integration.rs`, fixes the routing mismatch that 404'd). The 7 `#[ignore]` reasons updated from "hangs" (now false) to "slow binary-spawn; opt-in via `--ignored`".
+
+**Precondition fix:** the worktree HEAD (`7a0de4d`, WO 29.7 merge) committed git conflict markers in `Cargo.toml` + `Cargo.lock` (same class as the 5a6c32d incident in lessons.md). Resolved by taking the wo29g side (`kf-orchestrator` workspace dep + `thiserror 2.0.20`).
+
+**DEFERRED (disclosed):** the underlying `index_dir` pathological slowness on large repos (gap #27 in TECHNICAL.md) is *masked*, not fixed — interactive TUI users on big repos still pay it. Remaining work: (a) profile `index_dir`/`resolve_imports`/`resolve_call_edges` (suspected O(n²)); (b) add a `.gitignore`/`target`/`node_modules` filter to the `WalkDir` (it currently walks everything). Tracked here + gap #27.
+
+### Pending
+- Decide whether the 7 e2e scenarios should drop `#[ignore]` entirely (they're fast now) or stay opt-in for the binary-spawn cost. Currently kept `#[ignore]` to preserve the `required-features = ["e2e-tests"]` + `--ignored` opt-in contract.
+
 ## WO 29.7 — Port orchestrator to kf-orchestrator crate (branch `wo29g`, not yet merged)
 
 - **DONE (R1+R2+R3+R4+R5):** Ported `@kirkforge/orchestrator` to a new `crates/kf-orchestrator/` workspace member.

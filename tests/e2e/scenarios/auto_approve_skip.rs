@@ -10,7 +10,7 @@ use crate::harness::mock::{MockProvider, Reply};
 use crate::harness::shard;
 use crate::harness::IsolatedEnv;
 
-#[ignore = "WO 27.2: binary-spawn e2e hangs in run_line_mode startup; in-process equivalent PASSES (wiremock_integration.rs); tracked in docs/workorders/27.2-test-health.md"]
+#[ignore = "slow binary-spawn e2e (real kf-code binary + mock provider); WO 27.2 startup hang is fixed — run with `cargo test --test e2e --features e2e-tests -- --ignored auto_approve_skips_approval`"]
 #[tokio::test]
 async fn auto_approve_skips_approval() {
     if !shard::shard_gate("auto_approve_skips_approval") {

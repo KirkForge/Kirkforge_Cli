@@ -110,8 +110,19 @@ impl Tool for ReadFile {
         //                   `minify_above_bytes`. The note appended
         //                   below tells the model how to see the full
         //                   content.
+        //
+        // Auto-minify only fires when `minify_write_side` is true: then the
+        // minified text is wrapped in a `<minified>` envelope that
+        // `edit_file`/`write_file` expand back to source, so the model can
+        // round-trip it. With `minify_write_side=false` (default), an
+        // auto-minified read returns PLAIN minified text that can't match
+        // `edit_file`'s raw-string compare — the model would stall on edits.
+        // The model can still explicitly pass `minify=true` for token savings
+        // (it then knows to re-read with `minify=false` before editing).
         let minify_arg = args.get("minify").and_then(|m| m.as_bool());
-        let auto_minified = minify_arg.is_none() && raw_content.len() > self.minify_above_bytes;
+        let auto_minified = minify_arg.is_none()
+            && self.minify_write_side
+            && raw_content.len() > self.minify_above_bytes;
         let minify = minify_arg.unwrap_or(auto_minified);
         let selected = if minify {
             crate::shared::minify::minify_source(&path, &selected_raw)
@@ -269,7 +280,9 @@ mod tests {
     }
 
     /// A file larger than `minify_above_bytes` with no explicit `minify`
-    /// arg is auto-minified and the output carries the WO's note.
+    /// arg is auto-minified and the output carries the WO's note. Auto-minify
+    /// only fires when `minify_write_side` is true (so the envelope round-trips
+    /// through `edit_file`).
     #[tokio::test]
     async fn auto_minify_large_file_emits_note() {
         let tmp = std::env::temp_dir().join(format!(
@@ -286,7 +299,7 @@ mod tests {
             f.write_all(source.as_bytes()).unwrap();
         }
 
-        let tool = ReadFile::new(PathGuard::default(), false, 64);
+        let tool = ReadFile::new(PathGuard::default(), true, 64);
         let outcome = tool
             .run(
                 &ToolContext::new(),
@@ -317,6 +330,52 @@ mod tests {
         assert!(
             !content.contains("filler comment"),
             "comments should be stripped: {content}"
+        );
+    }
+
+    /// Regression for WO 30.0.8: when `minify_write_side=false` (the default),
+    /// auto-minify must NOT fire even for a large file with no explicit `minify`
+    /// arg. Otherwise the plain (non-enveloped) minified text can't round-trip
+    /// through `edit_file`'s raw-string match, stalling edits.
+    #[tokio::test]
+    async fn auto_minify_skipped_when_write_side_disabled() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kf_code_read_file_no_auto_min_{}.rs",
+            std::process::id()
+        ));
+        let mut source = String::new();
+        for _ in 0..40 {
+            source.push_str("// filler comment line that should remain\n");
+        }
+        source.push_str("pub fn add(a: i32, b: i32) -> i32 { a + b }\n");
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            f.write_all(source.as_bytes()).unwrap();
+        }
+
+        let tool = ReadFile::new(PathGuard::default(), false, 64);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({ "path": tmp.to_string_lossy() }),
+            )
+            .await;
+        std::fs::remove_file(&tmp).ok();
+
+        let ToolOutcome::FileContent { content, .. } = outcome else {
+            panic!("expected FileContent, got {outcome:?}");
+        };
+        assert!(
+            content.contains("filler comment"),
+            "with minify_write_side=false, large auto-read must stay raw: {content}"
+        );
+        assert!(
+            !content.contains("[minified:"),
+            "no auto-minify note when write_side is disabled: {content}"
+        );
+        assert!(
+            !content.contains("(minified, was"),
+            "no minified header when write_side is disabled: {content}"
         );
     }
 

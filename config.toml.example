@@ -218,8 +218,8 @@
 # preserve_recent_messages = 2
 
 # Maximum model↔tool iterations within a single turn. Prevents runaway loops
-# during large codebase analysis. Default: 50.
-# max_tool_calls_per_turn = 50
+# during large codebase analysis. Default: 100.
+# max_tool_calls_per_turn = 100
 
 # Maximum consecutive FinishReason::Length continuations per turn. When the
 # model hits max_tokens, the executor injects a continuation message and loops.

@@ -1,5 +1,57 @@
 # lessons.md — WO 27.2 e2e hang fix session (2026-08-12)
 
+## Session 2026-08-13 — WO 31.1 + 31.4 Python verification loop (wo31 worktree)
+
+### What I learned about this codebase
+- **Two coexisting Python-detection sites already existed.** `tui/commands/init.rs:65`
+  has `detect_project(cwd) -> ProjectType` (single language, returns first hit).
+  The WO 31.4 spec asked for a `Vec<ProjectLanguage>` (multi-language aware —
+  real workspaces mix Cargo + pyproject). I added the Vec variant in
+  `verifier/detect.rs` rather than refactoring `init.rs` — the two serve
+  different purposes (init picks ONE gitignore template; verifiers fire ALL
+  relevant tools). Don't unify them.
+- **`Verifier` registration has TWO places that must stay in sync:**
+  `init_default_verifiers` (registers at startup) AND `BUILTIN_VERIFIERS`
+  const in `rebuild_plugin_verifiers` (the retain-list that survives plugin
+  reload). Forget the second and your verifier works once, then vanishes on
+  the first `/reload`. Grep `BUILTIN_VERIFIERS` before adding any new
+  built-in verifier.
+- **Python verifier self-gating pattern:** each `verify_X` does
+  Edit/FileWrite match → `.py` ext check → `find_python_root` →
+  `detect_project_languages(root).contains(Python)` → spawn tool. Three
+  gates before any subprocess; Rust verifiers do the same with `find_cargo_root`,
+  so registering BOTH sets is safe — they never double-fire.
+- **`python -m pytest` distinguishability:** pytest-missing vs tests-failed
+  both exit non-zero. The seam is stderr containing `"No module named pytest"`
+  (Python interpreter's own error) → `Skipped`; anything else non-zero →
+  `Fixable`. Without this, a host without pytest would emit `Fixable` with a
+  confusing "No module named pytest" body.
+- **Pre-existing RED at HEAD (4542e81) blocked the gate:**
+  - `src/main/line_mode.rs:720` test called
+    `spawn_non_interactive_approval_handler(rx)` with the old 1-arg
+    signature; the fn gained `auto_approve: bool` in `958e4f2` but the test
+    wasn't updated. The test's own comment ("deny even when auto_approve is
+    true") made the fix obvious: pass `true`.
+  - `cargo fmt --check` drift in `line_mode.rs` + `task_spawner.rs`
+    (flagged by the WO30.4 worker as not-hers). Mechanical `cargo fmt` fix.
+  - `Cargo.lock` had `kf-code = "0.3.6"` while `Cargo.toml` says `3.8.0`
+    (commit `6e2e0d4` bumped one, not the other). `cargo check` regenerated
+    it. All three are disclosed scope creep per AGENTS.md §7/§11 — same
+    precedent the WO30b worker set.
+- **`cargo test --lib -p kf-code session::executor::` is SLOW** (the full
+  suite includes `wiremock_integration` + the `loop_` tests which spawn mock
+  HTTP servers). Sub-filter to the specific module (`dispatch`, `turn`,
+  `coverage_gaps`, `verifier_cross`) — each finishes in 2-4s. The workorder
+  gate is `verifier::` only (235 tests, ~3s), not the executor suite.
+
+### What I'd do differently
+- The `[tool.mypy]` detection is a substring scan over pyproject.toml
+  (`text.contains("[tool.mypy]")`) rather than a TOML parse. Marked with a
+  `ponytail:` comment naming the ceiling (false-positive risk is negligible
+  — the literal only appears under that section) + upgrade path (parse with
+  `toml` if section detection ever gets ambiguous). Resist pulling a TOML
+  parser into the verifier hot path for one substring check.
+
 ## Session 2026-08-13 — WO 30.2 TaskManager lifecycle (wo30b worktree)
 
 ### What I learned about this codebase

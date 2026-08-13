@@ -1,5 +1,6 @@
 pub mod build;
 pub mod bus;
+pub mod detect;
 pub mod git;
 mod helpers;
 /// Verifier slots — deterministic post-execution checks and correction loop.
@@ -28,6 +29,9 @@ mod helpers;
 /// and stops at the first definitive result.
 pub mod lint;
 pub mod plugin;
+pub mod python_lint;
+pub mod python_test;
+pub mod python_typecheck;
 pub mod rustfmt;
 pub mod security;
 pub mod security_emitter;

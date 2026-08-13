@@ -6,6 +6,47 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
+## Session 2026-08-13 — WO 31.1 + 31.4 Python verification loop (branch `wo31`, worktree `.worktrees/wo31`)
+
+Multi-language verification loop — Python half. The verification bus previously
+only fired for Rust; editing a `.py` file returned `Skipped` and the
+generate→execute→verify→correct loop degraded to generate→execute→hope
+(proven by the 2026-08-13 dogfood test against KirkForge-MCP). Shipped:
+- **31.4 (detect):** `src/session/verifier/detect.rs` — `ProjectLanguage`
+  enum + `detect_project_languages(&Path) -> Vec<ProjectLanguage>` (sniffs
+  `Cargo.toml` / `pyproject.toml`|`setup.py`|`conftest.py` / `package.json`
+  / `go.mod`; multi-language aware; stable Rust→Python→Node→Go order) +
+  `find_python_root` walker (mirrors `helpers::find_cargo_root`). 10 tests.
+- **31.1 (Python verifiers):** `python_test.rs` (`python -m pytest -x
+  --tb=short -q`), `python_lint.rs` (probes `ruff` then `flake8`),
+  `python_typecheck.rs` (`mypy`, only when `mypy.ini` or `[tool.mypy]` in
+  pyproject.toml). Each self-gates on `.py` ext + Python detected at root;
+  each returns `Verdict::Skipped` when its tool is absent (never blocks the
+  turn). 13 tests.
+- **Registration:** all three in `init_default_verifiers` at priorities
+  6/7/8 (after Rust `test`=5) + added to `BUILTIN_VERIFIERS` so
+  `rebuild_plugin_verifiers` retains them across plugin reloads.
+- **Docs synced:** `docs/TECHNICAL.md` verifier section + workorder 31.0
+  status header. Gate green: `cargo test --lib -p kf-code verifier::` →
+  235 passed / 0 failed / 3 ignored; `cargo check` + clippy `-D warnings` +
+  `cargo fmt --check` all clean.
+- **Disclosed scope creep (pre-existing red, fixed to unblock gate):**
+  (a) `src/main/line_mode.rs:720` test called
+  `spawn_non_interactive_approval_handler(rx)` with the old 1-arg signature
+  — the fn gained `auto_approve: bool` in `958e4f2` but the test wasn't
+  updated; passed `true` (the test asserts "deny even when auto_approve").
+  (b) Pre-existing `cargo fmt --check` drift in `line_mode.rs` + `task_spawner.rs`
+  (flagged by the WO30.4 worker, not mine) — `cargo fmt` mechanical fix.
+  (c) `Cargo.lock` `kf-code` version `0.3.6`→`3.8.0` to match `Cargo.toml`
+  (commit `6e2e0d4` bumped Cargo.toml but not the lock).
+
+### Pending
+- **WO 31.2 (Node: tsc + eslint)** — not started. Same pattern; `Node`
+  variant already exists in `detect.rs`; needs `node_test.rs` +
+  `node_lint.rs` + npm-script detection.
+- **WO 31.3 (Go: go test + go vet)** — not started. `Go` variant exists.
+- **WO 31.5 (generic fallback: make test / ctest / ./test.sh)** — not started.
+
 ## Session 2026-08-13 — WO 30.4 seccomp syscall filter (branch `wo30c`, worktree `.worktrees/wo30c`)
 
 The missing OS-isolation layer (external review 2026-08-13 §10): landlock confines the FS, seccomp confines the syscall surface. Shipped as a **default-OFF** `seccomp` Cargo feature (`seccomp = ["dep:seccompiler"]`):

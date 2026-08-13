@@ -417,7 +417,13 @@ pub trait Verifier: Send + Sync {
 or `Skipped`. Built-in verifiers: `build` (cargo build on edited files),
 `lint` (clippy), `rustfmt`, `test` (targeted tests for edited files), `git`
 (git-state validation), `security` (dangerous-pattern scan), `plugin` (verifiers
-declared by plugins).
+declared by plugins). WO 31.1+31.4 added Python self-gating verifiers —
+`python_test` (pytest), `python_lint` (ruff/flake8), `python_typecheck` (mypy,
+fires only when configured) — alongside the Rust ones. Each Python verifier
+calls `verifier::detect::detect_project_languages(workspace)` and skips unless
+Python is detected at the edited file's project root, so registering both Rust
+and Python verifiers is safe for pure-Rust workspaces. Missing tools (no
+pytest/ruff/mypy on PATH) skip gracefully rather than blocking the turn.
 
 ### Context-based `BusVerifier` trait (ADR-043)
 

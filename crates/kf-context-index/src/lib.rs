@@ -962,10 +962,21 @@ impl ContextIndex {
         &mut self.call_edges
     }
 
+    // ponytail: skip build/vendored/VCS dirs so a huge `target/` or `.git`
+    // does not make the index-walk spin for minutes. The upgrade path is a
+    // proper .gitignore-aware walker.
+    fn is_ignored_dir(name: &std::ffi::OsStr) -> bool {
+        matches!(
+            name.to_str(),
+            Some("target" | ".git" | "node_modules" | ".venv" | "venv" | "dist" | "build")
+        )
+    }
+
     /// Index all `.rs`, `.ts`/`.tsx`, `.py`, and `.go` files under a directory.
     pub fn index_dir(&mut self, root: &std::path::Path) -> anyhow::Result<()> {
         for entry in walkdir::WalkDir::new(root)
             .into_iter()
+            .filter_entry(|e| !Self::is_ignored_dir(e.file_name()))
             .filter_map(|e| e.ok())
         {
             let path = entry.path();

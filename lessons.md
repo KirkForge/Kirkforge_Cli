@@ -1,5 +1,56 @@
 # lessons.md — WO 27.2 e2e hang fix session (2026-08-12)
 
+## Session 2026-08-13 — WO 31.6 TUI selftest harness (worktree `wo31tui`)
+
+### What I learned about this codebase
+- **The full TUI render pipeline lived inside `render_frame`'s `terminal.draw`
+  closure** (`src/tui/mod.rs`). To test it against a `TestBackend`, extract the
+  closure body into `pub(crate) fn render_app(f: &mut Frame, state: &mut AppState)`
+  and have `render_frame` call `terminal.draw(|f| render_app(f, state))`. The
+  closure captured nothing from the outer scope, so the extraction is verbatim.
+  `Frame` is non-generic in ratatui 0.30 (all widgets use `f: &mut Frame` with
+  no type param) — no generic gymnastics needed.
+- **`#[cfg(test)] mod selftest;`** is the clean way to gate a test-only file:
+  declare the module cfg-gated in `mod.rs`, the file body IS the module body
+  (no outer `mod selftest { }` wrapper). Matches the per-widget test pattern
+  (`render_state` in `widgets/chat/mod.rs`) already in the repo.
+- **Existing per-widget tests already use `TestBackend`** — copy that pattern:
+  `TestBackend::new(w,h)` → `Terminal::new` → `terminal.draw(|f| ...)` →
+  `terminal.backend().buffer()`. Iterate cells with `buffer.cell((x,y))` and
+  push `cell.symbol()` to flatten to a string. Trim trailing whitespace per
+  row so `contains` assertions don't trip on the right-side border padding.
+- **`app_state()` and `app_state_with_log(path)`** live in `src/shared/test_util.rs`
+  (under `#[cfg(test)]`, `pub(crate)`). They build the canonical
+  `AppState::new(Arc<RwLock::new(Config::default())))` — reuse them instead of
+  re-rolling.
+- **TurnEvent variant names differ from workorder shorthand.** The WO 31.6
+  spec said "ToolCall" / "BudgetUpdate"; real variants in
+  `src/session/executor/types.rs` are `ToolStart { name, args }` and
+  `CostStats { prompt_tokens, ... }`. Always grep the enum before writing
+  feed_event calls.
+
+### Real bug the harness caught on first run (DEFERRED, not fixed)
+- **`auto_scroll` doesn't pin to the bottom for a long single-paragraph
+  assistant message.** `render_chat` (`src/tui/widgets/chat/mod.rs`) computes
+  `max_scroll = lines.len().saturating_sub(visible_height)` from the PRE-
+  `.wrap()` `Vec<Line>`. pulldown-cmark emits one markdown paragraph as ONE
+  `Line` (the renderer's `flush_current` pushes the whole paragraph as one
+  line). So a 500-token assistant message is `lines.len() == ~3` (header +
+  one body Line + blank), `max_scroll = 0`, and `auto_scroll` leaves
+  `scroll_offset = 0`. `Paragraph::wrap(Wrap{trim:false})` then re-wraps the
+  long Line at render time into ~34 visual rows and clips the tail
+  (`word466..word499` out of view). Existing widget tests miss it because
+  they use short messages that fit in one screen. The selftest
+  `token_stream_stress` pins the bug with a guard assertion. Fix path:
+  pre-wrap the assistant body into multiple `Line`s before scroll math, OR
+  compute `max_scroll` from post-wrap row count.
+
+### Gate-load gotcha
+- Same as last session: this box runs concurrent cargo builds. `cargo clippy
+  --all-targets` here took ~5m48s even after warm. Narrow filters
+  (`cargo test --lib -p kf-code tui::selftest`) ran in 0.15-0.5s once built.
+  Run the targeted test first to validate the harness, THEN the broad gates.
+
 ## Session 2026-08-13 — WO 30.9 plan-mode-traps-non-interactive (worktree `wo30fix2`)
 
 ### What I learned about this codebase

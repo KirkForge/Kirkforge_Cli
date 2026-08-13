@@ -968,7 +968,17 @@ impl ContextIndex {
     fn is_ignored_dir(name: &std::ffi::OsStr) -> bool {
         matches!(
             name.to_str(),
-            Some("target" | ".git" | "node_modules" | ".venv" | "venv" | "dist" | "build" | ".claude" | ".opencode")
+            Some(
+                "target"
+                    | ".git"
+                    | "node_modules"
+                    | ".venv"
+                    | "venv"
+                    | "dist"
+                    | "build"
+                    | ".claude"
+                    | ".opencode"
+            )
         )
     }
 

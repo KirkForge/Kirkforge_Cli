@@ -6,6 +6,41 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
+## Session 2026-08-13 — WO 31.6: TUI selftest harness (branch `wo31tui`)
+
+A `#[cfg(test)]` harness in `src/tui/selftest.rs` that drives the FULL TUI
+render pipeline (tab bar + chat + slash menu + input + status + approval +
+doom banner) against an in-memory ratatui `TestBackend` — no terminal / PTY /
+tmux needed. Runs in <1s as `cargo test --lib -p kf-code tui::selftest`.
+
+- **`src/tui/mod.rs`** — extracted the body of `render_frame`'s closure into
+  `pub(crate) fn render_app(f: &mut Frame, state: &mut AppState)` so the
+  harness drives the EXACT same layout the production event loop does.
+  `render_frame` (single caller, verified by grep) now just wraps
+  `terminal.draw(|f| render_app(f, state))`. LOW-risk pure refactor.
+- **`src/tui/selftest.rs`** — NEW. `TuiTestHarness` (owns `AppState`,
+  exposes `feed_event` / `feed_events` / `render` / `assert_contains` /
+  `assert_not_contains`), `render_to_string(state, w, h) -> String` helper,
+  and 10 spec scenarios (token-stream stress, thinking word-wrap, tool-card
+  render, approval prompt, budget indicator, scroll-100-messages, slash menu,
+  search overlay, doom-loop banner, empty state) + 2 belt-and-suspenders
+  tests. 12 tests, all green.
+
+### Finding surfaced by the harness (DEFERRED — out of WO 31.6 scope)
+The `token_stream_stress` scenario caught a real latent bug on first run:
+**`auto_scroll` does not pin to the bottom for a long single-paragraph
+assistant message.** Root cause: `render_chat` (`src/tui/widgets/chat/mod.rs`)
+computes `max_scroll` from the pre-`.wrap()` `Vec<Line>` length, but a long
+markdown paragraph is ONE `Line` (pulldown-cmark emits a paragraph as a single
+flush), so `max_scroll` saturates to 0 and `auto_scroll` leaves `scroll_offset
+= 0`. `Paragraph::wrap` then re-wraps the long Line at render time and clips
+the tail out of view. The existing widget tests miss it because they use short
+messages. The `token_stream_stress` test pins the bug with a guard assertion
+(panics if the bug is fixed, prompting removal). **Remaining work to close
+it:** either pre-wrap the assistant body into multiple `Line`s before
+computing scroll geometry, or compute `max_scroll` from the post-wrap row
+count. Tracked here; not fixed in this session (harness-only workorder).
+
 ## Session 2026-08-13 — WO 30.9: plan mode no longer traps `--non-interactive` (branch `wo30fix2`)
 
 The doom-loop circuit breaker (WO 23.8) auto-switches to plan mode, but

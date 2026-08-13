@@ -6,40 +6,40 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
-## Session 2026-08-13 (late) — WO 30.0.5: startup hang + prompt bomb + bash EINVAL (dogfood, shipped on `dev`)
+## Session 2026-08-13 — WO 31.6: TUI selftest harness (branch `wo31tui`)
 
-Dogfooding `kf-code run` in KirkForge-PicoSeries-picosentry surfaced three
-bugs. **Full write-up:
-`docs/workorders/30.0.5-tui-startup-hang-context-index.md`.** Shipped on
-`dev`: `f842591` (Bugs 1+2), `10162f8` (Bug 3). Binary reinstalled at
-`~/.local/bin/kf-code`, e2e-verified.
+A `#[cfg(test)]` harness in `src/tui/selftest.rs` that drives the FULL TUI
+render pipeline (tab bar + chat + slash menu + input + status + approval +
+doom banner) against an in-memory ratatui `TestBackend` — no terminal / PTY /
+tmux needed. Runs in <1s as `cargo test --lib -p kf-code tui::selftest`.
 
-- **Bug 1 — startup "hang":** `is_ignored_dir` didn't exclude
-  `.claude`/`.opencode`; pre-TUI index parsed 5 duplicate agent worktrees
-  (800 MB, 26.5k files) silently. Fix: ignore list (1 line). Extends WO 30.5.
-- **Bug 2 — 7.1 MB system prompt:** `imported_by` filter `is_none_or`
-  smeared every unresolved import edge into every retrieved symbol
-  (10 lines × 649 KB) → cloud 400, 1,076,589 tokens over. Fix:
-  resolved-edges-only + dedup; 10-entry `+N more` render cap in
-  `prompt/mod.rs`.
-- **Bug 3 — bash EINVAL without workdir:** landlock `add_path` passed
-  non-NUL-terminated `as_bytes().as_ptr()` to `libc::open`; default
-  workdir `"."` opened `".<heap garbage>"` → every workdir-less bash call
-  died with `os error 22` → 3 identical failures tripped doom-loop
-  breaker → plan mode → "broke completely". Fix: `CString`s precomputed
-  in `resolve_paths`; `SYSTEM_READ_DIRS` as `c"..."` literals. Likely the
-  WO 27.2/28.6 e2e spawn-failure class finally root-caused.
-- Gates: kf-context-index 59/59, prompt 9/9, landlock 6/6, release
-  builds PASS, e2e bash-without-workdir + full turn PASS.
-- Env: own-code worktree ff'd off non-compiling `6e2e0d4`;
-  `ollama_host`/`default_model` set in config.toml; 3 concurrent
-  daemons killed (2 stale debug builds — suspect in config wipe +
-  dropped approvals).
-- **Pending:** approval-drop bug ("responder dropped without a user
-  decision", 4× in TUI, unverified — needs RUST_LOG=debug repro);
-  config-rewrite-on-failed-run; `KF_CODE_HOST` env override ignored.
-- NOTE: my earlier state.md/lessons.md entries for 30.0.5 were lost to a
-  concurrent worker's branch reset — this entry replaces them.
+- **`src/tui/mod.rs`** — extracted the body of `render_frame`'s closure into
+  `pub(crate) fn render_app(f: &mut Frame, state: &mut AppState)` so the
+  harness drives the EXACT same layout the production event loop does.
+  `render_frame` (single caller, verified by grep) now just wraps
+  `terminal.draw(|f| render_app(f, state))`. LOW-risk pure refactor.
+- **`src/tui/selftest.rs`** — NEW. `TuiTestHarness` (owns `AppState`,
+  exposes `feed_event` / `feed_events` / `render` / `assert_contains` /
+  `assert_not_contains`), `render_to_string(state, w, h) -> String` helper,
+  and 10 spec scenarios (token-stream stress, thinking word-wrap, tool-card
+  render, approval prompt, budget indicator, scroll-100-messages, slash menu,
+  search overlay, doom-loop banner, empty state) + 2 belt-and-suspenders
+  tests. 12 tests, all green.
+
+### Finding surfaced by the harness (DEFERRED — out of WO 31.6 scope)
+The `token_stream_stress` scenario caught a real latent bug on first run:
+**`auto_scroll` does not pin to the bottom for a long single-paragraph
+assistant message.** Root cause: `render_chat` (`src/tui/widgets/chat/mod.rs`)
+computes `max_scroll` from the pre-`.wrap()` `Vec<Line>` length, but a long
+markdown paragraph is ONE `Line` (pulldown-cmark emits a paragraph as a single
+flush), so `max_scroll` saturates to 0 and `auto_scroll` leaves `scroll_offset
+= 0`. `Paragraph::wrap` then re-wraps the long Line at render time and clips
+the tail out of view. The existing widget tests miss it because they use short
+messages. The `token_stream_stress` test pins the bug with a guard assertion
+(panics if the bug is fixed, prompting removal). **Remaining work to close
+it:** either pre-wrap the assistant body into multiple `Line`s before
+computing scroll geometry, or compute `max_scroll` from the post-wrap row
+count. Tracked here; not fixed in this session (harness-only workorder).
 
 ## Session 2026-08-13 — WO 30.9: plan mode no longer traps `--non-interactive` (branch `wo30fix2`)
 

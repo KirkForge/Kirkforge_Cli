@@ -469,10 +469,8 @@ impl PromptBuilder {
                                 ));
                             }
                             if result.called_by.len() > 10 {
-                                content.push_str(&format!(
-                                    ", +{} more",
-                                    result.called_by.len() - 10
-                                ));
+                                content
+                                    .push_str(&format!(", +{} more", result.called_by.len() - 10));
                             }
                             content.push(')');
                         }

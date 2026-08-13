@@ -35,6 +35,9 @@ pub mod theme;
 pub mod transcript;
 pub mod widgets;
 
+#[cfg(test)]
+mod selftest;
+
 mod connection;
 #[cfg(unix)]
 mod daemon_events;
@@ -60,7 +63,7 @@ use events::{drain_approval_requests, drain_turn_events, handle_mouse_event};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    Terminal,
+    Frame, Terminal,
 };
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -925,132 +928,143 @@ fn render_frame(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
 ) -> anyhow::Result<()> {
-    terminal.draw(|f| {
-        let size = f.area();
-        let input_height = state.input_visible_height(5);
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1), // tab bar
-                Constraint::Min(1),    // main content
-                Constraint::Length(input_height),
-                Constraint::Length(1), // status bar
-            ])
-            .split(size);
-
-        // ── Top tab bar: F1–F6 labels, active tab highlighted ──
-        crate::tui::widgets::tabs::render_tab_bar(f, chunks[0], state);
-
-        // Render main content area based on active tab.
-        // Chat (F1) shows the conversation; other tabs show their
-        // own panel content in the same area.
-        use crate::tui::app::ActiveTab;
-        match state.ui.active_tab {
-            ActiveTab::Chat => {
-                // Welcome screen when no messages and no input
-                if state.conversation.messages.is_empty() && state.conversation.input.is_empty() {
-                    crate::tui::widgets::welcome::render_welcome(f, chunks[1], state);
-                } else {
-                    render_chat(f, chunks[1], state);
-                }
-            }
-            ActiveTab::Models => {
-                crate::tui::widgets::tabs::render_models(f, chunks[1], state);
-            }
-            ActiveTab::Plugins => {
-                crate::tui::widgets::tabs::render_plugins(f, chunks[1], state);
-            }
-            ActiveTab::Jobs => {
-                crate::tui::widgets::tabs::render_jobs(f, chunks[1], state);
-            }
-            ActiveTab::Settings => {
-                crate::tui::widgets::tabs::render_settings(f, chunks[1], state);
-            }
-            ActiveTab::Threads => {
-                crate::tui::widgets::tabs::render_threads(f, chunks[1], state);
-            }
-        }
-
-        // ── Slash menu popup (above input) ──
-        if let Some(ref menu) = state.ui.slash_menu {
-            crate::tui::widgets::slash_menu::render_slash_menu(f, chunks[2], menu);
-        }
-
-        // ── File completer popup (above input) ──
-        if let Some(ref completer) = state.ui.file_completer {
-            crate::tui::widgets::file_completer::render_file_completer(f, chunks[2], completer);
-        }
-
-        // Show input and status for all tabs; the main content area
-        // already rendered above.
-        render_input(f, chunks[2], state);
-        render_status(f, chunks[3], state);
-
-        // Session picker overlay (daemon follow-up). Shown when the
-        // user invokes `/resume` with no arguments, or at startup
-        // before the main event loop. The approval dialog takes
-        // precedence if both are somehow active — approvals are
-        // system-initiated and require immediate attention.
-        if state.approval.pending_approval.is_none() && state.approval.pending_bang.is_none() {
-            if let Some(ref picker) = state.session.session_picker {
-                picker.render(f, size);
-            }
-        }
-
-        // Directory picker overlay (Ctrl+O) is rendered by the
-        // file_completer above — it uses FileCompleter with
-        // pick_directory=true instead of a separate widget.
-
-        // Approval dialog overlay.
-        //
-        // `render_approval_dialog` needs both a `&PendingApproval` (to
-        // display the args preview) and `&mut state` (to clamp
-        // `state.approval.approval_scroll` / `state.approval.approval_max_scroll`). We
-        // can't hold both borrows simultaneously because the immutable
-        // borrow of `state.approval.pending_approval` would extend through the
-        // call site and conflict with the mutable borrow.
-        //
-        // The fix is `std::mem::take`: swap the `Option<PendingApproval>`
-        // out for `None` (replacing the contained value with a sentinel
-        // `None` via `mem::replace`), pass the owned approval by ref to
-        // the renderer, then put it back. The closure is the cleanest
-        // way to scope the `&mut state` borrow tightly.
-        //
-        // `std::mem::take` is sound here because:
-        //   1. `pending_approval` is `Option<PendingApproval>`, and
-        //      `None` is a valid value for it.
-        //   2. We immediately restore the original value after the call.
-        //   3. The dialog is the only consumer of `pending_approval`,
-        //      and we're already inside the render path so no other
-        //      code can observe the temporary `None`.
-        //
-        // The bang-approval gate (review.md arch concern #1) uses
-        // the same dialog shape via `pending_bang`. We render it
-        // identically — only the key handler knows the difference
-        // (see `approval_keys::handle_bang_approval_key`).
-        let pending_taken = state.approval.pending_approval.take();
-        if let Some(ref approval) = pending_taken {
-            render_approval_dialog(f, size, approval, state);
-        } else if let Some(ref bang) = state.approval.pending_bang {
-            // Synthesize a transient `PendingApproval` view of the
-            // bang command so the dialog renders the same way. The
-            // `responder` is `None` because bang is a local flow
-            // (no executor oneshot).
-            let synthetic = crate::tui::app::PendingApproval {
-                tool_name: "!bash".into(),
-                args: serde_json::json!({ "command": bang.cmd }),
-                responder: None,
-            };
-            render_approval_dialog(f, size, &synthetic, state);
-        }
-        state.approval.pending_approval = pending_taken;
-
-        // Doom-loop warning banner. Renders last so it sits on top
-        // of any other overlay. Skipped when acknowledged or when
-        // the underlying state hasn't crossed the threshold.
-        crate::tui::widgets::doom_banner::render_if_active(f, size, state);
-    })?;
+    terminal.draw(|f| render_app(f, state))?;
     Ok(())
+}
+
+/// The full TUI render pipeline: tab bar, main content (chat / models /
+/// plugins / jobs / settings / threads), slash menu, file completer, input
+/// bar, status bar, session picker overlay, approval dialog, and doom-loop
+/// banner.
+///
+/// Extracted from `render_frame`'s closure so the selftest harness can drive
+/// the EXACT same layout against a `TestBackend` (WO 31.6). `render_frame`
+/// remains the production entry point (it owns the `terminal.draw` call and
+/// the `CrosstermBackend` type); this function is the backend-agnostic core.
+pub(crate) fn render_app(f: &mut Frame, state: &mut AppState) {
+    let size = f.area();
+    let input_height = state.input_visible_height(5);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // tab bar
+            Constraint::Min(1),    // main content
+            Constraint::Length(input_height),
+            Constraint::Length(1), // status bar
+        ])
+        .split(size);
+
+    // ── Top tab bar: F1–F6 labels, active tab highlighted ──
+    crate::tui::widgets::tabs::render_tab_bar(f, chunks[0], state);
+
+    // Render main content area based on active tab.
+    // Chat (F1) shows the conversation; other tabs show their
+    // own panel content in the same area.
+    use crate::tui::app::ActiveTab;
+    match state.ui.active_tab {
+        ActiveTab::Chat => {
+            // Welcome screen when no messages and no input
+            if state.conversation.messages.is_empty() && state.conversation.input.is_empty() {
+                crate::tui::widgets::welcome::render_welcome(f, chunks[1], state);
+            } else {
+                render_chat(f, chunks[1], state);
+            }
+        }
+        ActiveTab::Models => {
+            crate::tui::widgets::tabs::render_models(f, chunks[1], state);
+        }
+        ActiveTab::Plugins => {
+            crate::tui::widgets::tabs::render_plugins(f, chunks[1], state);
+        }
+        ActiveTab::Jobs => {
+            crate::tui::widgets::tabs::render_jobs(f, chunks[1], state);
+        }
+        ActiveTab::Settings => {
+            crate::tui::widgets::tabs::render_settings(f, chunks[1], state);
+        }
+        ActiveTab::Threads => {
+            crate::tui::widgets::tabs::render_threads(f, chunks[1], state);
+        }
+    }
+
+    // ── Slash menu popup (above input) ──
+    if let Some(ref menu) = state.ui.slash_menu {
+        crate::tui::widgets::slash_menu::render_slash_menu(f, chunks[2], menu);
+    }
+
+    // ── File completer popup (above input) ──
+    if let Some(ref completer) = state.ui.file_completer {
+        crate::tui::widgets::file_completer::render_file_completer(f, chunks[2], completer);
+    }
+
+    // Show input and status for all tabs; the main content area
+    // already rendered above.
+    render_input(f, chunks[2], state);
+    render_status(f, chunks[3], state);
+
+    // Session picker overlay (daemon follow-up). Shown when the
+    // user invokes `/resume` with no arguments, or at startup
+    // before the main event loop. The approval dialog takes
+    // precedence if both are somehow active — approvals are
+    // system-initiated and require immediate attention.
+    if state.approval.pending_approval.is_none() && state.approval.pending_bang.is_none() {
+        if let Some(ref picker) = state.session.session_picker {
+            picker.render(f, size);
+        }
+    }
+
+    // Directory picker overlay (Ctrl+O) is rendered by the
+    // file_completer above — it uses FileCompleter with
+    // pick_directory=true instead of a separate widget.
+
+    // Approval dialog overlay.
+    //
+    // `render_approval_dialog` needs both a `&PendingApproval` (to
+    // display the args preview) and `&mut state` (to clamp
+    // `state.approval.approval_scroll` / `state.approval.approval_max_scroll`). We
+    // can't hold both borrows simultaneously because the immutable
+    // borrow of `state.approval.pending_approval` would extend through the
+    // call site and conflict with the mutable borrow.
+    //
+    // The fix is `std::mem::take`: swap the `Option<PendingApproval>`
+    // out for `None` (replacing the contained value with a sentinel
+    // `None` via `mem::replace`), pass the owned approval by ref to
+    // the renderer, then put it back. The closure is the cleanest
+    // way to scope the `&mut state` borrow tightly.
+    //
+    // `std::mem::take` is sound here because:
+    //   1. `pending_approval` is `Option<PendingApproval>`, and
+    //      `None` is a valid value for it.
+    //   2. We immediately restore the original value after the call.
+    //   3. The dialog is the only consumer of `pending_approval`,
+    //      and we're already inside the render path so no other
+    //      code can observe the temporary `None`.
+    //
+    // The bang-approval gate (review.md arch concern #1) uses
+    // the same dialog shape via `pending_bang`. We render it
+    // identically — only the key handler knows the difference
+    // (see `approval_keys::handle_bang_approval_key`).
+    let pending_taken = state.approval.pending_approval.take();
+    if let Some(ref approval) = pending_taken {
+        render_approval_dialog(f, size, approval, state);
+    } else if let Some(ref bang) = state.approval.pending_bang {
+        // Synthesize a transient `PendingApproval` view of the
+        // bang command so the dialog renders the same way. The
+        // `responder` is `None` because bang is a local flow
+        // (no executor oneshot).
+        let synthetic = crate::tui::app::PendingApproval {
+            tool_name: "!bash".into(),
+            args: serde_json::json!({ "command": bang.cmd }),
+            responder: None,
+        };
+        render_approval_dialog(f, size, &synthetic, state);
+    }
+    state.approval.pending_approval = pending_taken;
+
+    // Doom-loop warning banner. Renders last so it sits on top
+    // of any other overlay. Skipped when acknowledged or when
+    // the underlying state hasn't crossed the threshold.
+    crate::tui::widgets::doom_banner::render_if_active(f, size, state);
 }
 
 /// Merge a completed persona result back into the parent session.

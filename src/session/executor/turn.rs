@@ -59,6 +59,12 @@ impl Executor {
         cancelled: &AtomicBool,
         event_tx: &mpsc::Sender<TurnEvent>,
     ) -> anyhow::Result<()> {
+        // WO 30.6: keep the task spawner's parent-approval forwarder pinned
+        // to this turn's approval channel. The channel is session-stable,
+        // so this is idempotent across turns; setting it here (the common
+        // chokepoint for main-loop, subagent, and test turn paths) means a
+        // subagent's destructive-tool requests reach the interactive handler.
+        self.set_spawner_parent_approval(approval_sender.clone());
         // Post-turn hook: fires on every exit path (Ok / Err / panic /
         // cancel / max-iterations / parse-error second retry) via the
         // `PostTurnHookGuard` constructed on the stack below. The guard

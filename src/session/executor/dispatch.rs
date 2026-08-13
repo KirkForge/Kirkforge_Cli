@@ -40,6 +40,10 @@ pub(super) struct PreparedCall {
     timeout: std::time::Duration,
     diff_review: bool,
     event_tx: Option<mpsc::Sender<TurnEvent>>,
+    /// The session's task spawner, threaded through so the `task` tool can
+    /// reach it via `ctx.task_spawner` (WO 30.6). Previously this was None
+    /// and the parent's task tool always errored "not available".
+    task_spawner: Option<Arc<dyn crate::tools::task::TaskSpawner>>,
 }
 
 /// Phase-1 output: a buffered skip (denied/unknown tool/plan-mode/etc.) waiting
@@ -234,6 +238,10 @@ impl Executor {
                         timeout: self.tool_call_timeout(),
                         diff_review: read_shared_config(&self.config).security.diff_review,
                         event_tx: Some(event_tx.clone()),
+                        task_spawner: self
+                            .task_spawner
+                            .clone()
+                            .map(|s| s as Arc<dyn crate::tools::task::TaskSpawner>),
                     });
                 }
                 PreRunVerdict::Skip { events, message } => {
@@ -619,7 +627,7 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
         token: prep.cancel_token,
         dry_run: false,
         diff_review: prep.diff_review,
-        task_spawner: None,
+        task_spawner: prep.task_spawner.clone(),
         tools: None,
         event_tx: prep.event_tx,
     };

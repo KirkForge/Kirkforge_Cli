@@ -320,6 +320,21 @@ most conservative subagent surface — same read-only tools as the `/plan`
 persona, but no `bash` (the bash sandbox adds attack surface that has not
 been independently audited).
 
+The **`task`-tool subagents** (`InProcessTaskSpawner` in `src/session/task_spawner.rs`,
+WO 28.1) are a separate surface from the scout: each `task` tool call spins up an isolated
+`Executor` with a throwaway conversation log and a persona-restricted toolset (`explore` =
+read-only + bash, `plan` = read-only research, `coder` = full toolset). Two isolation
+controls apply (WO 30): **approval forwarding** — subagent destructive-tool approval requests
+are forwarded to the *parent* session's approval channel (set on the spawner from
+`Executor::run_turn`), so the user sees and decides them interactively in the TUI / line-mode;
+with no parent channel (top-level scheduled job) the P0 policy applies (auto-approve in CI,
+deny otherwise). **Worktree isolation** — a `coder` subagent gets its own git worktree and the
+path guard's `sandbox_dir` is pointed at it, so file edits land in a separate checkout whose
+path is returned in the summary for the parent to review/merge; `explore`/`plan` read the
+parent workspace. Bash CWD is not confined to the worktree (deferred — bash keeps its existing
+landlock/sandbox posture). Note: the executor's spawner is threaded into the dispatch
+`ToolContext` via `PreparedCall` (the parent `task` tool reaches it through `ctx.task_spawner`).
+
 Personas currently route through Anthropic-direct only. Bedrock/Vertex-configured users should use Anthropic API keys for persona invocation.
 
 **Color themes** (WO 27.6): the TUI ships a central `Theme` palette (`src/tui/theme.rs`) covering every color role the markdown renderer, search highlighter, table grid, and budget indicator use. Four built-ins: `default` (prior hard-coded colors — the back-compat baseline), `dark` (high-contrast dark), `light` (readable on white terminals — swaps `Black`/`Cyan`/`Yellow` for higher-luminance alternatives), and `monokai` (warm palette with the canonical Monokai hex values). The active theme is selected by `display.theme` (TOML) or `KF_CODE_THEME` (env), both defaulting to `"default"`, and is live-switchable via the `/theme [name]` slash command — `/theme` with no argument cycles through the four built-ins. Unknown names fall back to `default`. The render functions in `src/tui/rendering/` take a `&Theme` and read colors by role name (`code_block_fg`, `link`, `budget_tight`, …); zero `Color::*` literals remain in production code under `rendering/`. Custom user-loaded palettes are explicitly out of scope (upgrade path: a `Theme::custom(palette)` constructor reading a TOML color map).

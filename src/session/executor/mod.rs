@@ -93,7 +93,10 @@ pub struct Executor {
     session_id: String,
     /// Optional spawner for the `task` tool. Built lazily from executor
     /// state so subagents inherit the same model, config, and sandboxing.
-    task_spawner: Option<Arc<dyn crate::tools::task::TaskSpawner>>,
+    /// Held concretely (not as `dyn TaskSpawner`) so the executor can set
+    /// the per-session parent-approval forwarder on it (WO 30.6). The ctx
+    /// the task tool receives still carries it as `Arc<dyn TaskSpawner>`.
+    task_spawner: Option<Arc<crate::session::task_spawner::InProcessTaskSpawner>>,
 
     /// Optional turn-trace recorder. When present, each completed turn
     /// is serialized as a `TurnRecord` and appended to the trace file.
@@ -409,6 +412,17 @@ impl Executor {
                 supports_images,
             ),
         ));
+    }
+
+    /// Set the parent-approval forwarder on this executor's task spawner.
+    /// Subagent destructive-tool approval requests are forwarded to `tx`
+    /// so the user sees them in the TUI / line-mode and can decide
+    /// interactively (WO 30.6). Called from `run_turn` with the current
+    /// turn's approval channel, which is session-stable.
+    pub fn set_spawner_parent_approval(&self, tx: mpsc::UnboundedSender<ApprovalRequest>) {
+        if let Some(spawner) = &self.task_spawner {
+            spawner.set_parent_approval(tx);
+        }
     }
 
     /// Replace the shared config with `new` and rebuild access-control

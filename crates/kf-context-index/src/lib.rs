@@ -968,7 +968,7 @@ impl ContextIndex {
     fn is_ignored_dir(name: &std::ffi::OsStr) -> bool {
         matches!(
             name.to_str(),
-            Some("target" | ".git" | "node_modules" | ".venv" | "venv" | "dist" | "build")
+            Some("target" | ".git" | "node_modules" | ".venv" | "venv" | "dist" | "build" | ".claude" | ".opencode")
         )
     }
 
@@ -1095,10 +1095,20 @@ impl ContextIndex {
     /// Build a `RetrievalResult` for a single symbol (shared by the
     /// graph-walk and embedding paths).
     fn to_retrieval_result(&self, sym: &Symbol) -> RetrievalResult {
+        // Only edges that RESOLVED to this symbol's file count as
+        // importers. Unresolved edges (resolved_file: None — external /
+        // stdlib imports) belong to no symbol; the old
+        // `is_none_or(rf == sym.file)` filter smeared every unresolved
+        // edge in the index into every result, which on a large repo
+        // produced multi-MB system prompts (7MB / >1M tokens observed).
+        // ponytail: module-level attribution (file, not symbol); a
+        // symbol-level edge model is the upgrade path.
+        let mut seen_files = std::collections::HashSet::new();
         let imported_by = self
             .edges
             .iter()
-            .filter(|e| e.resolved_file.as_ref().is_none_or(|rf| rf == &sym.file))
+            .filter(|e| e.resolved_file.as_ref() == Some(&sym.file))
+            .filter(|e| seen_files.insert(e.source_file.clone()))
             .map(|e| e.source_file.clone())
             .collect();
         let called_by = self

@@ -438,17 +438,26 @@ impl PromptBuilder {
                         ));
                         if !result.imported_by.is_empty() {
                             content.push_str(" (imported by: ");
-                            for (i, imp) in result.imported_by.iter().enumerate() {
+                            // ponytail: cap fan-out at 10 — prompt-size
+                            // ceiling; any index pathology must not be
+                            // able to blow the system prompt to MBs.
+                            for (i, imp) in result.imported_by.iter().take(10).enumerate() {
                                 if i > 0 {
                                     content.push_str(", ");
                                 }
                                 content.push_str(&imp.display().to_string());
                             }
+                            if result.imported_by.len() > 10 {
+                                content.push_str(&format!(
+                                    ", +{} more",
+                                    result.imported_by.len() - 10
+                                ));
+                            }
                             content.push(')');
                         }
                         if !result.called_by.is_empty() {
                             content.push_str(" (called by: ");
-                            for (i, cs) in result.called_by.iter().enumerate() {
+                            for (i, cs) in result.called_by.iter().take(10).enumerate() {
                                 if i > 0 {
                                     content.push_str(", ");
                                 }
@@ -457,6 +466,12 @@ impl PromptBuilder {
                                     cs.caller_name,
                                     cs.caller_file.display(),
                                     cs.line
+                                ));
+                            }
+                            if result.called_by.len() > 10 {
+                                content.push_str(&format!(
+                                    ", +{} more",
+                                    result.called_by.len() - 10
                                 ));
                             }
                             content.push(')');

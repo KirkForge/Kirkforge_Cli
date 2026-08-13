@@ -37,3 +37,6 @@ build_rs_cov.profraw
 # Covers .worktrees/ and its locks subdir (.worktrees/locks/) intentionally.
 .worktrees/
 .vix/
+
+# Local context-index cache (ADR-037 Phase 4)
+.kf-code/

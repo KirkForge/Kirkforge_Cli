@@ -768,6 +768,66 @@ mod tests {
         assert_eq!(bus.verdicts()[0].message, "first run");
     }
 
+    // ── R5.4 — bus resilience to a panicking verifier ─────────────────
+    //
+    // `VerifierBus::run` wraps each verifier in `catch_unwind` so a buggy
+    // or hostile plugin verifier cannot unwind the executor mid-turn. The
+    // panic must surface as a `Severity::Warning` verdict naming the
+    // verifier, and sibling verifiers must still contribute their findings
+    // (proving the bus keeps running after the panic).
+
+    struct PanickingVerifier {
+        name: String,
+    }
+    impl BusVerifier for PanickingVerifier {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn verify(&self, _ctx: &VerifyContext) -> Vec<VerdictEntry> {
+            panic!("intentional verifier panic for R5.4");
+        }
+    }
+
+    #[test]
+    fn verifier_bus_survives_panicking_verifier_and_keeps_siblings() {
+        let mut bus = VerifierBus::new();
+        bus.register(Box::new(PanickingVerifier {
+            name: "boom".into(),
+        }));
+        bus.register(Box::new(StubVerifier {
+            name: "sibling".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Lint,
+                severity: Severity::Error,
+                message: "sibling finding".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+
+        // Must not panic.
+        bus.run(&make_verify_ctx());
+
+        // The panicking verifier contributes a "verifier panicked" warning.
+        assert!(
+            bus.verdicts()
+                .iter()
+                .any(|v| v.severity == Severity::Warning
+                    && v.message.contains("verifier panicked")
+                    && v.message.contains("intentional verifier panic")),
+            "panicking verifier should surface a warning verdict, got: {:?}",
+            bus.verdicts()
+        );
+        // The sibling verifier's finding survives the panic.
+        assert!(
+            bus.verdicts()
+                .iter()
+                .any(|v| v.message == "sibling finding"),
+            "sibling verdict must survive the panic"
+        );
+        assert!(bus.has_errors(), "sibling's Error verdict must be counted");
+    }
+
     #[test]
     fn parse_ndjson_contract_is_retired() {
         // WO 29.2: the NDJSON wire format + NdjsonVerdict/parse_severity/

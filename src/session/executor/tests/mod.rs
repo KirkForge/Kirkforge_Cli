@@ -7,6 +7,7 @@
 
 mod approval;
 mod common;
+mod coverage_gaps;
 mod dispatch;
 mod loop_;
 mod scout;

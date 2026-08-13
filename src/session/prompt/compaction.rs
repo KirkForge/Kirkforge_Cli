@@ -758,4 +758,66 @@ mod tests {
         assert!(s.contains("Failed to auto-fix:"));
         assert!(!s.contains("Auto-fixed:"));
     }
+
+    // ── R3.4 — tool-call / tool-result pairing survives compaction ──────
+    //
+    // After naive compaction, every tool-result message in the middle region
+    // is stubbed but KEEPS its `tool_call_id` and `tool_name` (so the TUI
+    // header still renders). The structural invariant — every Tool message
+    // references a `tool_call_id` that some Assistant message emitted — must
+    // hold in the compacted output. Breaking it would orphan tool results
+    // and confuse the next model turn.
+
+    #[test]
+    fn slice_keeps_tool_call_tool_result_pairs_intact() {
+        // 1 system + 1 assistant(tool_call) + 1 tool_result + 8-message tail.
+        // The tool_call/result pair lands in the middle (compacted region).
+        let mut msgs = vec![system("anchor")];
+        msgs.push(assistant_with_tool_call(
+            "I'll run it",
+            "bash",
+            "call_pair_1",
+        ));
+        msgs.push(tool_result("big output here", "call_pair_1", "bash"));
+        for i in 0..DEFAULT_PRESERVE_RECENT {
+            msgs.push(user(&format!("q{i}")));
+            msgs.push(assistant(&format!("a{i}")));
+        }
+
+        let r = compact(&msgs, DEFAULT_PRESERVE_RECENT);
+
+        // Every Tool-role message must still carry a non-empty tool_call_id
+        // matching an id emitted on some Assistant message's tool_calls.
+        let assistant_call_ids: Vec<String> = r
+            .new_messages
+            .iter()
+            .filter(|m| matches!(m.role, Role::Assistant))
+            .flat_map(|m| m.tool_calls.clone().unwrap_or_default())
+            .map(|tc| tc.id)
+            .collect();
+        let tool_results = r
+            .new_messages
+            .iter()
+            .filter(|m| matches!(m.role, Role::Tool))
+            .collect::<Vec<_>>();
+        assert!(
+            !tool_results.is_empty(),
+            "compaction must keep the tool-result slot (stubbed), not drop it"
+        );
+        for tr in &tool_results {
+            let id = tr
+                .tool_call_id
+                .as_ref()
+                .expect("tool result must retain tool_call_id after compaction");
+            assert!(
+                assistant_call_ids.iter().any(|a| a == id),
+                "tool result id {id} must match an assistant tool_call id; \
+                 pairing broken after compaction"
+            );
+            assert!(
+                tr.tool_name.is_some(),
+                "tool_name must survive compaction for TUI rendering"
+            );
+        }
+    }
 }

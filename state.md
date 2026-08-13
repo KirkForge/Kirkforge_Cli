@@ -6,6 +6,41 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
+## Session 2026-08-13 (late) — WO 30.0.5: startup hang + prompt bomb + bash EINVAL (dogfood, shipped on `dev`)
+
+Dogfooding `kf-code run` in KirkForge-PicoSeries-picosentry surfaced three
+bugs. **Full write-up:
+`docs/workorders/30.0.5-tui-startup-hang-context-index.md`.** Shipped on
+`dev`: `f842591` (Bugs 1+2), `10162f8` (Bug 3). Binary reinstalled at
+`~/.local/bin/kf-code`, e2e-verified.
+
+- **Bug 1 — startup "hang":** `is_ignored_dir` didn't exclude
+  `.claude`/`.opencode`; pre-TUI index parsed 5 duplicate agent worktrees
+  (800 MB, 26.5k files) silently. Fix: ignore list (1 line). Extends WO 30.5.
+- **Bug 2 — 7.1 MB system prompt:** `imported_by` filter `is_none_or`
+  smeared every unresolved import edge into every retrieved symbol
+  (10 lines × 649 KB) → cloud 400, 1,076,589 tokens over. Fix:
+  resolved-edges-only + dedup; 10-entry `+N more` render cap in
+  `prompt/mod.rs`.
+- **Bug 3 — bash EINVAL without workdir:** landlock `add_path` passed
+  non-NUL-terminated `as_bytes().as_ptr()` to `libc::open`; default
+  workdir `"."` opened `".<heap garbage>"` → every workdir-less bash call
+  died with `os error 22` → 3 identical failures tripped doom-loop
+  breaker → plan mode → "broke completely". Fix: `CString`s precomputed
+  in `resolve_paths`; `SYSTEM_READ_DIRS` as `c"..."` literals. Likely the
+  WO 27.2/28.6 e2e spawn-failure class finally root-caused.
+- Gates: kf-context-index 59/59, prompt 9/9, landlock 6/6, release
+  builds PASS, e2e bash-without-workdir + full turn PASS.
+- Env: own-code worktree ff'd off non-compiling `6e2e0d4`;
+  `ollama_host`/`default_model` set in config.toml; 3 concurrent
+  daemons killed (2 stale debug builds — suspect in config wipe +
+  dropped approvals).
+- **Pending:** approval-drop bug ("responder dropped without a user
+  decision", 4× in TUI, unverified — needs RUST_LOG=debug repro);
+  config-rewrite-on-failed-run; `KF_CODE_HOST` env override ignored.
+- NOTE: my earlier state.md/lessons.md entries for 30.0.5 were lost to a
+  concurrent worker's branch reset — this entry replaces them.
+
 ## Session 2026-08-13 — WO 30.9: plan mode no longer traps `--non-interactive` (branch `wo30fix2`)
 
 The doom-loop circuit breaker (WO 23.8) auto-switches to plan mode, but

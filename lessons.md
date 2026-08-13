@@ -1,5 +1,52 @@
 # lessons.md — WO 27.2 e2e hang fix session (2026-08-12)
 
+## Session 2026-08-13 (late) — WO 30.0.5 dogfood: three bugs, one session
+
+### What I learned about this codebase
+- **A "hung" kf-code is usually grinding, not dead.** The pre-TUI
+  context-index build emits zero output at default `warn` level;
+  `strace -f -e trace=openat` on the stuck process identified the
+  tight `.claude/worktrees/` loop in one shot. Check what it's
+  *opening*, not what it's waiting on.
+- **`is_none_or` in a filter predicate is a smear bug waiting to
+  happen.** `imported_by` matched "resolved_file is None OR equals
+  target", attaching every unresolved edge to EVERY symbol. Fan-out
+  attribution must be *positive* (`== Some(target)`), never "unknown
+  counts as match".
+- **Fan-out rendered into a prompt needs a hard cap at the render
+  site.** Data-side fix bounds the current pathology; the 10-entry
+  `+N more` cap bounds all future ones. Both layers, always.
+- **`as_bytes().as_ptr()` passed to libc is missing-NUL bug bait.**
+  `libc::open` reads until NUL; `OsStr::as_bytes()` has none. Short
+  paths (`"."` — the default bash workdir) hit heap garbage
+  deterministically (`openat(".\33\217M\337{")` in strace); long paths
+  survived by luck (next heap byte happened to be 0). Rule: every path
+  crossing into a pre_exec/FFI boundary is a `CString`, built in the
+  parent. `c"..."` literals for static lists (rust ≥1.77).
+- **"Broke completely in the TUI" was three stacked failures:**
+  approval-drop ×4 → bash EINVAL ×3 → doom-loop breaker (max_hits=1)
+  → auto plan mode → everything blocked. The doom breaker is a good
+  tripwire but a terrible UX — it fires on the *symptom* (3 identical
+  tool errors) and hides the cause.
+- **Diagnosing model 400s needs the actual payload.** A 30-line Python
+  logging proxy on `ollama_host` captured the 7.1 MB request and the
+  cloud's `prompt too long` error in one shot. `KF_CODE_HOST` env
+  override did NOT redirect (still hit :11434) — flip `ollama_host` in
+  config.toml instead.
+- **`ollama_host`/`default_model` empty-by-default is deliberate**
+  (test-pinned, `session/config/mod.rs:1050`). Empty host surfaces as
+  reqwest's cryptic `builder error: relative URL without a base`.
+- **Stale daemons from debug builds linger and misbehave** (suspected
+  config wipe + dropped approvals). `ps aux | grep kf-code` before
+  blaming the code. Also: an early-failure run can rewrite config.toml
+  to defaults — unverified, candidate workorder.
+- **Concurrent workers clobber uncommitted docs edits** — commit
+  state.md/lessons.md promptly in shared worktrees, or lose them (lost
+  one 30.0.5 entry to a branch reset this session).
+- Release builds: 13-20 min (`opt-level=z`, LTO, codegen-units=1).
+  `cp` to `~/.local/bin` fails with "Text file busy" while a daemon
+  holds the binary — kill it first.
+
 ## Session 2026-08-13 — WO 30.9 plan-mode-traps-non-interactive (worktree `wo30fix2`)
 
 ### What I learned about this codebase

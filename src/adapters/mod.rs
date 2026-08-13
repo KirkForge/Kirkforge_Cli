@@ -22,15 +22,17 @@ use std::future::Future;
 /// and MCP HTTP transports.
 pub(crate) const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
-// ponytail: 90s idle ceiling catches wedged HTTP body streams. The
+// ponytail: 180s idle ceiling catches wedged HTTP body streams. Was 90s
+// but that's too aggressive for cloud models (GLM 5.1 cloud, Claude, etc.)
+// which have higher inter-token latency and longer thinking pauses. The
 // reqwest `.timeout(120s)` does not reliably bound the streaming-body
 // phase, so without this a server that opens the connection and never
-// sends EOF hangs the agent loop forever (the e2e stdin-piping hang
-// was this bug). 90s is well above any realistic silence — Ollama
-// cold-start TTFT is typically <60s, established streams chunk every
-// <1s — but turns a true hang into a clean StreamEvent::Error.
-// Upgrade path: per-adapter configurable idle timeout.
-pub(crate) const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+// sends EOF hangs the agent loop forever. 180s is well above any
+// realistic silence — local Ollama cold-start TTFT is <60s, cloud models
+// may pause 30-60s during thinking — but turns a true hang into a clean
+// StreamEvent::Error. Upgrade path: per-adapter configurable idle timeout
+// from config.model.request_timeout_secs.
+pub(crate) const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// Build `ModelInfo` for any Anthropic-family model (first-party, Bedrock,
 /// or Vertex). `image_prefix` is the model-id prefix that signals vision

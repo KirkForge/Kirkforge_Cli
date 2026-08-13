@@ -721,9 +721,6 @@ mod tests {
             parse_anthropic_stream(tx, chunks(events)).await;
         });
         let events = drain(rx, 64).await;
-        for (idx, ev) in events.iter().enumerate() {
-            eprintln!("event[{idx}]: {ev:?}");
-        }
         let thinking: Vec<&str> = events
             .iter()
             .filter_map(|e| match e {

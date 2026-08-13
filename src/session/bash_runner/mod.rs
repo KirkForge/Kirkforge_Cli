@@ -203,7 +203,7 @@ pub(crate) fn setup_rlimits(
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
-pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig, _landlock_paths: Option<&()>) {
+pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig, _landlock_paths: Option<()>) {
     use std::os::unix::process::CommandExt;
 
     let cpu_secs = cfg.cpu_limit_secs;
@@ -240,7 +240,7 @@ pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig, _landlock_pa
 }
 
 #[cfg(not(unix))]
-pub(crate) fn setup_rlimits(_cmd: &mut Command, cfg: &SandboxConfig, _landlock_paths: Option<&()>) {
+pub(crate) fn setup_rlimits(_cmd: &mut Command, cfg: &SandboxConfig, _landlock_paths: Option<()>) {
     if cfg.harden || cfg.no_network {
         use std::sync::OnceLock;
         static WARNED: OnceLock<()> = OnceLock::new();

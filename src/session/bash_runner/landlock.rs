@@ -239,11 +239,23 @@ pub(crate) fn apply_landlock(paths: &LandlockPaths) -> Result<(), String> {
         }
     }
 
-    // restrict_self — fatal if this fails
+    // restrict_self — fail-closed on real errors, but SKIP on EPERM (missing
+    // CAP_SYS_ADMIN — common in CI containers, Docker without --cap-add, or
+    // unprivileged namespaces). Distinguishing "no caps" from "real error"
+    // prevents the sandbox from locking users out of environments where
+    // landlock is available but not granted.
     unsafe {
         if !landlock_restrict(ruleset_fd) {
+            let err = std::io::Error::last_os_error();
             libc::close(ruleset_fd);
-            return Err("landlock: restrict_self failed".to_string());
+            if err.raw_os_error() == Some(libc::EPERM) {
+                eprintln!(
+                    "landlock: restrict_self EPERM — no CAP_SYS_ADMIN in this \
+                     environment; continuing WITHOUT filesystem confinement"
+                );
+                return Ok(());
+            }
+            return Err(format!("landlock: restrict_self failed: {err}"));
         }
         libc::close(ruleset_fd);
     }

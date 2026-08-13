@@ -6,6 +6,62 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
+## Session 2026-08-13 — Comprehensive auto_approve audit + fix (branch `dev`, main repo)
+
+The recurring `auto_approve` bug class (WO 12 → 24 → 27 → 30) was a
+defence-in-depth "safety downgrade" in `pre_run.rs` that forced
+destructive non-read-only `bash` to `Ask` *even when* `auto_approve =
+true`, silently defeating the operator opt-in for the most common
+destructive operation. Full audit of every approval endpoint + fixes:
+
+- **`src/session/executor/pre_run.rs`** — removed the bash-specific
+  `Ask` downgrade. The evaluator is now the single gate: when
+  `auto_approve = true`, the default action is `Allow` for ALL
+  destructive tools (incl. non-read-only bash). Deny rules still win
+  (handled by `evaluate`); only the default changed. One branch
+  collapsed.
+- **`src/session/mcp_client/mod.rs`** — MCP `sampling/createMessage`
+  now honors `security.auto_approve` in addition to
+  `tools.allow_sampling_unattended`. A global opt-in covers
+  server-initiated sampling too.
+- **`src/main/line_mode.rs`** — fixed a RED test that slipped the WO 31
+  gate. `non_interactive_approval_handler_denies_all_requests` passed
+  `auto_approve=true` (sig fixed in `958e4f2`) but still asserted
+  `DeniedWithReason`. The WO 31 worker's gate was `cargo test --lib` —
+  the binary-crate test was never run, so the RED slipped in (confirmed
+  RED: `panicked ... expected a reasoned denial, got Approved`).
+  Renamed + split into `..._approves_when_auto_approve` and
+  `..._denies_when_auto_approve_false`.
+- **`src/session/executor/tests/approval/auto.rs`** — flipped
+  `test_auto_approve_does_not_skip_approval_for_non_read_only_bash`
+  (which asserted the buggy behaviour) to
+  `test_auto_approve_skips_approval_for_non_read_only_bash` (asserts
+  NO approval request is sent under `auto_approve=true`).
+- **New test:** `test_sampling_auto_approved_when_auto_approve_set`
+  in `mcp_client/mod.rs` — regression guard for the sampling fix.
+
+### Endpoints audited (verdict)
+| Endpoint | Verdict |
+|---|---|
+| `shared/permission.rs::evaluate()` | OK — default-action design, not auto_approve-aware by design |
+| `shared/config/security.rs` field + `Default` | OK — `false` default |
+| `session/config/mod.rs` TOML parse (nested + legacy) | OK |
+| `session/config/env_overrides.rs` `KF_CODE_AUTO_APPROVE` | OK |
+| `main/run_session.rs` CLI `--auto-approve` | OK |
+| `main/line_mode.rs` non-interactive handler impl | OK |
+| `main/line_mode.rs` interactive handler | OK — only reached if evaluator returns Ask |
+| `session/task_spawner.rs` subagent handler | OK — parent-forward else auto_approve gate |
+| `session/executor/pre_run.rs` default_action | **BUG → FIXED** |
+| `session/executor/sandbox.rs` | N/A — FS path guard |
+| `tools/bash.rs`, `session/plugin_tools/wrapper.rs` | N/A — rely on executor |
+| `session/mcp_client/mod.rs` sampling | **BUG → FIXED** |
+| `tui/commands/persona.rs` persona fork | OK — always-approve is intentional (isolated fork) |
+| `tui/mod.rs` TUI approval prompt | OK — never reached under auto_approve after fix |
+| `jobs/runner.rs` scheduled bash | N/A — separate `scheduled_bash_auto_approve` subsystem |
+
+### Gate
+`cargo check -p kf-code --lib --tests` ✓ · `cargo clippy -p kf-code --lib --tests -- -D warnings` ✓ · `cargo fmt --check` ✓ · `permission::` 41 passed · `session::executor::tests::approval::auto::` key tests passed (incl. flipped `..._skips_approval...`) · `session::mcp_client::tests::test_sampling` 9 passed (incl. new `..._when_auto_approve_set`) · `kf-code --bin kf-code non_interactive_approval_handler` 2 passed (previously RED). HEAD pre-push: see commit.
+
 ## Session 2026-08-13 — WO 31.1 + 31.4 Python verification loop (branch `wo31`, worktree `.worktrees/wo31`)
 
 Multi-language verification loop — Python half. The verification bus previously

@@ -1,5 +1,56 @@
 # lessons.md — WO 27.2 e2e hang fix session (2026-08-12)
 
+## Session 2026-08-13 — Comprehensive auto_approve audit (main repo)
+
+### What I learned about this codebase
+- **The recurring `auto_approve` bug class is a *defence-in-depth
+  downgrade* in `pre_run.rs`**, not a missing check. The "safety
+  downgrade" (destructive non-read-only bash forced to `Ask` even when
+  `auto_approve=true`) was added *intentionally* — there's even a test
+  asserting it (`test_auto_approve_does_not_skip_approval_for_non_read_only_bash`).
+  So the bug survived across WO 12/24/27/30 because each fix added the
+  *flag* to a new endpoint without removing the *downgrade* that
+  defeated it. The single-gate principle (`evaluate()` is the ONLY
+  decision point) is the real fix: if it returns `Allow`, no request
+  reaches any handler.
+- **The approval flow is: tool call → `pre_run_verdict` (calls
+  `evaluate`) → `run_approval_flow` (only if `Ask`) → handler**. The
+  handlers (non-interactive, interactive line-mode, TUI, subagent,
+  persona-fork) are *consequence sinks*, not gates. Fixing the
+  evaluator fixes all of them at once. The handlers are defence-in-depth
+  nets and should approve when their local `auto_approve` is true (the
+  non-interactive handler already does; the test was wrong, not the impl).
+- **Binary-crate tests (`src/main/*`) are NOT run by `cargo test --lib`.**
+  The WO 31 worker's gate was `cargo test --lib -p kf-code verifier::`,
+  which silently skipped the RED `line_mode::tests::non_...` test. The
+  full gate must include `cargo test -p kf-code --bin kf-code` for any
+  change that touches `src/main/`. **Lesson: when a change touches the
+  binary root, add `--bin kf-code` to the local gate.** The slipped RED
+  was caught here only because the audit explicitly ran the binary test.
+- **`cargo test --lib -p kf-code session::executor::` is genuinely
+  >15min** (the lessons.md WO31 note understated it). The compile is
+  ~6min, the run is slow due to `wiremock_integration` + `loop_` tests.
+  Workaround: run specific test *names* via `cargo test --lib -p kf-code
+  -- <name1> <name2>` — the test binary is already built, so subsequent
+  name-filtered runs are 1-3s each.
+- **MCP sampling has its OWN approval flag** (`tools.allow_sampling_unattended`),
+  separate from `security.auto_approve`. Both now bypass the bus; the
+  global flag is the broader opt-in. Don't remove the sampling-specific
+  one — it lets operators auto-approve sampling without globally
+  auto-approving tools.
+- **`jobs/runner.rs` scheduled bash** uses yet another flag
+  (`tools.scheduled_bash_auto_approve`). It's a separate subsystem
+  (cron-like scheduled jobs, not the interactive/subagent approval
+  system) and correctly out of scope for this audit.
+
+### What I'd do differently
+- When auditing a "recurring bug class", trace the FULL path end-to-end
+  *before* reading individual fixes. I almost missed that the
+  `pre_run.rs` downgrade was the root cause because each endpoint *looked*
+  correct in isolation — the bug was the interaction (evaluator forced
+  `Ask` → handler still approved/denied based on its own logic). The
+  single-gate principle would have pointed at `pre_run.rs` immediately.
+
 ## Session 2026-08-13 — WO 31.1 + 31.4 Python verification loop (wo31 worktree)
 
 ### What I learned about this codebase

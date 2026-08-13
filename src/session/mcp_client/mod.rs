@@ -689,11 +689,15 @@ impl McpClient {
             );
         };
 
-        let allowed_unattended = ctx.config.tools.allow_sampling_unattended;
+        // `tools.allow_sampling_unattended` is the sampling-specific opt-in.
+        // `security.auto_approve` is the global operator opt-in — if set,
+        // ALL approvals (tools AND server-initiated sampling) are skipped.
+        let allowed_unattended =
+            ctx.config.tools.allow_sampling_unattended || ctx.config.security.auto_approve;
         let approved = if allowed_unattended {
             tracing::info!(
                 server = %server_name,
-                "sampling/createMessage auto-approved (tools.allow_sampling_unattended)"
+                "sampling/createMessage auto-approved (allow_sampling_unattended or auto_approve)"
             );
             true
         } else {
@@ -1915,6 +1919,44 @@ mod tests {
         assert!(
             !err_msg.contains("denied"),
             "unexpected denial message: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sampling_auto_approved_when_auto_approve_set() {
+        // `security.auto_approve = true` is the global operator opt-in and
+        // must cover server-initiated sampling too — not just tool calls.
+        // This is the regression guard for the WO 12/24/27/30 bug class
+        // where auto_approve was inconsistently honored across endpoints.
+        let (approval_tx, mut approval_rx) =
+            tokio::sync::mpsc::unbounded_channel::<ApprovalRequest>();
+        let mut cfg = crate::shared::Config::default();
+        cfg.security.auto_approve = true;
+        // allow_sampling_unattended stays false — the global flag must be enough.
+        let ctx = SamplingContext {
+            approval_tx,
+            config: std::sync::Arc::new(cfg),
+        };
+        let sampling = Arc::new(tokio::sync::RwLock::new(Some(ctx)));
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "sampling/createMessage",
+            "params": { "messages": [{ "role": "user", "content": "hi" }] }
+        });
+        let response = McpClient::handle_sampling_request(&sampling, &request, "test").await;
+        assert!(
+            approval_rx.try_recv().is_err(),
+            "auto_approve=true must not route sampling through the approval bus"
+        );
+        let err_msg = response
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("");
+        assert!(
+            !err_msg.contains("denied"),
+            "auto_approve must not produce a denial message: {err_msg}"
         );
     }
 

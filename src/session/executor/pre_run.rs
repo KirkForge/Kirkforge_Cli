@@ -97,14 +97,15 @@ impl Executor {
                 .map(is_read_only_bash)
                 .unwrap_or(false);
 
-        let default_action = if !is_destructive || is_read_only_bash_call {
+        // `auto_approve = true` is an operator opt-in: ALL destructive
+        // tools (including non-read-only bash) proceed without asking.
+        // The bash-specific downgrade that used to live here was the
+        // recurring bug across WO 12/24/27/30 — it silently defeated the
+        // opt-in for the most common destructive operation. Deny rules
+        // still win (handled by `evaluate` below); only the *default*
+        // changes.
+        let default_action = if !is_destructive || is_read_only_bash_call || auto_approve {
             PermissionAction::Allow
-        } else if auto_approve {
-            if tc.name == "bash" {
-                PermissionAction::Ask
-            } else {
-                PermissionAction::Allow
-            }
         } else {
             PermissionAction::Ask
         };

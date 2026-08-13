@@ -714,13 +714,38 @@ mod tests {
         assert!(next_prompt(&mut reader, &mut buf).unwrap().is_none());
     }
 
-    /// The non-interactive approval handler must deny every request,
-    /// even when global auto_approve is true. Otherwise it would bypass
-    /// the executor's safety downgrade for non-read-only bash.
+    /// When `auto_approve = true`, the non-interactive handler MUST
+    /// approve every request — the operator opted in. The evaluator
+    /// (`pre_run_verdict`) is the single gate and short-circuits before
+    /// any request reaches this handler; this test guards the handler as
+    /// a defence-in-depth net so a future evaluator regression cannot
+    /// silently turn a `true` opt-in into a denial.
     #[tokio::test]
-    async fn non_interactive_approval_handler_denies_all_requests() {
+    async fn non_interactive_approval_handler_approves_when_auto_approve() {
         let (tx, rx) = mpsc::unbounded_channel();
         spawn_non_interactive_approval_handler(rx, true);
+
+        let (oneshot_tx, oneshot_rx) = tokio::sync::oneshot::channel();
+        tx.send(session::executor::ApprovalRequest {
+            tool_name: "bash".into(),
+            args: serde_json::json!({"command": "rm -rf /"}),
+            response: session::executor::ApprovalResponder::new(oneshot_tx),
+        })
+        .unwrap();
+
+        let resp = oneshot_rx.await.expect("handler sent a response");
+        assert!(
+            matches!(resp, session::executor::ApprovalResponse::Approved),
+            "auto_approve=true must approve; got {resp:?}"
+        );
+    }
+
+    /// When `auto_approve = false` (default), the non-interactive handler
+    /// denies every destructive request — no human is in the loop.
+    #[tokio::test]
+    async fn non_interactive_approval_handler_denies_when_auto_approve_false() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        spawn_non_interactive_approval_handler(rx, false);
 
         let (oneshot_tx, oneshot_rx) = tokio::sync::oneshot::channel();
         tx.send(session::executor::ApprovalRequest {
@@ -736,7 +761,7 @@ mod tests {
                 resp,
                 session::executor::ApprovalResponse::DeniedWithReason(_)
             ),
-            "expected a reasoned denial, got {resp:?}"
+            "auto_approve=false must deny in non-interactive mode; got {resp:?}"
         );
     }
 

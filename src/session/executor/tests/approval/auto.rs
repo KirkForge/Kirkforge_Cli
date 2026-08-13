@@ -258,7 +258,13 @@ async fn test_always_approve_dedups_repeated_calls() {
 }
 
 #[tokio::test]
-async fn test_auto_approve_does_not_skip_approval_for_non_read_only_bash() {
+async fn test_auto_approve_skips_approval_for_non_read_only_bash() {
+    // `auto_approve = true` is an operator opt-in: ALL destructive tools
+    // (including non-read-only bash) must be approved WITHOUT asking.
+    // The evaluator is the single gate; if it returns Allow, no request
+    // reaches any handler. This is the regression guard for the
+    // recurring WO 12/24/27/30 bug class where destructive bash was
+    // silently downgraded back to Ask under auto_approve.
     let captured = Arc::new(Mutex::new(None));
     let tool = MockTool {
         def: ToolDef {
@@ -288,24 +294,34 @@ async fn test_auto_approve_does_not_skip_approval_for_non_read_only_bash() {
     );
 
     let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
-    let approval_handle = tokio::spawn(async move {
-        let req: ApprovalRequest = approval_rx.recv().await.expect("approval request");
-        assert_eq!(req.tool_name, "bash");
-        let _ = req.response.send(ApprovalResponse::Approved);
-    });
 
     let mut exe =
         make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
-    let _events = exe
+    let events = exe
         .run_turn_collecting("build", &approval_tx, never_cancelled())
         .await
         .unwrap();
-    approval_handle.await.unwrap();
+    drop(approval_tx);
+
+    // No approval request should have been sent — the evaluator
+    // short-circuits to Allow under auto_approve.
+    tokio::task::yield_now().await;
+    assert!(
+        approval_rx.try_recv().is_err(),
+        "auto_approve=true must not send an approval request for destructive bash"
+    );
 
     assert!(
         captured.lock().unwrap().is_some(),
-        "Tool should have run after the user approved the non-read-only command"
+        "Tool should have run without approval under auto_approve"
     );
+    let ran = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, success, .. } if name == "bash" && *success
+        )
+    });
+    assert!(ran, "Expected bash result, got events: {events:?}");
 }
 
 #[tokio::test]

@@ -1,5 +1,45 @@
 # lessons.md — WO 27.2 e2e hang fix session (2026-08-12)
 
+## Session 2026-08-13 — WO 30.9 plan-mode-traps-non-interactive (worktree `wo30fix2`)
+
+### What I learned about this codebase
+- **`Executor` did NOT carry a `non_interactive` flag** — the flag lived only
+  at the CLI layer (`RunArgs.non_interactive`, `line_mode.rs` param). The
+  doom-loop breaker (`Executor::observe_tool_outcome`) and the plan-mode
+  enforcement (`pre_run.rs`) had no way to know the session was unattended, so
+  they couldn't special-case. Fix = plumb a `non_interactive: bool` field onto
+  `Executor` + a `set_non_interactive` setter, mirroring the existing
+  `set_plan_mode`/`set_system_override` setter pattern that `line_mode.rs`
+  already calls after construction. (`set_non_interactive` is a clean one-liner
+  setter — no constructor-param churn needed because `line_mode.rs` owns the
+  executor post-construction.)
+- **Two distinct surfaces guard plan mode**, both must be addressed for a hard
+  guarantee: (1) the *trigger* — doom-loop `AutoPlan` → `set_plan_mode(true)` in
+  `turn.rs` (two call sites, file-tool path + non-file-tool path); (2) the
+  *enforcement* — `pre_run.rs` `if self.plan_mode`. The lazy root-cause fix is
+  to downgrade `AutoPlan`→`WarnOnly` at the single resolution point
+  (`observe_tool_outcome` in `mod.rs`) so both turn.rs call sites do the right
+  thing, PLUS a belt-and-suspenders guard at the enforcement point
+  (`pre_run.rs`: `&& !self.non_interactive`) so writes are never blocked
+  regardless of how `plan_mode` got set.
+- **TUI path is always interactive** — `tui/mod.rs` builds its own executor and
+  never sets `non_interactive`, so it stays `false` (correct: TUI = interactive).
+  `bench.rs` also builds its own executor and stays `false` (out of scope).
+  Only `run_line_mode` wires the flag.
+- **TUI has a *separate* `DoomLoopAction` enum** (`tui/widgets/doom_banner.rs`:
+  Break/Plan/Continue — the interactive banner the user picks from) vs the
+  executor one (`session/executor/cost_tracking.rs`: AutoPlan/Halt/WarnOnly).
+  Don't confuse them; the fix only touches the cost_tracking one.
+
+### Gate-load gotcha (environment)
+- The machine was running **two concurrent cargo builds** (another agent's
+  `cargo test --workspace` + a `cargo build --release`) during this session.
+  `cargo check`/`clippy` each took ~7m50s; the broad `session::executor::`
+  test filter dragged in slow approval-flow tests and timed out at 40m under
+  load. Workaround: narrow test filters (`loop_::doom_loop`, `test_plan_mode`)
+  run in ~1-3s and cover exactly the two surfaces changed. When the box is
+  contended, prefer tight filters over the whole module.
+
 ## Session 2026-08-13 — Comprehensive auto_approve audit (main repo)
 
 ### What I learned about this codebase

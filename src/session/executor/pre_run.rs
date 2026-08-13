@@ -39,7 +39,10 @@ impl Executor {
         };
 
         // Plan-mode enforcement: only read-only discovery tools may run.
-        if self.plan_mode {
+        // Skipped entirely in non-interactive runs — plan mode is an
+        // interactive aid (exit via `/implement`) and enforcing it would
+        // brick a scripted run. (WO 30.9)
+        if self.plan_mode && !self.non_interactive {
             let allowed = match tc.name.as_str() {
                 "read_file" | "read_image" | "grep" | "glob" => true,
                 "bash_status" | "bash_cancel" => true,

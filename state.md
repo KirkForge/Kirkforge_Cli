@@ -6,6 +6,26 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
+## Session 2026-08-13 — WO 30.9: plan mode no longer traps `--non-interactive` (branch `wo30fix2`)
+
+The doom-loop circuit breaker (WO 23.8) auto-switches to plan mode, but
+`/implement` (the only exit) is interactive-only — so a scripted run hit
+"Plan mode blocked" on every write tool and bricked. Fix (worktree `wo30fix2`):
+
+- **`src/session/executor/mod.rs`** — `Executor` gains a `non_interactive: bool`
+  field + `set_non_interactive()` setter; `observe_tool_outcome` downgrades
+  `AutoPlan`→`WarnOnly` when non-interactive (the warning still logs; no trap).
+- **`src/session/executor/pre_run.rs`** — plan-mode block gated by
+  `self.plan_mode && !self.non_interactive` (belt-and-suspenders: writes never
+  blocked in `--non-interactive` regardless of how `plan_mode` got set).
+- **`src/main/line_mode.rs`** — calls `executor.set_non_interactive(non_interactive)`.
+- **New test:** `doom_loop_circuit_breaker_downgrades_to_warn_only_when_non_interactive`
+  in `tests/loop_.rs`. Existing doom-loop + plan-mode tests unchanged (all green).
+
+Gate: `cargo check` + `clippy -D warnings` + `fmt --check` green; doom-loop (4)
++ plan-mode (6) tests green. WO 30.9 row in `docs/workorders/30.0.0-wo30-overview.md`
+  → FIXED.
+
 ## Session 2026-08-13 — Comprehensive auto_approve audit + fix (branch `dev`, main repo)
 
 The recurring `auto_approve` bug class (WO 12 → 24 → 27 → 30) was a

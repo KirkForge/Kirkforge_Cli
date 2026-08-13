@@ -905,6 +905,33 @@ async fn doom_loop_circuit_breaker_default_action_is_auto_plan() {
 }
 
 #[tokio::test]
+async fn doom_loop_circuit_breaker_downgrades_to_warn_only_when_non_interactive() {
+    // WO 30.9: in --non-interactive runs there is no user to type
+    // `/implement`, so AutoPlan would brick the agent. The breaker must
+    // downgrade AutoPlan to WarnOnly (warning still logs, no trap).
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(vec![], make_info())),
+        vec![],
+        make_config(false),
+    )
+    .unwrap();
+    exe.set_non_interactive(true);
+    let (tx, _rx) = mpsc::channel::<TurnEvent>(64);
+    let err = ToolOutcome::Error {
+        message: "stuck".into(),
+    };
+    exe.observe_tool_outcome("bash", &err, &tx);
+    exe.observe_tool_outcome("bash", &err, &tx);
+    let outcome = exe.observe_tool_outcome("bash", &err, &tx);
+    let outcome = outcome.expect("doom-loop should still fire (downgraded, not suppressed)");
+    assert_eq!(
+        outcome.action,
+        cost_tracking::DoomLoopAction::WarnOnly,
+        "AutoPlan must downgrade to WarnOnly in non-interactive runs"
+    );
+}
+
+#[tokio::test]
 async fn doom_loop_circuit_breaker_disabled_when_zero() {
     let mut exe = make_executor(
         Box::new(MockAdapter::new(vec![], make_info())),

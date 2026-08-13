@@ -74,9 +74,10 @@ following targets and attaches the archives to a GitHub release:
    kf-code --version
    ```
    Expected output: the released version (e.g., `kf-code 0.2.0`).
- 3. Verify Windows artifacts exist on the release page and contain the
-   binary (`kf-code.exe`), the bundled `plugins/`, and the Node SDK under
-   `npm/kf-plugin/`.
+  3. Verify Windows artifacts exist on the release page and contain the
+    binary (`kf-code.exe`). The plugin SDK is now compiled-in Rust
+    (WO 29) — there is no longer a `plugins/` folder or `npm/kf-plugin/`
+    Node SDK in the release artifacts.
 4. If anything fails, delete the release and tag, fix `main`, and start over.
 
 ## Changelog enforcement in CI

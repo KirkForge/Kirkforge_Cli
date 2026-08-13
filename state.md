@@ -121,16 +121,18 @@ Knocked down the MEDIUM findings from the deep review (worktree `.worktrees/wo28
 | 26.9 | DONE (partial) | R1: top-10 slowest tests fixed/skipped; R3+R4: testdoctor parallel scan + caching |
 | 26.10 | NOT STARTED | provider hardening (mocks, Plugin3 shim, landlock default, memory dedup) |
 
-## Current state (refreshed 2026-08-13, branch `wo28h`)
+## Current state (refreshed 2026-08-13, HEAD `2bfc2fa`, branch `docs-sweep`)
 
-*The 2026-08-10 block below was stale (it predated the WO 27/28/29 merges). This refresh uses [`docs/workorders/30.0.0-wo30-overview.md`](docs/workorders/30.0.0-wo30-overview.md) — the living master index of unfinished work — as the source of truth.*
+*Source of truth: [`docs/workorders/30.0.0-wo30-overview.md`](docs/workorders/30.0.0-wo30-overview.md) — the living master index of unfinished work — reality-checked against HEAD.*
 
-- **WO 27 / 28 / 29 shipped.** The 2026-08-10 block listed WO 27 as "STARTED" and the version as 0.3.7-not-done; both were wrong. WO 27 (landlock default-on + plugin-trust + test-health + themes + mouse), WO 28.x (cycle cuts, turn.rs split 2087→1191 LOC, budget/TS cleanup), and WO 29.x (the `kf-routing` / `kf-rbac` / `kf-memory-store` / `kf-orchestrator` ports, Rust security emitter, EventBus + AuditLogger, delete of the `npm/kf-plugin/` TS tree) have all merged. See the WO 30 overview CLOSED table for per-item closing evidence.
-- **CI is green** (the 5th-ed CI-red debt is closed). The e2e stdin-piping hang that kept the `windows` job red is RESOLVED (`260e7d8`: 90s `STREAM_IDLE_TIMEOUT` across the 4 adapter parsers + `[adapter_routing] "e2e-" = "Ollama"`). The WO 29.7 merge-conflict markers in `Cargo.toml`/`Cargo.lock` are resolved.
-- **`main` fast-forward: still pending.** `origin/main` sits at `d848b37` (WO 27.2 CI fix); HEAD is several WO merges ahead. Needs an ff to current.
-- **Version: still `0.3.6`** (`Cargo.toml`). The old "0.3.7 NOT done" target was itself stale — WO 27/28/29 shipped without a bump. Next release number TBD (WO 30 overview, CI/ops table).
+- **WO 27 / 28 / 29 / 30 shipped.** WO 27 (landlock default-on + plugin-trust + test-health + themes + mouse); WO 28.x (cycle cuts, `turn.rs` split 2087→1191 LOC, coverage gate, bedrock/tripwire/computer_use-beta items); WO 29.x (the `kf-routing` / `kf-rbac` / `kf-memory-store` / `kf-orchestrator` ports — 4 new crates, 13 total — Rust security emitter, EventBus + AuditLogger, **delete of the `npm/kf-plugin/` TS tree** in WO 29.9); WO 30 (subagent worktree isolation + approval forwarding 30.1/30.6, TaskManager lifecycle 30.2, seccomp filter 30.4).
+- **OS isolation shipped.** Landlock FS confinement is default-on for Linux (WO 27.1, fail-closed, `--i-accept-unsandboxed` escape). Seccomp syscall-filter is opt-in behind the `seccomp` Cargo feature (WO 30.4, applied last in the bash `pre_exec` hook; default-OFF pending real-workload tuning).
+- **Subagent isolation shipped.** `coder` subagents get their own git worktree (WO 30.1) and destructive-tool approvals forward to the parent session's approval channel (WO 30.6).
+- **CI is green** (the 5th-ed CI-red debt is closed). The e2e stdin-piping hang that kept the `windows` job red is RESOLVED (`260e7d8`: 90s `STREAM_IDLE_TIMEOUT` + `[adapter_routing] "e2e-" = "Ollama"`). This docs-sweep run is gated on `scripts/check-artifact-consistency.sh` + `adr_xref_drift`.
+- **`main` fast-forward: still pending.** `origin/main` sits at `d848b37`; HEAD `2bfc2fa` is several WO merges ahead.
+- **Version: still `0.3.6`** (`Cargo.toml`). WO 27/28/29/30 shipped without a bump; next number TBD.
 - **Local install at `/home/henrik/own-code/kf-code`: not done** (carryover; not code debt).
-- **Where the remaining work lives:** `docs/workorders/30.0.0-wo30-overview.md` is now the master index. Headline open items: WO 28.6 (7 binary-spawn e2e → in-process), WO 28.7→28.9 (coverage gate + session 75%), WO 29.7 residuals (`ModelClient` prod impl + `ValidatorConfig` execution), WO 29.8 (health-server), plus the MEDIUM security hardening this session (`wo28h`) is knocking down.
+- **Where the remaining work lives:** `docs/workorders/30.0.0-wo30-overview.md`. Headline open items: WO 28.6 (7 binary-spawn e2e), WO 28.13 (Vertex mock + full Bedrock turn), WO 28.16 R4 (computer_use vision loop), WO 29.7 residuals (`ModelClient` prod impl + `ValidatorConfig` execution), WO 30.3 (parallel orchestration), WO 30.5 (context-index target/ filter), WO 30.7 (cross-tool benchmark).
 
 ### Pending / blocked
 - **PENDING:** fast-forward `main` to current HEAD; pick + bump the next version; push.

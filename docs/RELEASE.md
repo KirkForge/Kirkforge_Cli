@@ -70,7 +70,7 @@ following targets and attaches the archives to a GitHub release:
 1. Wait for the `Release` workflow to finish.
 2. Run the install-script smoke test on a clean Linux/macOS machine:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/KirkForge/KirkForge-Cli/main/scripts/install.sh | sh
+   curl -fsSL https://raw.githubusercontent.com/KirkForge/Kirkforge_Cli/main/scripts/install.sh | sh
    kf-code --version
    ```
    Expected output: the released version (e.g., `kf-code 0.2.0`).

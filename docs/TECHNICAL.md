@@ -28,14 +28,14 @@ synthesis with its own architectural contributions:
 
 ## Workspace layout
 
-The workspace has one binary crate (`kf-code`) and 12 satellite crates under
+The workspace has one binary crate (`kf-code`) and 13 satellite crates under
 `crates/`. The binary is the user-facing CLI; the satellites are libraries and
 standalone binaries.
 
 ```
 kf-code (root bin)          ← the CLI the user runs
 ├── src/                       ← agent core (session, tools, TUI, adapters, verifiers)
-├── crates/                    ← 12 satellite crates
+├── crates/                    ← 13 satellite crates
 │   ├── kf-plugin-sdk     ← plugin SDK: manifest types, trust tiers
 │   ├── kf-plugin-host  ← plugin runtime: registry, dispatch, signatures
 │   ├── kf-context-index← tree-sitter symbol/import/call-graph index
@@ -49,14 +49,12 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-memory-store ← routing-oriented memory store (MemoryStore facade + InMemory/File/SQLite adapters) — port of @kirkforge/memory-palace (WO 29.6)
 │   ├── kf-orchestrator ← orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of @kirkforge/orchestrator (WO 29.7)
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
-├── plugins/                   ← shell plugin manifests + tool/hook scripts
-│   └── kf-plugin/      ← SDK self-plugin (Node-backed verification tools)
 ├── benches/tasks/             ← 30 benchmark task definitions (TOML)
-└── docs/adr/                  ← 89 Architecture Decision Records
+└── docs/adr/                  ← 90 Architecture Decision Records
 ```
 
-The workspace has ~3,000 `#[test]` functions (~2,200 under `src/`,
-~772 under `crates/`). The `crates/` count is pinned by the
+The workspace has ~3,300 `#[test]` functions (~2,400 under `src/`,
+~860 under `crates/`). The `crates/` count is pinned by the
 `readme_drift` test (`crates/kf-budget-core/README.md` State table).
 
 ### Compiled-in vs satellite
@@ -72,11 +70,13 @@ The root `kf-code` binary directly depends on six crates:
 | `kf-lsp` | LSP client pool |
 | `kf-bench` | Benchmark task types, loader, verifier, report writers |
 
-The remaining four crates are **satellites**: they build as support
-libraries. When their feature flag is enabled, the core crate is linked
-directly into the `kf-code` binary as a compiled-in module (ADR-046–049).
-When the feature is off, the shell plugin dir loads as a fallback
-(ADR-050).
+The remaining seven crates are **satellites**: they build as support
+libraries. `kf-compress-core` and `kf-budget-core` compile in behind the
+`stratum` / `budget` features (ADR-046/047) and retain shell-plugin fallbacks
+for feature-off builds (ADR-050). `kf-routing`, `kf-rbac`, `kf-memory-store`,
+and `kf-orchestrator` are foundation libraries (WO 29.3–29.7 ports) with no
+shell fallback — they exist only as Rust. `kf-testdoctor` ships as the
+`kf-code doctor` CLI.
 
 ### Crate map
 
@@ -932,7 +932,7 @@ descriptions below are read as the *design*, not a live system.
 
 ### Bench CI loop (WO 10.9) — *currently disabled* (file: `bench-baseline.yml.disabled`)
 
-The bench CI loop has three jobs in `.github/workflows/bench-baseline.yml`
+The bench CI loop has three jobs in `.github/workflows/bench-baseline.yml.disabled`
 (all currently disabled; described as designed, not as running):
 
 1. **`bench-baseline`** (push to main): runs `bench run` with
@@ -1018,10 +1018,12 @@ The root `Cargo.toml` exposes these features:
   reach the API in a default build. The local headless-Chrome CDP
   `computer_use` tool (`src/tools/computer_use.rs`) is a separate capability
   and is unaffected.
-- `landlock` – no longer a Cargo feature (WO 27.1). The landlock module is
-  compiled unconditionally on Linux via `cfg(target_os = "linux")` and
-  applied by default in the bash `pre_exec` hook (fail-closed). The
-  `--features landlock` flag is a no-op kept only for backward compat.
+- `landlock` – no longer a Cargo feature (WO 27.1). There is no `landlock`
+  feature key in `[features]` at all; the landlock module is compiled
+  unconditionally on Linux via `cfg(target_os = "linux")` and applied by
+  default in the bash `pre_exec` hook (fail-closed). Operators escape via
+  `--i-accept-unsandboxed` on kernels where `restrict_self` errors;
+  `landlock_extra_paths` in config.toml extends the allow-list.
 - `seccomp` (non-default) — Linux seccomp-bpf syscall filter for bash
   subprocesses (WO 30.4). Confines the syscall surface to an allowlist;
   everything else fails with `EPERM` (graceful, not `SIGSYS`-kill). Applied

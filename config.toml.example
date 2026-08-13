@@ -62,33 +62,28 @@
 # task_concurrency_mode = "queue"
 
 # ---------------------------------------------------------------------------
-# Computer-use browser tool
+# Computer-use browser tool ([computer_use] table — SecurityConfig is flattened
+# into the top level, so the table is [computer_use], not [security.computer_use])
 # ---------------------------------------------------------------------------
 
-# When true, the `computer_use` tool is available to vision-capable models.
-# It launches a headless Chrome tab and lets the model navigate, click,
-# type, and take screenshots. Default: false.
-# computer_use_enabled = false
-
-# Path to a Chrome/Chromium binary. If empty the CLI tries a small set of
-# common binary names. Default: "".
-# chrome_path = ""
-
-# Extra command-line flags passed to Chrome on launch. Default: [] (none).
-# chrome_extra_flags = []
-
-# Width of the emulated browser viewport in pixels. Default: 1280.
-# chrome_viewport_width = 1280
-
-# Height of the emulated browser viewport in pixels. Default: 800.
-# chrome_viewport_height = 800
+# Headless Chrome configuration for the `computer_use` tool. The tool is
+# available only to vision-capable models when `enabled = true`.
+# [computer_use]
+# enabled = false
+# chrome_path = ""        # explicit Chrome/Chromium path; "" = auto-detect
+# headful = false         # launch a visible window (debugging)
+# width = 1280            # emulated viewport width
+# height = 800            # emulated viewport height
+# startup_timeout_secs = 30
+# wait_timeout_secs = 10
+# max_steps = 20          # cap on browser-session steps (infinite-loop guard)
 
 # Activate the Anthropic HOSTED computer_use beta (coordinate-vision model)
 # instead of the local headless-Chrome CDP tool. Requires building kf-code
 # with the `computer_use` Cargo feature (`--features computer_use`); without
-# it this flag is inert. When true, chrome_viewport_width/height are sent as
-# the hosted display dims. Default: false. See WO 28.16.
-# computer_use_hosted = false
+# it this flag is inert. When true, width/height are sent as the hosted
+# display dims. Default: false. See WO 28.16.
+# hosted = false
 
 # ---------------------------------------------------------------------------
 # Anthropic cloud routing
@@ -141,8 +136,10 @@
 # When `harden` is true and Docker is NOT enabled, the bash tool applies
 # RLIMIT_CPU / RLIMIT_AS / RLIMIT_FSIZE to the child shell in a pre_exec
 # hook (Unix only; Windows no-op with a one-shot warning). Ignored when
-# [security.docker] enabled is true. seccomp is future work.
-# [security.sandbox]
+# [docker] enabled is true. Seccomp (WO 30.4) is a separate opt-in Cargo
+# feature (`--features seccomp`), not a config field — it adds a syscall
+# allowlist filter in the same pre_exec hook, after landlock + rlimits.
+# [sandbox]
 # harden = false
 # cpu_limit_secs = 300       # SIGXCPU after this many CPU seconds
 # memory_limit_mb = 2048     # ENOMEM past this address space

@@ -9,24 +9,30 @@ use tokio::sync::mpsc;
 
 /// Spawn the approval responder used by non-interactive runs.
 ///
-/// Non-interactive mode has no human in the loop, so every request
-/// that reaches this channel is denied. The executor already auto-allows
-/// read-only discovery tools and benign bash; anything that still needs
-/// approval (non-read-only bash, explicit Deny rules, etc.) must be
-/// rejected rather than silently approved.
+/// When `auto_approve` is true (operator opted in), approve all requests.
+/// When false (default), deny destructive tools — no human is in the loop
+/// to review them.
 pub(super) fn spawn_non_interactive_approval_handler(
     mut approval_rx: mpsc::UnboundedReceiver<session::executor::ApprovalRequest>,
+    auto_approve: bool,
 ) {
     tokio::spawn(async move {
         while let Some(req) = approval_rx.recv().await {
-            tracing::warn!(
-                tool = %req.tool_name,
-                args = %req.args,
-                "non-interactive run denied approval for tool; use interactive mode or add a permission rule that explicitly allows this operation"
-            );
-            kf_code::send_or_warn!(req.response.send(session::executor::ApprovalResponse::DeniedWithReason(
-                "non-interactive mode cannot approve destructive tools; use interactive mode or add a permission rule".into(),
-            )), "approval response receiver dropped; response discarded");
+            if auto_approve {
+                kf_code::send_or_warn!(
+                    req.response.send(session::executor::ApprovalResponse::Approved),
+                    "approval response receiver dropped; response discarded"
+                );
+            } else {
+                tracing::warn!(
+                    tool = %req.tool_name,
+                    args = %req.args,
+                    "non-interactive run denied approval for tool; use interactive mode or add a permission rule that explicitly allows this operation"
+                );
+                kf_code::send_or_warn!(req.response.send(session::executor::ApprovalResponse::DeniedWithReason(
+                    "non-interactive mode cannot approve destructive tools; set auto_approve = true in config.toml or use interactive mode".into(),
+                )), "approval response receiver dropped; response discarded");
+            }
         }
     });
 }
@@ -99,7 +105,8 @@ pub(super) async fn run_line_mode(
     }
 
     if non_interactive {
-        spawn_non_interactive_approval_handler(approval_rx);
+        let auto_approve = kf_code::shared::read_shared_config(&config).security.auto_approve;
+        spawn_non_interactive_approval_handler(approval_rx, auto_approve);
     } else {
         spawn_line_mode_approval_handler(approval_rx, no_color);
     }

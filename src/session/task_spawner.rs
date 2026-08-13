@@ -30,6 +30,9 @@ pub struct InProcessTaskSpawner {
     ollama_host: String,
     undo_stack: Option<UndoStackRef>,
     supports_images: bool,
+    /// Optional parent approval channel — if set, subagent approval requests
+    /// are forwarded here so the parent's handler decides (WO 30.6).
+    parent_approval: std::sync::Arc<std::sync::Mutex<Option<mpsc::UnboundedSender<ApprovalRequest>>>>,
 }
 
 impl InProcessTaskSpawner {
@@ -46,6 +49,15 @@ impl InProcessTaskSpawner {
             ollama_host,
             undo_stack,
             supports_images,
+            parent_approval: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    /// Set the parent's approval channel so subagent requests are forwarded
+    /// to the parent's interactive handler (WO 30.6).
+    pub fn set_parent_approval(&self, tx: mpsc::UnboundedSender<ApprovalRequest>) {
+        if let Ok(mut guard) = self.parent_approval.lock() {
+            *guard = Some(tx);
         }
     }
 }
@@ -192,33 +204,40 @@ impl TaskSpawner for InProcessTaskSpawner {
         }
 
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
-        // Inherit the parent's auto_approve setting. If the parent session is
-        // NOT in auto-approve mode, subagent destructive tool calls are DENIED
-        // (the user didn't authorize the subagent to do destructive things).
-        // If auto_approve IS on (CI/non-interactive), approve as before.
-        // This closes the P0 where subagents bypassed the parent's permission
-        // policy (reported by external review 2026-08-13).
+        // WO 30.6: if the parent set its approval channel, forward subagent
+        // requests to it so the parent's handler decides interactively.
+        // Otherwise inherit auto_approve: approve in CI, deny otherwise (P0 fix).
+        let parent_approval = self.parent_approval.lock()
+            .ok()
+            .and_then(|g| g.as_ref().cloned());
         let auto_approve = cfg.security.auto_approve;
         tokio::spawn(async move {
             while let Some(req) = approval_rx.recv().await {
-                let resp = if auto_approve {
-                    ApprovalResponse::Approved
-                } else {
-                    tracing::warn!(
-                        tool = %req.tool_name,
-                        "subagent approval DENIED: parent session is not in auto-approve mode"
+                if let Some(ref parent) = parent_approval {
+                    // Forward to parent — its handler decides + routes the response back.
+                    crate::send_or_warn!(
+                        parent.send(req),
+                        "parent approval channel dropped; subagent request lost"
                     );
-                    ApprovalResponse::DeniedWithReason(
-                        "subagent cannot approve destructive tools when the parent session \
-                         is not in auto-approve mode; enable auto_approve or run the tool \
-                         in the parent session"
-                            .into(),
-                    )
-                };
-                crate::send_or_warn!(
-                    req.response.send(resp),
-                    "task approval response receiver dropped"
-                );
+                } else {
+                    let resp = if auto_approve {
+                        ApprovalResponse::Approved
+                    } else {
+                        tracing::warn!(
+                            tool = %req.tool_name,
+                            "subagent approval DENIED: parent session is not in auto-approve mode"
+                        );
+                        ApprovalResponse::DeniedWithReason(
+                            "subagent cannot approve destructive tools when the parent session \
+                             is not in auto-approve mode; enable auto_approve or run the tool \
+                             in the parent session".into(),
+                        )
+                    };
+                    crate::send_or_warn!(
+                        req.response.send(resp),
+                        "task approval response receiver dropped"
+                    );
+                }
             }
         });
 

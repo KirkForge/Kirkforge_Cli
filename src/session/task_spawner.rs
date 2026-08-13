@@ -192,10 +192,30 @@ impl TaskSpawner for InProcessTaskSpawner {
         }
 
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+        // Inherit the parent's auto_approve setting. If the parent session is
+        // NOT in auto-approve mode, subagent destructive tool calls are DENIED
+        // (the user didn't authorize the subagent to do destructive things).
+        // If auto_approve IS on (CI/non-interactive), approve as before.
+        // This closes the P0 where subagents bypassed the parent's permission
+        // policy (reported by external review 2026-08-13).
+        let auto_approve = cfg.security.auto_approve;
         tokio::spawn(async move {
             while let Some(req) = approval_rx.recv().await {
+                let resp = if auto_approve {
+                    ApprovalResponse::Approved
+                } else {
+                    tracing::warn!(
+                        tool = %req.tool_name,
+                        "subagent approval DENIED: parent session is not in auto-approve mode"
+                    );
+                    ApprovalResponse::DeniedWithReason(
+                        "subagent cannot approve destructive tools when the parent session \
+                         is not in auto-approve mode; enable auto_approve or run the tool \
+                         in the parent session".into(),
+                    )
+                };
                 crate::send_or_warn!(
-                    req.response.send(ApprovalResponse::Approved),
+                    req.response.send(resp),
                     "task approval response receiver dropped"
                 );
             }

@@ -1,6 +1,6 @@
 # ADR-054: rlimit sandbox hardening for the non-Docker bash path
 
-- **Status:** Accepted (WO 27.1 added landlock — see amendment below)
+- **Status:** Accepted (WO 27.1 landlock + WO 30.4 seccomp — see amendments below)
 - **Date:** 2026-07-26
 
 ## Context
@@ -135,6 +135,44 @@ hook** as the rlimits, in `setup_rlimits` (`src/session/bash_runner/mod.rs`).
   `config.toml` (array of strings) or `KF_CODE_LANDLOCK_EXTRA_PATHS` (colon-
   separated); those paths get full r/w. See `src/session/bash_runner/landlock.rs`.
 
+## WO 30.4 amendment — seccomp-bpf syscall filter (2026-08-13)
+
+The external review (2026-08-13) named seccomp as the missing OS-isolation
+layer: landlock confines the filesystem; seccomp confines the syscall
+surface. The original "Do NOT ship seccomp in this pass" decision (above)
+was deferred on the grounds that a BPF compiler was too heavy for the
+size-optimized binary. That blocker is removed by the `seccompiler` crate
+(pure-Rust, no C deps, pulls only `libc`) — small enough to earn its place
+behind an opt-in feature.
+
+- **Default-OFF Cargo feature.** `seccomp = ["dep:seccompiler"]`, opt in via
+  `--features seccomp`. Compiled only on Linux (`cfg(all(target_os = "linux",
+  feature = "seccomp"))`). The feature ships the capability; it is not yet
+  default-on because the allowlist needs exercising against real workloads.
+- **Allowlist, not denylist.** Each allowed syscall maps to an empty rule
+  (unconditional allow); the match action is `Allow`, the mismatch action is
+  `Errno(EPERM)` — graceful failure, not `KILL`/SIGSYS. A tool that hits an
+  unlisted syscall fails with a clear `EPERM` rather than vanishing.
+- **Applied last in the same `pre_exec` hook.** After rlimits + landlock —
+  once seccomp is on, only allowlisted syscalls work, so landlock's own
+  syscalls must already have run. Fail-closed like landlock: the
+  `--i-accept-unsandboxed` escape hatch governs seccomp too.
+- **Compile-in-parent / apply-in-pre_exec split.** `SeccompFilter::new` +
+  BPF emit allocate a `BTreeMap` and must run in the parent before fork;
+  `seccompiler::apply_filter` does only `prctl(PR_SET_NO_NEW_PRIVS)` + the
+  `seccomp` syscall (no allocation) and is safe in the async-signal-safe
+  `pre_exec` closure. Mirrors the landlock resolve-in-parent /
+  apply-in-pre_exec split. `apply_filter` setting `PR_SET_NO_NEW_PRIVS` is a
+  desirable side effect: the sandboxed bash cannot gain privileges via setuid.
+- **Allowlist scope.** The base list (WO 30.4) covers bash + common tools
+  (grep/sed/awk/curl/cargo/node/python). It is augmented with a glibc-startup
+  + modern-`at`-variant block (`arch_prctl`, `set_tid_address`,
+  `set_robust_list`, `rt_sigreturn`, `mremap`, `newfstatat`, `faccessat`, …)
+  without which no dynamically-linked binary can exec. The list is x86_64-
+  tuned; aarch64/riscv64 cross-arch + exotic-tool tuning is deferred. Adding
+  a syscall is one line in `allowed_syscalls()`. See
+  `src/session/bash_runner/seccomp.rs`.
+
 ## Implementation
 
 - `src/shared/mod.rs`: `SandboxConfig` struct with `#[serde(default =
@@ -216,17 +254,12 @@ Negative:
 
 ## Future work
 
-- **seccomp BPF filter.** A `setup_seccomp` hook in
-  `bash_runner/mod.rs`, sitting alongside `setup_rlimits` in the same
-  `pre_exec` window. The filter would allow-list the syscalls a shell
-  needs (`read`, `write`, `open`, `close`, `fork`, `exec`, `wait`,
-  `exit`, `mmap`, `munmap`, `brk`, `sigaction`, `pipe`, `dup`, the
-  `fcntl` family, `stat`/`fstat`/`lstat`) and deny everything else
-  (`ptrace`, `mount`, `reboot`, `kexec_load`, the `perf_event_open`
-  side-channel family). This is the syscall-level bound that rlimits
-  cannot provide. The blocker is the BPF compiler dependency; a
-  hand-rolled BPF assembler (no C dep, ~5 KB of Rust) is the path
-  that fits the size-optimized binary.
+- **seccomp BPF filter.** ✅ Shipped opt-in (WO 30.4 amendment, above). The
+  `seccomp` Cargo feature compiles a `seccompiler`-based allowlist filter and
+  applies it last in the same `pre_exec` window as the rlimits. Remaining
+  work: flip default-on after real-workload allowlist tuning (cross-arch
+  aarch64/riscv64 coverage; per-arg `SeccompRule` tightening if a misuse
+  vector appears).
 - **`RLIMIT_NPROC`.** Bound the number of child processes a single
   shell can fork, catching fork bombs that evade `RLIMIT_CPU` by
   distributing work across many short-lived children.

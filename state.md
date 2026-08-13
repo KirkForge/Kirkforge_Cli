@@ -6,6 +6,15 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
+## Session 2026-08-13 — WO 30.4 seccomp syscall filter (branch `wo30c`, worktree `.worktrees/wo30c`)
+
+The missing OS-isolation layer (external review 2026-08-13 §10): landlock confines the FS, seccomp confines the syscall surface. Shipped as a **default-OFF** `seccomp` Cargo feature (`seccomp = ["dep:seccompiler"]`):
+- New `src/session/bash_runner/seccomp.rs` (cfg `all(target_os="linux", feature="seccomp")`). Allowlist filter: each listed syscall → empty rule (unconditional allow); match action `Allow`, mismatch action `Errno(EPERM)` (graceful, not KILL/SIGSYS). Allowlist = WO 30.4 base list (bash + grep/sed/awk/curl/cargo/node/python) **+ a glibc-startup/modern-`at`-variant block** (`arch_prctl`, `set_tid_address`, `set_robust_list`, `rt_sigreturn`, `sigaltstack`, `mremap`, `madvise`, `sched_getaffinity`, `getpid`, `getppid`, `newfstatat`, `faccessat`, `faccessat2`, `renameat2`, `fchmodat`, `fchownat`) — without these, no dynamically-linked binary (ld.so/bash) execs, making the filter dead-on-arrival; the workorder's literal list omitted them.
+- Compile-in-parent / apply-in-pre_exec split (mirrors landlock): `SeccompFilter::new` + BPF emit allocate a `BTreeMap` → parent; `seccompiler::apply_filter` does only `prctl(PR_SET_NO_NEW_PRIVS)` + `seccomp()` syscalls (no alloc) → safe in pre_exec. Applied LAST (after landlock + rlimits). Fail-closed like landlock; `--i-accept-unsandboxed` governs both.
+- `setup_rlimits` signature UNCHANGED → all 3 callers (`bash_runner/mod.rs`, `bash_jobs.rs`, `plugin_tools/wrapper.rs`) unaffected.
+- ADR-054 amended (was "Do NOT ship seccomp"; the `seccompiler` crate removed the BPF-compiler blocker); status header + `docs/adr/README.md` row updated identically. `docs/TECHNICAL.md` feature-flag table + bash-sandbox section synced. Workorder 30.4 row → SHIPPED (opt-in).
+- **DEFERRED (see pending):** (a) real-workload allowlist tuning — some tools will hit `EPERM` on unlisted syscalls; (b) cross-arch aarch64/riscv64 (legacy syscalls stat/fstat/lstat/access/pipe/dup2/fork/vfork/umount2/mount/getdents/arch_prctl are x86_64-only — the list is x86_64-tuned, CI is x86_64-only); (c) the default-on flip (kept opt-in until exercised). Gate green (both `--features seccomp` and default), clippy clean both ways, `cargo fmt --check` clean on my files (pre-existing task_spawner.rs:211 drift NOT mine).
+
 ## Session 2026-08-13 — MEDIUM security hardening (branch `wo28h`)
 
 Knocked down the MEDIUM findings from the deep review (worktree `.worktrees/wo28h`, 3 commits, not pushed):

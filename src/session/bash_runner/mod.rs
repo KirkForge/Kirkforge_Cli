@@ -12,6 +12,13 @@ pub mod pty;
 #[cfg(target_os = "linux")]
 mod landlock;
 
+// WO 30.4: seccomp-bpf syscall filter. Opt-in via the `seccomp` cargo feature;
+// compiled only on Linux (seccomp is Linux-only). Applied in the same pre_exec
+// hook as landlock, after it. See `seccomp.rs` for the allowlist + the
+// compile-in-parent / apply-in-pre_exec split.
+#[cfg(all(target_os = "linux", feature = "seccomp"))]
+mod seccomp;
+
 // WO 28.5: re-export resolve_paths so background bash jobs (a sibling
 // module under session/) can resolve landlock paths. The rest of the
 // landlock module stays private; LandlockPaths is never named across the
@@ -144,6 +151,13 @@ pub(crate) fn setup_rlimits(
     let no_network = cfg.harden && cfg.no_network;
     let accept_unsandboxed = cfg.accept_unsandboxed;
 
+    // WO 30.4: compile the seccomp BPF program here, in the PARENT (before
+    // fork). The closure below only applies it — seccompiler::apply_filter is
+    // syscall-only, but SeccompFilter::new / BPF emit allocate, so they must
+    // not run inside the async-signal-safe pre_exec closure.
+    #[cfg(feature = "seccomp")]
+    let seccomp_prog = seccomp::build_filter();
+
     unsafe {
         cmd.as_std_mut().pre_exec(move || {
             #[allow(unused_must_use)]
@@ -195,6 +209,27 @@ pub(crate) fn setup_rlimits(
                         );
                     }
                     Err(e) => return Err(std::io::Error::other(e)),
+                }
+            }
+
+            // WO 30.4: apply the seccomp syscall filter LAST (after landlock +
+            // rlimits — once seccomp is on, only allowlisted syscalls work).
+            // Fail-closed like landlock: `accept_unsandboxed` is the documented
+            // escape hatch. In practice apply_filter only fails on a broken
+            // filter or a kernel without seccomp (rare on modern Linux).
+            #[cfg(feature = "seccomp")]
+            {
+                if let Ok(prog) = seccomp_prog.as_ref() {
+                    if let Err(e) = seccomp::apply_filter(prog) {
+                        if accept_unsandboxed {
+                            eprintln!(
+                                "seccomp: {e}; --i-accept-unsandboxed set, \
+                                 continuing WITHOUT syscall filter"
+                            );
+                        } else {
+                            return Err(std::io::Error::other(e));
+                        }
+                    }
                 }
             }
             Ok(())

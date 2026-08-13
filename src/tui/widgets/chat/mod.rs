@@ -232,13 +232,15 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 Span::styled("  · Esc to hide", border_style),
             ]));
 
-            for t in &state.generation.thinking_buffer {
-                for line in textwrap::fill(t, content_width).lines() {
-                    lines.push(Line::from(vec![
-                        Span::styled("    │ ", border_style),
-                        Span::styled(line.to_string(), body_style),
-                    ]));
-                }
+            // Join all thinking tokens into one string before wrapping —
+            // the buffer is Vec<String> of individual streaming tokens, not
+            // paragraphs. Without joining, each token gets its own line.
+            let joined = state.generation.thinking_buffer.join("");
+            for line in textwrap::fill(&joined, content_width).lines() {
+                lines.push(Line::from(vec![
+                    Span::styled("    │ ", border_style),
+                    Span::styled(line.to_string(), body_style),
+                ]));
             }
         } else {
             lines.push(Line::from(vec![

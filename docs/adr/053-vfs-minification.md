@@ -40,7 +40,16 @@ default (omitted, not `false`):
 |----------------|------------------------------------------------------------|
 | `true`         | Force minify. Output carries the byte header (unchanged).  |
 | `false`        | Force raw. No minification, no header.                     |
-| omitted        | Auto: minify iff `raw_content.len() > minify_above_bytes`. |
+| omitted        | Auto: minify iff `minify_write_side=true` AND `raw_content.len() > minify_above_bytes`. |
+
+> **Note (WO 30.0.8):** auto-minify additionally requires `minify_write_side`
+> to be true. When `minify_write_side=false` (the default), the minified text
+> is returned *plain* (no `<minified>` envelope), so it cannot round-trip
+> through `edit_file`'s raw-string match — the model would copy the minified
+> body into `old_string` and the edit would fail. Gating auto-minify on
+> `minify_write_side` means the envelope only emits when the write side can
+> expand it back. The model can still explicitly pass `minify=true` for token
+> savings (knowing it must re-read with `minify=false` before editing).
 
 When auto-minification triggers, the output appends:
 
@@ -137,7 +146,12 @@ Negative:
   — small file (under threshold) with no `minify` arg returned raw.
 - `tools::read_file::tests::auto_minify_large_file_emits_note`
   — large file (over threshold) with no `minify` arg auto-minified
-  and the output carries the `[minified: ... lines]` note.
+  and the output carries the `[minified: ... lines]` note (constructed
+  with `minify_write_side=true`, the condition under which auto-minify
+  now fires per WO 30.0.8).
+- `tools::read_file::tests::auto_minify_skipped_when_write_side_disabled`
+  — large file with no `minify` arg returned RAW when
+  `minify_write_side=false` (WO 30.0.8 regression guard).
 - `tools::read_file::tests::explicit_minify_false_returns_raw`
   — large file with `minify=false` returned raw despite the threshold.
 - `shared::config::tools::tests::tool_config_defaults_match_spec` and

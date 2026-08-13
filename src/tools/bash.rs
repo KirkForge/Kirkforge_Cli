@@ -231,7 +231,7 @@ impl Tool for Bash {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "bash",
-            description: "Execute a bash command. Use for running tests, builds, git operations, and file inspection. Output is captured and returned. Set \"background\": true to run long-lived commands in the background.",
+            description: "Execute a bash command. Use for running tests, builds, git operations, and file inspection. Output is captured and returned. Set \"background\": true to run long-lived commands in the background. Note: if your project invokes `python` (not `python3`), ensure the symlink exists (`ln -s $(which python3) /usr/local/bin/python`); many distros ship python3 only.",
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

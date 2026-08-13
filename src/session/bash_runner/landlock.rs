@@ -121,8 +121,19 @@ unsafe fn add_path(ruleset_fd: libc::c_int, path: &CStr, access: u64) -> bool {
 // pre_exec needs a NUL-terminated path; building these in the child would
 // allocate, which pre_exec forbids.
 static SYSTEM_READ_DIRS: &[&CStr] = &[
-    c"/usr", c"/bin", c"/sbin", c"/lib", c"/lib64", c"/etc", c"/opt", c"/nix", c"/snap",
-    c"/var/lib", c"/tmp", c"/dev", c"/proc",
+    c"/usr",
+    c"/bin",
+    c"/sbin",
+    c"/lib",
+    c"/lib64",
+    c"/etc",
+    c"/opt",
+    c"/nix",
+    c"/snap",
+    c"/var/lib",
+    c"/tmp",
+    c"/dev",
+    c"/proc",
 ];
 
 /// Pre-resolved paths for the landlock allow-list. Built in the parent
@@ -157,7 +168,10 @@ fn to_cstring(path: &Path) -> Option<CString> {
 pub(crate) fn resolve_paths(workspace: &Path, extra: &[PathBuf]) -> Option<LandlockPaths> {
     landlock_available()?;
     let workspace = to_cstring(workspace)?;
-    let home = std::env::var("HOME").ok().map(PathBuf::from).and_then(|h| to_cstring(&h));
+    let home = std::env::var("HOME")
+        .ok()
+        .map(PathBuf::from)
+        .and_then(|h| to_cstring(&h));
     let xdg_vars = [
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",

@@ -267,9 +267,24 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
     }
 
     // ── Compute scroll geometry ─────────────────────────────
+    // CRITICAL: max_scroll must account for WRAPPED lines, not just
+    // logical lines. A 10K-char assistant message is 1 logical Line
+    // but wraps to 80+ terminal rows. Without this, max_scroll=0 and
+    // the bottom of long messages is unreachable.
     let visible_height = (area.height as usize).saturating_sub(3);
-    let total_lines = lines.len();
-    let max_scroll = total_lines.saturating_sub(visible_height);
+    let content_width = (area.width as usize).saturating_sub(2).max(1);
+    let wrapped_total: usize = lines
+        .iter()
+        .map(|line| {
+            let w = line.width();
+            if w == 0 {
+                1
+            } else {
+                (w + content_width - 1) / content_width
+            }
+        })
+        .sum();
+    let max_scroll = wrapped_total.saturating_sub(visible_height);
 
     // Publish max_scroll to AppState so key handlers (PgUp/PgDn) can
     // clamp immediately without waiting for the next render.

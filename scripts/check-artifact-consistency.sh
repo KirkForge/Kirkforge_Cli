@@ -119,6 +119,31 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# 11. Structural: docs must not reference non-existent repo paths
+# (docs-sweep). The structural fix vs "another denylist string": grep
+# docs/RELEASE.md + docs/TECHNICAL.md for root-relative path references
+# (src/ crates/ docs/ scripts/ benches/ tests/ .github/) and verify each
+# exists. Catches deleted/renamed files that prose still points at.
+# Relative/prose paths (e.g. ../AGENTS.md, path/to/x) are intentionally
+# excluded — only unambiguous root-relative refs are checked.
+MISSING_PATHS=0
+for doc in docs/RELEASE.md docs/TECHNICAL.md; do
+  paths=$(grep -oE '(src|crates|docs|scripts|benches|tests|\.github)/[A-Za-z0-9_./-]+' "$doc" \
+          | sed -E 's/:[0-9]+$//; s/\.$//' | sort -u || true)
+  for p in $paths; do
+    if [ ! -e "$p" ]; then
+      echo "✗ $doc references non-existent path: $p"
+      MISSING_PATHS=$((MISSING_PATHS+1))
+    fi
+  done
+done
+if [ "$MISSING_PATHS" -eq 0 ]; then
+  echo "✓ docs reference only existing repo paths"
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 if [ "$FAIL" -gt 0 ]; then

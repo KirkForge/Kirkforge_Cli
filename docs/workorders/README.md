@@ -534,23 +534,23 @@ See [WO 28.0](28.0-wo28-overview.md) for the full plan + ordering.
 
 | WO | Title | Status | Est |
 |----|-------|--------|-----|
-| 28.1 | [Break tools↔session cycle (H7)](28.1-tools-session-cycle.md) | Planned | L |
-| 28.2 | [Break budget↔stratum cycle](28.2-budget-stratum-cycle.md) | Planned | S |
-| 28.3 | [Split turn.rs god-object (H8)](28.3-turn-rs-split.md) | Planned | M |
-| 28.4 | [Fix TS plugin-SDK cycles](28.4-ts-plugin-cycles.md) | Planned (may be superseded by WO 29) | M |
-| 28.5 | [Landlock on background bash jobs](28.5-background-landlock.md) | Planned | S |
+| 28.1 | [Break tools↔session cycle (H7)](28.1-tools-session-cycle.md) | Done (R1; 3 non-cyclic residuals) | L |
+| 28.2 | [Break budget↔stratum cycle](28.2-budget-stratum-cycle.md) | Done (R1; R2 optional deferred) | S |
+| 28.3 | [Split turn.rs god-object (H8)](28.3-turn-rs-split.md) | Done (2087→1191 LOC) | M |
+| 28.4 | [Fix TS plugin-SDK cycles](28.4-ts-plugin-cycles.md) | Superseded (TS tree deleted, WO 29.9) | M |
+| 28.5 | [Landlock on background bash jobs](28.5-background-landlock.md) | Done (R1+R2; R3 test deferred) | S |
 | 28.6 | [e2e binary-spawn hang debug/convert](28.6-e2e-hang-debug.md) | Planned | M |
-| 28.7 | [Coverage regression gate](28.7-coverage-gate.md) | Planned | M |
-| 28.8 | [daemon/client.rs tests](28.8-daemon-client-tests.md) | Planned | M |
-| 28.9 | [Session coverage >75%](28.9-session-coverage-75.md) | Planned (dep: 28.7) | XL |
-| 28.10 | [Slow-test feature-flag split](28.10-slow-test-split.md) | Planned | S-M |
-| 28.11 | [Bench manifest validation](28.11-bench-manifest-validation.md) | Planned | S |
-| 28.12 | [Dead-ref CI gate for src/](28.12-dead-ref-ci-gate.md) | Planned | S-M |
-| 28.13 | [Bedrock/Vertex test mocks](28.13-bedrock-vertex-test-mocks.md) | Planned | M |
-| 28.14 | [Plugin3 env backward-compat shim](28.14-plugin3-env-shim.md) | Planned | S |
-| 28.15 | [Memory semantic dedup](28.15-memory-semantic-dedup.md) | Planned | M |
-| 28.16 | [Anthropic computer_use beta](28.16-anthropic-computer-use-beta.md) | Planned | L |
-| 28.17 | [Bash evasion tripwire posture (H3)](28.17-bash-evasion-tripwire-posture.md) | Planned | S |
+| 28.7 | [Coverage regression gate](28.7-coverage-gate.md) | Done (R1-R4 local; ci.yml step deferred) | M |
+| 28.8 | [daemon/client.rs tests](28.8-daemon-client-tests.md) | Done (R1-R5; R6 Windows deferred) | M |
+| 28.9 | [Session coverage >75%](28.9-session-coverage-75.md) | Done (5 tests; R2.5/R2.6 disclosed) | XL |
+| 28.10 | [Slow-test feature-flag split](28.10-slow-test-split.md) | Done (R1+R3+R4; R2 n/a) | S-M |
+| 28.11 | [Bench manifest validation](28.11-bench-manifest-validation.md) | Done (R1+R2; R3 deferred) | S |
+| 28.12 | [Dead-ref CI gate for src/](28.12-dead-ref-ci-gate.md) | Done (R1+R4; R2 n/a) | S-M |
+| 28.13 | [Bedrock/Vertex test mocks](28.13-bedrock-vertex-test-mocks.md) | Partial (R1 Bedrock; R2 Vertex + full-turn deferred) | M |
+| 28.14 | [Plugin3 env backward-compat shim](28.14-plugin3-env-shim.md) | Done | S |
+| 28.15 | [Memory semantic dedup](28.15-memory-semantic-dup.md) | Done (R1+R3; R2 verified no-op) | M |
+| 28.16 | [Anthropic computer_use beta](28.16-anthropic-computer-use-beta.md) | Partial (R1-R3 adapter wire; R4 deferred) | L |
+| 28.17 | [Bash evasion tripwire posture (H3)](28.17-bash-evasion-tripwire-posture.md) | Done (R1; R2 deferred) | S |
 
 ### Series 29 — TS→Rust SDK Migration (Eliminate the Node Runtime)
 
@@ -565,16 +565,39 @@ biggest target. See [WO 29.0](29.0-wo29-overview.md) for the full phased plan.
 | WO | Title | Status | Est | Phase |
 |----|-------|--------|-----|-------|
 | 29.0 | [Series overview](29.0-wo29-overview.md) | Planned | — | — |
-| 29.1 | [Fold bundled plugin into compiled-in Rust tools](29.1-fold-bundled-plugin.md) | Planned | M | 1 |
-| 29.2 | [Rust security emitter (replace bridge-emitter.ts)](29.2-rust-security-emitter.md) | Planned | S | 1 |
-| 29.3 | [Port pure modules (classifier + routing + correction + truth-model)](29.3-pure-module-ports.md) | Done (branch `wo29c`) | M | 2 |
-| 29.4 | [Port EventBus + AuditLogger (core-events)](29.4-event-bus-audit-logger.md) | Planned | M | 3 |
-| 29.5 | [Port RBAC + JWT verification (core-rbac)](29.5-rbac-jwt-port.md) | Planned | M | 3 |
-| 29.6 | [Port memory-palace (routing store + adapters)](29.6-memory-palace-port.md) | Planned | M | 3 |
-| 29.7 | [Port orchestrator delegation + decompose + correction loop](29.7-orchestrator-port.md) | Planned (dep: 29.3+29.4+29.6) | L | 4 |
-| 29.8 | [Port health-server (HTTP + auth + Prometheus)](29.8-health-server-port.md) | Planned (dep: 29.4+29.5) — OPTIONAL | M | 4 |
-| 29.9 | [Delete npm/kf-plugin/ + remove TS CI + deps](29.9-delete-npm-cleanup.md) | Planned (LAST) | S | 5 |
+| 29.1 | [Fold bundled plugin into compiled-in Rust tools](29.1-fold-bundled-plugin.md) | In Progress (Phase 1 shipped; verify tools deferred to 29.7) | M | 1 |
+| 29.2 | [Rust security emitter (replace bridge-emitter.ts)](29.2-rust-security-emitter.md) | Done (R1+R2; R3 folded into 29.9) | S | 1 |
+| 29.3 | [Port pure modules (classifier + routing + correction + truth-model)](29.3-pure-module-ports.md) | Done | M | 2 |
+| 29.4 | [Port EventBus + AuditLogger (core-events)](29.4-event-bus-audit-logger.md) | Done (R1-R3; R4 dead sinks skipped) | M | 3 |
+| 29.5 | [Port RBAC + JWT verification (core-rbac)](29.5-rbac-jwt-port.md) | Done | M | 3 |
+| 29.6 | [Port memory-palace (routing store + adapters)](29.6-memory-palace-port.md) | Done (R1-R3; R4 skipped per workorder) | M | 3 |
+| 29.7 | [Port orchestrator delegation + decompose + correction loop](29.7-orchestrator-port.md) | In Progress (R1-R5 ported; ModelClient prod impl + validator deferred) | L | 4 |
+| 29.8 | [Port health-server (HTTP + auth + Prometheus)](29.8-health-server-port.md) | Skipped (not needed for CLI) | M | 4 |
+| 29.9 | [Delete npm/kf-plugin/ + remove TS CI + deps](29.9-delete-npm-cleanup.md) | Done | S | 5 |
 
 **9 sub-workorders.** Phase 1 (29.1-29.2) ships independently — eliminates the
 bundled-plugin Node hop + the last Rust→TS call path. Phase 2-3 port the
 foundation. Phase 4 is the orchestrator. Phase 5 deletes everything TS.
+
+### Series 30 — External-Review Action Items + OS Isolation + Subagent Isolation
+
+Series 30 is driven by the ChatGPT external review (2026-08-13) and the WO 30
+master index ([WO 30.0.0](30.0.0-wo30-overview.md)). It adds the missing
+OS-isolation layer (seccomp), real subagent isolation (worktree + approval
+forwarding), and the TaskManager lifecycle. Status below verified against HEAD
+`2bfc2fa`; the overview is the living master index.
+
+| WO | Title | Status | Est |
+|----|-------|--------|-----|
+| 30.1 | Subagent worktree isolation | Done (`8717bd1`; coder subagent gets its own git worktree; bash CWD confinement deferred) | M |
+| 30.2 | TaskManager lifecycle (status/cancel/metadata/list) | Done (`63800ed`) | M |
+| 30.3 | Parallel agent orchestration (scout/coder/reviewer) | Planned (dep: 30.1 + 30.2) | L |
+| 30.4 | Seccomp syscall filter (default-off, opt-in `seccomp` feature) | Done (`2bfc2fa`; allowlist tuning + cross-arch + default-on flip deferred) | M |
+| 30.5 | Context-index target/ filter (e2e hang secondary root cause) | Planned | S |
+| 30.6 | Subagent approval forwarding to parent session | Done (`8717bd1`; supersedes the conservative P0 auto-approve deny at `5fbd955`) | M |
+| 30.7 | Benchmark: KirkForge vs Codex vs Claude Code (token-budget challenge) | Planned | M |
+
+**7 items.** Shipped at HEAD `2bfc2fa`: the seccomp OS-isolation layer, subagent
+worktree isolation, approval forwarding, and the TaskManager lifecycle. Open:
+the parallel-orchestration pattern (30.3), the context-index walker filter
+(30.5), and the cross-tool benchmark (30.7).

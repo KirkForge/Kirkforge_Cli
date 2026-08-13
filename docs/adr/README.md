@@ -11,7 +11,7 @@ Two series live side by side in this directory:
 - **Plugin3** — 4-digit numbers (`0001`–`0047`). Output-side sibling of Stratum:
   slicing, compaction, token budget, hooks, cost reporting, and the Plugin3
   fold-in. Originally a vendored design doc set; now part of the core.
-- **CLI** — 3-digit numbers (`001`–`050`). Native KirkForge-Cli ADRs covering
+- **CLI** — 3-digit numbers (`001`–`073`). Native KirkForge-Cli ADRs covering
   the TUI, model adapters, tool dispatch, event bus, verifier slots, plugin
   system, LSP, VS Code bridge, and the Stratum/Draw/Video fold-ins.
 

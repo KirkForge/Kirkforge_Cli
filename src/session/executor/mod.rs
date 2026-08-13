@@ -82,6 +82,13 @@ pub struct Executor {
     /// `/plan` and exited via `/implement` or user approval.
     plan_mode: bool,
 
+    /// True when the session runs unattended (`--non-interactive`). Plan
+    /// mode is an interactive aid (exit via `/implement`); in a scripted
+    /// run there is no one to type it, so enforcing it would brick the
+    /// agent. When set, the doom-loop breaker downgrades `AutoPlan` to
+    /// `WarnOnly` and `pre_run` skips the plan-mode block entirely. (WO 30.9)
+    non_interactive: bool,
+
     /// If the conversation log was restored from a checkpoint on open,
     /// this holds the number of recovered messages. It is emitted once
     /// as a `TurnEvent::Recovered` at the start of the first turn so
@@ -276,6 +283,7 @@ impl Executor {
             verifier_bus: None,
             undo_stack,
             plan_mode: false,
+            non_interactive: false,
             recovered_messages: None,
             session_id: String::new(),
             task_spawner: None,
@@ -849,6 +857,15 @@ impl Executor {
             .doom_loop_action
             .parse::<DoomLoopAction>()
             .unwrap_or(DoomLoopAction::AutoPlan);
+        // Non-interactive runs have no user to switch to plan mode for help,
+        // and `/implement` (the only exit) is interactive-only — AutoPlan
+        // would brick the run. Downgrade to WarnOnly so the doom-loop warning
+        // still logs without trapping the agent. (WO 30.9)
+        let action = if self.non_interactive && action == DoomLoopAction::AutoPlan {
+            DoomLoopAction::WarnOnly
+        } else {
+            action
+        };
         let max_hits = cfg.tools.doom_loop_max_hits;
         self.cost
             .observe_tool_outcome(tool, outcome, event_tx, max_hits, action)
@@ -872,6 +889,14 @@ impl Executor {
     /// denied at the dispatch layer.
     pub fn set_plan_mode(&mut self, enabled: bool) {
         self.plan_mode = enabled;
+    }
+
+    /// Mark this session as unattended (`--non-interactive`). When set,
+    /// plan mode is never enforced (writes are never blocked) and the
+    /// doom-loop circuit breaker downgrades `AutoPlan` to `WarnOnly`.
+    /// (WO 30.9)
+    pub fn set_non_interactive(&mut self, enabled: bool) {
+        self.non_interactive = enabled;
     }
 
     /// Exit plan mode and inject a system message telling the model it

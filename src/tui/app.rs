@@ -515,6 +515,12 @@ pub struct UiState {
     /// row delta. `None` when no drag is active (cleared on
     /// `MouseEventKind::Up`) (WO 27.7).
     pub mouse_drag_row: Option<u16>,
+    /// Brief render-countdown after a bracketed paste. The input title shows
+    /// "📋 pasted" while this is > 0. Set on `Event::Paste`, decremented once
+    /// per slow-tick (125 ms), and cleared on the next keystroke. A `u8`
+    /// countdown instead of a `bool` so the indicator can fade on its own
+    /// without a second field (WO 30.0.11).
+    pub paste_flash: u8,
 }
 
 impl Default for UiState {
@@ -527,6 +533,7 @@ impl Default for UiState {
             cwd: std::env::current_dir().unwrap_or_default(),
             theme: Theme::default(),
             mouse_drag_row: None,
+            paste_flash: 0,
         }
     }
 }
@@ -710,12 +717,33 @@ impl AppState {
             .unwrap_or(self.conversation.input.len())
     }
 
-    /// Number of logical lines in the input buffer (split on `\n`).
-    /// Includes the empty trailing line created by a final newline so the
-    /// user can keep typing after pressing Shift+Enter.
-    #[inline]
-    pub fn input_line_count(&self) -> usize {
-        self.conversation.input.split('\n').count()
+    /// Number of VISUAL rows the input occupies at `content_width` char
+    /// columns. Each logical line wraps to `ceil(chars / content_width)`
+    /// rows (minimum 1), and the per-line counts are summed. This is what
+    /// the input box must grow to so a long paste / long line stays visible
+    /// (WO 30.0.12). `content_width` is clamped to ≥ 1.
+    pub fn input_visual_line_count(&self, content_width: usize) -> usize {
+        let width = content_width.max(1);
+        self.conversation
+            .input
+            .split('\n')
+            .map(|line| {
+                let chars = line.chars().count();
+                if chars == 0 {
+                    1
+                } else {
+                    chars.div_ceil(width)
+                }
+            })
+            .sum()
+    }
+
+    /// Insert `text` at the cursor and advance the cursor by its char count.
+    /// Used by bracketed-paste handling (WO 30.0.11).
+    pub fn apply_paste(&mut self, text: &str) {
+        let byte_pos = self.cursor_byte();
+        self.conversation.input.insert_str(byte_pos, text);
+        self.conversation.cursor_position += text.chars().count();
     }
 
     /// Return the cursor position as `(line, column)` char indices.
@@ -737,9 +765,10 @@ impl AppState {
     }
 
     /// Visible height of the input box in terminal rows, including borders.
-    /// Grows with the line count up to `max_rows`.
-    pub fn input_visible_height(&self, max_rows: u16) -> u16 {
-        let lines = self.input_line_count();
+    /// Grows with the VISUAL line count (wraps long lines at `content_width`)
+    /// up to `max_rows` (WO 30.0.12).
+    pub fn input_visible_height(&self, max_rows: u16, content_width: usize) -> u16 {
+        let lines = self.input_visual_line_count(content_width);
         lines.min(max_rows as usize).max(1) as u16 + 2
     }
 }
@@ -855,5 +884,69 @@ mod tests {
         // And reset path is just a bool write.
         s.dirty = false;
         assert!(!s.dirty);
+    }
+
+    // ── WO 30.0.12: visual-wrap line count ──────────────────────────
+    //
+    // `input_visual_line_count` must count VISUAL rows (wrapping long
+    // lines at the content width), not just `\n`-separated logical lines.
+    // A 300-char single line at width 60 wraps to 5 rows; a bug that
+    // returns 1 here is exactly the 30.0.12 regression (input box stays
+    // at minimum height and clips the wrapped text).
+
+    #[test]
+    fn visual_line_count_wraps_long_line() {
+        let mut s = app_state();
+        s.conversation.input = "x".repeat(300);
+        // 300 chars / 60 width = 5 rows.
+        assert_eq!(s.input_visual_line_count(60), 5);
+        // content_width=0 clamps to 1 → 300 rows (no divide-by-zero).
+        assert_eq!(s.input_visual_line_count(0), 300);
+    }
+
+    #[test]
+    fn visual_line_count_sums_across_newlines() {
+        let mut s = app_state();
+        // 60-char line (1 row at width 60) + empty line (1 row) + 90-char
+        // line (2 rows) = 4 visual rows.
+        s.conversation.input = format!("{}\n\n{}", "a".repeat(60), "b".repeat(90));
+        assert_eq!(s.input_visual_line_count(60), 4);
+    }
+
+    #[test]
+    fn input_visible_height_grows_with_visual_wrap() {
+        let mut s = app_state();
+        s.conversation.input = "y".repeat(300);
+        // 5 visual rows clamped to max_rows=5 → 5 + 2 borders = 7.
+        assert_eq!(s.input_visible_height(5, 60), 7);
+        // 300 visual rows (width 1) clamp to max_rows=5 → still 7.
+        assert_eq!(s.input_visible_height(5, 1), 7);
+        // Empty input → 1 row + 2 borders = 3.
+        s.conversation.input.clear();
+        assert_eq!(s.input_visible_height(5, 60), 3);
+    }
+
+    // ── WO 30.0.11: paste inserts at cursor + advances it ───────────
+
+    #[test]
+    fn apply_paste_inserts_at_cursor_and_advances() {
+        let mut s = app_state();
+        s.conversation.input = "hello world".to_string();
+        // Cursor between "hello" and " world" (char index 5).
+        s.conversation.cursor_position = 5;
+        s.apply_paste(" brave");
+        assert_eq!(s.conversation.input, "hello brave world");
+        // char count of " brave" = 6 → cursor advanced to 11.
+        assert_eq!(s.conversation.cursor_position, 11);
+    }
+
+    #[test]
+    fn apply_paste_handles_multibyte_at_cursor() {
+        let mut s = app_state();
+        s.conversation.input = "héllo".to_string(); // é is one char, two bytes
+        s.conversation.cursor_position = 1; // after 'h'
+        s.apply_paste("X");
+        assert_eq!(s.conversation.input, "hXéllo");
+        assert_eq!(s.conversation.cursor_position, 2);
     }
 }

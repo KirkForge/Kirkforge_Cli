@@ -97,7 +97,10 @@ kf-testdoctor = { path = "crates/kf-testdoctor" }
 
 # TUI
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "unstable"] }
-crossterm = { version = "0.29", features = ["event-stream"] }
+# `bracketed-paste` unlocks `Event::Paste(String)` so pasted text is
+# detectable (WO 30.0.11); without it, paste arrives as individual Char
+# keystrokes indistinguishable from typing.
+crossterm = { version = "0.29", features = ["event-stream", "bracketed-paste"] }
 
 # Async
 tokio.workspace = true

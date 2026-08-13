@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -24,15 +24,30 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
+    // Content width = area width minus the two border columns. Used for the
+    // VISUAL (wrapped) line count so the "(N lines)" title reflects rows the
+    // text actually occupies, not just explicit newlines (WO 30.0.12).
+    let content_width = area.width.saturating_sub(2) as usize;
+
     let block = Block::default()
         .title(if !state.search.matches.is_empty() {
             let total = state.search.matches.len();
             let cur = state.search.match_idx + 1;
             format!(" Input  ({cur} / {total} matches) ")
-        } else if state.conversation.input.contains('\n') {
-            format!(" Input  ({} lines) ", state.input_line_count())
         } else {
-            " Input ".to_string()
+            let vlines = state.input_visual_line_count(content_width);
+            let lines_part = if vlines > 1 {
+                format!("  ({vlines} lines)")
+            } else {
+                String::new()
+            };
+            // Brief "📋 pasted" marker after a bracketed paste (WO 30.0.11).
+            let paste_part = if state.ui.paste_flash > 0 {
+                "  📋 pasted"
+            } else {
+                ""
+            };
+            format!(" Input{lines_part}{paste_part} ")
         })
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -83,7 +98,12 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
         );
     }
 
-    let paragraph = Paragraph::new(display_text).block(block);
+    // `.wrap` is required for a long line to wrap within the grown box;
+    // without it Paragraph truncates each Line to one row and the wrapped
+    // text stays invisible even with the correct box height (WO 30.0.12).
+    let paragraph = Paragraph::new(display_text)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(paragraph, area);
 }
 

@@ -55,7 +55,10 @@ use commands::{
 use components::approval::render_approval_dialog;
 use connection::{connection_probe_task, probe_ollama_connection};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -73,6 +76,10 @@ use widgets::chat::render_chat;
 use widgets::input::render_input;
 use widgets::status::render_status;
 
+/// How many slow-ticks (125 ms each) the "📋 pasted" title indicator
+/// stays visible after a bracketed paste before fading on its own.
+const PASTE_FLASH_TICKS: u8 = 8;
+
 /// Panic-safe guard that restores terminal state on drop.
 pub(crate) struct TerminalGuard;
 
@@ -82,6 +89,9 @@ impl Drop for TerminalGuard {
             tracing::warn!(error = %e, "failed to disable raw mode in terminal guard");
         }
         let mut stdout = io::stdout();
+        if let Err(e) = execute!(stdout, DisableBracketedPaste) {
+            tracing::warn!(error = %e, "failed to disable bracketed paste in terminal guard");
+        }
         if let Err(e) = execute!(stdout, DisableMouseCapture) {
             tracing::warn!(error = %e, "failed to disable mouse capture in terminal guard");
         }
@@ -300,6 +310,9 @@ async fn teardown(
     if let Err(e) = disable_raw_mode() {
         tracing::warn!(error = %e, "failed to disable raw mode during TUI shutdown");
     }
+    if let Err(e) = execute!(terminal.backend_mut(), DisableBracketedPaste) {
+        tracing::warn!(error = %e, "failed to disable bracketed paste during TUI shutdown");
+    }
     if let Err(e) = execute!(terminal.backend_mut(), DisableMouseCapture) {
         tracing::warn!(error = %e, "failed to disable mouse capture during TUI shutdown");
     }
@@ -384,6 +397,9 @@ pub async fn run_tui(
     if mouse_enabled {
         execute!(stdout, EnableMouseCapture)?;
     }
+    // Bracketed paste is independent of mouse capture and always desirable:
+    // it lets the loop distinguish a paste from typed keystrokes (WO 30.0.11).
+    execute!(stdout, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let _guard = TerminalGuard;
@@ -836,6 +852,12 @@ async fn run_event_loop(
                 state.generation.spinner_tick = state.generation.spinner_tick.wrapping_add(1);
                 state.mark_dirty();
             }
+            // Fade the "📋 pasted" title indicator: decrement each slow-tick
+            // (125 ms) and keep rendering until it expires (WO 30.0.11).
+            if state.ui.paste_flash > 0 {
+                state.ui.paste_flash -= 1;
+                state.mark_dirty();
+            }
         }
 
         // ── Render (only if dirty) ──────────────────────────────
@@ -863,6 +885,8 @@ async fn dispatch_kb_events<'a>(
         key: event::KeyEvent,
         key_ctx: &keys::HandleInputContext<'a>,
     ) -> anyhow::Result<()> {
+        // Any keystroke dismisses the "📋 pasted" title indicator (WO 30.0.11).
+        state.ui.paste_flash = 0;
         if state.approval.pending_bang.is_some() {
             approval_keys::handle_bang_approval_key(key, state).await;
         } else if state.approval.pending_approval.is_some() {
@@ -876,6 +900,11 @@ async fn dispatch_kb_events<'a>(
     if let Some(ev) = first {
         match ev {
             Event::Key(key) => dispatch_one(state, key, key_ctx).await?,
+            Event::Paste(content) => {
+                state.apply_paste(&content);
+                state.ui.paste_flash = PASTE_FLASH_TICKS;
+                state.mark_dirty();
+            }
             Event::Mouse(mouse) => handle_mouse_event(state, mouse),
             Event::Resize(_w, _h) => state.mark_dirty(),
             _ => {}
@@ -885,6 +914,11 @@ async fn dispatch_kb_events<'a>(
     while let Ok(ev) = kb_rx.try_recv() {
         match ev {
             Event::Key(key) => dispatch_one(state, key, key_ctx).await?,
+            Event::Paste(content) => {
+                state.apply_paste(&content);
+                state.ui.paste_flash = PASTE_FLASH_TICKS;
+                state.mark_dirty();
+            }
             Event::Mouse(mouse) => handle_mouse_event(state, mouse),
             Event::Resize(_w, _h) => state.mark_dirty(),
             _ => {}
@@ -943,7 +977,10 @@ fn render_frame(
 /// the `CrosstermBackend` type); this function is the backend-agnostic core.
 pub(crate) fn render_app(f: &mut Frame, state: &mut AppState) {
     let size = f.area();
-    let input_height = state.input_visible_height(5);
+    // Input box content width ≈ terminal width minus the two border columns.
+    // Used so a long line wraps and the box grows to fit (WO 30.0.12).
+    let content_width = size.width.saturating_sub(2) as usize;
+    let input_height = state.input_visible_height(5, content_width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

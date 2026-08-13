@@ -380,6 +380,13 @@ concurrently; additional tasks either queue or are rejected depending on
 message suggesting `task_output` or increasing `max_background_tasks`. Env
 override: `KF_CODE_TASK_CONCURRENCY_MODE`.
 
+Each background task is tracked with a derived `TaskStatus`
+(`Pending | Running | Completed | Cancelled | Failed | TimedOut`) plus
+`TaskMetadata` (model, persona, ≤100-char prompt summary, started_at,
+duration_ms, token_estimate, parent_task_id). `TaskManager::cancel` stops a
+running subagent via a per-task cancel flag and a `select!` race; `status`
+and `list` expose the state for the `/jobs` view (WO 30.2).
+
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`
 
 Session daemon (background process tracking recent sessions), scheduled-job

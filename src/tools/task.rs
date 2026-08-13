@@ -1,7 +1,9 @@
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Request to spawn a subagent task.
 #[derive(Debug, Clone)]
@@ -12,12 +14,181 @@ pub struct TaskRequest {
     pub max_turns: usize,
 }
 
+/// Lifecycle state of a background subagent task.
+///
+/// `Pending` = inserted but the worker has not entered `run_task` yet;
+/// `Running` = `run_task` is in flight. `TimedOut` is defined for API
+/// completeness — no per-task timeout is wired into `run_task` yet, so the
+/// current code paths never produce it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskStatus {
+    Pending,
+    Running,
+    Completed(String),
+    Cancelled,
+    Failed(String),
+    TimedOut,
+}
+
+impl TaskStatus {
+    /// One-word status label for compact display (TUI `/jobs`, logs).
+    pub fn label(&self) -> &'static str {
+        match self {
+            TaskStatus::Pending => "pending",
+            TaskStatus::Running => "running",
+            TaskStatus::Completed(_) => "completed",
+            TaskStatus::Cancelled => "cancelled",
+            TaskStatus::Failed(_) => "failed",
+            TaskStatus::TimedOut => "timed out",
+        }
+    }
+
+    /// True once the task can no longer change state.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            TaskStatus::Completed(_)
+                | TaskStatus::Cancelled
+                | TaskStatus::Failed(_)
+                | TaskStatus::TimedOut
+        )
+    }
+}
+
+/// Per-task metadata recorded at spawn and updated on completion.
+#[derive(Debug, Clone)]
+pub struct TaskMetadata {
+    pub model: Option<String>,
+    pub persona: String,
+    /// First 100 chars of the prompt — enough to identify a task in a list
+    /// without dumping the whole (potentially long) prompt into the TUI.
+    pub prompt_summary: String,
+    pub started_at: chrono::DateTime<chrono::Local>,
+    /// Wall-clock duration; `None` until the task reaches a terminal state.
+    pub duration_ms: Option<u64>,
+    /// Token usage, if the executor surfaces it. Currently always `None` —
+    /// `TaskSpawner::run_task` returns only a summary string.
+    pub token_estimate: Option<u64>,
+    /// Parent task id for subagent trees. `None` for top-level tasks.
+    pub parent_task_id: Option<String>,
+}
+
+impl Default for TaskMetadata {
+    fn default() -> Self {
+        Self {
+            model: None,
+            persona: String::new(),
+            prompt_summary: String::new(),
+            started_at: chrono::Local::now(),
+            duration_ms: None,
+            token_estimate: None,
+            parent_task_id: None,
+        }
+    }
+}
+
+/// A row returned by [`TaskManager::list`] for TUI display.
+#[derive(Debug, Clone)]
+pub struct TaskListEntry {
+    pub id: String,
+    pub status: TaskStatus,
+    pub metadata: TaskMetadata,
+}
+
+/// Format a [`TaskListEntry`] as a single display line for the TUI `/jobs`
+/// view (mirrors `format_job_status` for bash jobs). Pub so the deferred
+/// `/jobs` wiring can render subagent tasks alongside bash jobs.
+pub fn format_task_entry(entry: &TaskListEntry) -> String {
+    let icon = match &entry.status {
+        TaskStatus::Pending => "⏳",
+        TaskStatus::Running => "▶️",
+        TaskStatus::Completed(_) => "✅",
+        TaskStatus::Cancelled => "🚫",
+        TaskStatus::Failed(_) => "❌",
+        TaskStatus::TimedOut => "⏰",
+    };
+    let model = entry.metadata.model.as_deref().unwrap_or("default");
+    let dur = entry
+        .metadata
+        .duration_ms
+        .map(format_duration_ms)
+        .unwrap_or_else(|| "—".to_string());
+    format!(
+        "{} {} {} [{}] persona={} {} — {}",
+        icon,
+        entry.id,
+        entry.status.label(),
+        model,
+        entry.metadata.persona,
+        dur,
+        entry.metadata.prompt_summary,
+    )
+}
+
+/// Compact `<n>ms` / `<n>.<dd>s` / `<n>m<dd>s` formatter for task durations.
+fn format_duration_ms(ms: u64) -> String {
+    if ms < 1_000 {
+        format!("{ms}ms")
+    } else if ms < 60_000 {
+        format!("{:.2}s", ms as f64 / 1_000.0)
+    } else {
+        format!("{}m{:02}s", ms / 60_000, (ms % 60_000) / 1_000)
+    }
+}
+
 /// Handle returned for a background task.
+///
+/// `result` / `error` remain the source of truth for completion/failure (so
+/// the existing `task_output` tool is unchanged); [`TaskStatus`] is derived
+/// from them plus the `started` / `cancel_requested` flags — no second copy
+/// of completion state to drift.
 #[derive(Debug, Clone)]
 pub struct TaskHandle {
     pub result: Option<String>,
     pub error: Option<String>,
     pub completed: Arc<tokio::sync::Notify>,
+    pub metadata: TaskMetadata,
+    started: Arc<AtomicBool>,
+    cancel_requested: Arc<AtomicBool>,
+    cancel_signal: Arc<tokio::sync::Notify>,
+}
+
+impl Default for TaskHandle {
+    fn default() -> Self {
+        Self {
+            result: None,
+            error: None,
+            completed: Arc::new(tokio::sync::Notify::new()),
+            metadata: TaskMetadata::default(),
+            started: Arc::new(AtomicBool::new(false)),
+            cancel_requested: Arc::new(AtomicBool::new(false)),
+            cancel_signal: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+}
+
+impl TaskHandle {
+    /// Derived lifecycle state. See [`TaskStatus`].
+    pub fn status(&self) -> TaskStatus {
+        if let Some(r) = &self.result {
+            TaskStatus::Completed(r.clone())
+        } else if let Some(e) = &self.error {
+            TaskStatus::Failed(e.clone())
+        } else if self.cancel_requested.load(Ordering::SeqCst) {
+            TaskStatus::Cancelled
+        } else if self.started.load(Ordering::SeqCst) {
+            TaskStatus::Running
+        } else {
+            TaskStatus::Pending
+        }
+    }
+
+    /// True if the task has reached a terminal state (no further updates).
+    pub fn is_terminal(&self) -> bool {
+        self.result.is_some()
+            || self.error.is_some()
+            || self.cancel_requested.load(Ordering::SeqCst)
+    }
 }
 
 /// Trait for an object that can spawn isolated subagent tasks.
@@ -52,6 +223,53 @@ impl TaskManager {
     pub fn get(&self, id: &str) -> Option<&TaskHandle> {
         self.tasks.get(id)
     }
+
+    /// Current lifecycle state of a task, or `None` if the id is unknown.
+    pub fn status(&self, id: &str) -> Option<TaskStatus> {
+        self.tasks.get(id).map(|h| h.status())
+    }
+
+    /// Request cancellation of a running task. Sets the per-task cancel flag
+    /// and wakes the worker's `select!` arm so `run_task` is dropped. Returns
+    /// `false` if the task is unknown or already terminal.
+    ///
+    /// The flag is `Arc<AtomicBool>` — the same primitive the executor uses
+    /// for cooperative cancellation — surfaced here at the manager layer so
+    /// callers (TUI `/jobs <id> cancel`, programmatic) can stop a subagent.
+    pub fn cancel(&self, id: &str) -> bool {
+        let Some(handle) = self.tasks.get(id) else {
+            return false;
+        };
+        if handle.is_terminal() {
+            return false;
+        }
+        handle.cancel_requested.store(true, Ordering::SeqCst);
+        handle.cancel_signal.notify_one();
+        true
+    }
+
+    /// All tasks with their status + metadata, ordered by task id (numeric)
+    /// so `task-2` precedes `task-10`, for the TUI `/jobs` display.
+    pub fn list(&self) -> Vec<TaskListEntry> {
+        let mut entries: Vec<TaskListEntry> = self
+            .tasks
+            .iter()
+            .map(|(id, h)| TaskListEntry {
+                id: id.clone(),
+                status: h.status(),
+                metadata: h.metadata.clone(),
+            })
+            .collect();
+        entries.sort_by_key(|e| task_id_rank(&e.id));
+        entries
+    }
+}
+
+/// Numeric sort key for `task-<n>` ids so `task-2` sorts before `task-10`.
+fn task_id_rank(id: &str) -> usize {
+    id.strip_prefix("task-")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(usize::MAX)
 }
 
 impl Default for TaskManager {
@@ -217,8 +435,9 @@ impl Tool for Task {
 
         if background {
             let manager = self.task_manager.clone();
+            let prompt_summary: String = prompt.chars().take(100).collect();
             let request = TaskRequest {
-                prompt: prompt.clone(),
+                prompt,
                 persona: persona.clone(),
                 model: model.clone(),
                 max_turns,
@@ -242,24 +461,60 @@ impl Tool for Task {
                         .unwrap_or_else(|_| panic!("bg_semaphore closed unexpectedly"))
                 }
             };
+            // Per-task lifecycle handles. `started` distinguishes Pending from
+            // Running; `cancel_requested`/`cancel_signal` drive cancellation.
+            let started = Arc::new(AtomicBool::new(false));
+            let cancel_signal = Arc::new(tokio::sync::Notify::new());
+            let metadata = TaskMetadata {
+                model,
+                persona,
+                prompt_summary,
+                started_at: chrono::Local::now(),
+                duration_ms: None,
+                token_estimate: None,
+                parent_task_id: None,
+            };
             let id = {
                 let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
-                let notify = Arc::new(tokio::sync::Notify::new());
-                let id = guard.insert(TaskHandle {
+                guard.insert(TaskHandle {
                     result: None,
                     error: None,
-                    completed: notify.clone(),
-                });
-                (id, notify)
+                    completed: Arc::new(tokio::sync::Notify::new()),
+                    metadata,
+                    started: started.clone(),
+                    cancel_requested: Arc::new(AtomicBool::new(false)),
+                    cancel_signal: cancel_signal.clone(),
+                })
             };
-            let id = id.0;
             let id_for_spawn = id.clone();
             tokio::spawn(async move {
-                let result = spawner.run_task(request).await;
+                started.store(true, Ordering::SeqCst);
+                let start = Instant::now();
+                let result = tokio::select! {
+                    r = spawner.run_task(request) => r,
+                    _ = cancel_signal.notified() => {
+                        // ceiling: dropping run_task mid-flight leaks its
+                        // temp dir (cleanup runs at the end of run_task).
+                        // Bounded: one small tempdir per cancelled subagent
+                        // in $TMPDIR. Upgrade path: thread a cancel token
+                        // into TaskSpawner::run_task so it cooperates and
+                        // runs its own cleanup.
+                        drop(permit);
+                        let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
+                        if let Some(h) = guard.tasks.get_mut(&id_for_spawn) {
+                            h.metadata.duration_ms =
+                                Some(start.elapsed().as_millis() as u64);
+                            h.completed.clone().notify_one();
+                        }
+                        return;
+                    }
+                };
                 drop(permit);
+                let duration_ms = start.elapsed().as_millis() as u64;
                 let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(handle) = guard.tasks.get_mut(&id_for_spawn) {
                     let notify = handle.completed.clone();
+                    handle.metadata.duration_ms = Some(duration_ms);
                     match result {
                         Ok(summary) => handle.result = Some(summary),
                         Err(err) => handle.error = Some(err),
@@ -299,9 +554,7 @@ impl TaskOutput {
 
     pub fn is_completed(&self, id: &str) -> bool {
         let guard = self.task_manager.lock().unwrap_or_else(|e| e.into_inner());
-        guard
-            .get(id)
-            .is_some_and(|h| h.result.is_some() || h.error.is_some())
+        guard.get(id).is_some_and(|h| h.is_terminal())
     }
 }
 
@@ -392,16 +645,8 @@ mod tests {
     #[test]
     fn task_manager_generates_unique_ids() {
         let mut mgr = TaskManager::new();
-        let id1 = mgr.insert(TaskHandle {
-            result: None,
-            error: None,
-            completed: Arc::new(tokio::sync::Notify::new()),
-        });
-        let id2 = mgr.insert(TaskHandle {
-            result: None,
-            error: None,
-            completed: Arc::new(tokio::sync::Notify::new()),
-        });
+        let id1 = mgr.insert(TaskHandle::default());
+        let id2 = mgr.insert(TaskHandle::default());
         assert_ne!(id1, id2);
         assert!(mgr.get(&id1).is_some());
     }
@@ -442,8 +687,7 @@ mod tests {
             let mut mgr = manager.lock().unwrap_or_else(|e| e.into_inner());
             mgr.insert(TaskHandle {
                 result: Some("done".to_string()),
-                error: None,
-                completed: Arc::new(tokio::sync::Notify::new()),
+                ..Default::default()
             })
         };
         let tool = TaskOutput::new(manager);
@@ -552,11 +796,7 @@ mod tests {
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let id = {
             let mut mgr = manager.lock().unwrap();
-            mgr.insert(TaskHandle {
-                result: None,
-                error: None,
-                completed: Arc::new(tokio::sync::Notify::new()),
-            })
+            mgr.insert(TaskHandle::default())
         };
         let tool = TaskOutput::new(manager);
         let outcome = tool
@@ -576,9 +816,8 @@ mod tests {
         let id = {
             let mut mgr = manager.lock().unwrap();
             mgr.insert(TaskHandle {
-                result: None,
                 error: Some("task blew up".to_string()),
-                completed: Arc::new(tokio::sync::Notify::new()),
+                ..Default::default()
             })
         };
         let tool = TaskOutput::new(manager);
@@ -596,8 +835,7 @@ mod tests {
         let mut mgr = TaskManager::default();
         let id = mgr.insert(TaskHandle {
             result: Some("x".to_string()),
-            error: None,
-            completed: Arc::new(tokio::sync::Notify::new()),
+            ..Default::default()
         });
         assert!(id.starts_with("task-"));
     }
@@ -784,5 +1022,324 @@ mod tests {
                 "expected Failure(InvalidArgs) for second task in reject mode, got {other:?}"
             ),
         }
+    }
+
+    // ── WO 30.2: TaskManager lifecycle (status / metadata / cancel / list) ──
+
+    fn extract_task_id(content: &str) -> String {
+        content
+            .split_whitespace()
+            .find(|w| w.starts_with("task-"))
+            .map(|w| w.trim_end_matches('.'))
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn task_handle_status_pending_by_default() {
+        let h = TaskHandle::default();
+        assert_eq!(h.status(), TaskStatus::Pending);
+        assert!(!h.is_terminal());
+    }
+
+    #[test]
+    fn task_handle_status_running_when_started() {
+        let h = TaskHandle {
+            started: Arc::new(AtomicBool::new(true)),
+            ..Default::default()
+        };
+        assert_eq!(h.status(), TaskStatus::Running);
+        assert!(!h.is_terminal());
+    }
+
+    #[test]
+    fn task_handle_status_completed_carries_result() {
+        let h = TaskHandle {
+            result: Some("summary".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(h.status(), TaskStatus::Completed("summary".to_string()));
+        assert!(h.is_terminal());
+    }
+
+    #[test]
+    fn task_handle_status_failed_carries_error() {
+        let h = TaskHandle {
+            error: Some("boom".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(h.status(), TaskStatus::Failed("boom".to_string()));
+        assert!(h.is_terminal());
+    }
+
+    #[test]
+    fn task_handle_status_cancelled_when_requested_and_not_terminal() {
+        // Cancel wins the race: no result/error, cancel flag set.
+        let h = TaskHandle {
+            cancel_requested: Arc::new(AtomicBool::new(true)),
+            ..Default::default()
+        };
+        assert_eq!(h.status(), TaskStatus::Cancelled);
+        assert!(h.is_terminal());
+    }
+
+    #[test]
+    fn task_handle_status_prefers_result_over_cancel_race() {
+        // If the task completed before cancel took effect, Completed wins.
+        let h = TaskHandle {
+            result: Some("done".to_string()),
+            cancel_requested: Arc::new(AtomicBool::new(true)),
+            ..Default::default()
+        };
+        assert_eq!(h.status(), TaskStatus::Completed("done".to_string()));
+    }
+
+    #[test]
+    fn task_status_label_and_terminal_cover_all_variants() {
+        assert!(!TaskStatus::Pending.is_terminal());
+        assert!(!TaskStatus::Running.is_terminal());
+        assert!(TaskStatus::Cancelled.is_terminal());
+        assert!(TaskStatus::TimedOut.is_terminal());
+        assert!(TaskStatus::Completed("x".into()).is_terminal());
+        assert!(TaskStatus::Failed("e".into()).is_terminal());
+        assert_eq!(TaskStatus::TimedOut.label(), "timed out");
+        assert_eq!(TaskStatus::Running.label(), "running");
+    }
+
+    #[test]
+    fn task_manager_status_unknown_id_is_none() {
+        let mgr = TaskManager::new();
+        assert!(mgr.status("task-99").is_none());
+    }
+
+    #[test]
+    fn task_manager_cancel_unknown_id_returns_false() {
+        let mgr = TaskManager::new();
+        assert!(!mgr.cancel("task-99"));
+    }
+
+    #[test]
+    fn task_manager_cancel_terminal_returns_false() {
+        let mut mgr = TaskManager::new();
+        let id = mgr.insert(TaskHandle {
+            result: Some("done".to_string()),
+            ..Default::default()
+        });
+        assert!(!mgr.cancel(&id));
+    }
+
+    #[test]
+    fn task_manager_cancel_running_marks_cancelled() {
+        let mut mgr = TaskManager::new();
+        let id = mgr.insert(TaskHandle {
+            started: Arc::new(AtomicBool::new(true)),
+            ..Default::default()
+        });
+        assert!(mgr.cancel(&id));
+        assert_eq!(mgr.status(&id), Some(TaskStatus::Cancelled));
+        // Second cancel is a no-op (now terminal).
+        assert!(!mgr.cancel(&id));
+    }
+
+    #[test]
+    fn task_manager_list_sorted_by_numeric_id() {
+        let mut mgr = TaskManager::new();
+        for _ in 0..12 {
+            mgr.insert(TaskHandle::default());
+        }
+        let entries = mgr.list();
+        let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+        // task-2 must precede task-10 (numeric, not lexicographic).
+        assert_eq!(
+            ids,
+            vec![
+                "task-1", "task-2", "task-3", "task-4", "task-5", "task-6", "task-7", "task-8",
+                "task-9", "task-10", "task-11", "task-12"
+            ]
+        );
+    }
+
+    #[test]
+    fn format_duration_ms_thresholds() {
+        assert_eq!(format_duration_ms(0), "0ms");
+        assert_eq!(format_duration_ms(999), "999ms");
+        assert_eq!(format_duration_ms(1_000), "1.00s");
+        assert_eq!(format_duration_ms(1_500), "1.50s");
+        assert_eq!(format_duration_ms(60_000), "1m00s");
+        assert_eq!(format_duration_ms(125_000), "2m05s");
+    }
+
+    #[test]
+    fn format_task_entry_renders_icon_id_status_and_summary() {
+        let entry = TaskListEntry {
+            id: "task-3".to_string(),
+            status: TaskStatus::Completed("ignored by display".to_string()),
+            metadata: TaskMetadata {
+                model: Some("qwen".to_string()),
+                persona: "explore".to_string(),
+                prompt_summary: "scan the repo".to_string(),
+                duration_ms: Some(1_500),
+                ..Default::default()
+            },
+        };
+        let s = format_task_entry(&entry);
+        assert!(s.contains("task-3"), "got: {s}");
+        assert!(s.contains("completed"), "got: {s}");
+        assert!(s.contains("[qwen]"), "got: {s}");
+        assert!(s.contains("persona=explore"), "got: {s}");
+        assert!(s.contains("1.50s"), "got: {s}");
+        assert!(s.contains("scan the repo"), "got: {s}");
+    }
+
+    #[tokio::test]
+    async fn task_background_spawn_records_metadata_and_duration() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let task = Task::with_manager(manager.clone());
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(MockSpawner {
+            result: Ok("ok".to_string()),
+        });
+        let ctx = ToolContext::with_spawner(spawner);
+        let outcome = task
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "prompt": "do the thing",
+                    "background": true,
+                    "persona": "explore",
+                    "model": "qwen2.5:0.5b",
+                }),
+            )
+            .await;
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected Success, got {other:?}"),
+        };
+        let id = extract_task_id(&content);
+
+        // Wait for the mock spawner to finish and the worker to record duration.
+        for _ in 0..50 {
+            if manager
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .status(&id)
+                .as_ref()
+                .is_some_and(|s| s.is_terminal())
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        let guard = manager.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = guard
+            .list()
+            .into_iter()
+            .find(|e| e.id == id)
+            .expect("task should be listed");
+        assert!(matches!(entry.status, TaskStatus::Completed(_)));
+        let m = entry.metadata;
+        assert_eq!(m.persona, "explore");
+        assert_eq!(m.model.as_deref(), Some("qwen2.5:0.5b"));
+        assert_eq!(m.prompt_summary, "do the thing");
+        assert!(m.duration_ms.is_some(), "duration should be recorded");
+    }
+
+    #[tokio::test]
+    async fn task_background_prompt_summary_truncated_to_100_chars() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let task = Task::with_manager(manager.clone());
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(MockSpawner {
+            result: Ok("ok".to_string()),
+        });
+        let ctx = ToolContext::with_spawner(spawner);
+        let long_prompt = "x".repeat(250);
+        let outcome = task
+            .run(
+                &ctx,
+                serde_json::json!({ "prompt": long_prompt, "background": true }),
+            )
+            .await;
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected Success, got {other:?}"),
+        };
+        let id = extract_task_id(&content);
+        for _ in 0..50 {
+            if manager
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .status(&id)
+                .as_ref()
+                .is_some_and(|s| s.is_terminal())
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let m = manager
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .list()
+            .first()
+            .unwrap()
+            .metadata
+            .clone();
+        assert_eq!(m.prompt_summary.chars().count(), 100);
+        assert!(m.prompt_summary.chars().all(|c| c == 'x'));
+    }
+
+    #[tokio::test]
+    async fn task_background_cancel_marks_cancelled_not_failed() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let task = Task::with_manager(manager.clone());
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(BlockingSpawner {
+            started: Arc::new(tokio::sync::Notify::new()),
+            finish: Arc::new(AtomicBool::new(false)),
+        });
+        let ctx = ToolContext::with_spawner(spawner);
+        let outcome = task
+            .run(
+                &ctx,
+                serde_json::json!({ "prompt": "long running", "background": true }),
+            )
+            .await;
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected Success, got {other:?}"),
+        };
+        let id = extract_task_id(&content);
+
+        // Wait until the worker has started (Pending -> Running).
+        for _ in 0..50 {
+            if matches!(
+                manager
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .status(&id),
+                Some(TaskStatus::Running)
+            ) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // cancel() sets the flag synchronously, so status reflects Cancelled
+        // immediately — distinct from Failed, and without waiting for the
+        // worker's select! arm to observe the notify.
+        assert!(
+            manager
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .cancel(&id),
+            "cancel should succeed for a running task"
+        );
+        assert_eq!(
+            manager
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .status(&id),
+            Some(TaskStatus::Cancelled),
+            "cancelled task must read as Cancelled, not Failed"
+        );
     }
 }

@@ -15,7 +15,7 @@ use crate::tools::task::{TaskConcurrencyMode, TaskRequest, TaskSpawner};
 use crate::tools::toolset::{CompositeToolset, VecToolset};
 use crate::tools::{Tool, UndoStackRef};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Spawn a subagent task inside an isolated `Executor` with a temporary
@@ -30,14 +30,6 @@ pub struct InProcessTaskSpawner {
     ollama_host: String,
     undo_stack: Option<UndoStackRef>,
     supports_images: bool,
-    /// Parent session's approval channel. When set, subagent destructive-tool
-    /// approval requests are forwarded here so the user sees them in the
-    /// TUI / line-mode (WO 30.6). When `None` (no interactive parent — e.g.
-    /// a top-level scheduled job), `run_task` falls back to the P0 policy:
-    /// auto-approve in CI, deny otherwise. Interior-mutable because the
-    /// spawner is `Arc`-shared and the channel is established after
-    /// construction (set from `Executor::run_turn`).
-    parent_approval: Arc<Mutex<Option<mpsc::UnboundedSender<ApprovalRequest>>>>,
 }
 
 impl InProcessTaskSpawner {
@@ -54,15 +46,7 @@ impl InProcessTaskSpawner {
             ollama_host,
             undo_stack,
             supports_images,
-            parent_approval: Arc::new(Mutex::new(None)),
         }
-    }
-
-    /// Set the parent-session approval channel that subagent approval
-    /// requests are forwarded to (WO 30.6). Called by the executor at the
-    /// start of each turn with the session-stable approval sender.
-    pub fn set_parent_approval(&self, tx: mpsc::UnboundedSender<ApprovalRequest>) {
-        *self.parent_approval.lock().unwrap() = Some(tx);
     }
 }
 
@@ -115,48 +99,6 @@ impl TaskSpawner for InProcessTaskSpawner {
         );
 
         let (deny_list, path_guard, _read_gate) = crate::shared::access::access_from_config(&cfg);
-
-        // WO 30.1: give the `coder` persona its own git worktree so its file
-        // edits land in an isolated checkout, not the parent's working tree.
-        // `explore` and `plan` stay on the parent's workspace (read-only
-        // research). The worktree's path becomes the path_guard's
-        // `sandbox_dir`, confining read_file/write_file/edit_file/notebook_edit
-        // to the worktree. bash is NOT confined here (it runs in the process
-        // CWD); bash remains governed by its existing landlock/sandbox posture.
-        // The worktree is left on disk after the run so the parent can review
-        // or merge; on error the guard drops and cleans it up.
-        let mut worktree_guard: Option<crate::session::worktree::WorktreeSession> = None;
-        let path_guard = if request.persona == "coder" {
-            let repo_root = std::env::current_dir().unwrap_or_default();
-            let worktree_id = format!(
-                "task-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis())
-                    .unwrap_or(0)
-            );
-            match crate::session::worktree::WorktreeSession::create(&worktree_id, &repo_root) {
-                Ok(wt) => {
-                    let wt_path = wt.path().clone();
-                    tracing::info!(worktree = %wt_path.display(), "coder subagent isolated to worktree");
-                    worktree_guard = Some(wt);
-                    let mut g = path_guard;
-                    g.sandbox_dir = Some(wt_path);
-                    g
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "coder worktree creation failed; falling back to shared workspace"
-                    );
-                    path_guard
-                }
-            }
-        } else {
-            path_guard
-        };
-
         let all = crate::tools::all_tools(&crate::tools::ToolContextBuilder {
             undo_stack: self.undo_stack.clone(),
             supports_images: self.supports_images,
@@ -250,51 +192,35 @@ impl TaskSpawner for InProcessTaskSpawner {
         }
 
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
-        // WO 30.6: forward subagent approval requests to the parent session's
-        // approval channel so the user sees them in the TUI / line-mode and
-        // can approve/deny interactively. The request carries its own
-        // responder (a oneshot back to THIS subagent's executor), so the
-        // parent's existing handler decides and the response routes back
-        // with no extra plumbing. When there is no parent channel (a
-        // top-level scheduled job with no interactive session), fall back to
-        // the P0 policy from `5fbd955`: auto-approve in CI, deny otherwise.
-        let parent_approval = self.parent_approval.lock().unwrap().clone();
+        // Inherit the parent's auto_approve setting. If the parent session is
+        // NOT in auto-approve mode, subagent destructive tool calls are DENIED
+        // (the user didn't authorize the subagent to do destructive things).
+        // If auto_approve IS on (CI/non-interactive), approve as before.
+        // This closes the P0 where subagents bypassed the parent's permission
+        // policy (reported by external review 2026-08-13).
         let auto_approve = cfg.security.auto_approve;
         tokio::spawn(async move {
             while let Some(req) = approval_rx.recv().await {
-                if let Some(parent) = &parent_approval {
-                    if parent.send(req).is_err() {
-                        tracing::warn!("parent approval channel closed; subagent request dropped");
-                    }
+                let resp = if auto_approve {
+                    ApprovalResponse::Approved
                 } else {
-                    let resp = if auto_approve {
-                        ApprovalResponse::Approved
-                    } else {
-                        tracing::warn!(
-                            tool = %req.tool_name,
-                            "subagent approval DENIED: no parent approval channel to forward \
-                             to and the session is not in auto-approve mode"
-                        );
-                        ApprovalResponse::DeniedWithReason(
-                            "subagent has no parent approval channel to forward to and the \
-                             session is not in auto-approve mode; enable auto_approve or run \
-                             the tool in the parent session"
-                                .into(),
-                        )
-                    };
-                    crate::send_or_warn!(
-                        req.response.send(resp),
-                        "task approval response receiver dropped"
+                    tracing::warn!(
+                        tool = %req.tool_name,
+                        "subagent approval DENIED: parent session is not in auto-approve mode"
                     );
-                }
+                    ApprovalResponse::DeniedWithReason(
+                        "subagent cannot approve destructive tools when the parent session \
+                         is not in auto-approve mode; enable auto_approve or run the tool \
+                         in the parent session"
+                            .into(),
+                    )
+                };
+                crate::send_or_warn!(
+                    req.response.send(resp),
+                    "task approval response receiver dropped"
+                );
             }
         });
-
-        // WO 30.6: pin the subagent executor's own spawner to forward nested
-        // (sub-subagent) approval requests to THIS subagent's approval
-        // channel, which the forwarder above relays to the parent. Each
-        // recursion level chains one hop nearer the top-level user channel.
-        executor.set_spawner_parent_approval(approval_tx.clone());
 
         let cancelled = Arc::new(AtomicBool::new(false));
         let prompt = build_task_prompt(&request.persona, &request.prompt);
@@ -339,23 +265,6 @@ impl TaskSpawner for InProcessTaskSpawner {
             .find(|m| matches!(m.role, Role::Assistant) && !m.content.is_empty())
             .map(|m| m.content.clone())
             .unwrap_or_else(|| "(no assistant response produced)".to_string());
-
-        // WO 30.1: persist the coder worktree on success and surface its path
-        // so the parent can review or merge. The guard is dropped (cleaning
-        // up) on any error path above via the `?` operators; here the run
-        // succeeded so the work must outlive this call.
-        // ponytail: completed worktrees accumulate on disk until the parent
-        // merges/removes them; add a janitor if that becomes a problem.
-        let summary = if let Some(wt) = worktree_guard.take() {
-            let wt_path = wt.path().clone();
-            std::mem::forget(wt);
-            format!(
-                "{summary}\n\n[isolated worktree left for review: {}]",
-                wt_path.display()
-            )
-        } else {
-            summary
-        };
 
         let _ = std::fs::remove_dir_all(&temp_dir);
         Ok(summary)

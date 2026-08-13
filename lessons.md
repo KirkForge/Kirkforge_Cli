@@ -1,5 +1,51 @@
 # lessons.md — WO 27.2 e2e hang fix session (2026-08-12)
 
+## Session 2026-08-13 — WO 30.2 TaskManager lifecycle (wo30b worktree)
+
+### What I learned about this codebase
+- **Two parallel background-job systems, don't conflate them.** `TaskManager`
+  (`tools/task.rs`) = subagent tasks, string ids `task-N`, per-session
+  (`Arc<Mutex<..>>` created fresh inside `all_tools()` at `tools/mod.rs:204`).
+  `BashJobRegistry` (`session/bash_jobs.rs`) = bash commands, numeric ids,
+  **global singleton** (`global_registry()`). The `/jobs` TUI command only
+  reads the bash registry. The right layer for subagent lifecycle is
+  `TaskManager`; `bash_jobs.rs` needed zero changes.
+- **`TaskManager` is unreachable from the TUI.** Unlike `BashJobRegistry`,
+  it's per-toolset, not in `AppState`. So "make metadata available to /jobs"
+  meant shipping `list()`/`format_task_entry` (done) — the actual `/jobs`
+  rendering is a cross-layer plumbing task (global singleton vs `ServicesState`
+  field), deferred + disclosed.
+- **`InProcessTaskSpawner::run_task` creates its OWN `cancelled: Arc<AtomicBool>`
+  internally** (`task_spawner.rs:224`) per call — it does NOT receive one from
+  the caller. So "surface the executor's AtomicBool to the TaskManager" can't
+  be done without changing the `TaskSpawner` trait (blast radius: trait + all
+  impls + test mocks + workflow runner). Lazy alternative that preserves
+  Cancelled-vs-Failed semantics: `tokio::select!` race in the spawn closure.
+- **Cooperative cancel can't distinguish Cancelled from Failed.** Threading
+  the `&AtomicBool` into `run_turn_collecting` returns via `Err` on cancel →
+  recorded as `Failed`. The `select!` drop approach marks `Cancelled` cleanly.
+  Tradeoff: dropping `run_task` mid-flight leaks its temp dir (cleanup is at
+  the end of `run_task`). Bounded; flagged with a `ceiling:` comment.
+- **`TaskOutput::is_completed` had zero external callers** — safe to retarget
+  to `is_terminal()` (so cancelled tasks stop polling).
+- **AGENTS.md gotcha confirmed:** `cargo check`/`clippy` cold runs are 3-4 min
+  each on this repo. Budget wall-clock; run the focused test first, then gates.
+
+### Scope creep (disclosed)
+- `src/session/task_spawner.rs`: 1-line `cargo fmt` fix (`.into()` line wrap).
+  Pre-existing from `5fbd955` (WO 30 sibling), not my regression. Fixed so the
+  `cargo fmt --check` gate is green. AGENTS.md §7/§11 bless disclosed scope
+  creep that unblocks a hard gate.
+
+### What I'd do differently
+- For the TUI integration: the "make available to /jobs" constraint was
+  ambiguous given the per-toolset `TaskManager`. Next time, surface this
+  tension in `workplan.md` BEFORE implementing and either (a) confirm with the
+  owner that `list()` alone satisfies "available", or (b) pick the plumbing
+  approach up front. I chose (a) + explicit deferral, which is defensible but
+  leaves the visible `/jobs` integration as a follow-up.
+
+
 ## Session 2026-08-12 — ADR drift gate fix (adr-fix worktree)
 
 ### Scope creep (disclosed): Cargo.toml + Cargo.lock

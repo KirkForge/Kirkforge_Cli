@@ -211,7 +211,8 @@ impl TaskSpawner for InProcessTaskSpawner {
                     ApprovalResponse::DeniedWithReason(
                         "subagent cannot approve destructive tools when the parent session \
                          is not in auto-approve mode; enable auto_approve or run the tool \
-                         in the parent session".into(),
+                         in the parent session"
+                            .into(),
                     )
                 };
                 crate::send_or_warn!(

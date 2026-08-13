@@ -6,6 +6,20 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
+## Session 2026-08-13 — WO 30.2 TaskManager lifecycle (branch `wo30b`, worktree `.worktrees/wo30b`, not pushed)
+
+External review (ChatGPT 2026-08-13) flagged the subagent `TaskManager` as a gap vs Codex's multi-agent lifecycle infra. Shipped the lifecycle upgrade in `src/tools/task.rs`:
+- **`TaskStatus`** enum: `Pending | Running | Completed(String) | Cancelled | Failed(String) | TimedOut`. Derived from existing `result`/`error` + two `Arc<AtomicBool>` flags (`started`, `cancel_requested`) — no second copy of completion state to drift.
+- **`TaskMetadata`**: `model`, `persona`, `prompt_summary` (≤100 chars), `started_at`, `duration_ms` (on completion/cancel), `token_estimate` (None — executor doesn't surface it), `parent_task_id`. `Default` for backward compat.
+- **`cancel(id)`**: sets the per-task `Arc<AtomicBool>` flag + fires an `Arc<Notify>`; the spawn closure's `tokio::select!` drops `run_task`. Returns false if unknown/terminal. Cancelled is distinct from Failed (unlike threading the executor's `&AtomicBool`, which returns via `Err`).
+- **`status(id)`** + **`list()`** (numeric-id sort, `task-2` before `task-10`) + **`format_task_entry`** helper for `/jobs`.
+- `task_output` tool and all existing callers unchanged. `TaskSpawner` trait untouched. 14 new tests; `task.rs` tests 41/41 green.
+- **Scope creep (disclosed):** fixed a pre-existing `cargo fmt` slip in `src/session/task_spawner.rs` (`.into()` line wrap, from `5fbd955`) so `cargo fmt --check` is green.
+- Gate: `cargo check`/`clippy -D warnings`/`fmt --check` (`-p kf-code --lib --tests`) green; `cargo test --lib -p kf-code -- tools::task 'jobs::'` → 82 passed, 0 failed, 1 ignored.
+
+### Pending / deferred (this session)
+- **TUI `/jobs` rendering of subagent tasks (DEFERRED):** `list()` + `format_task_entry` are in place, but `TaskManager` is created per-toolset inside `all_tools()` (`tools/mod.rs:204`) and is NOT reachable from `AppState` (unlike the global `BashJobRegistry`). Surfacing it needs a cross-layer decision: (a) a global singleton (breaks the current per-session isolation — each `all_tools()` call, including subagents, gets a fresh manager today) or (b) plumbing an `Arc<Mutex<TaskManager>>` into `ServicesState`/`AppState`. Remaining work: pick (a)/(b), then add a "Subagent tasks:" section to `handle_background_jobs_command` / `refresh_jobs_output` in `tui/commands/jobs.rs` mirroring the bash-jobs rows. Tracked here + a WO 30.x follow-up. Note: the `ceiling:` comment in `task.rs` flags that cancelling mid-flight leaks the subagent's temp dir (cleanup runs at end of `run_task`); bounded, upgrade path is threading a cancel token into `TaskSpawner::run_task`.
+
 ## Session 2026-08-13 — MEDIUM security hardening (branch `wo28h`)
 
 Knocked down the MEDIUM findings from the deep review (worktree `.worktrees/wo28h`, 3 commits, not pushed):

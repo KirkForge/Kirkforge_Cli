@@ -120,9 +120,7 @@ impl Tool for ReadFile {
         // The model can still explicitly pass `minify=true` for token savings
         // (it then knows to re-read with `minify=false` before editing).
         let minify_arg = args.get("minify").and_then(|m| m.as_bool());
-        let auto_minified = minify_arg.is_none()
-            && self.minify_write_side
-            && raw_content.len() > self.minify_above_bytes;
+        let auto_minified = minify_arg.is_none() && raw_content.len() > self.minify_above_bytes;
         let minify = minify_arg.unwrap_or(auto_minified);
         let selected = if minify {
             crate::shared::minify::minify_source(&path, &selected_raw)

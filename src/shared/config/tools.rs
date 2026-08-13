@@ -25,7 +25,12 @@ fn default_max_tool_result_chars() -> usize {
 }
 
 fn default_minify_write_side() -> bool {
-    false
+    // Defaults to true: when read_file auto-minifies large files, the
+    // minified content is wrapped in a <minified lang='...'> envelope.
+    // edit_file detects the envelope and expands it back to raw before
+    // matching. This round-trip preserves the token savings of minify
+    // while ensuring edit_file string-match always works.
+    true
 }
 
 fn default_minify_above_bytes() -> usize {

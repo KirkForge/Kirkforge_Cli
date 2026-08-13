@@ -16,6 +16,16 @@ use crate::tui::app::{AppState, ConnectionState, ConversationEntry};
 use crate::tui::rendering::{highlight_line_spans, render_markdown_lines_with_query};
 use crate::tui::theme::Theme;
 
+/// Check if a tool entry at `idx` is currently streaming (PTY tool).
+fn idx_is_streaming_tool(state: &AppState, idx: usize, _last_idx: usize) -> bool {
+    state
+        .conversation
+        .messages
+        .get(idx)
+        .map(|m| m.role == "tool" && m.streaming)
+        .unwrap_or(false)
+}
+
 /// Map a conversation role to a short, color-coded badge span.
 pub(super) fn role_badge(role: &str) -> Span<'static> {
     match role {
@@ -376,8 +386,74 @@ pub(super) fn build_chat_lines(
     // Conversation messages.
     let last_idx = state.conversation.messages.len().saturating_sub(1);
     let mut prev_entry: Option<&ConversationEntry> = None;
-    for (idx, entry) in state.conversation.messages.iter().enumerate() {
+    let mut idx = 0;
+    while idx < state.conversation.messages.len() {
+        let entry = &state.conversation.messages[idx];
         message_start.push(lines.len());
+
+        // ── Tool call grouping: collapse consecutive tool entries ──
+        // Instead of rendering each ToolStart+ToolResult as a separate
+        // card, group consecutive tool entries into a single collapsed
+        // header: "🔧 N tool calls — Enter to expand". This prevents
+        // tool cards from fragmenting the assistant's text flow.
+        if entry.role == "tool" && !idx_is_streaming_tool(state, idx, last_idx) {
+            // Count consecutive tool entries.
+            let group_start = idx;
+            let mut group_count = 1;
+            while idx + 1 < state.conversation.messages.len()
+                && state.conversation.messages[idx + 1].role == "tool"
+                && !idx_is_streaming_tool(state, idx + 1, last_idx)
+            {
+                idx += 1;
+                group_count += 1;
+            }
+
+            if group_count > 1 && state.tool_should_collapse(idx) {
+                // Render as a single grouped header.
+                let tool_names: Vec<&str> = (group_start..=idx)
+                    .map(|i| {
+                        let e = &state.conversation.messages[i];
+                        // Tool entries store the tool name in content header
+                        // like "🔧 bash" — extract it, fallback to "tool".
+                        e.content.split_whitespace().nth(1).unwrap_or("tool")
+                    })
+                    .collect();
+                let unique: Vec<&str> = {
+                    let mut seen = std::collections::HashSet::new();
+                    tool_names.iter().filter(|t| seen.insert(**t)).copied().collect()
+                };
+                let label = if unique.len() == 1 {
+                    format!("{} ×{}", unique[0], group_count)
+                } else {
+                    format!("{} tool calls", group_count)
+                };
+                lines.push(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(
+                        "🔧 ",
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::styled(
+                        label,
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        "  · Enter to expand",
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::DIM),
+                    ),
+                ]));
+                lines.push(Line::from(""));
+                prev_entry = Some(entry);
+                idx += 1;
+                continue;
+            }
+            // group_count == 1 or expanded: fall through to normal render
+        }
+
         let is_streaming_last =
             idx == last_idx && state.generation.is_generating && entry.role == "assistant";
         let collapsed = if is_streaming_last {
@@ -400,6 +476,7 @@ pub(super) fn build_chat_lines(
         lines.extend(entry_lines);
         lines.push(Line::from(""));
         prev_entry = Some(entry);
+        idx += 1;
     }
 
     // Inline thinking block.

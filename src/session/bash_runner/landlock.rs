@@ -10,6 +10,7 @@
 //! add it. The "everything else is denied" invariant relies on restrict_self
 //! removing the pre-landlock access scope.
 
+use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 
 use std::os::unix::ffi::OsStrExt;
@@ -106,35 +107,48 @@ unsafe fn landlock_restrict(ruleset_fd: libc::c_int) -> bool {
     libc::syscall(LANDLOCK_RESTRICT_SELF, ruleset_fd as libc::c_long, 0u32) == 0
 }
 
-unsafe fn add_path(ruleset_fd: libc::c_int, path: &Path, access: u64) -> bool {
-    let fd = match libc::open(
-        path.as_os_str().as_bytes().as_ptr() as *const _,
-        libc::O_PATH | libc::O_CLOEXEC,
-    ) {
-        fd if fd >= 0 => fd,
-        _ => return false,
-    };
+unsafe fn add_path(ruleset_fd: libc::c_int, path: &CStr, access: u64) -> bool {
+    let fd = libc::open(path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC);
+    if fd < 0 {
+        return false;
+    }
     let ok = landlock_add_path_rule(ruleset_fd, fd, access);
     libc::close(fd);
     ok
 }
 
-static SYSTEM_READ_DIRS: &[&str] = &[
-    "/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/nix", "/snap", "/var/lib", "/tmp",
-    "/dev", "/proc",
+// &CStr literals (NUL-terminated, 'static, zero-alloc) — libc::open in
+// pre_exec needs a NUL-terminated path; building these in the child would
+// allocate, which pre_exec forbids.
+static SYSTEM_READ_DIRS: &[&CStr] = &[
+    c"/usr", c"/bin", c"/sbin", c"/lib", c"/lib64", c"/etc", c"/opt", c"/nix", c"/snap",
+    c"/var/lib", c"/tmp", c"/dev", c"/proc",
 ];
 
 /// Pre-resolved paths for the landlock allow-list. Built in the parent
 /// process (before fork) so the pre_exec closure never allocates.
+///
+/// Paths are stored as `CString`s: the old version kept `PathBuf`s and
+/// passed `as_bytes().as_ptr()` to `libc::open`, which reads a
+/// NUL-terminated string — the byte AFTER the path was heap garbage, so
+/// short paths like `.` (the default bash workdir) opened `".<junk>"`
+/// and failed with ENOENT/EINVAL, breaking every workdir-less bash call
+/// (WO 30.0.5 follow-up, 2026-08-13 dogfood).
 #[allow(dead_code)]
 pub(crate) struct LandlockPaths {
-    pub workspace: PathBuf,
-    pub home: Option<PathBuf>,
-    pub xdg_dirs: Vec<PathBuf>,
+    pub workspace: CString,
+    pub home: Option<CString>,
+    pub xdg_dirs: Vec<CString>,
     /// Operator-supplied extra allow-list paths (config
     /// `security.landlock_extra_paths` / `KF_CODE_LANDLOCK_EXTRA_PATHS`),
     /// granted full read/write. Operators explicitly trust these.
-    pub extra: Vec<PathBuf>,
+    pub extra: Vec<CString>,
+}
+
+/// Convert a path to a NUL-terminated CString, dropping paths with
+/// interior NULs (impossible for real filesystem paths).
+fn to_cstring(path: &Path) -> Option<CString> {
+    CString::new(path.as_os_str().as_bytes()).ok()
 }
 
 /// Resolve all env vars and path computations in the parent process.
@@ -142,7 +156,8 @@ pub(crate) struct LandlockPaths {
 /// `extra` are operator-supplied paths added to the allow-list at full r/w.
 pub(crate) fn resolve_paths(workspace: &Path, extra: &[PathBuf]) -> Option<LandlockPaths> {
     landlock_available()?;
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let workspace = to_cstring(workspace)?;
+    let home = std::env::var("HOME").ok().map(PathBuf::from).and_then(|h| to_cstring(&h));
     let xdg_vars = [
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
@@ -152,17 +167,19 @@ pub(crate) fn resolve_paths(workspace: &Path, extra: &[PathBuf]) -> Option<Landl
     let mut xdg_dirs = Vec::new();
     for var in &xdg_vars {
         if let Ok(val) = std::env::var(var) {
-            let pb = PathBuf::from(val);
-            if !xdg_dirs.contains(&pb) {
-                xdg_dirs.push(pb);
+            if let Some(pb) = to_cstring(&PathBuf::from(val)) {
+                if !xdg_dirs.contains(&pb) {
+                    xdg_dirs.push(pb);
+                }
             }
         }
     }
+    let extra = extra.iter().filter_map(|p| to_cstring(p)).collect();
     Some(LandlockPaths {
-        workspace: workspace.to_path_buf(),
+        workspace,
         home,
         xdg_dirs,
-        extra: extra.to_vec(),
+        extra,
     })
 }
 
@@ -193,14 +210,14 @@ pub(crate) fn apply_landlock(paths: &LandlockPaths) -> Result<(), String> {
 
     // system dirs: read-only (or full for /dev) — warn on failure, continue
     for dir in SYSTEM_READ_DIRS {
-        let access = if *dir == "/dev" {
+        let access = if *dir == c"/dev" {
             ACCESS_FS_ALL
         } else {
             ACCESS_FS_READ
         };
         unsafe {
-            if !add_path(ruleset_fd, Path::new(dir), access) {
-                eprintln!("landlock: warning: cannot add system dir {dir}");
+            if !add_path(ruleset_fd, dir, access) {
+                eprintln!("landlock: warning: cannot add system dir {dir:?}");
             }
         }
     }
@@ -353,12 +370,8 @@ mod tests {
         cmd.current_dir(&ws_path);
         unsafe {
             cmd.pre_exec(move || {
-                let paths = LandlockPaths {
-                    workspace: ws_for_closure.clone(),
-                    home: None,
-                    xdg_dirs: Vec::new(),
-                    extra: Vec::new(),
-                };
+                let paths = resolve_paths(&ws_for_closure, &[])
+                    .expect("landlock available (guarded by landlock_usable above)");
                 match apply_landlock(&paths) {
                     Ok(()) => Ok(()),
                     Err(e) => Err(std::io::Error::other(e)),
@@ -400,12 +413,8 @@ mod tests {
         cmd.current_dir(&ws_path);
         unsafe {
             cmd.pre_exec(move || {
-                let paths = LandlockPaths {
-                    workspace: ws_for_closure.clone(),
-                    home: None,
-                    xdg_dirs: Vec::new(),
-                    extra: Vec::new(),
-                };
+                let paths = resolve_paths(&ws_for_closure, &[])
+                    .expect("landlock available (guarded by landlock_usable above)");
                 match apply_landlock(&paths) {
                     Ok(()) => Ok(()),
                     Err(e) => Err(std::io::Error::other(e)),
@@ -439,12 +448,8 @@ mod tests {
         cmd.current_dir(&ws_path);
         unsafe {
             cmd.pre_exec(move || {
-                let paths = LandlockPaths {
-                    workspace: ws_for_closure.clone(),
-                    home: None,
-                    xdg_dirs: Vec::new(),
-                    extra: Vec::new(),
-                };
+                let paths = resolve_paths(&ws_for_closure, &[])
+                    .expect("landlock available (guarded by landlock_usable above)");
                 match apply_landlock(&paths) {
                     Ok(()) => Ok(()),
                     Err(e) => Err(std::io::Error::other(e)),

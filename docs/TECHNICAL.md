@@ -983,6 +983,17 @@ The root `Cargo.toml` exposes these features:
   `plugins/kf-plugin/` was deleted in WO 29.9.
 - `pty` (non-default) — PTY-backed interactive bash commands via `portable-pty`
   (WO 21.5-R2; opt in via `--features pty`).
+- `computer_use` (non-default) — Anthropic hosted computer_use beta
+  (coordinate-vision model). Adapter wire format only: serializes a `computer`
+  tool as `{"type":"computer_20250124",...}`, sends the
+  `anthropic-beta: computer-use-2025-01-24` header, and parses
+  `computer_tool_result` content blocks (WO 28.16 R1–R3). The vision execution
+  loop (screenshot capture + coordinate-action routing, R4) is deferred — the
+  hosted path is wired at the adapter seam but not yet driven end-to-end. Opt
+  in via `--features computer_use`; default OFF so zero computer_use wire bytes
+  reach the API in a default build. The local headless-Chrome CDP
+  `computer_use` tool (`src/tools/computer_use.rs`) is a separate capability
+  and is unaffected.
 - `landlock` – no longer a Cargo feature (WO 27.1). The landlock module is
   compiled unconditionally on Linux via `cfg(target_os = "linux")` and
   applied by default in the bash `pre_exec` hook (fail-closed). The

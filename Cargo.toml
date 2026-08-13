@@ -259,8 +259,14 @@ e2e-tests = []
 # client in the orchestrator crate (WO 29.7). The shell/Node fallback that
 # lived under plugins/kf-plugin/ was removed in WO 29.9 when the TS tree was
 # deleted; with the feature off, no kf-plugin tools are registered.
-kf-plugin-tools = []
- pty = ["portable-pty"]
+ kf-plugin-tools = []
+  pty = ["portable-pty"]
+# computer_use: Anthropic hosted computer_use beta (coordinate-vision model).
+# Adapter wire format only (`computer` tool type + `anthropic-beta` header +
+# `computer_tool_result` stream parsing). The vision execution loop (R4) is
+# deferred — see WO 28.16. Default OFF: opt in via --features computer_use.
+# ponytail: meaningful capability + cost surface; users opt in explicitly.
+computer_use = []
 # landlock: no longer a Cargo feature — the module is always compiled on
 # Linux via cfg(target_os = "linux") and applies by default (WO 27.1).
 # Operators escape via --i-accept-unsandboxed on kernels where restrict_self

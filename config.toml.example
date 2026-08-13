@@ -83,6 +83,13 @@
 # Height of the emulated browser viewport in pixels. Default: 800.
 # chrome_viewport_height = 800
 
+# Activate the Anthropic HOSTED computer_use beta (coordinate-vision model)
+# instead of the local headless-Chrome CDP tool. Requires building kf-code
+# with the `computer_use` Cargo feature (`--features computer_use`); without
+# it this flag is inert. When true, chrome_viewport_width/height are sent as
+# the hosted display dims. Default: false. See WO 28.16.
+# computer_use_hosted = false
+
 # ---------------------------------------------------------------------------
 # Anthropic cloud routing
 # ---------------------------------------------------------------------------

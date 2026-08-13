@@ -269,6 +269,14 @@ pub struct ComputerUseConfig {
     /// forcibly closed. Prevents infinite loops. Default 20.
     #[serde(default = "default_computer_use_max_steps")]
     pub max_steps: u32,
+
+    /// Activate the Anthropic HOSTED computer_use beta (coordinate-vision
+    /// model) instead of the local headless-Chrome CDP tool. Requires the
+    /// `computer_use` Cargo feature; otherwise this flag is inert. When
+    /// true, `width`/`height` are sent as the hosted display dims. Default
+    /// false. See WO 28.16.
+    #[serde(default)]
+    pub hosted: bool,
 }
 
 // ponytail: fields serde-deserialized from config; replace with const when config schema stabilizes

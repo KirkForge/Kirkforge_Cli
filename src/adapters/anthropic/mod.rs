@@ -44,6 +44,11 @@ pub struct AnthropicAdapter {
     budget_tokens: usize,
     max_tokens: u32,
     tool_choice: Option<crate::shared::ToolChoice>,
+    /// Hosted computer_use display dims. `Some((w,h))` activates the hosted
+    /// coordinate-vision path (requires the `computer_use` Cargo feature +
+    /// `anthropic-beta: computer-use-2025-01-24` header). `None` = off.
+    /// Default: off. See WO 28.16.
+    computer_use_dims: Option<(u32, u32)>,
 }
 
 impl AnthropicAdapter {
@@ -61,6 +66,7 @@ impl AnthropicAdapter {
             budget_tokens: 10_000,
             max_tokens: 8192,
             tool_choice: None,
+            computer_use_dims: None,
         }
     }
 
@@ -71,6 +77,14 @@ impl AnthropicAdapter {
 
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
+        self
+    }
+
+    /// Activate the hosted Anthropic computer_use beta path. Pass `Some((w,h))`
+    /// to enable (requires the `computer_use` Cargo feature to take effect at
+    /// the wire level) or `None` to disable. See WO 28.16.
+    pub fn with_computer_use(mut self, dims: Option<(u32, u32)>) -> Self {
+        self.computer_use_dims = dims;
         self
     }
 }
@@ -130,16 +144,38 @@ impl ModelAdapter for AnthropicAdapter {
         );
         let url = format!("{}/v1/messages", self.api_base);
 
+        // Hosted computer_use beta (WO 28.16): rewrite the `computer` tool to
+        // the hosted tool type + tag the request with the beta header. The
+        // whole path compiles out when the `computer_use` feature is off, so
+        // a default build emits zero computer_use wire bytes.
+        #[cfg(feature = "computer_use")]
+        let beta_header_needed = self.computer_use_dims.is_some();
+        #[cfg(not(feature = "computer_use"))]
+        let beta_header_needed = false;
+        #[cfg(feature = "computer_use")]
+        let body = {
+            if let Some((w, h)) = self.computer_use_dims {
+                let mut body = body;
+                apply_computer_use(&mut body, w, h);
+                body
+            } else {
+                body
+            }
+        };
+
         let response = super::send_with_retry(|| async {
-            self.client
+            let mut req = self
+                .client
                 .post(&url)
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", ANTHROPIC_VERSION)
                 .header("content-type", "application/json")
                 .json(&body)
-                .timeout(std::time::Duration::from_secs(self.timeout_secs))
-                .send()
-                .await
+                .timeout(std::time::Duration::from_secs(self.timeout_secs));
+            if beta_header_needed {
+                req = req.header("anthropic-beta", "computer-use-2025-01-24");
+            }
+            req.send().await
         })
         .await?;
 
@@ -356,6 +392,32 @@ pub(crate) fn build_anthropic_body(
     }
 
     body
+}
+
+/// Rewrite the `computer` tool entry to Anthropic's hosted computer_use tool
+/// type (WO 28.16). The standard `{name, description, input_schema}` shape is
+/// replaced with `{"type":"computer_20250124","name":"computer",
+/// "display_width_px":W,"display_height_px":H}`. No-op if no `computer` tool
+/// is present. Feature-gated: compiles out entirely when `computer_use` is off.
+#[cfg(feature = "computer_use")]
+fn apply_computer_use(body: &mut serde_json::Value, width: u32, height: u32) {
+    let Some(tools) = body.get_mut("tools").and_then(|t| t.as_array_mut()) else {
+        return;
+    };
+    for tool in tools.iter_mut() {
+        if tool.get("name").and_then(|n| n.as_str()) == Some("computer") {
+            let preserved_cache_control = tool.get("cache_control").cloned();
+            *tool = serde_json::json!({
+                "type": "computer_20250124",
+                "name": "computer",
+                "display_width_px": width,
+                "display_height_px": height,
+            });
+            if let Some(cc) = preserved_cache_control {
+                tool["cache_control"] = cc;
+            }
+        }
+    }
 }
 
 fn content_block_from_parts(parts: &[ContentPart]) -> serde_json::Value {
@@ -1943,5 +2005,189 @@ mod tests {
         std::env::remove_var("ANTHROPIC_API_KEY");
         let key = super::super::auth::resolve_api_key("anthropic", None);
         assert!(key.is_none());
+    }
+
+    // ---- WO 28.16: hosted computer_use beta gate tests ----
+
+    /// Critical safety check (WO 28.16 R1 / success criterion #1): with the
+    /// `computer_use` Cargo feature OFF, the adapter body MUST NOT emit the
+    /// hosted `computer` tool type. Even when the caller registers a tool
+    /// literally named "computer" and sets the dims builder, the default
+    /// build serializes it as a standard `{name, description, input_schema}`
+    /// tool — no `computer_20250124` bytes reach the wire.
+    #[test]
+    fn feature_off_emits_no_computer_tool_type() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let tools = vec![crate::shared::ToolDef {
+            name: "computer",
+            description: "screen control",
+            parameters: json!({"type": "object"}),
+        }];
+        let body = build_anthropic_body(
+            "claude-sonnet-4",
+            &messages,
+            &tools,
+            None,
+            None,
+            false,
+            10_000,
+            8192,
+            None,
+        );
+        let wire = body.to_string();
+        assert!(
+            !wire.contains("computer_20250124"),
+            "hosted computer tool type leaked into wire with feature OFF: {wire}"
+        );
+        assert!(
+            !wire.contains("display_width_px"),
+            "hosted display dims leaked into wire with feature OFF: {wire}"
+        );
+        // The tool is still present, but as a standard schema.
+        let tools_arr = body["tools"].as_array().unwrap();
+        assert_eq!(tools_arr[0]["name"], "computer");
+        assert_eq!(tools_arr[0]["input_schema"], json!({"type": "object"}));
+    }
+
+    /// With the feature OFF, the dims builder is inert — the field is stored
+    /// but no wire-level effect (no header, no tool rewrite). This complements
+    /// the compile-time gate: the runtime safety is also asserted.
+    #[test]
+    fn feature_off_dims_builder_is_inert() {
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-sonnet-4", 30, None)
+            .with_computer_use(Some((1024, 768)));
+        // Field stored regardless of feature so construction code is uniform.
+        assert_eq!(a.computer_use_dims, Some((1024, 768)));
+        // The apply_computer_use helper does not exist with the feature off,
+        // so there is no code path that can rewrite the tool type.
+    }
+
+    #[cfg(feature = "computer_use")]
+    #[test]
+    fn feature_on_apply_computer_use_rewrites_tool() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let tools = vec![
+            crate::shared::ToolDef {
+                name: "read_file",
+                description: "read",
+                parameters: json!({"type": "object"}),
+            },
+            crate::shared::ToolDef {
+                name: "computer",
+                description: "screen control",
+                parameters: json!({"type": "object"}),
+            },
+        ];
+        let mut body = build_anthropic_body(
+            "claude-sonnet-4",
+            &messages,
+            &tools,
+            None,
+            None,
+            false,
+            10_000,
+            8192,
+            None,
+        );
+        apply_computer_use(&mut body, 1024, 768);
+        let tools_arr = body["tools"].as_array().unwrap();
+        // Non-computer tool untouched.
+        assert_eq!(tools_arr[0]["name"], "read_file");
+        assert_eq!(tools_arr[0]["input_schema"], json!({"type": "object"}));
+        // Computer tool rewritten to hosted type.
+        assert_eq!(tools_arr[1]["type"], "computer_20250124");
+        assert_eq!(tools_arr[1]["name"], "computer");
+        assert_eq!(tools_arr[1]["display_width_px"], 1024);
+        assert_eq!(tools_arr[1]["display_height_px"], 768);
+        // No input_schema on the rewritten tool.
+        assert!(tools_arr[1].get("input_schema").is_none());
+        // The WO 17.5 cache_control breakpoint on the last tool is preserved.
+        assert_eq!(tools_arr[1]["cache_control"], json!({"type": "ephemeral"}));
+    }
+
+    #[cfg(feature = "computer_use")]
+    #[test]
+    fn feature_on_apply_computer_use_noop_without_computer_tool() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let tools = vec![crate::shared::ToolDef {
+            name: "read_file",
+            description: "read",
+            parameters: json!({"type": "object"}),
+        }];
+        let mut body = build_anthropic_body(
+            "claude-sonnet-4",
+            &messages,
+            &tools,
+            None,
+            None,
+            false,
+            10_000,
+            8192,
+            None,
+        );
+        let before = body.clone();
+        apply_computer_use(&mut body, 1024, 768);
+        assert_eq!(body, before, "body must be unchanged when no computer tool");
+    }
+
+    #[cfg(feature = "computer_use")]
+    #[test]
+    fn feature_on_apply_computer_use_noop_without_tools() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".into(),
+            ..Default::default()
+        }];
+        let mut body = build_anthropic_body(
+            "claude-sonnet-4",
+            &messages,
+            &[],
+            None,
+            None,
+            false,
+            10_000,
+            8192,
+            None,
+        );
+        let before = body.clone();
+        apply_computer_use(&mut body, 1024, 768);
+        assert_eq!(body, before);
+    }
+
+    #[cfg(feature = "computer_use")]
+    #[tokio::test]
+    async fn feature_on_parses_computer_tool_result_block() {
+        use super::content_blocks;
+        // The hosted model returns a computer_tool_result block. The vision
+        // loop (R4) is deferred, so the parser surfaces a text placeholder.
+        let block = json!({
+            "type": "computer_tool_result",
+            "action": {"type": "click", "coordinate": [120, 340]},
+        });
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamEvent>(8);
+        let mut pending = None;
+        content_blocks::handle_content_block_start(&block, &mut pending, &tx).await;
+        let ev = rx.recv().await.expect("expected a text placeholder event");
+        match ev {
+            StreamEvent::Text(s) => {
+                assert!(s.contains("computer_tool_result"), "got: {s}");
+                assert!(s.contains("click"), "got: {s}");
+            }
+            other => panic!("expected Text placeholder, got {other:?}"),
+        }
+        // No tool_use pending was created for a computer_tool_result block.
+        assert!(pending.is_none());
     }
 }

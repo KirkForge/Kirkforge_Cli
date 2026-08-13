@@ -47,7 +47,24 @@ pub(super) async fn handle_content_block_start(
                 }
             }
         }
-        _ => {}
+        _ => {
+            // Hosted computer_use beta (WO 28.16): the model returns
+            // `computer_tool_result` blocks containing screenshots + coordinate
+            // actions. The structured payload is opaque to the executor today
+            // (the vision loop R4 is deferred); surface a text placeholder so
+            // the turn doesn't silently swallow the block. Compiles out when
+            // the `computer_use` feature is off.
+            #[cfg(feature = "computer_use")]
+            if block_type == "computer_tool_result" {
+                let summary = summarize_computer_tool_result(block);
+                let _ = send_or_bail(
+                    tx,
+                    StreamEvent::Text(summary),
+                    "Anthropic computer_tool_result block",
+                )
+                .await;
+            }
+        }
     }
 }
 
@@ -117,5 +134,26 @@ impl PendingToolUse {
             name: self.name,
             arguments,
         }
+    }
+}
+
+/// Reduce a `computer_tool_result` content block to a short text summary.
+/// The hosted vision loop (screenshot capture + coordinate-action execution,
+/// WO 28.16 R4) is deferred, so for now the structured payload is surfaced as
+/// a text placeholder. Feature-gated: compiles out when `computer_use` is off.
+#[cfg(feature = "computer_use")]
+fn summarize_computer_tool_result(block: &serde_json::Value) -> String {
+    // The block carries the model's coordinate action (e.g. click/type/scroll)
+    // in `action` and optional screenshot evidence in `image`/`content`. We
+    // serialize the action subtree so the turn record stays inspectable.
+    if let Some(action) = block.get("action") {
+        format!("[computer_tool_result: action={action}]")
+    } else {
+        // ponytail: ceiling — unknown shape; emit the raw JSON so nothing is
+        // silently dropped. Upgrade path: structured TurnEvent variant in R4.
+        format!(
+            "[computer_tool_result: {}]",
+            serde_json::to_string(block).unwrap_or_else(|_| "<unserializable>".into())
+        )
     }
 }

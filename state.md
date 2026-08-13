@@ -6,19 +6,14 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
-## Session 2026-08-13 — WO 30.2 TaskManager lifecycle (branch `wo30b`, worktree `.worktrees/wo30b`, not pushed)
+## Session 2026-08-13 — WO 30.4 seccomp syscall filter (branch `wo30c`, worktree `.worktrees/wo30c`)
 
-External review (ChatGPT 2026-08-13) flagged the subagent `TaskManager` as a gap vs Codex's multi-agent lifecycle infra. Shipped the lifecycle upgrade in `src/tools/task.rs`:
-- **`TaskStatus`** enum: `Pending | Running | Completed(String) | Cancelled | Failed(String) | TimedOut`. Derived from existing `result`/`error` + two `Arc<AtomicBool>` flags (`started`, `cancel_requested`) — no second copy of completion state to drift.
-- **`TaskMetadata`**: `model`, `persona`, `prompt_summary` (≤100 chars), `started_at`, `duration_ms` (on completion/cancel), `token_estimate` (None — executor doesn't surface it), `parent_task_id`. `Default` for backward compat.
-- **`cancel(id)`**: sets the per-task `Arc<AtomicBool>` flag + fires an `Arc<Notify>`; the spawn closure's `tokio::select!` drops `run_task`. Returns false if unknown/terminal. Cancelled is distinct from Failed (unlike threading the executor's `&AtomicBool`, which returns via `Err`).
-- **`status(id)`** + **`list()`** (numeric-id sort, `task-2` before `task-10`) + **`format_task_entry`** helper for `/jobs`.
-- `task_output` tool and all existing callers unchanged. `TaskSpawner` trait untouched. 14 new tests; `task.rs` tests 41/41 green.
-- **Scope creep (disclosed):** fixed a pre-existing `cargo fmt` slip in `src/session/task_spawner.rs` (`.into()` line wrap, from `5fbd955`) so `cargo fmt --check` is green.
-- Gate: `cargo check`/`clippy -D warnings`/`fmt --check` (`-p kf-code --lib --tests`) green; `cargo test --lib -p kf-code -- tools::task 'jobs::'` → 82 passed, 0 failed, 1 ignored.
-
-### Pending / deferred (this session)
-- **TUI `/jobs` rendering of subagent tasks (DEFERRED):** `list()` + `format_task_entry` are in place, but `TaskManager` is created per-toolset inside `all_tools()` (`tools/mod.rs:204`) and is NOT reachable from `AppState` (unlike the global `BashJobRegistry`). Surfacing it needs a cross-layer decision: (a) a global singleton (breaks the current per-session isolation — each `all_tools()` call, including subagents, gets a fresh manager today) or (b) plumbing an `Arc<Mutex<TaskManager>>` into `ServicesState`/`AppState`. Remaining work: pick (a)/(b), then add a "Subagent tasks:" section to `handle_background_jobs_command` / `refresh_jobs_output` in `tui/commands/jobs.rs` mirroring the bash-jobs rows. Tracked here + a WO 30.x follow-up. Note: the `ceiling:` comment in `task.rs` flags that cancelling mid-flight leaks the subagent's temp dir (cleanup runs at end of `run_task`); bounded, upgrade path is threading a cancel token into `TaskSpawner::run_task`.
+The missing OS-isolation layer (external review 2026-08-13 §10): landlock confines the FS, seccomp confines the syscall surface. Shipped as a **default-OFF** `seccomp` Cargo feature (`seccomp = ["dep:seccompiler"]`):
+- New `src/session/bash_runner/seccomp.rs` (cfg `all(target_os="linux", feature="seccomp")`). Allowlist filter: each listed syscall → empty rule (unconditional allow); match action `Allow`, mismatch action `Errno(EPERM)` (graceful, not KILL/SIGSYS). Allowlist = WO 30.4 base list (bash + grep/sed/awk/curl/cargo/node/python) **+ a glibc-startup/modern-`at`-variant block** (`arch_prctl`, `set_tid_address`, `set_robust_list`, `rt_sigreturn`, `sigaltstack`, `mremap`, `madvise`, `sched_getaffinity`, `getpid`, `getppid`, `newfstatat`, `faccessat`, `faccessat2`, `renameat2`, `fchmodat`, `fchownat`) — without these, no dynamically-linked binary (ld.so/bash) execs, making the filter dead-on-arrival; the workorder's literal list omitted them.
+- Compile-in-parent / apply-in-pre_exec split (mirrors landlock): `SeccompFilter::new` + BPF emit allocate a `BTreeMap` → parent; `seccompiler::apply_filter` does only `prctl(PR_SET_NO_NEW_PRIVS)` + `seccomp()` syscalls (no alloc) → safe in pre_exec. Applied LAST (after landlock + rlimits). Fail-closed like landlock; `--i-accept-unsandboxed` governs both.
+- `setup_rlimits` signature UNCHANGED → all 3 callers (`bash_runner/mod.rs`, `bash_jobs.rs`, `plugin_tools/wrapper.rs`) unaffected.
+- ADR-054 amended (was "Do NOT ship seccomp"; the `seccompiler` crate removed the BPF-compiler blocker); status header + `docs/adr/README.md` row updated identically. `docs/TECHNICAL.md` feature-flag table + bash-sandbox section synced. Workorder 30.4 row → SHIPPED (opt-in).
+- **DEFERRED (see pending):** (a) real-workload allowlist tuning — some tools will hit `EPERM` on unlisted syscalls; (b) cross-arch aarch64/riscv64 (legacy syscalls stat/fstat/lstat/access/pipe/dup2/fork/vfork/umount2/mount/getdents/arch_prctl are x86_64-only — the list is x86_64-tuned, CI is x86_64-only); (c) the default-on flip (kept opt-in until exercised). Gate green (both `--features seccomp` and default), clippy clean both ways, `cargo fmt --check` clean on my files (pre-existing task_spawner.rs:211 drift NOT mine).
 
 ## Session 2026-08-13 — MEDIUM security hardening (branch `wo28h`)
 

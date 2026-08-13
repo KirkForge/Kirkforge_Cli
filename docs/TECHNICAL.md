@@ -197,9 +197,11 @@ via the same `pre_exec` hook as the rlimits — not a Cargo feature). The
 `--harden` flag applies `RLIMIT_CPU` / `RLIMIT_AS` / `RLIMIT_FSIZE` to
 the child shell in a `pre_exec` hook (Unix only; Windows no-op with a
 warning). It is ignored when `--docker` is set (Docker already enforces
-`--memory` and `--cpus`). seccomp is documented as future work in
-ADR-054 — it needs a BPF compiler that's too heavy for the
-size-optimized binary.
+`--memory` and `--cpus`). An optional fourth layer — a seccomp-bpf syscall
+filter (WO 30.4) — confines the syscall surface to an allowlist (everything
+else fails with `EPERM`); it is default-OFF behind the `seccomp` Cargo
+feature and applied last in the same `pre_exec` hook, after landlock. See
+`src/session/bash_runner/seccomp.rs`.
 
 **Security posture — tripwire vs boundary (WO 28.17 R1):** the bash
 deny-list + dangerous-pattern scan (`src/shared/bash_safety.rs`) is a
@@ -1020,6 +1022,14 @@ The root `Cargo.toml` exposes these features:
   compiled unconditionally on Linux via `cfg(target_os = "linux")` and
   applied by default in the bash `pre_exec` hook (fail-closed). The
   `--features landlock` flag is a no-op kept only for backward compat.
+- `seccomp` (non-default) — Linux seccomp-bpf syscall filter for bash
+  subprocesses (WO 30.4). Confines the syscall surface to an allowlist;
+  everything else fails with `EPERM` (graceful, not `SIGSYS`-kill). Applied
+  in the same `pre_exec` hook as landlock + rlimits, after landlock. Default
+  OFF: opt in via `--features seccomp`. The allowlist is a starting set
+  (bash + grep/sed/awk/curl/cargo/node/python + the glibc startup syscalls);
+  real-workload tuning is deferred (see WO 30.4). Brings in the `seccompiler`
+  crate (pure-Rust BPF compiler, no C deps).
 - `otel` (non-default) — OpenTelemetry span/metric export.
 
 Three plugins are feature-gated compiled-in modules, served as direct Rust

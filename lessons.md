@@ -143,3 +143,47 @@
   the lock and crate list.
 - `docs/TECHICAL.md` context-index note: AGENTS.md §9 mandates doc-sync for
   context-index changes. Added a 4-line note about the non-interactive skip.
+
+## Session 2026-08-13 — WO 30.4 seccomp syscall filter (wo30c worktree)
+
+### seccompiler 0.5.0 API gotchas (docs.rs example hides these)
+- `SeccompFilter::new` takes **`BTreeMap<i64, Vec<SeccompRule>>`** — NOT
+  `HashMap<u64, _>`. The docs.rs example uses `.into_iter().collect()` which
+  infers the type; spell it wrong (HashMap/u64) → E0308. Keys are `i64`
+  (`c_long`); BTreeMap gives deterministic BPF.
+- `SeccompAction::Errno(u32)` — cast `libc::EPERM as u32`.
+- `seccompiler::apply_filter` internally calls `prctl(PR_SET_NO_NEW_PRIVS, 1)`
+  then the `seccomp()` syscall. So no_new_privs is set for free (also blocks
+  setuid gain in the sandboxed child — desirable). flags=0 → calling thread
+  only (correct in pre_exec post-fork; child is single-threaded).
+
+### pre_exec async-signal-safety split (mirrors landlock)
+- `SeccompFilter::new` + `try_into()` to `BpfProgram` **allocate** (BTreeMap +
+  Vec) → MUST run in parent before fork. `apply_filter` is allocation-free
+  (prctl + seccomp syscalls + reads is_empty/len/as_ptr) → safe in pre_exec.
+- Repo pattern: compute in `setup_rlimits` body, move owned data into the
+  `move ||` closure, syscalls-only inside.
+
+### A literal allowlist omitting glibc startup syscalls is DEAD-ON-ARRIVAL
+- The WO 30.4 base list omits: `arch_prctl` (ld.so TLS/ARCH_SET_FS — block it
+  and NO ELF execs), `set_tid_address`, `set_robust_list`, `rt_sigreturn`,
+  `mremap`, `sigaltstack`, `madvise`, and modern `at`-variants glibc routes
+  through (`newfstatat` = stat/fstat/lstat on x86_64; `faccessat` = access).
+- Without these ld.so/bash get EPERM before any output → false confidence.
+  ALWAYS augment a userspace-tool allowlist with glibc-runtime essentials.
+  Workorder explicitly deferred "tune against real workloads", so augmenting +
+  disclosing is correct, not scope creep.
+
+### Gotchas
+- `.github/workflows/ci.yml` runs ubuntu-latest (x86_64) + windows-latest
+  only — no aarch64. x86_64-tuned allowlist is gate-safe; legacy syscalls
+  (stat/fstat/lstat/access/pipe/dup2/fork/vfork/umount2/mount/getdents/
+  arch_prctl) are x86_64-only → aarch64/riscv64 needs them dropped/cfg-gated.
+- `cargo fmt --check` has a PRE-EXISTING drift at `src/session/task_spawner.rs:211`
+  (not mine, not WO 30.4). Don't "fix" it inside a WO 30.x commit (scope
+  creep). Separate fmt-cleanup if it bothers you. `rustfmt --edition 2021
+  <file>` formats one file without touching the rest.
+- kf-code lib test binary with `--features seccomp` takes ~6 min to compile.
+- `seccompiler` pulls only `libc` — no C toolchain, earns its place.
+- `lessons.md` is TRACKED in this repo (not gitignored, despite AGENTS.md
+  §3/§7). Append, don't overwrite — I nearly clobbered the WO 27.2/29.x log.

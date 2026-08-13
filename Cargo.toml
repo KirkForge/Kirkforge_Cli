@@ -231,6 +231,12 @@ tempfile.workspace = true
 # ponytail: ~2 MB binary cost; opt-in via --features pty.
 portable-pty = { version = "0.8", optional = true }
 
+# Seccomp-bpf syscall filter for bash subprocesses (WO 30.4, feature-gated).
+# Pure-Rust BPF compiler; only pulls in libc (already a dep). Linux-only by
+# nature (seccompiler itself only builds on little-endian x86_64/aarch64/riscv64).
+# ponytail: opt-in via --features seccomp until allowlist is exercised on real workloads.
+seccompiler = { version = "0.5", optional = true }
+
 [dev-dependencies]
 # Property-based testing for edit-file diff application and other invariants.
 proptest = "1.6"
@@ -267,6 +273,16 @@ e2e-tests = []
 # deferred — see WO 28.16. Default OFF: opt in via --features computer_use.
 # ponytail: meaningful capability + cost surface; users opt in explicitly.
 computer_use = []
+# seccomp: Linux seccomp-bpf syscall filter for bash subprocesses (WO 30.4).
+# Applied in the pre_exec hook alongside landlock + rlimits. Confines the
+# syscall surface to an allowlist (everything else -> EPERM, graceful). Default
+# OFF: opt in via --features seccomp. The allowlist is a starting set tuned for
+# bash + common tools (grep/sed/awk/curl/cargo/node/python) + the glibc startup
+# syscalls; real-workload tuning is deferred (see WO 30.4). Brings in the
+# `seccompiler` crate (pure-Rust BPF compiler, no C deps).
+# ponytail: opt-in until exercised against real workloads; ceiling noted in
+# src/session/bash_runner/seccomp.rs.
+seccomp = ["dep:seccompiler"]
 # landlock: no longer a Cargo feature — the module is always compiled on
 # Linux via cfg(target_os = "linux") and applies by default (WO 27.1).
 # Operators escape via --i-accept-unsandboxed on kernels where restrict_self

@@ -94,7 +94,7 @@ verifies the table and the file headers agree.
 | [051](./051-stratum-budget-coordination.md) | Stratum–Budget Coordination (slicing triggers compression, budget tracks compressed size) | Accepted | CLI |
 | [052](./052-cache-stem-reuse.md) | Client-side prompt cache stem reuse | Accepted | CLI |
 | [053](./053-vfs-minification.md) | VFS minification for the agent loop `read_file` tool | Accepted | CLI |
-| [054](./054-rlimit-sandbox-hardening.md) | rlimit sandbox hardening for the non-Docker bash path | Accepted (WO 27.1 added landlock — see amendment below) | CLI |
+| [054](./054-rlimit-sandbox-hardening.md) | rlimit sandbox hardening for the non-Docker bash path | Accepted (WO 27.1 landlock + WO 30.4 seccomp — see amendments below) | CLI |
 | [055](./055-http-mcp-session-id.md) | HTTP MCP session-id tracking + resumable streams | Accepted | CLI |
 | [056](./056-plugin-cli-subcommand.md) | Shared plugin-ops layer and `kirkforge plugin` CLI subcommand | Accepted | CLI |
 | [057](./057-plugin-signature-rust.md) | In-process plugin signature verification (no minisign shell-out) | Accepted | CLI |

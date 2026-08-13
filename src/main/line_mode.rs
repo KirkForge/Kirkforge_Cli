@@ -20,7 +20,8 @@ pub(super) fn spawn_non_interactive_approval_handler(
         while let Some(req) = approval_rx.recv().await {
             if auto_approve {
                 kf_code::send_or_warn!(
-                    req.response.send(session::executor::ApprovalResponse::Approved),
+                    req.response
+                        .send(session::executor::ApprovalResponse::Approved),
                     "approval response receiver dropped; response discarded"
                 );
             } else {
@@ -105,7 +106,9 @@ pub(super) async fn run_line_mode(
     }
 
     if non_interactive {
-        let auto_approve = kf_code::shared::read_shared_config(&config).security.auto_approve;
+        let auto_approve = kf_code::shared::read_shared_config(&config)
+            .security
+            .auto_approve;
         spawn_non_interactive_approval_handler(approval_rx, auto_approve);
     } else {
         spawn_line_mode_approval_handler(approval_rx, no_color);
@@ -717,7 +720,7 @@ mod tests {
     #[tokio::test]
     async fn non_interactive_approval_handler_denies_all_requests() {
         let (tx, rx) = mpsc::unbounded_channel();
-        spawn_non_interactive_approval_handler(rx);
+        spawn_non_interactive_approval_handler(rx, true);
 
         let (oneshot_tx, oneshot_rx) = tokio::sync::oneshot::channel();
         tx.send(session::executor::ApprovalRequest {

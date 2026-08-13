@@ -581,6 +581,70 @@ impl Executor {
             }
         }
 
+        // Python verifiers (WO 31.1). Each self-gates on language detection
+        // inside its verify fn — they return Skipped unless a Python marker is
+        // found at the edited file's project root, so registering them
+        // alongside the Rust verifiers is safe for pure-Rust workspaces.
+        struct PyTestV;
+        #[async_trait::async_trait]
+        impl Verifier for PyTestV {
+            fn name(&self) -> &str {
+                "python_test"
+            }
+            fn priority(&self) -> u8 {
+                6
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::python_test::verify_python_test(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            if s.register(Arc::new(PyTestV)).is_ok() {
+                count += 1;
+            }
+        }
+
+        struct PyLintV;
+        #[async_trait::async_trait]
+        impl Verifier for PyLintV {
+            fn name(&self) -> &str {
+                "python_lint"
+            }
+            fn priority(&self) -> u8 {
+                7
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::python_lint::verify_python_lint(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            if s.register(Arc::new(PyLintV)).is_ok() {
+                count += 1;
+            }
+        }
+
+        struct PyTypeV;
+        #[async_trait::async_trait]
+        impl Verifier for PyTypeV {
+            fn name(&self) -> &str {
+                "python_typecheck"
+            }
+            fn priority(&self) -> u8 {
+                8
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::python_typecheck::verify_python_typecheck(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            if s.register(Arc::new(PyTypeV)).is_ok() {
+                count += 1;
+            }
+        }
+
         // Register plugin verifiers (Phase 2.4).
         if let Some(registry) = plugin_registry {
             let plugin_verifiers =
@@ -629,7 +693,17 @@ impl Executor {
     ///
     /// Returns the number of plugin verifiers now registered.
     fn rebuild_plugin_verifiers(&mut self, registry: &kf_plugin_host::PluginRegistry) -> usize {
-        const BUILTIN_VERIFIERS: &[&str] = &["security", "lint", "build", "git", "rustfmt", "test"];
+        const BUILTIN_VERIFIERS: &[&str] = &[
+            "security",
+            "lint",
+            "build",
+            "git",
+            "rustfmt",
+            "test",
+            "python_test",
+            "python_lint",
+            "python_typecheck",
+        ];
 
         let Some(ref correction_loop) = self.correction_loop else {
             return 0;

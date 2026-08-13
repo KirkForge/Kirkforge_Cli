@@ -32,7 +32,8 @@ pub struct InProcessTaskSpawner {
     supports_images: bool,
     /// Optional parent approval channel — if set, subagent approval requests
     /// are forwarded here so the parent's handler decides (WO 30.6).
-    parent_approval: std::sync::Arc<std::sync::Mutex<Option<mpsc::UnboundedSender<ApprovalRequest>>>>,
+    parent_approval:
+        std::sync::Arc<std::sync::Mutex<Option<mpsc::UnboundedSender<ApprovalRequest>>>>,
 }
 
 impl InProcessTaskSpawner {
@@ -207,7 +208,9 @@ impl TaskSpawner for InProcessTaskSpawner {
         // WO 30.6: if the parent set its approval channel, forward subagent
         // requests to it so the parent's handler decides interactively.
         // Otherwise inherit auto_approve: approve in CI, deny otherwise (P0 fix).
-        let parent_approval = self.parent_approval.lock()
+        let parent_approval = self
+            .parent_approval
+            .lock()
             .ok()
             .and_then(|g| g.as_ref().cloned());
         let auto_approve = cfg.security.auto_approve;
@@ -230,7 +233,8 @@ impl TaskSpawner for InProcessTaskSpawner {
                         ApprovalResponse::DeniedWithReason(
                             "subagent cannot approve destructive tools when the parent session \
                              is not in auto-approve mode; enable auto_approve or run the tool \
-                             in the parent session".into(),
+                             in the parent session"
+                                .into(),
                         )
                     };
                     crate::send_or_warn!(

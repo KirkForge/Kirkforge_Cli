@@ -2086,7 +2086,7 @@ dependencies = [
 
 [[package]]
 name = "kf-code"
-version = "0.3.6"
+version = "3.8.0"
 dependencies = [
  "anyhow",
  "arboard",

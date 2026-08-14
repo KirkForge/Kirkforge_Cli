@@ -173,7 +173,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
 
         let is_streaming_last =
             (idx == last_idx && state.generation.is_generating && entry.role == "assistant")
-            || entry.streaming;
+                || entry.streaming;
         let is_streaming_tool = entry.role == "tool" && entry.streaming;
         let collapsed = if is_streaming_last {
             // The message currently being streamed must stay expanded

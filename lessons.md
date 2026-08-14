@@ -417,3 +417,28 @@
 - `seccompiler` pulls only `libc` — no C toolchain, earns its place.
 - `lessons.md` is TRACKED in this repo (not gitignored, despite AGENTS.md
   §3/§7). Append, don't overwrite — I nearly clobbered the WO 27.2/29.x log.
+
+## TUI event-loop lost-message bug (WO10/WO30-era streaming bug)
+- **Root cause was NOT in the SSE parsers or chat renderer** — it was in the
+  `tokio::select!` event-loop handoff in `src/tui/mod.rs`. The `recv()` arm
+  consumed the event but stored only a boolean; the drain functions then
+  only saw events that arrived *after* the first. Lost the first chunk of
+  every burst, and every token in slow-stream scenarios.
+- **Second bug**: UI completion was coupled to `CostStats`, which only fires
+  when the provider supplies usage. Providers sending `Done { usage: None }`
+  (Anthropic SSE fallback) left the TUI stuck "generating" forever.
+- **Fix**: retain the `Option<TurnEvent>` from `select!` and pass it to the
+  drain function. Add a `TurnComplete` terminal event emitted once per
+  `run_turn` so finalization is decoupled from cost accounting.
+- **Same pattern bug in approval_rx**: the approval `recv()` arm had the
+  identical discard bug. Fixed in the same pass.
+- **Test boundary that missed it**: the selftest harness calls
+  `dispatch_turn_event` directly (correct), but nothing exercised
+  `select!` → `recv()` → `drain_turn_events` together. The missing test
+  was "enqueue one event, run one loop iteration, assert it arrived".
+- **Pre-existing hang**: `approval::auto::test_always_approve_dedups_repeated_calls`
+  hangs on clean `origin/dev` — unrelated to this fix. Don't block on it.
+- **Compile cost**: each `cargo test` cold compile is 3-4 min. The opencode
+  tool kills background processes at 120s. Use `setsid`/`nohup` with
+  `disown`, or run in the foreground with a large timeout. `CARGO_BUILD_JOBS=1`
+  avoids OOM kills on memory-constrained hosts.

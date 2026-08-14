@@ -20,13 +20,13 @@ use serde::{Deserialize, Serialize};
 /// If either site is missing the new field, the drift-guard test will fail.
 ///
 /// Breakdown:
-///   ModelConfig    31
+///   ModelConfig    32  (31 direct + subagent_provider sub-struct handle)
 ///   SecurityConfig 20  (17 direct + 3 sub-struct handles)
 ///   ToolConfig     33
 ///   SessionConfig   8
 ///   DisplayConfig   7
 ///   Note: 1 field (seed) has #[serde(skip_serializing)], so serde
-///   produces 96 keys; ToolConfig.memory_auto_populate and
+///   produces 97 keys; ToolConfig.memory_auto_populate and
 ///   DisplayConfig.memory_auto_populate flatten to the same JSON key,
 ///   dropping 1 more. The drift-guard test accounts for both.
 //
@@ -35,7 +35,8 @@ use serde::{Deserialize, Serialize};
 // 31/19/33/8/7). The "known-broken" drift-guard test hid the drift
 // for several WO cycles; un-ignoring it forced the correction.
 // WO 27.1: bumped 98 → 99 (added SecurityConfig.landlock_extra_paths).
-pub const CONFIG_FIELD_COUNT: usize = 99;
+// WO 30.0.6: bumped 99 → 100 (added ModelConfig.subagent_provider).
+pub const CONFIG_FIELD_COUNT: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

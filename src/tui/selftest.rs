@@ -168,6 +168,7 @@ fn token_stream_stress() {
 
     // The full render pipeline must complete without panicking or
     // overflowing the buffer (render() would panic on overflow).
+<<<<<<< HEAD
     //
     // A 500-token single-paragraph message wraps to far more rows than
     // the terminal is tall, so auto_scroll pins the viewport to the
@@ -177,6 +178,40 @@ fn token_stream_stress() {
     // lines (commit 2f844f6), otherwise max_scroll saturates to 0 and
     // the tail is unreachable. Before that fix the tail was clipped;
     // now it is in view.
+||||||| 4668f91
+    // overflowing the buffer (render() would panic on overflow). The
+    // assistant header and the first token are visible in the rendered
+    // output.
+    h.assert_contains("ASSISTANT");
+    h.assert_contains("word0");
+
+    // FINDING (do NOT weaken — this is a real latent bug the harness
+    // surfaced on first run): `word499` is NOT in the rendered buffer
+    // even though `auto_scroll` is on. Root cause: `render_chat` computes
+    // `max_scroll` from the pre-`.wrap()` `Line` count, but a long
+    // single-paragraph assistant message is ONE `Line` (markdown emits a
+    // paragraph as one Line), so `max_scroll` saturates to 0 and
+    // `auto_scroll` never pins to the bottom. `Paragraph::wrap` then
+    // re-wraps the long Line at render time and clips the tail out of
+    // view. The existing widget tests miss this because they use short
+    // messages. Tracked as a deferred finding in state.md — fixing it is
+    // out of scope for the harness workorder (WO 31.6).
+    let rendered = h.render();
+    assert!(
+        !rendered.contains("word499"),
+        "if this assertion now fires, the auto_scroll-on-long-message bug \
+         was fixed — remove this block and restore the word499 visibility \
+         assertion above"
+    );
+=======
+    // WO 30.0.13: streaming content is rendered as plain text via
+    // textwrap (not markdown), which pre-wraps into one Line per visual
+    // row. This makes `max_scroll` correctly reflect the wrapped height,
+    // so `auto_scroll` pins to the bottom and the latest tokens (word499)
+    // are visible — the previous auto_scroll-on-long-message bug is fixed
+    // for the streaming case. The ASSISTANT header scrolls off the top on
+    // long content, which is the correct auto-scroll-to-bottom behaviour.
+>>>>>>> wo30misc
     h.assert_contains("word499");
 }
 
@@ -247,6 +282,105 @@ fn tool_call_card_render() {
     // streaming placeholder), so exactly one tool message exists.
     assert_eq!(h.state.conversation.messages.len(), 1);
     assert_eq!(h.state.conversation.messages[0].role, "tool");
+}
+
+/// Tool call grouping (WO 30.0.14): consecutive non-streaming tool entries
+/// collapse into a single "🔧 name ×N" header in the production render
+/// path (`render_chat`). Catches the regression where grouping lived only
+/// in `build_chat_lines` (search-scroll) and never appeared in the TUI.
+/// Also verifies the three edge cases: single tool not grouped, streaming
+/// PTY tool not grouped, and the expanded-group path rendering every
+/// member individually.
+#[test]
+fn tool_call_grouping() {
+    // ── 1. Multiple consecutive tools collapse to one header ──
+    let mut h = TuiTestHarness::new().connected("qwen2.5");
+    for i in 0..3u32 {
+        h.feed_events([
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({"command": format!("echo {i}")}),
+            },
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: format!("{i}\n"),
+                success: true,
+            },
+        ]);
+    }
+    // Three finalized tool entries, all consecutive.
+    assert_eq!(h.state.conversation.messages.len(), 3);
+    assert!(h
+        .state
+        .conversation
+        .messages
+        .iter()
+        .all(|m| m.role == "tool"));
+    // tool_collapsed defaults to true → the group renders as one header.
+    let rendered = h.render();
+    assert!(
+        rendered.contains("🔧"),
+        "grouped tool header missing from production render"
+    );
+    assert!(
+        rendered.contains("bash ×3"),
+        "three consecutive bash calls must group into 'bash ×3'"
+    );
+
+    // ── 2. Single tool call is NOT grouped ──
+    let mut h2 = TuiTestHarness::new().connected("qwen2.5");
+    h2.feed_events([
+        TurnEvent::ToolStart {
+            name: "grep".into(),
+            args: serde_json::json!({"pattern": "x"}),
+        },
+        TurnEvent::ToolResult {
+            name: "grep".into(),
+            output: "match\n".into(),
+            success: true,
+        },
+    ]);
+    let rendered2 = h2.render();
+    // A single tool renders its own card with the "(done)" summary —
+    // not a grouped header. (The status bar's "🔧×1" counter is
+    // unrelated; we assert on the chat-specific "(done)" marker.)
+    assert!(
+        rendered2.contains("grep (done)"),
+        "single tool card must show its own summary, not a group header"
+    );
+    assert!(
+        !rendered2.contains("grep ×1"),
+        "a single tool call must not be grouped"
+    );
+
+    // ── 3. Expanding any member renders all individually ──
+    let mut h3 = TuiTestHarness::new().connected("qwen2.5");
+    for i in 0..3u32 {
+        h3.feed_events([
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({"command": format!("echo {i}")}),
+            },
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: format!("out{i}\n"),
+                success: true,
+            },
+        ]);
+    }
+    // Expand the middle tool → the group must un-group so that tool's
+    // body is visible. This also catches the idx-advance bug where the
+    // expanded-mode fall-through skipped middle entries.
+    h3.state.conversation.expanded_tools.insert(1);
+    let rendered3 = h3.render();
+    assert!(
+        !rendered3.contains("bash ×3"),
+        "expanding one member must un-group the block"
+    );
+    assert!(
+        rendered3.contains("out1"),
+        "expanded middle tool's body must be visible"
+    );
 }
 
 /// Approval prompt display: a pending tool approval must render the

@@ -618,6 +618,39 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
             .filter_map(|v| v.as_str().map(expand_tilde_str))
             .collect();
     }
+
+    // Subagent provider override (WO 30.0.6 brain+brawn). Each field is
+    // optional; an empty string normalises to None so the subagent falls
+    // back to the parent's value.
+    if let Some(Value::Table(v)) = table.get("subagent_provider") {
+        if let Some(Value::String(s)) = v.get("model") {
+            cfg.model.subagent_provider.model = if s.is_empty() { None } else { Some(s.clone()) };
+        }
+        if let Some(Value::String(s)) = v.get("ollama_host") {
+            cfg.model.subagent_provider.ollama_host =
+                if s.is_empty() { None } else { Some(s.clone()) };
+        }
+        if let Some(Value::String(s)) = v.get("anthropic_api_key") {
+            cfg.model.subagent_provider.anthropic_api_key =
+                if s.is_empty() { None } else { Some(s.clone()) };
+        }
+        if let Some(Value::String(s)) = v.get("openai_api_key") {
+            cfg.model.subagent_provider.openai_api_key =
+                if s.is_empty() { None } else { Some(s.clone()) };
+        }
+        if let Some(Value::String(s)) = v.get("deepseek_api_key") {
+            cfg.model.subagent_provider.deepseek_api_key =
+                if s.is_empty() { None } else { Some(s.clone()) };
+        }
+        if let Some(Value::String(s)) = v.get("gemini_api_key") {
+            cfg.model.subagent_provider.gemini_api_key =
+                if s.is_empty() { None } else { Some(s.clone()) };
+        }
+        if let Some(Value::String(s)) = v.get("kimi_api_key") {
+            cfg.model.subagent_provider.kimi_api_key =
+                if s.is_empty() { None } else { Some(s.clone()) };
+        }
+    }
 }
 
 /// Human-readable summary of config changes. Security/internal knobs
@@ -2158,10 +2191,11 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=31, SecurityConfig=20, ToolConfig=33,
-        // SessionConfig=8, DisplayConfig=7 → 99 total pub fields.
+        // ModelConfig=32 (31 direct + subagent_provider sub-struct handle),
+        // SecurityConfig=20, ToolConfig=33, SessionConfig=8,
+        // DisplayConfig=7 → 100 total pub fields.
         assert_eq!(
-            CONFIG_FIELD_COUNT, 99,
+            CONFIG_FIELD_COUNT, 100,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2258,6 +2292,15 @@ mod tests {
             height = 999
             startup_timeout_secs = 999
             wait_timeout_secs = 999
+
+            [subagent_provider]
+            model = "x"
+            ollama_host = "x"
+            anthropic_api_key = "x"
+            openai_api_key = "x"
+            deepseek_api_key = "x"
+            gemini_api_key = "x"
+            kimi_api_key = "x"
         "#;
 
         let table: toml::Table = merge_toml_source.parse().unwrap();
@@ -2270,8 +2313,8 @@ mod tests {
             }
         }
         // 68 top-level leaf keys + 8 array keys + 3 single-key inline
-        // tables + 7 computer_use sub-keys = 86
-        const MERGE_TOML_EXPECTED: usize = 86;
+        // tables + 7 computer_use sub-keys + 7 subagent_provider sub-keys = 93
+        const MERGE_TOML_EXPECTED: usize = 93;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2289,8 +2332,9 @@ mod tests {
             + env_overrides_src.matches("\"DEEPSEEK_API_KEY\"").count()
             + env_overrides_src.matches("\"GEMINI_API_KEY\"").count()
             + env_overrides_src.matches("\"KIMI_API_KEY\"").count();
-        // 77 KF_CODE_* literals + 5 API-key literals = 82
-        const ENV_OVERRIDE_EXPECTED: usize = 82;
+        // 84 KF_CODE_* literals (77 base + 7 KF_CODE_SUBAGENT_*) +
+        // 5 API-key literals = 89
+        const ENV_OVERRIDE_EXPECTED: usize = 89;
         assert_eq!(
             env_var_count, ENV_OVERRIDE_EXPECTED,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"

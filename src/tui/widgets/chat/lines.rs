@@ -16,14 +16,92 @@ use crate::tui::app::{AppState, ConnectionState, ConversationEntry};
 use crate::tui::rendering::{highlight_line_spans, render_markdown_lines_with_query};
 use crate::tui::theme::Theme;
 
-/// Check if a tool entry at `idx` is currently streaming (PTY tool).
-fn idx_is_streaming_tool(state: &AppState, idx: usize, _last_idx: usize) -> bool {
-    state
-        .conversation
-        .messages
-        .get(idx)
-        .map(|m| m.role == "tool" && m.streaming)
-        .unwrap_or(false)
+/// Try to collapse consecutive non-streaming tool entries starting at
+/// `idx` into a single grouped header line (WO 30.0.14).
+///
+/// Returns `Some((end_idx, lines))` when the entries should render as one
+/// collapsed header; the caller must advance its cursor to `end_idx + 1`.
+/// Returns `None` when the entry should render normally (single tool,
+/// streaming PTY tool, a group with any member expanded, or a non-tool
+/// entry) — the caller advances by one.
+///
+/// Edge cases handled:
+/// - **Single tool call**: `group_count == 1` → `None` (renders as a normal
+///   tool card, not grouped).
+/// - **Streaming PTY tool**: `entry.streaming` → `None` (needs live updates,
+///   never grouped).
+/// - **Expanded group**: if any member's index is in `expanded_tools`,
+///   `all_collapsed` is false → `None` (each tool renders individually).
+pub(super) fn grouped_tool_header(
+    state: &AppState,
+    idx: usize,
+) -> Option<(usize, Vec<Line<'static>>)> {
+    let messages = &state.conversation.messages;
+    let entry = messages.get(idx)?;
+    if entry.role != "tool" || entry.streaming {
+        return None;
+    }
+    let group_start = idx;
+    let mut end = idx;
+    while let Some(next) = messages.get(end + 1) {
+        if next.role != "tool" || next.streaming {
+            break;
+        }
+        end += 1;
+    }
+    let group_count = end - group_start + 1;
+    if group_count <= 1 {
+        return None;
+    }
+    // Collapse the group only when every member is collapsed. If any tool
+    // in the group is expanded, render all individually so the expanded
+    // content is visible.
+    let all_collapsed = (group_start..=end).all(|i| state.tool_should_collapse(i));
+    if !all_collapsed {
+        return None;
+    }
+
+    // Tool entries store the tool name in the content header like
+    // "🔧 bash" — extract it, fallback to "tool".
+    let tool_names: Vec<&str> = (group_start..=end)
+        .map(|i| {
+            messages[i]
+                .content
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("tool")
+        })
+        .collect();
+    let unique: Vec<&str> = {
+        let mut seen = std::collections::HashSet::new();
+        tool_names
+            .iter()
+            .filter(|t| seen.insert(**t))
+            .copied()
+            .collect()
+    };
+    let label = if unique.len() == 1 {
+        format!("{} ×{}", unique[0], group_count)
+    } else {
+        format!("{group_count} tool calls")
+    };
+    let header = Line::from(vec![
+        Span::raw(" "),
+        Span::styled("🔧 ", Style::default().fg(Color::Cyan)),
+        Span::styled(
+            label,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "  · Enter to expand".to_string(),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        ),
+    ]);
+    Some((end, vec![header, Line::from("")]))
 }
 
 /// Map a conversation role to a short, color-coded badge span.
@@ -228,6 +306,12 @@ pub(super) fn tool_card_lines(
 ///
 /// This is the per-message unit that the chat render cache stores. It does
 /// not include the trailing blank line between messages.
+///
+/// When `is_streaming` is true for an assistant message, the body is
+/// rendered as plain text (textwrap) rather than parsed as markdown.
+/// Streaming content is incomplete — a lone `#` arriving before the rest
+/// of a header would otherwise render as a fragment. Only once the turn
+/// completes do we parse the markdown (WO 30.0.13).
 // reason: each arg is an independent rendering input; grouping would obscure the wiring.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_entry_lines(
@@ -237,6 +321,7 @@ pub(super) fn render_entry_lines(
     content_width: usize,
     search_query: &str,
     collapsed: bool,
+    is_streaming: bool,
     spinner: &'static str,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
@@ -278,7 +363,12 @@ pub(super) fn render_entry_lines(
 
     let mut lines = vec![message_header(entry, prev)];
 
-    if entry.role == "assistant" {
+    // Only parse markdown for COMPLETED assistant messages. While
+    // streaming, the content is incomplete and partial markdown (a lone
+    // `#` before the rest of a header, an unclosed code fence) renders
+    // as fragments — fall back to plain text wrapping until the turn
+    // finishes (WO 30.0.13).
+    if entry.role == "assistant" && !is_streaming {
         let md_lines =
             render_markdown_lines_with_query(&entry.content, search_query, content_width, theme);
         for md_line in md_lines {
@@ -391,68 +481,15 @@ pub(super) fn build_chat_lines(
         let entry = &state.conversation.messages[idx];
         message_start.push(lines.len());
 
-        // ── Tool call grouping: collapse consecutive tool entries ──
-        // Instead of rendering each ToolStart+ToolResult as a separate
-        // card, group consecutive tool entries into a single collapsed
-        // header: "🔧 N tool calls — Enter to expand". This prevents
-        // tool cards from fragmenting the assistant's text flow.
-        if entry.role == "tool" && !idx_is_streaming_tool(state, idx, last_idx) {
-            // Count consecutive tool entries.
-            let group_start = idx;
-            let mut group_count = 1;
-            while idx + 1 < state.conversation.messages.len()
-                && state.conversation.messages[idx + 1].role == "tool"
-                && !idx_is_streaming_tool(state, idx + 1, last_idx)
-            {
-                idx += 1;
-                group_count += 1;
-            }
-
-            if group_count > 1 && state.tool_should_collapse(idx) {
-                // Render as a single grouped header.
-                let tool_names: Vec<&str> = (group_start..=idx)
-                    .map(|i| {
-                        let e = &state.conversation.messages[i];
-                        // Tool entries store the tool name in content header
-                        // like "🔧 bash" — extract it, fallback to "tool".
-                        e.content.split_whitespace().nth(1).unwrap_or("tool")
-                    })
-                    .collect();
-                let unique: Vec<&str> = {
-                    let mut seen = std::collections::HashSet::new();
-                    tool_names
-                        .iter()
-                        .filter(|t| seen.insert(**t))
-                        .copied()
-                        .collect()
-                };
-                let label = if unique.len() == 1 {
-                    format!("{} ×{}", unique[0], group_count)
-                } else {
-                    format!("{group_count} tool calls")
-                };
-                lines.push(Line::from(vec![
-                    Span::raw(" "),
-                    Span::styled("🔧 ", Style::default().fg(Color::Cyan)),
-                    Span::styled(
-                        label,
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        "  · Enter to expand",
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::DIM),
-                    ),
-                ]));
-                lines.push(Line::from(""));
-                prev_entry = Some(entry);
-                idx += 1;
-                continue;
-            }
-            // group_count == 1 or expanded: fall through to normal render
+        // ── Tool call grouping (WO 30.0.14) ──
+        // Collapse consecutive non-streaming tool entries into a single
+        // header. The helper returns the group's end index so we skip
+        // past every member; None means render this entry normally.
+        if let Some((end, group_lines)) = grouped_tool_header(state, idx) {
+            lines.extend(group_lines);
+            prev_entry = Some(entry);
+            idx = end + 1;
+            continue;
         }
 
         let is_streaming_last =
@@ -471,6 +508,7 @@ pub(super) fn build_chat_lines(
             content_width,
             &state.search.query,
             collapsed,
+            is_streaming_last,
             state.spinner_char(),
             &state.ui.theme,
         );

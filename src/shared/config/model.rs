@@ -44,6 +44,35 @@ fn default_summarize_model() -> String {
     String::new()
 }
 
+/// Optional provider override for subagents (WO 30.0.6 brain+brawn).
+///
+/// Every field is optional; an unset field inherits the parent's value
+/// (the corresponding `ModelConfig` field). Setting `model` lets the
+/// subagent run on a different adapter; setting `ollama_host` and the
+/// per-provider API keys routes it to a different account/endpoint.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SubagentProvider {
+    /// Model name for subagents. When `None`, the parent's
+    /// `default_model` is used (or the `task` tool's `model` arg, which
+    /// takes precedence over both).
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Ollama host override. When `None` or empty, inherits parent's
+    /// `ollama_host`.
+    #[serde(default)]
+    pub ollama_host: Option<String>,
+    #[serde(default)]
+    pub anthropic_api_key: Option<String>,
+    #[serde(default)]
+    pub openai_api_key: Option<String>,
+    #[serde(default)]
+    pub deepseek_api_key: Option<String>,
+    #[serde(default)]
+    pub gemini_api_key: Option<String>,
+    #[serde(default)]
+    pub kimi_api_key: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub default_model: String,
@@ -119,6 +148,10 @@ pub struct ModelConfig {
     /// `[adapter_routing]` section continue to work identically.
     #[serde(default)]
     pub adapter_routing: HashMap<String, String>,
+    /// Optional subagent provider override (WO 30.0.6). When a field is
+    /// `None`, the subagent inherits the parent's value.
+    #[serde(default)]
+    pub subagent_provider: SubagentProvider,
 }
 
 impl Default for ModelConfig {
@@ -155,6 +188,7 @@ impl Default for ModelConfig {
             budget_tokens: default_budget_tokens(),
             max_tokens: default_max_tokens(),
             adapter_routing: HashMap::new(),
+            subagent_provider: SubagentProvider::default(),
         }
     }
 }
@@ -197,5 +231,20 @@ mod tests {
     fn effective_response_format_default_is_text() {
         let cfg = ModelConfig::default();
         assert_eq!(cfg.effective_response_format(), ResponseFormat::Text);
+    }
+
+    // WO 30.0.6: subagent_provider defaults to all-None (inherit parent).
+    #[test]
+    fn subagent_provider_default_inherits_parent() {
+        let sub = SubagentProvider::default();
+        assert!(sub.model.is_none());
+        assert!(sub.ollama_host.is_none());
+        assert!(sub.anthropic_api_key.is_none());
+        assert!(sub.openai_api_key.is_none());
+        assert!(sub.deepseek_api_key.is_none());
+        assert!(sub.gemini_api_key.is_none());
+        assert!(sub.kimi_api_key.is_none());
+        // ModelConfig exposes the sub-struct with a default.
+        assert!(ModelConfig::default().subagent_provider.model.is_none());
     }
 }

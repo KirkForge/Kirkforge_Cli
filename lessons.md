@@ -1,4 +1,40 @@
-# lessons.md — WO 27.2 e2e hang fix session (2026-08-12)
+# lessons.md
+
+## Session 2026-08-14 — config drift wipe fix (worktree `woconfig`)
+
+### What I learned about this codebase
+- **Config drift wipe (the task's bug) — actual mechanism differs from the
+  task's guess.** There is no "detect schema change → write defaults"
+  regenerator. The wipe: strict `toml::from_str::<Config>` fails on ANY
+  missing field that lacks a field-level `#[serde(default)]` (trivially
+  true for any newly added field — the AGENTS.md field checklist does not
+  require the attribute) → load falls into `merge_toml_into_config`, which
+  silently resets the ~15 fields it doesn't handle (budget_ceiling,
+  summarize_enabled, docker, sandbox, permission_rules, mcp_servers, …) →
+  the next `save_config` persists the wipe. Reproduced empirically with a
+  scratch no-default field: budget_ceiling 50000 → 200000, saved to disk.
+- **Fix that holds:** struct-level `#[serde(default)]` on the five Config
+  sub-structs. Verified it composes with `#[serde(flatten)]`. Missing
+  fields fill from `Default` via the primary serde path; the lossy
+  fallback now only runs for genuinely malformed TOML.
+- **Branch tip `45c82b1` did not compile** — committed merge-conflict
+  markers in `src/tui/selftest.rs` (second such regression; CHANGELOG
+  mentions the WO 29.6 one). Run `cargo check` on the branch tip BEFORE
+  anything else.
+- **Three executor approval tests hang indefinitely at this branch tip**
+  (deny×2 + auto×1). Pre-existing (reproduces without my changes; the
+  branch was un-runnable before the conflict fix). Disclosed in state.md
+  "Pending / pre-existing" — next worker picks it up before merge to dev.
+- `KF_CODE_DATA_DIR` redirects `config_path()` — the established pattern
+  for config round-trip tests (needs ENV_LOCK serialization).
+- GitNexus CLI (`.gitnexus/run.cjs`) absent in this worktree — impact
+  analysis done manually; all `load_config` callers reviewed (run_session,
+  tui reload/SIGHUP, daemon, plugin CLI) and benefit uniformly.
+
+### Scope creep log
+- `src/tui/selftest.rs` — resolved committed conflict markers; the tree
+  did not compile at all without it.
+- `CHANGELOG.md`, `state.md`, `lessons.md` — session-close cadence.
 
 ## Session 2026-08-13 — WO 31.6 TUI selftest harness (worktree `wo31tui`)
 

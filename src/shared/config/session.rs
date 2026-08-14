@@ -21,6 +21,7 @@ fn default_compaction_drop_threshold() -> f64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SessionConfig {
     #[serde(default = "default_carryover_enabled")]
     pub carryover_enabled: bool,

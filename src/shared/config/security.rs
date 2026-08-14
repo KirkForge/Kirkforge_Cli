@@ -34,6 +34,7 @@ fn default_diff_review() -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SecurityConfig {
     #[serde(default)]
     pub auto_approve: bool,

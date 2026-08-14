@@ -103,6 +103,7 @@ fn default_enabled_plugins() -> Vec<String> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ToolConfig {
     #[serde(default = "default_max_tool_result_chars")]
     pub max_tool_result_chars: usize,

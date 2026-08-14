@@ -29,6 +29,7 @@ fn default_mouse_enabled() -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DisplayConfig {
     #[serde(default = "default_memory_enabled")]
     pub memory_enabled: bool,

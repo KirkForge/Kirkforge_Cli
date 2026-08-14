@@ -6,6 +6,43 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
+## Session 2026-08-14 — Config drift wipe fix (branch `woconfig`, worktree `.worktrees/woconfig`)
+
+- **Config regeneration no longer wipes user values on schema drift.**
+  Root cause: strict `toml::from_str::<Config>` failed whenever the file
+  lacked a field without a field-level serde default (any newly added
+  field — the field-addition checklist never required the attribute), and
+  the `merge_toml_into_config` fallback silently resets the ~15 fields it
+  doesn't handle (`budget_ceiling`, `summarize_enabled`, `docker`,
+  `sandbox`, `permission_rules`, `mcp_servers`, …); first `save_config`
+  persisted the wipe. Fix: struct-level `#[serde(default)]` on all five
+  Config sub-structs — missing fields fill from `Default` via the primary
+  serde path (verified to compose with `#[serde(flatten)]`). Regression
+  test `schema_drift_preserves_user_values` (session/config/mod.rs) pins
+  the load→save round-trip with two fallback-skipped canaries.
+- **Scope creep:** resolved committed merge-conflict markers in
+  `src/tui/selftest.rs` (HEAD `45c82b1` imported them from the wo30misc
+  merge; ALL compilation was broken). Kept the wo30misc/WO 30.0.13 side —
+  consistent with the 30.0.15 session entry ("retired the
+  token_stream_stress guard").
+
+### Pending / pre-existing (disclosed, not fixed here)
+
+- **Executor approval test hang** blocks `scripts/test-fast.sh` at branch
+  tip: `approval::deny::test_always_approve_does_not_overwrite_existing_deny`,
+  `approval::deny::test_deny_rule_blocks_bash_even_with_auto_approve`,
+  `approval::auto::test_always_approve_dedups_repeated_calls` hang
+  indefinitely (isolated single-test run killed at 400 s, `EXIT:124`).
+  Reproduces on pristine HEAD with only the conflict-marker resolution —
+  NOT caused by the config-drift fix. Why unfixed: out of task scope, and
+  HEAD `45c82b1` did not compile, so the hang predates any runnable state
+  of this branch. Remaining work: bisect (suspects: `78fdd35` "auto_approve
+  honored as single gate" era changes; the approval flow's
+  `write_shared_config` at `src/session/executor/approval.rs:113`; or the
+  turn loop re-querying an exhausted MockAdapter after AlwaysApprove hits
+  a Deny rule), fix root cause, re-run the full fast gate. Tracked here
+  (next worker: pick up before merging `woconfig` → `dev`).
+
 ## Session 2026-08-14 — WO 30 misc: subagent provider + TUI fixes (branch `wo30misc`)
 
 Three WO 30 items shipped off `origin/dev`:

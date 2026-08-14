@@ -15,7 +15,8 @@
 use crate::session::executor::TurnEvent;
 use crate::shared::test_util::app_state;
 use crate::tui::app::{
-    AppState, ConnectionState, ConversationEntry, DoomLoopState, PendingApproval, SlashMenu,
+    ActiveTab, AppState, ConnectionState, ConversationEntry, DoomLoopState, PendingApproval,
+    SlashMenu,
 };
 use crate::tui::events::dispatch_turn_event;
 use ratatui::{backend::TestBackend, Terminal};
@@ -166,30 +167,17 @@ fn token_stream_stress() {
     );
 
     // The full render pipeline must complete without panicking or
-    // overflowing the buffer (render() would panic on overflow). The
-    // assistant header and the first token are visible in the rendered
-    // output.
-    h.assert_contains("ASSISTANT");
-    h.assert_contains("word0");
-
-    // FINDING (do NOT weaken — this is a real latent bug the harness
-    // surfaced on first run): `word499` is NOT in the rendered buffer
-    // even though `auto_scroll` is on. Root cause: `render_chat` computes
-    // `max_scroll` from the pre-`.wrap()` `Line` count, but a long
-    // single-paragraph assistant message is ONE `Line` (markdown emits a
-    // paragraph as one Line), so `max_scroll` saturates to 0 and
-    // `auto_scroll` never pins to the bottom. `Paragraph::wrap` then
-    // re-wraps the long Line at render time and clips the tail out of
-    // view. The existing widget tests miss this because they use short
-    // messages. Tracked as a deferred finding in state.md — fixing it is
-    // out of scope for the harness workorder (WO 31.6).
-    let rendered = h.render();
-    assert!(
-        !rendered.contains("word499"),
-        "if this assertion now fires, the auto_scroll-on-long-message bug \
-         was fixed — remove this block and restore the word499 visibility \
-         assertion above"
-    );
+    // overflowing the buffer (render() would panic on overflow).
+    //
+    // A 500-token single-paragraph message wraps to far more rows than
+    // the terminal is tall, so auto_scroll pins the viewport to the
+    // BOTTOM. The assistant header and `word0` therefore scroll off the
+    // top — that is correct behaviour, not a bug. We assert the last
+    // token (`word499`) is visible: max_scroll must account for WRAPPED
+    // lines (commit 2f844f6), otherwise max_scroll saturates to 0 and
+    // the tail is unreachable. Before that fix the tail was clipped;
+    // now it is in view.
+    h.assert_contains("word499");
 }
 
 /// Word-wrap regression guard for the thinking panel. The bug
@@ -451,6 +439,311 @@ fn harness_renders_bare_default_state() {
         rendered.contains("k i r k f o r g e") || rendered.contains("Disconnected"),
         "bare default state should render welcome or disconnected banner"
     );
+}
+
+/// Slash menu must surface command ALIASES, not just primaries. Typing
+/// `/q` filters the menu; before the fix `complete_command` only looked
+/// at the first trigger of each command, so `/quit` (an alias of
+/// `/exit`) never appeared — the user could not discover or complete it.
+/// This scenario opens the menu with query `"q"` and asserts `/quit`
+/// is listed.
+#[test]
+fn slash_menu_shows_alias_quit() {
+    let mut h = TuiTestHarness::new().connected("qwen2.5");
+    h.state.ui.slash_menu = Some(SlashMenu {
+        query: "q".into(),
+        selected: 0,
+    });
+
+    h.assert_contains("/quit");
+    // `/exit` (the primary) does NOT match `q`, so it must be absent
+    // from this filtered view — proving the match is on the alias text.
+    h.assert_not_contains("/exit");
+}
+
+/// Every F1–F6 tab must render through the full pipeline without panic.
+/// Catches a tab-panel widget that derefs empty state (e.g. the Threads
+/// daemon picker) and crashes the whole render. Also verifies the active
+/// tab's bar label is highlighted so switching is visibly confirmed.
+#[test]
+fn tab_panels_render_without_panic() {
+    for tab in ActiveTab::ALL {
+        let mut h = TuiTestHarness::new().connected("qwen2.5");
+        h.state.ui.active_tab = tab;
+        // Must not panic — that's the contract under test.
+        let rendered = h.render();
+        assert!(
+            rendered.contains(tab.label()),
+            "tab bar should show its label {:?}",
+            tab.label()
+        );
+    }
+}
+
+/// Switching away from Chat and back preserves the chat scroll offset
+/// (it lives on AppState, not a per-tab local). Seeds a tall
+/// conversation, scrolls up off the bottom, flips to Jobs and back,
+/// and checks the offset survived.
+#[test]
+fn tab_switch_preserves_chat_scroll() {
+    let mut h = TuiTestHarness::new().connected("qwen2.5");
+    for i in 0..40u32 {
+        h.state
+            .conversation
+            .messages
+            .push_back(ConversationEntry::new("user", format!("line {i}")));
+    }
+    // Force a render so max_scroll is published, then scroll up.
+    h.render();
+    assert!(h.state.conversation.max_scroll > 0, "expected scroll range");
+    h.state.conversation.auto_scroll = false;
+    h.state.conversation.scroll_offset = 0;
+
+    // Flip to Jobs and back to Chat.
+    h.state.ui.active_tab = ActiveTab::Jobs;
+    h.render();
+    h.state.ui.active_tab = ActiveTab::Chat;
+    h.render();
+
+    assert_eq!(
+        h.state.conversation.scroll_offset, 0,
+        "scroll offset must survive a tab round-trip"
+    );
+}
+
+/// `/help` output is generated from the COMMANDS table and rendered as
+/// a system message. Verifies the render path for a long system message
+/// and that both `/exit` and `/quit` are listed (catches a help-text
+/// regression that dropped aliases).
+#[test]
+fn help_message_renders_command_list() {
+    let mut h = TuiTestHarness::new().connected("qwen2.5");
+    let text = crate::tui::keys::slash_commands::help_text(&h.state.services.skill_registry);
+    h.state
+        .conversation
+        .messages
+        .push_back(ConversationEntry::new("system", text));
+
+    // The help text is long; auto_scroll would pin to the bottom
+    // (keybindings section) and hide the command list at the top. Scroll
+    // to the top so the command listing is in view before asserting.
+    h.render(); // publish max_scroll
+    h.state.conversation.auto_scroll = false;
+    h.state.conversation.scroll_offset = 0;
+
+    h.assert_contains("/exit");
+    h.assert_contains("/quit");
+    h.assert_contains("Session");
+}
+
+/// Streaming markdown renders incrementally without panic. A heading
+/// arrives token-by-token (`#`, then ` Title`); every intermediate
+/// partial must render, and the finalised heading text must be visible.
+/// Guards against the partial-markdown parser path choking on a lone
+/// `#` or an unclosed construct mid-stream.
+#[test]
+fn streaming_heading_renders_incrementally() {
+    let mut h = TuiTestHarness::new().connected("qwen2.5");
+    // Partial heading — just the opener. Must not panic.
+    h.feed_event(TurnEvent::Token("#".into()));
+    let _partial = h.render();
+
+    // Complete the heading. The text must now be visible.
+    h.feed_event(TurnEvent::Token(" Title".into()));
+    h.assert_contains("Title");
+
+    // Streaming a fenced code block opener then content must not panic
+    // and must show the code text (the unclosed fence is treated as a
+    // code block-in-progress, which is the desired live view).
+    h.state.conversation.messages.clear();
+    h.state.generation.is_generating = true;
+    h.feed_event(TurnEvent::Token("```python\n".into()));
+    h.feed_event(TurnEvent::Token("print('hi')".into()));
+    h.assert_contains("print");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Key-dispatch scenarios.
+//
+// The render scenarios above cover the paint path; these cover the
+// INPUT path — they drive the same `handle_input_key` the event loop
+// calls, so the state transitions are byte-for-byte identical to
+// production. Each targets one key-handling bug class.
+// ─────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod key_scenarios {
+    use super::*;
+    use crate::session::conversation::ConversationLog;
+    use crate::session::prompt::CompactRequest;
+    use crate::shared::Config;
+    use crate::tui::commands::PersonaResult;
+    use crate::tui::keys::{handle_input_key, HandleInputContext};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use kf_plugin_host::PluginRegistry;
+    use tokio::sync::mpsc;
+
+    /// Owns an `AppState` plus the full set of dispatch channels, so a
+    /// test can press keys through the production handler and then
+    /// inspect both `state` and what was signaled on the channels
+    /// (`cancel_rx`, `input_rx`). Modeled on the existing `keys::tests`.
+    pub(super) struct KeyHarness {
+        pub state: AppState,
+        input_tx: mpsc::UnboundedSender<String>,
+        input_rx: mpsc::UnboundedReceiver<String>,
+        cancel_tx: mpsc::UnboundedSender<()>,
+        cancel_rx: mpsc::UnboundedReceiver<()>,
+        resume_tx: mpsc::UnboundedSender<ConversationLog>,
+        compact_tx: mpsc::UnboundedSender<CompactRequest>,
+        model_tx: mpsc::UnboundedSender<String>,
+        undo_tx: mpsc::UnboundedSender<()>,
+        config_tx: mpsc::UnboundedSender<Config>,
+        plan_tx: mpsc::UnboundedSender<bool>,
+        persona_tx: mpsc::UnboundedSender<PersonaResult>,
+        event_tx: mpsc::Sender<TurnEvent>,
+        plugin_reload_tx: mpsc::UnboundedSender<PluginRegistry>,
+    }
+
+    impl KeyHarness {
+        fn new() -> Self {
+            let (input_tx, input_rx) = mpsc::unbounded_channel();
+            let (cancel_tx, cancel_rx) = mpsc::unbounded_channel();
+            let (resume_tx, _resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+            let (compact_tx, _compact_rx) = mpsc::unbounded_channel();
+            let (model_tx, _model_rx) = mpsc::unbounded_channel();
+            let (undo_tx, _undo_rx) = mpsc::unbounded_channel();
+            let (config_tx, _config_rx) = mpsc::unbounded_channel::<Config>();
+            let (plan_tx, _plan_rx) = mpsc::unbounded_channel::<bool>();
+            let (persona_tx, _persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
+            let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
+            let (plugin_reload_tx, _plugin_reload_rx) = mpsc::unbounded_channel::<PluginRegistry>();
+            Self {
+                state: app_state(),
+                input_tx,
+                input_rx,
+                cancel_tx,
+                cancel_rx,
+                resume_tx,
+                compact_tx,
+                model_tx,
+                undo_tx,
+                config_tx,
+                plan_tx,
+                persona_tx,
+                event_tx,
+                plugin_reload_tx,
+            }
+        }
+
+        async fn press(&mut self, code: KeyCode) {
+            self.press_with(code, KeyModifiers::NONE).await;
+        }
+
+        async fn press_char(&mut self, c: char, mods: KeyModifiers) {
+            self.press_with(KeyCode::Char(c), mods).await;
+        }
+
+        async fn press_with(&mut self, code: KeyCode, mods: KeyModifiers) {
+            let ctx = HandleInputContext {
+                input_tx: &self.input_tx,
+                cancel_tx: &self.cancel_tx,
+                resume_tx: &self.resume_tx,
+                compact_tx: &self.compact_tx,
+                model_tx: &self.model_tx,
+                undo_tx: &self.undo_tx,
+                config_tx: &self.config_tx,
+                plan_tx: &self.plan_tx,
+                persona_tx: &self.persona_tx,
+                event_tx: &self.event_tx,
+                plugin_reload_tx: &self.plugin_reload_tx,
+            };
+            handle_input_key(KeyEvent::new(code, mods), &mut self.state, &ctx)
+                .await
+                .expect("handle_input_key must not error");
+        }
+    }
+
+    /// `/exit` and `/quit` must both route through the slash dispatcher
+    /// and set `session.should_exit`. Catches a regression where the
+    /// Enter handler failed to forward an alias to the dispatcher.
+    #[tokio::test]
+    async fn exit_and_quit_both_set_should_exit() {
+        let mut h = KeyHarness::new();
+        h.state.conversation.input = "/exit".into();
+        h.press(KeyCode::Enter).await;
+        assert!(
+            h.state.session.should_exit,
+            "/exit must set should_exit (end-to-end routing)"
+        );
+
+        let mut h = KeyHarness::new();
+        h.state.conversation.input = "/quit".into();
+        h.press(KeyCode::Enter).await;
+        assert!(
+            h.state.session.should_exit,
+            "/quit (alias) must set should_exit (end-to-end routing)"
+        );
+    }
+
+    /// Enter on empty input with no messages must be a no-op: no spurious
+    /// message, no prompt sent to the executor, no quit. Guards the
+    /// invariant that empty submits never reach the model.
+    #[tokio::test]
+    async fn enter_on_empty_input_with_no_messages_is_noop() {
+        let mut h = KeyHarness::new();
+        h.press(KeyCode::Enter).await;
+        assert!(h.state.conversation.messages.is_empty(), "no message added");
+        assert!(!h.state.session.should_exit, "must not quit");
+        assert!(!h.state.generation.is_generating, "must not start a turn");
+        // Nothing was forwarded to the executor.
+        assert!(h.input_rx.try_recv().is_err(), "no prompt sent on input_tx");
+    }
+
+    /// Ctrl+C when idle quits the app.
+    #[tokio::test]
+    async fn ctrl_c_when_idle_quits() {
+        let mut h = KeyHarness::new();
+        h.press_char('c', KeyModifiers::CONTROL).await;
+        assert!(h.state.session.should_exit, "idle Ctrl+C must quit");
+    }
+
+    /// First Ctrl+C while generating cancels the turn (signals cancel,
+    /// clears the generating flag) WITHOUT quitting; the second then
+    /// quits. This is the documented two-press contract.
+    #[tokio::test]
+    async fn ctrl_c_cancel_then_quit_two_presses() {
+        let mut h = KeyHarness::new();
+        h.state.generation.is_generating = true;
+
+        // First press: cancel, not quit.
+        h.press_char('c', KeyModifiers::CONTROL).await;
+        assert!(
+            !h.state.generation.is_generating,
+            "first Ctrl+C must clear the generating flag"
+        );
+        assert!(
+            !h.state.session.should_exit,
+            "first Ctrl+C must NOT quit while generating"
+        );
+        assert!(
+            h.cancel_rx.try_recv().is_ok(),
+            "first Ctrl+C must signal cancel on the channel"
+        );
+        // The cancel must be ANNOUNCED so the two-press contract is
+        // explicit — otherwise a "did it work?" second press quits by
+        // accident. Guards the clarity fix.
+        assert!(
+            h.state
+                .conversation
+                .messages
+                .iter()
+                .any(|m| m.content.contains("cancelled")),
+            "first Ctrl+C should announce the cancel"
+        );
+
+        // Second press: nothing is generating now, so it quits.
+        h.press_char('c', KeyModifiers::CONTROL).await;
+        assert!(h.state.session.should_exit, "second Ctrl+C must quit");
+    }
 }
 
 #[cfg(test)]

@@ -182,6 +182,16 @@ pub(super) fn emit_turn_events(
                 // Non-interactive mode does not enter plan mode, so this
                 // event should not arrive. If it does, ignore it.
             }
+            session::executor::TurnEvent::TurnComplete => {
+                // Terminal turn marker. The TUI uses this to clear the
+                // spinner/streaming flags; non-interactive mode has no
+                // spinner, so it's a no-op. (Emitted in StreamJson mode
+                // too so replay tooling can find the turn boundary.)
+                if output == kf_code::shared::OutputFormat::StreamJson {
+                    let line = serde_json::json!({"type": "turn_complete"});
+                    print_json_line(&line);
+                }
+            }
             session::executor::TurnEvent::Recovered { messages } => {
                 if output == kf_code::shared::OutputFormat::Text {
                     eprintln!("\n[recovered] restored {messages} message(s) from checkpoint");

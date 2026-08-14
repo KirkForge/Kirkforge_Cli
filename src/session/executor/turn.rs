@@ -79,6 +79,18 @@ impl Executor {
             .run_turn_inner(user_input, approval_sender, cancelled, event_tx)
             .await;
 
+        // TurnComplete: emitted exactly once on every Ok exit path from
+        // run_turn_inner (normal completion, max-iterations, parse-error
+        // exhaustion, cancellation). The TUI relies on this to clear
+        // is_generating/streaming unconditionally — decoupled from
+        // CostStats, which only fires when the provider supplies usage.
+        if result.is_ok() {
+            crate::send_or_warn!(
+                event_tx.send(TurnEvent::TurnComplete).await,
+                "TurnEvent receiver dropped; discarding event"
+            );
+        }
+
         // WO 21.6: post-turn memory extraction (best-effort).
         // Rate limit: extract every 3rd turn, or immediately when the
         // user message contains preference/correction keywords.

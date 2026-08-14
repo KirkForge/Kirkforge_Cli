@@ -715,8 +715,8 @@ async fn run_event_loop(
         // `select!` waiting, with no work to do.
 
         let mut kb_event: Option<Event> = None;
-        let mut had_executor_event = false;
-        let mut had_approval_event = false;
+        let mut first_executor_event: Option<executor::TurnEvent> = None;
+        let mut first_approval_event: Option<ApprovalRequest> = None;
         let mut persona_result: Option<PersonaResult> = None;
         let mut had_approval_pending =
             state.approval.pending_approval.is_some() || state.approval.pending_bang.is_some();
@@ -734,14 +734,10 @@ async fn run_event_loop(
                 kb_event = ev;
             }
             ev = event_rx.recv() => {
-                if ev.is_some() {
-                    had_executor_event = true;
-                }
+                first_executor_event = ev;
             }
             ev = approval_rx.recv() => {
-                if ev.is_some() {
-                    had_approval_event = true;
-                }
+                first_approval_event = ev;
             }
             ev = persona_rx.recv() => {
                 if let Some(result) = ev {
@@ -775,12 +771,18 @@ async fn run_event_loop(
         // drained here in a tight loop. This is the same work the
         // v1 loop did on every iteration — now it only happens
         // when at least one event source is actually ready.
-        if had_executor_event {
-            drain_turn_events(state, event_rx);
+        //
+        // The event consumed by `select!` is dispatched FIRST, then
+        // the remaining queue is drained via `try_recv`. The prior
+        // code stored only a boolean and dropped the selected event,
+        // which lost the first chunk of every burst (and every token
+        // in slow-stream scenarios).
+        if first_executor_event.is_some() {
+            drain_turn_events(state, first_executor_event, event_rx);
             state.mark_dirty();
         }
-        if had_approval_event {
-            drain_approval_requests(state, approval_rx);
+        if first_approval_event.is_some() {
+            drain_approval_requests(state, first_approval_event, approval_rx);
             state.mark_dirty();
         }
         if let Some(result) = persona_result {

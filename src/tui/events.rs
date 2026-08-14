@@ -12,8 +12,9 @@
 //! Public entry points:
 //!   - [`dispatch_turn_event`] — apply a single `TurnEvent` to `state`.
 //!   - [`drain_turn_events`]   — pull every event currently queued
-//!     on the executor's unbounded channel and dispatch each one.
-//!     The TUI's event loop calls this once per render tick.
+//!     on the executor's channel and dispatch each one, including the
+//!     event consumed by the `select!` arm (passed as `first`). The
+//!     TUI's event loop calls this once per render tick.
 //!   - [`drain_approval_requests`] — same pattern for the approval
 //!     channel. If a new request arrives while one is pending, the
 //!     old one is **denied** before being replaced — otherwise its
@@ -155,6 +156,7 @@ fn tab_at_column(column: usize) -> Option<ActiveTab> {
 /// - `Verification { .. }` — push a "🔍/⚠️ message" system entry
 /// - `Error(e)` — push a "Error: e" system entry
 /// - `CostStats { .. }` — update tokens/cost/last-turn-prompt
+/// - `TurnComplete` — clear is_generating/streaming/continuation (terminal)
 /// - `CompactionReport { .. }` — rebuild messages from `new_messages`
 pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
     match ev {
@@ -268,17 +270,12 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             turn_cost,
             cumulative_cost,
         } => {
-            state.generation.is_generating = false;
-            // Clear streaming flag on all assistant entries — the turn
-            // is done, so markdown rendering can now parse the final text.
-            for msg in &mut state.conversation.messages {
-                if msg.role == "assistant" {
-                    msg.streaming = false;
-                    msg.bump_version();
-                }
-            }
-            state.generation.turn_tool_calls = 0; // reset for next turn
-            state.generation.continuation = None;
+            // Budget accounting only. Turn finalization (clearing
+            // is_generating / streaming) is handled by TurnComplete, which
+            // fires on every turn end regardless of whether the provider
+            // supplied usage data. Coupling finalization to CostStats left
+            // the TUI stuck "generating" for providers that emit
+            // `Done { usage: None }` (e.g. Anthropic SSE fallback).
             state.budget.tokens_sent = state.budget.tokens_sent.wrapping_add(prompt_tokens);
             state.budget.tokens_received =
                 state.budget.tokens_received.wrapping_add(completion_tokens);
@@ -478,6 +475,23 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             state.session.memory_status = Some((count, turn));
             state.mark_dirty();
         }
+        TurnEvent::TurnComplete => {
+            // Terminal event: the turn is fully done (model finished,
+            // tools ran, continuation exhausted, or cancelled). Emitted
+            // exactly once by the executor at the end of `run_turn`.
+            // This is the ONLY place that clears `is_generating` and
+            // `streaming` unconditionally — decoupled from CostStats,
+            // which only fires when the provider supplies usage data.
+            state.generation.is_generating = false;
+            state.generation.turn_tool_calls = 0;
+            state.generation.continuation = None;
+            for msg in &mut state.conversation.messages {
+                if msg.role == "assistant" {
+                    msg.streaming = false;
+                    msg.bump_version();
+                }
+            }
+        }
     }
 }
 
@@ -514,8 +528,16 @@ const MAX_DISPLAY_MESSAGES: usize = 2000;
 /// How many messages to retain after a prune (keeps the most recent ones).
 const KEEP_DISPLAY_MESSAGES: usize = 1500;
 
-pub fn drain_turn_events(state: &mut AppState, event_rx: &mut mpsc::Receiver<TurnEvent>) {
+pub fn drain_turn_events(
+    state: &mut AppState,
+    first: Option<TurnEvent>,
+    event_rx: &mut mpsc::Receiver<TurnEvent>,
+) {
     let mut any = false;
+    if let Some(ev) = first {
+        dispatch_turn_event(state, ev);
+        any = true;
+    }
     while let Ok(ev) = event_rx.try_recv() {
         dispatch_turn_event(state, ev);
         any = true;
@@ -580,41 +602,16 @@ fn prune_display_messages(state: &mut AppState) {
 /// path and the key handler otherwise disagree on which to show).
 pub fn drain_approval_requests(
     state: &mut AppState,
+    first: Option<ApprovalRequest>,
     approval_rx: &mut mpsc::UnboundedReceiver<ApprovalRequest>,
 ) {
     let mut any = false;
+    if let Some(req) = first {
+        install_approval(state, req);
+        any = true;
+    }
     while let Ok(req) = approval_rx.try_recv() {
-        // Deny any existing pending approval first. With the
-        // `ApprovalResponder` drop-guard, simply dropping the old
-        // responder would also send `Denied`; we send explicitly here so
-        // the log records why.
-        if let Some(old) = state.approval.pending_approval.take() {
-            if let Some(tx) = old.responder {
-                if let Err(e) = tx.send(ApprovalResponse::Denied) {
-                    tracing::warn!(
-                        tool = "superseded approval",
-                        error = ?e,
-                        "approval responder dropped before superseded-send"
-                    );
-                }
-            }
-        }
-        // A model approval supersedes any pending bang gate. Without
-        // this, both dialogs could be `Some` simultaneously and the
-        // render path prefers one while the key handler prefers the
-        // other, leaving one orphaned.
-        if state.approval.pending_bang.is_some() {
-            state.approval.pending_bang = None;
-        }
-        state.approval.pending_approval = Some(PendingApproval {
-            tool_name: req.tool_name.clone(),
-            args: req.args.clone(),
-            responder: Some(req.response),
-        });
-        // Reset approval scroll for each new request — a fresh dialog
-        // starts at the top, regardless of where the previous one was.
-        state.approval.approval_scroll = 0;
-        state.approval.approval_max_scroll = 0;
+        install_approval(state, req);
         any = true;
     }
     if any {
@@ -623,6 +620,44 @@ pub fn drain_approval_requests(
         // frame, so mark the state dirty.
         state.mark_dirty();
     }
+}
+
+/// Install a single approval request into state, denying any pending
+/// approval first (its oneshot sender must be answered or the executor
+/// hangs forever on `response_rx.await`). Also clears any pending bang
+/// gate so a model approval and a bang approval cannot be open at once.
+fn install_approval(state: &mut AppState, req: ApprovalRequest) {
+    // Deny any existing pending approval first. With the
+    // `ApprovalResponder` drop-guard, simply dropping the old
+    // responder would also send `Denied`; we send explicitly here so
+    // the log records why.
+    if let Some(old) = state.approval.pending_approval.take() {
+        if let Some(tx) = old.responder {
+            if let Err(e) = tx.send(ApprovalResponse::Denied) {
+                tracing::warn!(
+                    tool = "superseded approval",
+                    error = ?e,
+                    "approval responder dropped before superseded-send"
+                );
+            }
+        }
+    }
+    // A model approval supersedes any pending bang gate. Without
+    // this, both dialogs could be `Some` simultaneously and the
+    // render path prefers one while the key handler prefers the
+    // other, leaving one orphaned.
+    if state.approval.pending_bang.is_some() {
+        state.approval.pending_bang = None;
+    }
+    state.approval.pending_approval = Some(PendingApproval {
+        tool_name: req.tool_name.clone(),
+        args: req.args.clone(),
+        responder: Some(req.response),
+    });
+    // Reset approval scroll for each new request — a fresh dialog
+    // starts at the top, regardless of where the previous one was.
+    state.approval.approval_scroll = 0;
+    state.approval.approval_max_scroll = 0;
 }
 
 #[cfg(test)]
@@ -830,6 +865,11 @@ mod tests {
     /// Also mirrors the per-turn `prompt_tokens` into
     /// `last_turn_prompt_tokens` so the status bar can show
     /// context pressure.
+    ///
+    /// Note: `CostStats` no longer clears `is_generating` /
+    /// `streaming` / `continuation` — that's `TurnComplete`'s job
+    /// now (decoupled so providers with `usage: None` still
+    /// finalize the UI).
     #[test]
     fn coststats_accumulates_and_mirrors_last_turn() {
         let mut s = app_state();
@@ -864,6 +904,48 @@ mod tests {
         assert_eq!(s.budget.tokens_sent, 300);
         assert_eq!(s.budget.tokens_received, 130);
         assert_eq!(s.budget.last_turn_prompt_tokens, 200);
+    }
+
+    /// Regression (Bug #2): a provider that emits `Done { usage: None }`
+    /// never sends `CostStats`. The TUI must still finalize the turn.
+    /// `TurnComplete` is the terminal event that clears `is_generating`
+    /// and `streaming` unconditionally.
+    #[test]
+    fn turn_complete_finalizes_without_cost_stats() {
+        let mut s = app_state();
+        // Simulate a streaming turn: tokens arrive, is_generating flips.
+        // Two tokens so the second appends to the first entry and sets
+        // the streaming flag (the first token creates the entry; the
+        // second sets streaming=true on append).
+        dispatch_turn_event(&mut s, TurnEvent::Token("hello".into()));
+        dispatch_turn_event(&mut s, TurnEvent::Token(" world".into()));
+        assert!(s.generation.is_generating);
+        assert!(s.conversation.messages[0].streaming);
+        // No CostStats arrives (usage: None provider). TurnComplete must
+        // still clear the flags.
+        dispatch_turn_event(&mut s, TurnEvent::TurnComplete);
+        assert!(
+            !s.generation.is_generating,
+            "TurnComplete must clear is_generating without CostStats"
+        );
+        assert!(
+            !s.conversation.messages[0].streaming,
+            "TurnComplete must clear streaming flag without CostStats"
+        );
+    }
+
+    /// `TurnComplete` also clears the continuation indicator and
+    /// resets the per-turn tool-call counter — the role CostStats
+    /// previously played (incorrectly, since not every turn emits
+    /// CostStats).
+    #[test]
+    fn turn_complete_clears_continuation_and_tool_calls() {
+        let mut s = app_state();
+        s.generation.continuation = Some((3, 5));
+        s.generation.turn_tool_calls = 7;
+        dispatch_turn_event(&mut s, TurnEvent::TurnComplete);
+        assert!(s.generation.continuation.is_none());
+        assert_eq!(s.generation.turn_tool_calls, 0);
     }
 
     /// `CompactionReport` rebuilds `messages` from `new_messages`,
@@ -1039,12 +1121,53 @@ mod tests {
         tx.try_send(TurnEvent::Token("a".into())).unwrap();
         tx.try_send(TurnEvent::Token("b".into())).unwrap();
         tx.try_send(TurnEvent::Token("c".into())).unwrap();
-        drain_turn_events(&mut s, &mut rx);
+        drain_turn_events(&mut s, None, &mut rx);
         assert_eq!(s.conversation.messages.len(), 1);
         assert_eq!(s.conversation.messages[0].content, "abc");
         // Channel is drained — next call is a no-op
-        drain_turn_events(&mut s, &mut rx);
+        drain_turn_events(&mut s, None, &mut rx);
         assert_eq!(s.conversation.messages.len(), 1);
+    }
+
+    /// Regression: the `select!` arm consumes one event via `recv()`,
+    /// then `drain_turn_events` must dispatch THAT event plus everything
+    /// still queued. The prior code dropped the `recv()`'d event and only
+    /// drained what arrived after — losing the first chunk of every
+    /// burst and (in slow streams) every token.
+    #[test]
+    fn drain_turn_events_dispatches_first_event() {
+        let mut s = app_state();
+        let (_tx, mut rx) = mpsc::channel::<TurnEvent>(10_000);
+        // Simulate the select! arm: it received "hello" and passed it as
+        // `first`. Nothing else is queued (slow stream). The drain must
+        // still dispatch "hello".
+        let first = Some(TurnEvent::Token("hello".into()));
+        drain_turn_events(&mut s, first, &mut rx);
+        assert_eq!(s.conversation.messages.len(), 1);
+        assert_eq!(
+            s.conversation.messages[0].content, "hello",
+            "first event from select! must be dispatched, not dropped"
+        );
+    }
+
+    /// Regression: a burst of events all arrive before the loop wakes.
+    /// `select!` consumes the first ("a"); the rest sit in the channel.
+    /// All four must be dispatched in order.
+    #[test]
+    fn drain_turn_events_dispatches_first_plus_drained_burst() {
+        let mut s = app_state();
+        let (tx, mut rx) = mpsc::channel::<TurnEvent>(10_000);
+        tx.try_send(TurnEvent::Token("b".into())).unwrap();
+        tx.try_send(TurnEvent::Token("c".into())).unwrap();
+        tx.try_send(TurnEvent::Token("d".into())).unwrap();
+        // select! consumed "a"; b/c/d remain queued.
+        let first = Some(TurnEvent::Token("a".into()));
+        drain_turn_events(&mut s, first, &mut rx);
+        assert_eq!(s.conversation.messages.len(), 1);
+        assert_eq!(
+            s.conversation.messages[0].content, "abcd",
+            "first event + drained burst must all be dispatched in order"
+        );
     }
 
     /// `drain_approval_requests` replaces the pending approval
@@ -1078,7 +1201,7 @@ mod tests {
             })
             .unwrap();
 
-        drain_approval_requests(&mut s, &mut approval_rx);
+        drain_approval_requests(&mut s, None, &mut approval_rx);
 
         // Old responder received Denied before being dropped.
         let old_answer: Option<ApprovalResponse> = old_rx.try_recv().ok();
@@ -1208,26 +1331,6 @@ mod tests {
         dispatch_turn_event(&mut s, TurnEvent::ContinuationRound { round: 3, max: 5 });
         assert_eq!(s.generation.continuation, Some((3, 5)));
         assert!(s.dirty);
-    }
-
-    /// `CostStats` clears the continuation indicator.
-    #[test]
-    fn cost_stats_clears_continuation() {
-        let mut s = app_state();
-        s.generation.continuation = Some((3, 5));
-        dispatch_turn_event(
-            &mut s,
-            TurnEvent::CostStats {
-                prompt_tokens: 100,
-                completion_tokens: 50,
-                turn_cost: 0.001,
-                cumulative_cost: 0.001,
-            },
-        );
-        assert!(
-            s.generation.continuation.is_none(),
-            "CostStats should clear continuation"
-        );
     }
 
     /// `MemoryExtracted` mirrors the store size + turn into

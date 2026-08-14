@@ -125,6 +125,15 @@ pub enum TurnEvent {
         count: usize,
         turn: u64,
     },
+
+    /// Terminal event: the turn is fully complete (model finished, tools
+    /// ran, continuations exhausted, or cancelled). Emitted exactly once
+    /// at the end of `run_turn` on every Ok exit path. The TUI uses this
+    /// to clear `is_generating` / `streaming` unconditionally — decoupled
+    /// from `CostStats`, which is only emitted when the provider supplies
+    /// usage data. Without this, providers that send `Done { usage: None }`
+    /// leave the TUI stuck "generating" forever.
+    TurnComplete,
 }
 
 #[cfg(test)]

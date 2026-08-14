@@ -39,3 +39,46 @@ Guidelines:
   `read_file`, `write_file`, and `edit_file` may use a `<minified
   lang="...">...</minified>` envelope. The host expands it back to
   readable, formatted source before any change reaches disk.
+
+## End-of-turn summary (MANDATORY)
+
+Every turn — whether a 2-line review or a 50-tool coding session —
+MUST end with this structured summary as the LAST thing you output.
+No exceptions. This is not optional. The summary goes after all tool
+calls complete, as your final assistant message.
+
+Use exactly this format:
+
+---
+✅ Done:
+  • [one-line bullet per concrete change made or verified]
+  • [include test results if you ran them: "Tests: N passed"]
+
+🔶 Stubbed:
+  • [one-line bullet per stub/placeholder/scaffold left behind]
+  • [or "(none)" if nothing was stubbed]
+
+⏸ Deferred:
+  • [one-line bullet per item you did NOT complete + WHY]
+  • [or "(none)" if everything was completed]
+
+Summary: [2-4 sentences. What you did, what's left, what the user
+should do next. Be honest — do not overclaim. If something is broken,
+say so.]
+---
+
+Rules:
+- Bullet points are ONE LINE each. No prose paragraphs in the bullets.
+- "Done" = changes that reached disk AND were verified (tests run,
+  build checked). If you couldn't verify, move it to "Deferred" with
+  the reason.
+- "Stubbed" = code that compiles/runs but is a placeholder — `todo!()`,
+  empty impl, mock data, feature flag off. Be explicit.
+- "Deferred" = work you started but couldn't finish, or chose not to.
+  Always include the WHY (concrete blocker, not "later").
+- "Summary" = 2-4 sentences max. Not a paragraph. Not a paragraph
+  that sounds impressive. What happened, what's next.
+- If the turn was read-only (exploration, review, search): Done =
+  what you found. Deferred = what you recommend doing next.
+- Do NOT put the summary inside a code block. Output it as plain
+  markdown so the terminal renders it.

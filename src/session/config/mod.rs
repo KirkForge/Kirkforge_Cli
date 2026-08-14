@@ -2396,4 +2396,71 @@ mod tests {
              — did you add/remove a config field without updating CONFIG_FIELD_COUNT?"
         );
     }
+
+    /// **Contract:** a config.toml written by an older build (or
+    /// hand-edited to a subset of keys) must load via the PRIMARY serde
+    /// path — user values preserved, missing fields filled from
+    /// `Default`. The struct-level `#[serde(default)]` on the Config
+    /// sub-structs is what guarantees this: without it, any field the
+    /// file lacks that has no field-level serde default makes
+    /// `toml::from_str::<Config>` fail, and the load falls into the
+    /// `merge_toml_into_config` fallback — which silently resets every
+    /// field it doesn't handle (budget_ceiling, summarize_enabled,
+    /// docker, sandbox, permission_rules, …). The next `save_config`
+    /// then persists the wipe. This test simulates schema drift with a
+    /// file that predates `default_model` (and sets two
+    /// fallback-skipped canaries); if the load ever regresses to the
+    /// lossy fallback, the canaries come back as defaults.
+    #[test]
+    fn schema_drift_preserves_user_values() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = std::env::temp_dir().join(format!("kf_code_drift_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::env::set_var("KF_CODE_DATA_DIR", dir.as_os_str());
+        let path = super::super::config_path();
+        std::fs::write(
+            &path,
+            "ollama_host = \"http://my-host:1234\"\n\
+             auto_approve = true\n\
+             budget_ceiling = 50000\n\
+             summarize_enabled = true\n",
+        )
+        .unwrap();
+
+        let (cfg, warning) = load_config();
+        assert!(
+            warning.is_none(),
+            "drifted config must parse via the primary serde path, got: {warning:?}"
+        );
+        // User-set values survive.
+        assert_eq!(cfg.model.ollama_host, "http://my-host:1234");
+        assert!(cfg.security.auto_approve);
+        // Canaries for fields merge_toml_into_config does NOT handle:
+        // only the primary serde path preserves them.
+        assert_eq!(cfg.tools.budget_ceiling, 50000);
+        assert!(cfg.model.summarize_enabled);
+        // Missing fields are filled from defaults, not errors.
+        assert!(cfg.model.default_model.is_empty());
+        assert_eq!(cfg.model.request_timeout_secs, 120);
+
+        // The merged result must round-trip: saving (e.g. a plugin
+        // enable or "always allow" persisting a permission rule) writes
+        // the user's values back, never a fresh Config::default().
+        save_config(&cfg).unwrap();
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("http://my-host:1234"),
+            "user's ollama_host wiped on save:\n{on_disk}"
+        );
+        assert!(
+            on_disk.contains("budget_ceiling = 50000"),
+            "user's budget_ceiling wiped on save:\n{on_disk}"
+        );
+
+        std::env::remove_var("KF_CODE_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

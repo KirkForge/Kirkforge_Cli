@@ -74,6 +74,7 @@ pub struct SubagentProvider {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ModelConfig {
     pub default_model: String,
     pub ollama_host: String,

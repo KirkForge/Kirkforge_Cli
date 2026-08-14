@@ -159,13 +159,35 @@ fn tab_at_column(column: usize) -> Option<ActiveTab> {
 pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
     match ev {
         TurnEvent::Token(t) => {
-            state.generation.is_generating = true; // got first token — turn off spinner
-                                                   // Accumulate into the last assistant entry, or create one
+            state.generation.is_generating = true;
+            // Append to the LAST ASSISTANT entry in the conversation,
+            // even if tool entries were inserted after it. This prevents
+            // tool calls from splitting the assistant's text into
+            // fragments — all text from one turn stays in ONE message.
+            // Tool entries appear between the message and the next one
+            // in the data model, but the text content is unified.
             const ASSISTANT: &str = "assistant";
-            if let Some(last) = state.conversation.messages.back_mut() {
-                if last.role == ASSISTANT {
-                    last.content.push_str(&t);
-                    last.bump_version();
+            let last_assistant_idx = state
+                .conversation
+                .messages
+                .iter()
+                .rposition(|m| m.role == ASSISTANT);
+            if let Some(idx) = last_assistant_idx {
+                // Only append if this assistant entry was created in the
+                // CURRENT turn (not a previous turn's message). We detect
+                // this by checking if there are tool entries after it
+                // (meaning tools fired during this turn) or if it's the
+                // last entry (no tools yet).
+                let is_current_turn = idx == state.conversation.messages.len() - 1
+                    || state
+                        .conversation
+                        .messages
+                        .iter()
+                        .skip(idx + 1)
+                        .all(|m| m.role == "tool" || m.role == "system");
+                if is_current_turn {
+                    state.conversation.messages[idx].content.push_str(&t);
+                    state.conversation.messages[idx].bump_version();
                 } else {
                     state
                         .conversation

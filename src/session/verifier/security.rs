@@ -369,10 +369,14 @@ mod tests {
     // restores PATH and removes the marker on drop so a mid-test panic cannot
     // leak the mutated environment. The caller sets PATH to its fake bin dir
     // AFTER constructing the guard.
+    // ponytail: only used by the #[cfg(unix)] trufflehog-timeout test; gating
+    // the struct avoids a dead_code error on Windows where no caller exists.
+    #[cfg(unix)]
     struct PathEnvGuard {
         prior_path: Option<std::ffi::OsString>,
         marker: &'static str,
     }
+    #[cfg(unix)]
     impl PathEnvGuard {
         fn new(marker: &'static str) -> Self {
             let g = Self {
@@ -383,6 +387,7 @@ mod tests {
             g
         }
     }
+    #[cfg(unix)]
     impl Drop for PathEnvGuard {
         fn drop(&mut self) {
             match &self.prior_path {

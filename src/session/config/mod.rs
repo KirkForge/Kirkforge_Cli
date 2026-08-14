@@ -108,16 +108,21 @@ pub fn load_config() -> (Config, Option<String>) {
     // Layer 1: config file
     let path = super::config_path();
     if let Ok(content) = std::fs::read_to_string(&path) {
-        match toml::from_str::<Config>(&content) {
-            Ok(file_cfg) => cfg = file_cfg,
+        // Always parse as a TOML table and merge field-by-field into the
+        // default config. This preserves ALL user-set values while filling
+        // missing fields from Default. The previous approach tried
+        // `toml::from_str::<Config>` first, but serde's flatten + default
+        // interaction is broken (known serde issue #2230), so a minimal
+        // config file with only 4 keys would fail to parse and the merge
+        // fallback didn't handle all fields — wiping user values.
+        match content.parse::<toml::Table>() {
+            Ok(table) => {
+                merge_toml_into_config(&mut cfg, table);
+            }
             Err(e) => {
-                let msg = format!("Failed to parse config ({e}), merging with defaults");
+                let msg = format!("Failed to parse config ({e}), using defaults");
                 tracing::warn!(%msg);
                 warning = Some(msg);
-                // Try partial merge: parse what we can
-                if let Ok(table) = content.parse::<toml::Table>() {
-                    merge_toml_into_config(&mut cfg, table);
-                }
             }
         }
     }

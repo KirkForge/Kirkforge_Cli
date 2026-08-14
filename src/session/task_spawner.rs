@@ -66,8 +66,24 @@ impl InProcessTaskSpawner {
 #[async_trait::async_trait]
 impl TaskSpawner for InProcessTaskSpawner {
     async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
-        let effective_model = request.model.as_deref().unwrap_or(&self.model_name);
         let cfg = crate::shared::read_shared_config(&self.config).clone();
+
+        // WO 30.0.6: subagent provider override. Resolution order for the
+        // model: per-call `task` arg → subagent_provider.model → parent's
+        // model. Host and API keys fall back to the parent when the
+        // subagent override is unset, so a partial [subagent_provider]
+        // block (e.g. model + host only) still inherits the parent keys.
+        let sub = &cfg.model.subagent_provider;
+        let effective_model = request
+            .model
+            .as_deref()
+            .or(sub.model.as_deref().filter(|m| !m.is_empty()))
+            .unwrap_or(&self.model_name);
+        let effective_host = sub
+            .ollama_host
+            .as_deref()
+            .filter(|h| !h.is_empty())
+            .unwrap_or(&self.ollama_host);
 
         // If subagent_allowed_models is set, enforce the allowlist.
         if let Some(allowed) = &cfg.model.subagent_allowed_models {
@@ -81,7 +97,7 @@ impl TaskSpawner for InProcessTaskSpawner {
         let adapter = adapters::caching::maybe_wrap_cached(
             adapters::adapter_for_with_provider(
                 effective_model,
-                &self.ollama_host,
+                effective_host,
                 None,
                 &cfg.model.anthropic_provider,
                 cfg.model.request_timeout_secs,
@@ -89,11 +105,23 @@ impl TaskSpawner for InProcessTaskSpawner {
                 cfg.model.opencode_zen_api_key.as_deref(),
                 Some(&cfg.model.adapter_routing),
                 &adapters::ProviderApiKeys {
-                    anthropic: cfg.model.anthropic_api_key.clone(),
-                    openai: cfg.model.openai_api_key.clone(),
-                    deepseek: cfg.model.deepseek_api_key.clone(),
-                    gemini: cfg.model.gemini_api_key.clone(),
-                    kimi: cfg.model.kimi_api_key.clone(),
+                    anthropic: sub
+                        .anthropic_api_key
+                        .clone()
+                        .or(cfg.model.anthropic_api_key.clone()),
+                    openai: sub
+                        .openai_api_key
+                        .clone()
+                        .or(cfg.model.openai_api_key.clone()),
+                    deepseek: sub
+                        .deepseek_api_key
+                        .clone()
+                        .or(cfg.model.deepseek_api_key.clone()),
+                    gemini: sub
+                        .gemini_api_key
+                        .clone()
+                        .or(cfg.model.gemini_api_key.clone()),
+                    kimi: sub.kimi_api_key.clone().or(cfg.model.kimi_api_key.clone()),
                 },
                 Some(&cfg.model.aws_region),
                 if cfg.model.gcp_project_id.is_empty() {

@@ -119,6 +119,25 @@
 # gcp_service_account_path = ""
 
 # ---------------------------------------------------------------------------
+# Subagent provider override (brain+brawn, WO 30.0.6)
+# ---------------------------------------------------------------------------
+# Optional separate model + host + API keys for subagents spawned by the
+# `task` tool. Every field is optional; an unset field inherits the parent's
+# value above. The `task` tool's per-call `model` arg still wins over both.
+#
+# Enables brain+brawn: an expensive cloud model orchestrates while cheap
+# brawn runs on a different provider/account.
+#
+# [subagent_provider]
+# model = "qwen2.5:0.5b"
+# ollama_host = "http://localhost:11434"
+# anthropic_api_key = ""
+# openai_api_key = ""
+# deepseek_api_key = ""
+# gemini_api_key = ""
+# kimi_api_key = ""
+
+# ---------------------------------------------------------------------------
 # Sandbox and filesystem access
 # ---------------------------------------------------------------------------
 

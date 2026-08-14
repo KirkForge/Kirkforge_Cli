@@ -541,4 +541,43 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
             cfg.model.adapter_routing = map;
         }
     }
+
+    // Subagent provider override (WO 30.0.6 brain+brawn). Each var maps
+    // to the matching [subagent_provider] TOML field; an empty value is
+    // ignored so the subagent keeps inheriting the parent's value.
+    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_MODEL") {
+        if !val.is_empty() {
+            cfg.model.subagent_provider.model = Some(val);
+        }
+    }
+    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_HOST") {
+        if !val.is_empty() {
+            cfg.model.subagent_provider.ollama_host = Some(val);
+        }
+    }
+    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_ANTHROPIC_API_KEY") {
+        if !val.is_empty() {
+            cfg.model.subagent_provider.anthropic_api_key = Some(val);
+        }
+    }
+    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_OPENAI_API_KEY") {
+        if !val.is_empty() {
+            cfg.model.subagent_provider.openai_api_key = Some(val);
+        }
+    }
+    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_DEEPSEEK_API_KEY") {
+        if !val.is_empty() {
+            cfg.model.subagent_provider.deepseek_api_key = Some(val);
+        }
+    }
+    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_GEMINI_API_KEY") {
+        if !val.is_empty() {
+            cfg.model.subagent_provider.gemini_api_key = Some(val);
+        }
+    }
+    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_KIMI_API_KEY") {
+        if !val.is_empty() {
+            cfg.model.subagent_provider.kimi_api_key = Some(val);
+        }
+    }
 }

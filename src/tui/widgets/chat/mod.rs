@@ -10,7 +10,7 @@ use ratatui::{
 use crate::tui::app::{AppState, ConnectionState, ConversationEntry};
 
 mod lines;
-use lines::{build_chat_lines, progress_line, render_entry_lines};
+use lines::{build_chat_lines, grouped_tool_header, progress_line, render_entry_lines};
 
 /// Compute a scroll offset that shows the current search match.
 ///
@@ -154,7 +154,23 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
 
     let mut prev_entry: Option<&ConversationEntry> = None;
 
-    for (idx, entry) in state.conversation.messages.iter().enumerate() {
+    let mut idx = 0;
+    while idx < state.conversation.messages.len() {
+        let entry = &state.conversation.messages[idx];
+
+        // ── Tool call grouping (WO 30.0.14) ──
+        // Same helper build_chat_lines uses, so search-scroll and the
+        // production render agree on what a "grouped" tool block looks
+        // like. Skipping the group's members here also skips their cache
+        // slots — they re-render individually when the group is expanded
+        // (cache params include expanded_tools, so expansion invalidates).
+        if let Some((_end, group_lines)) = grouped_tool_header(state, idx) {
+            lines.extend(group_lines);
+            prev_entry = Some(entry);
+            idx = _end + 1;
+            continue;
+        }
+
         let is_streaming_last =
             idx == last_idx && state.generation.is_generating && entry.role == "assistant";
         let is_streaming_tool = entry.role == "tool" && entry.streaming;
@@ -212,6 +228,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
         lines.extend(entry_lines);
         lines.push(Line::from(""));
         prev_entry = Some(entry);
+        idx += 1;
     }
 
     // Inline thinking block under the latest assistant message.

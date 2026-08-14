@@ -246,6 +246,105 @@ fn tool_call_card_render() {
     assert_eq!(h.state.conversation.messages[0].role, "tool");
 }
 
+/// Tool call grouping (WO 30.0.14): consecutive non-streaming tool entries
+/// collapse into a single "🔧 name ×N" header in the production render
+/// path (`render_chat`). Catches the regression where grouping lived only
+/// in `build_chat_lines` (search-scroll) and never appeared in the TUI.
+/// Also verifies the three edge cases: single tool not grouped, streaming
+/// PTY tool not grouped, and the expanded-group path rendering every
+/// member individually.
+#[test]
+fn tool_call_grouping() {
+    // ── 1. Multiple consecutive tools collapse to one header ──
+    let mut h = TuiTestHarness::new().connected("qwen2.5");
+    for i in 0..3u32 {
+        h.feed_events([
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({"command": format!("echo {i}")}),
+            },
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: format!("{i}\n"),
+                success: true,
+            },
+        ]);
+    }
+    // Three finalized tool entries, all consecutive.
+    assert_eq!(h.state.conversation.messages.len(), 3);
+    assert!(h
+        .state
+        .conversation
+        .messages
+        .iter()
+        .all(|m| m.role == "tool"));
+    // tool_collapsed defaults to true → the group renders as one header.
+    let rendered = h.render();
+    assert!(
+        rendered.contains("🔧"),
+        "grouped tool header missing from production render"
+    );
+    assert!(
+        rendered.contains("bash ×3"),
+        "three consecutive bash calls must group into 'bash ×3'"
+    );
+
+    // ── 2. Single tool call is NOT grouped ──
+    let mut h2 = TuiTestHarness::new().connected("qwen2.5");
+    h2.feed_events([
+        TurnEvent::ToolStart {
+            name: "grep".into(),
+            args: serde_json::json!({"pattern": "x"}),
+        },
+        TurnEvent::ToolResult {
+            name: "grep".into(),
+            output: "match\n".into(),
+            success: true,
+        },
+    ]);
+    let rendered2 = h2.render();
+    // A single tool renders its own card with the "(done)" summary —
+    // not a grouped header. (The status bar's "🔧×1" counter is
+    // unrelated; we assert on the chat-specific "(done)" marker.)
+    assert!(
+        rendered2.contains("grep (done)"),
+        "single tool card must show its own summary, not a group header"
+    );
+    assert!(
+        !rendered2.contains("grep ×1"),
+        "a single tool call must not be grouped"
+    );
+
+    // ── 3. Expanding any member renders all individually ──
+    let mut h3 = TuiTestHarness::new().connected("qwen2.5");
+    for i in 0..3u32 {
+        h3.feed_events([
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({"command": format!("echo {i}")}),
+            },
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: format!("out{i}\n"),
+                success: true,
+            },
+        ]);
+    }
+    // Expand the middle tool → the group must un-group so that tool's
+    // body is visible. This also catches the idx-advance bug where the
+    // expanded-mode fall-through skipped middle entries.
+    h3.state.conversation.expanded_tools.insert(1);
+    let rendered3 = h3.render();
+    assert!(
+        !rendered3.contains("bash ×3"),
+        "expanding one member must un-group the block"
+    );
+    assert!(
+        rendered3.contains("out1"),
+        "expanded middle tool's body must be visible"
+    );
+}
+
 /// Approval prompt display: a pending tool approval must render the
 /// dialog with the tool name and the "Approval Required" header.
 /// Catches the borrow-scope regression where `mem::take` of the

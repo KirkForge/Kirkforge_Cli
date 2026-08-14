@@ -493,7 +493,8 @@ pub(super) fn build_chat_lines(
         }
 
         let is_streaming_last =
-            idx == last_idx && state.generation.is_generating && entry.role == "assistant";
+            (idx == last_idx && state.generation.is_generating && entry.role == "assistant")
+            || entry.streaming;
         let collapsed = if is_streaming_last {
             false
         } else if entry.role == "tool" {

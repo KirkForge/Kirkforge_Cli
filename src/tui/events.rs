@@ -187,6 +187,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                         .all(|m| m.role == "tool" || m.role == "system");
                 if is_current_turn {
                     state.conversation.messages[idx].content.push_str(&t);
+                    state.conversation.messages[idx].streaming = true;
                     state.conversation.messages[idx].bump_version();
                 } else {
                     state
@@ -268,6 +269,14 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             cumulative_cost,
         } => {
             state.generation.is_generating = false;
+            // Clear streaming flag on all assistant entries — the turn
+            // is done, so markdown rendering can now parse the final text.
+            for msg in &mut state.conversation.messages {
+                if msg.role == "assistant" {
+                    msg.streaming = false;
+                    msg.bump_version();
+                }
+            }
             state.generation.turn_tool_calls = 0; // reset for next turn
             state.generation.continuation = None;
             state.budget.tokens_sent = state.budget.tokens_sent.wrapping_add(prompt_tokens);

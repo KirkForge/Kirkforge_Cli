@@ -280,7 +280,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
             if w == 0 {
                 1
             } else {
-                (w + content_width - 1) / content_width
+                w.div_ceil(content_width)
             }
         })
         .sum();

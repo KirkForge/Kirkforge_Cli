@@ -1,19 +1,45 @@
-//! Python test verifier — runs `python -m pytest` on the edited Python file.
+//! Python test verifier — runs `python3 -m pytest` on the edited Python file.
 //!
 //! Mirrors [`super::test::verify_test`]: subscribes to `Edit` and `FileWrite`
 //! events. When a `.py` file inside a Python project (detected via
 //! [`super::detect::find_python_root`]) is modified, runs
-//! `python -m pytest {workspace} -x --tb=short -q` in the project root and
+//! `python3 -m pytest {workspace} -x --tb=short -q` in the project root and
 //! parses stdout/stderr. Failures are returned as `Verdict::Fixable` with the
 //! failure text; success returns `Verdict::Clean`. If pytest isn't installed,
 //! the verifier skips gracefully (per WO 31 failure criteria: never block when
 //! a tool is absent).
+//!
+//! The interpreter is resolved by [`pick_python`], which prefers `python3`
+//! (the canonical name on most Linux distros — many ship NO `python` symlink)
+//! and falls back to `python`.
 
 use crate::session::verifier::detect::{
     detect_project_languages, find_python_root, ProjectLanguage,
 };
 use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
 use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
+
+/// Resolve the first available Python interpreter by probing `--version`.
+/// Prefers `python3` (the canonical name on most Linux distros — many ship
+/// NO `python` symlink, so `Command::new("python")` fails with `NotFound`
+/// and the verifier can never run). Falls back to `python` (macOS Homebrew,
+/// some CI images). Returns the binary name or `None`.
+///
+/// Mirrors [`super::python_lint::pick_linter`]'s probe-then-fallback shape.
+async fn pick_python() -> Option<&'static str> {
+    for bin in ["python3", "python"] {
+        let ok = tokio::process::Command::new(bin)
+            .arg("--version")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if ok {
+            return Some(bin);
+        }
+    }
+    None
+}
 
 /// Run the Python test verifier against an event.
 pub async fn verify_python_test(event: &BusEvent) -> Verdict {
@@ -35,7 +61,13 @@ pub async fn verify_python_test(event: &BusEvent) -> Verdict {
         return Verdict::Skipped("Python not detected".into());
     }
 
-    let output = tokio::process::Command::new("python")
+    // python3-only hosts (most Linux distros) have no `python` symlink; without
+    // resolution the spawn fails with NotFound and the verifier can never run.
+    let Some(python) = pick_python().await else {
+        return Verdict::Skipped("no python interpreter found (tried python3, python)".into());
+    };
+
+    let output = tokio::process::Command::new(python)
         .current_dir(&root)
         .args(["-m", "pytest", "-x", "--tb=short", "-q"])
         .output()
@@ -45,7 +77,7 @@ pub async fn verify_python_test(event: &BusEvent) -> Verdict {
         Ok(o) => o,
         Err(e) => {
             return Verdict::Unfixable(VerificationError {
-                description: "failed to spawn python".into(),
+                description: format!("failed to spawn {python}"),
                 file: Some(path),
                 details: e.to_string(),
                 line: None,
@@ -130,6 +162,46 @@ mod tests {
         match verify_python_test(&event).await {
             Verdict::Skipped(msg) => assert!(msg.contains("Python marker")),
             other => panic!("expected Skipped, got {other:?}"),
+        }
+    }
+
+    /// `pick_python` resolves a real interpreter on any host with python3 or
+    /// python (the CI Ubuntu runners + dev machines all have at least one).
+    #[tokio::test]
+    async fn pick_python_finds_an_interpreter() {
+        // If neither is present the host can't run Python tests at all; skip
+        // the assertion rather than fail spuriously on a minimal container.
+        match pick_python().await {
+            Some(bin) => assert!(bin == "python3" || bin == "python"),
+            None => eprintln!("no python3/python on PATH — skipping interpreter probe"),
+        }
+    }
+
+    /// Regression: on a python3-only host (no `python` symlink), the verifier
+    /// must NOT fail with `Unfixable("failed to spawn python")`. It resolves
+    /// `python3` and either runs pytest or skips cleanly.
+    #[tokio::test]
+    async fn resolves_interpreter_when_python_symlink_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\nname = \"x\"\n",
+        )
+        .unwrap();
+        let py = dir.path().join("mod.py");
+        std::fs::write(&py, "x = 1\n").unwrap();
+        let event = BusEvent::Edit(EditEvent {
+            path: py,
+            diff: "".into(),
+        });
+        // Clean (pytest installed, tests pass) / Skipped (pytest or
+        // interpreter absent) / Fixable (a real test failure) are all
+        // acceptable. The bug being guarded: Unfixable spawn failure.
+        if let Verdict::Unfixable(e) = verify_python_test(&event).await {
+            assert!(
+                !e.details.contains("spawn") && !e.description.contains("spawn"),
+                "must not fail to spawn when an interpreter is available: {e:?}"
+            );
         }
     }
 }

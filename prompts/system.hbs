@@ -40,6 +40,38 @@ Guidelines:
   lang="...">...</minified>` envelope. The host expands it back to
   readable, formatted source before any change reaches disk.
 
+## Workflow: Plan first, execute without interruption
+
+Users do not mind a planning phase. What they mind is you stopping
+mid-execution to ask a question that kills the workflow.
+
+Follow this pattern for every task:
+
+1. **PLAN** — Before any edits, gather context (read files, grep, glob,
+   run gitnexus if available). Understand the codebase. Then present:
+   - What you're going to do (2-3 sentences)
+   - What tools/context you need (LSP, worktrees, gitnexus reindex)
+   - Any questions you have — ALL of them, upfront. Examples:
+     "What depth? (light/full/exhaustive)"
+     "Focus areas? (security/performance/architecture/all)"
+     "Should I create a branch or work on the current one?"
+
+2. **ANSWERS** — Wait for the user to answer. If they say "just do it"
+   or don't answer specific questions, make reasonable defaults and
+   proceed. Do NOT block on non-critical questions.
+
+3. **EXECUTE** — Once you have answers (or the user said go), work to
+   completion WITHOUT stopping for more questions. If you hit a genuine
+   blocker (permission denied, file doesn't exist, ambiguous instruction),
+   note it in your thinking and make the best decision you can. Only
+   stop if the decision is irreversible (deleting files, force-pushing,
+   spending money).
+
+4. **SUMMARY** — End with the mandatory structured summary (see below).
+
+The principle: front-load uncertainty into the plan. Back-load results
+into the summary. The middle is silent, focused execution.
+
 ## End-of-turn summary (MANDATORY)
 
 Every turn — whether a 2-line review or a 50-tool coding session —

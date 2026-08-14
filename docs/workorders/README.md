@@ -593,11 +593,51 @@ forwarding), and the TaskManager lifecycle. Status below verified against HEAD
 | 30.2 | TaskManager lifecycle (status/cancel/metadata/list) | Done (`63800ed`) | M |
 | 30.3 | Parallel agent orchestration (scout/coder/reviewer) | Planned (dep: 30.1 + 30.2) | L |
 | 30.4 | Seccomp syscall filter (default-off, opt-in `seccomp` feature) | Done (`2bfc2fa`; allowlist tuning + cross-arch + default-on flip deferred) | M |
-| 30.5 | Context-index target/ filter (e2e hang secondary root cause) | Planned | S |
+| 30.5 | Context-index target/ filter (e2e hang secondary root cause) | Done (`04c8f60`; `filter_entry` skips `target`/`.git`/`node_modules`/`.venv`/`dist`/`build`) | S |
 | 30.6 | Subagent approval forwarding to parent session | Done (`8717bd1`; supersedes the conservative P0 auto-approve deny at `5fbd955`) | M |
 | 30.7 | Benchmark: KirkForge vs Codex vs Claude Code (token-budget challenge) | Planned | M |
 
 **7 items.** Shipped at HEAD `2bfc2fa`: the seccomp OS-isolation layer, subagent
-worktree isolation, approval forwarding, and the TaskManager lifecycle. Open:
-the parallel-orchestration pattern (30.3), the context-index walker filter
-(30.5), and the cross-tool benchmark (30.7).
+worktree isolation, approval forwarding, the TaskManager lifecycle, and the
+context-index walker filter. Open: the parallel-orchestration pattern (30.3)
+and the cross-tool benchmark (30.7).
+
+### Series 32 — Post-Review Audit Corrections + Full Deferral Inventory
+
+Series 32 is driven by the 2026-08-14 evidence audit (4 parallel read-only
+subagents grepped every claim in the 8th-edition production-readiness review
+against source). The audit found 11 factual errors in the review (all corrected
+in-place) and surfaced every stubbed/deferred/skipped item from WO 27-31. A
+second pass verified each item against source: 11 RESOLVED, 9 OPEN. The OPEN
+items get individual WO 32 sub-workorders for tracking. See
+[WO 32.0](32.0-wo32-overview.md) for the full inventory + resolved/open split.
+
+| WO | Title | Status | Est | Priority |
+|----|-------|--------|-----|----------|
+| 32.0 | [Series overview + full deferral inventory](32.0-wo32-overview.md) | In Progress | — | — |
+| 32.1 | [Fix stale WO 30 overview statuses](32.1-fix-wo30-overview-statuses.md) | Done | S | — |
+| 32.2 | [Fix stale plugin_verify deferral message](32.2-fix-plugin-verify-message.md) | Pending | S | — |
+| 32.3 | [Clean up untracked npm/ build artifacts](32.3-clean-npm-artifacts.md) | Pending | S | — |
+| 32.4 | [Subagent CWD confinement](32.4-subagent-cwd-confinement.md) | Pending | M | High |
+| 32.5 | [Parallel orchestration (scout/coder/reviewer)](32.5-parallel-orchestration.md) | Pending (dep: 32.4) | L | Medium |
+| 32.6 | [Cross-tool benchmark vs Codex/Claude Code](32.6-cross-tool-benchmark.md) | Pending | M | High |
+| 32.7 | [WO 28.9 missing 11 tests (R3/R4/R5 — silent deferral)](32.7-missing-28.9-tests.md) | Pending | M | High |
+| 32.8 | [WO 28.1 port-trait residuals (3 imports)](32.8-port-trait-residuals.md) | Pending | M | Medium |
+| 32.9 | [WO 28.6 e2e tests still `#[ignore]`'d](32.9-e2e-tests-unignore.md) | Pending | S | Medium |
+| 32.10 | [WO 29.5 ES512 verifier gap](32.10-es512-verifier-gap.md) | Pending | S | Low |
+| 32.11 | [WO 29.3 ClassifierMemory + PathGuard unification](32.11-classifier-memory-pathguard.md) | Pending | M | Low |
+| 32.12 | [WO 27.7 R2 click-in-prompt cursor positioning](32.12-click-in-prompt-cursor.md) | Pending | S | Low |
+| 32.13 | [Streaming timeout per-adapter configurability](32.13-streaming-timeout-configurable.md) | Pending | S | Low |
+| 32.14 | [WO 28.7 R4 ci.yml coverage step](32.14-ci-yml-coverage-step.md) | Pending | S | Medium |
+| 32.15 | [WO 28.5 R3 landlock FS confinement test](32.15-landlock-fs-confinement-test.md) | Pending | S | Low |
+| 32.16 | [WO 28.8 R6 Windows stub test](32.16-windows-stub-test.md) | Pending | S | Low |
+| 32.17 | [WO 28.16 R4 computer_use vision loop (re-deferred 3×)](32.17-computer-use-vision-loop.md) | Pending | L | Medium |
+| 32.18 | [WO 28.17 R2 bash require_allowlist mode](32.18-bash-require-allowlist.md) | Pending | S | Low |
+| 32.19 | [WO 29.7 R6 SLO monitor + R7 security-emitter integration](32.19-slo-monitor-security-emitter.md) | Pending | M | Low |
+| 32.20 | [WO 31.2/31.3/31.5 Node + Go + generic verifiers](32.20-node-go-generic-verifiers.md) | Pending | M | Medium |
+
+**21 items.** 32.1 done (docs-only). 32.2-32.3 are small audit corrections. 32.4-32.20
+are the full deferral inventory from WO 27-31 — every stubbed/deferred/skipped item
+now has its own tracking workorder. High priority: 32.4 (CWD confinement — security),
+32.6 (benchmark — validates thesis), 32.7 (11 silently deferred tests — §11 violation).
+Most persistent: 32.17 (computer_use vision loop — re-deferred 3× since WO 25.18).

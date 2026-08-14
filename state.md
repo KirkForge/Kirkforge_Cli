@@ -346,7 +346,7 @@ Knocked down the MEDIUM findings from the deep review (worktree `.worktrees/wo28
 - **Subagent isolation shipped.** `coder` subagents get their own git worktree (WO 30.1) and destructive-tool approvals forward to the parent session's approval channel (WO 30.6).
 - **CI is green** (the 5th-ed CI-red debt is closed). The e2e stdin-piping hang that kept the `windows` job red is RESOLVED (`260e7d8`: 90s `STREAM_IDLE_TIMEOUT` + `[adapter_routing] "e2e-" = "Ollama"`). This docs-sweep run is gated on `scripts/check-artifact-consistency.sh` + `adr_xref_drift`.
 - **`main` fast-forward: still pending.** `origin/main` sits at `d848b37`; HEAD `2bfc2fa` is several WO merges ahead.
-- **Version: still `0.3.6`** (`Cargo.toml`). WO 27/28/29/30 shipped without a bump; next number TBD.
+- **Version: `3.8.0`** (`Cargo.toml` + `Cargo.lock` both bumped from `0.3.6` in commit `6e2e0d4`). The earlier "still 0.3.6" note was stale.
 - **Local install at `/home/henrik/own-code/kf-code`: not done** (carryover; not code debt).
 - **Where the remaining work lives:** `docs/workorders/30.0.0-wo30-overview.md`. Headline open items: WO 28.6 (7 binary-spawn e2e), WO 28.13 (Vertex mock + full Bedrock turn), WO 28.16 R4 (computer_use vision loop), WO 29.7 residuals (`ModelClient` prod impl + `ValidatorConfig` execution), WO 30.3 (parallel orchestration), WO 30.5 (context-index target/ filter), WO 30.7 (cross-tool benchmark).
 

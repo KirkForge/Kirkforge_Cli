@@ -773,6 +773,19 @@ pub(crate) async fn handle_input_key(
                             state.generation.is_generating = false;
                             state.conversation.input.clear();
                             state.conversation.cursor_position = 0;
+                            // Announce the cancel so the two-press
+                            // contract is explicit: without this, the
+                            // spinner just vanishes and a "did it work?"
+                            // second Ctrl+C would accidentally quit the
+                            // app. Mirrors the persona-cancel message.
+                            state
+                                .conversation
+                                .messages
+                                .push_back(ConversationEntry::new(
+                                    "system",
+                                    "⛔ Generation cancelled. Press Ctrl+C again to quit."
+                                        .to_string(),
+                                ));
                             return Ok(());
                         }
                         state.session.should_exit = true;

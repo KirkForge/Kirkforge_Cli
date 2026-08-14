@@ -239,15 +239,19 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
     },
 ];
 
-/// Return the primary trigger (first alias) of every command whose
-/// primary trigger starts with `/<prefix>`. The `prefix` argument is
-/// the text the user typed AFTER the `/` (e.g. `"he"` for `/he`); the
-/// returned triggers include the leading `/` (e.g. `"/help"`). Pure,
-/// deterministic, no I/O. Used by the Tab-completion handler.
+/// Return every command trigger (including aliases) whose text starts
+/// with `/<prefix>`. The `prefix` argument is the text the user typed
+/// AFTER the `/` (e.g. `"he"` for `/he`); the returned triggers include
+/// the leading `/` (e.g. `"/help"`). Pure, deterministic, no I/O. Used
+/// by the Tab-completion handler and the slash-menu popup.
+///
+/// Aliases are included so `/quit` (an alias of `/exit`) is reachable
+/// by typing `/q` — only filtering the primary trigger hid every
+/// non-first alias from completion.
 pub(crate) fn complete_command(prefix: &str) -> Vec<&'static str> {
     COMMANDS
         .iter()
-        .filter_map(|c| c.triggers.first())
+        .flat_map(|c| c.triggers.iter())
         .filter(|t| {
             t.strip_prefix('/')
                 .is_some_and(|rest| rest.starts_with(prefix))
@@ -955,20 +959,44 @@ mod tests {
     }
 
     #[test]
+    fn complete_command_quiet_matches_quit_alias() {
+        // `/quit` is an alias of `/exit`. Completion must surface aliases,
+        // not just primaries — otherwise `/q` shows nothing and the user
+        // cannot discover `/quit`.
+        assert_eq!(complete_command("q"), vec!["/quit"]);
+        assert_eq!(complete_command("quit"), vec!["/quit"]);
+    }
+
+    #[test]
     fn complete_command_zzz_returns_empty() {
         // No command starts with "zzz".
         assert!(complete_command("zzz").is_empty());
     }
 
     #[test]
-    fn complete_command_empty_prefix_returns_all_primaries() {
-        // An empty prefix matches every command's primary trigger.
+    fn complete_command_empty_prefix_returns_all_triggers() {
+        // An empty prefix matches every trigger — INCLUDING aliases —
+        // so the count is the total alias count, not the command count.
         let all = complete_command("");
+        let total_aliases: usize = COMMANDS.iter().map(|c| c.triggers.len()).sum();
         assert!(!all.is_empty());
         assert_eq!(
             all.len(),
-            COMMANDS.len(),
-            "expected one primary per command"
+            total_aliases,
+            "empty prefix should return every alias"
         );
+        // Every command's primary (first alias) is present.
+        for cmd in COMMANDS {
+            assert!(
+                all.contains(&cmd.triggers[0]),
+                "primary {:?} missing from empty-prefix completion",
+                cmd.triggers[0]
+            );
+        }
+        // No duplicates.
+        let mut sorted = all.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), all.len(), "duplicate triggers in {all:?}");
     }
 }

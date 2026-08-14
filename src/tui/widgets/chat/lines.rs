@@ -420,19 +420,20 @@ pub(super) fn build_chat_lines(
                     .collect();
                 let unique: Vec<&str> = {
                     let mut seen = std::collections::HashSet::new();
-                    tool_names.iter().filter(|t| seen.insert(**t)).copied().collect()
+                    tool_names
+                        .iter()
+                        .filter(|t| seen.insert(**t))
+                        .copied()
+                        .collect()
                 };
                 let label = if unique.len() == 1 {
                     format!("{} ×{}", unique[0], group_count)
                 } else {
-                    format!("{} tool calls", group_count)
+                    format!("{group_count} tool calls")
                 };
                 lines.push(Line::from(vec![
                     Span::raw(" "),
-                    Span::styled(
-                        "🔧 ",
-                        Style::default().fg(Color::Cyan),
-                    ),
+                    Span::styled("🔧 ", Style::default().fg(Color::Cyan)),
                     Span::styled(
                         label,
                         Style::default()

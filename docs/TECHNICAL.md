@@ -339,6 +339,17 @@ landlock/sandbox posture). Note: the executor's spawner is threaded into the dis
 
 Personas currently route through Anthropic-direct only. Bedrock/Vertex-configured users should use Anthropic API keys for persona invocation.
 
+**Per-subagent provider override** (WO 30.0.6 brain+brawn): the optional
+`[subagent_provider]` config block (TOML) or `KF_CODE_SUBAGENT_*` env vars
+let subagents run on a different model + host + API keys than the parent.
+Every field is optional; an unset field inherits the parent's value, so a
+partial block (e.g. `model` + `ollama_host` only) keeps the parent's API
+keys. `InProcessTaskSpawner` resolves the model as `task`-tool arg →
+`subagent_provider.model` → parent's `default_model`; host and per-provider
+keys fall back to the parent when unset. Enables the brain+brawn split: an
+expensive cloud model orchestrates while cheap brawn runs on a different
+provider/account.
+
 **Color themes** (WO 27.6): the TUI ships a central `Theme` palette (`src/tui/theme.rs`) covering every color role the markdown renderer, search highlighter, table grid, and budget indicator use. Four built-ins: `default` (prior hard-coded colors — the back-compat baseline), `dark` (high-contrast dark), `light` (readable on white terminals — swaps `Black`/`Cyan`/`Yellow` for higher-luminance alternatives), and `monokai` (warm palette with the canonical Monokai hex values). The active theme is selected by `display.theme` (TOML) or `KF_CODE_THEME` (env), both defaulting to `"default"`, and is live-switchable via the `/theme [name]` slash command — `/theme` with no argument cycles through the four built-ins. Unknown names fall back to `default`. The render functions in `src/tui/rendering/` take a `&Theme` and read colors by role name (`code_block_fg`, `link`, `budget_tight`, …); zero `Color::*` literals remain in production code under `rendering/`. Custom user-loaded palettes are explicitly out of scope (upgrade path: a `Theme::custom(palette)` constructor reading a TOML color map).
 
 **Mouse support** (WO 27.7): the TUI enables crossterm mouse capture at startup and routes click/drag/scroll through `events::handle_mouse_event` (`src/tui/events.rs`). The mouse wheel scrolls the chat (unchanged from before); a left-click on the top tab bar (row 0) switches to the tab under the cursor — the mouse equivalent of F1–F6; a left-click in the chat body "grabs" the view (turns auto-follow off so it sticks where the user clicked) and a subsequent left-drag scroll-pans the chat by the row delta (natural scrolling — content follows the drag). `DisableMouseCapture` runs in both the normal shutdown path and the panic-safe `TerminalGuard::drop`, so the terminal is never left with capture stuck on. Operators who dislike mouse capture hijacking their scrollback wheel can disable all of it with `display.mouse_enabled = false` (TOML) or `KF_CODE_MOUSE_ENABLED=false` (env) — when false, `EnableMouseCapture` is skipped entirely so the terminal keeps native scrollback. Click-to-position the text cursor inside the prompt input is deferred to 27.7-R2-later (the `LineReader` does not expose a set-position API cleanly); panel focus + drag-scroll alone close the competitive gap.

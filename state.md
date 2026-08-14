@@ -6,6 +6,33 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
+## Session 2026-08-14 — WO 30 misc: subagent provider + TUI fixes (branch `wo30misc`)
+
+Three WO 30 items shipped off `origin/dev`:
+
+- **WO 30.0.6 — Per-subagent provider config (`ee4f3c4`).** New
+  `SubagentProvider` struct (7 `Option` fields) on `ModelConfig` + a
+  `[subagent_provider]` TOML block + `KF_CODE_SUBAGENT_*` env vars.
+  `InProcessTaskSpawner` resolves the model as `task`-arg →
+  `subagent_provider.model` → parent's `default_model`; host and per-provider
+  keys fall back to parent when unset. Enables brain+brawn. `CONFIG_FIELD_COUNT`
+  99 → 100; drift-guard test literals updated (merge 86 → 93, env 82 → 89).
+  `config.toml.example` documents the block.
+- **WO 30.0.15 — Streaming markdown fragmentation (`3a26115`).**
+  `render_entry_lines` gains `is_streaming: bool`; streaming assistant content
+  renders as plain text (`textwrap::fill`) — only completed messages get
+  markdown parsing. Fixes partial-header artifacts (lone `#`). Side fix: the
+  chat render cache no longer stores streaming renders (would shadow the
+  markdown re-render on turn completion). Incidental fix: streaming now
+  pre-wraps into one `Line` per visual row, so `max_scroll` is correct and
+  `auto_scroll` pins to the bottom — retired the `token_stream_stress` guard.
+- **WO 30.0.14 — Tool grouping in production path (`f896bf6`).** Commit
+  `4668f91` added grouping to `build_chat_lines` (search-scroll) only;
+  `render_chat` (production) was missed. Extracted `grouped_tool_header(state,
+  idx) -> Option<(end_idx, lines)>` helper called from BOTH paths. Also fixed
+  the expanded-mode idx-advance bug (middle tools skipped when group expanded).
+  New `tool_call_grouping` selftest locks in 3 edge cases.
+
 ## Session 2026-08-13 — WO 31.6: TUI selftest harness (branch `wo31tui`)
 
 A `#[cfg(test)]` harness in `src/tui/selftest.rs` that drives the FULL TUI

@@ -166,30 +166,15 @@ fn token_stream_stress() {
     );
 
     // The full render pipeline must complete without panicking or
-    // overflowing the buffer (render() would panic on overflow). The
-    // assistant header and the first token are visible in the rendered
-    // output.
-    h.assert_contains("ASSISTANT");
-    h.assert_contains("word0");
-
-    // FINDING (do NOT weaken — this is a real latent bug the harness
-    // surfaced on first run): `word499` is NOT in the rendered buffer
-    // even though `auto_scroll` is on. Root cause: `render_chat` computes
-    // `max_scroll` from the pre-`.wrap()` `Line` count, but a long
-    // single-paragraph assistant message is ONE `Line` (markdown emits a
-    // paragraph as one Line), so `max_scroll` saturates to 0 and
-    // `auto_scroll` never pins to the bottom. `Paragraph::wrap` then
-    // re-wraps the long Line at render time and clips the tail out of
-    // view. The existing widget tests miss this because they use short
-    // messages. Tracked as a deferred finding in state.md — fixing it is
-    // out of scope for the harness workorder (WO 31.6).
-    let rendered = h.render();
-    assert!(
-        !rendered.contains("word499"),
-        "if this assertion now fires, the auto_scroll-on-long-message bug \
-         was fixed — remove this block and restore the word499 visibility \
-         assertion above"
-    );
+    // overflowing the buffer (render() would panic on overflow).
+    // WO 30.0.13: streaming content is rendered as plain text via
+    // textwrap (not markdown), which pre-wraps into one Line per visual
+    // row. This makes `max_scroll` correctly reflect the wrapped height,
+    // so `auto_scroll` pins to the bottom and the latest tokens (word499)
+    // are visible — the previous auto_scroll-on-long-message bug is fixed
+    // for the streaming case. The ASSISTANT header scrolls off the top on
+    // long content, which is the correct auto-scroll-to-bottom behaviour.
+    h.assert_contains("word499");
 }
 
 /// Word-wrap regression guard for the thinking panel. The bug

@@ -193,11 +193,18 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
                 content_width,
                 &state.search.query,
                 collapsed,
+                is_streaming_last,
                 state.spinner_char(),
                 &state.ui.theme,
             );
-            if let Some(slot) = state.conversation.chat_render_cache.entries.get_mut(idx) {
-                *slot = Some((entry.version, lines.clone()));
+            // Don't cache streaming renders: their plain-text form (WO
+            // 30.0.13) would shadow the markdown re-render that should
+            // appear once the turn completes. Streaming entries re-render
+            // every frame anyway, so skipping the cache costs nothing.
+            if !(is_streaming_last || is_streaming_tool) {
+                if let Some(slot) = state.conversation.chat_render_cache.entries.get_mut(idx) {
+                    *slot = Some((entry.version, lines.clone()));
+                }
             }
             lines
         };

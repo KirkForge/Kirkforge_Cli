@@ -228,6 +228,12 @@ pub(super) fn tool_card_lines(
 ///
 /// This is the per-message unit that the chat render cache stores. It does
 /// not include the trailing blank line between messages.
+///
+/// When `is_streaming` is true for an assistant message, the body is
+/// rendered as plain text (textwrap) rather than parsed as markdown.
+/// Streaming content is incomplete — a lone `#` arriving before the rest
+/// of a header would otherwise render as a fragment. Only once the turn
+/// completes do we parse the markdown (WO 30.0.13).
 // reason: each arg is an independent rendering input; grouping would obscure the wiring.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_entry_lines(
@@ -237,6 +243,7 @@ pub(super) fn render_entry_lines(
     content_width: usize,
     search_query: &str,
     collapsed: bool,
+    is_streaming: bool,
     spinner: &'static str,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
@@ -278,7 +285,12 @@ pub(super) fn render_entry_lines(
 
     let mut lines = vec![message_header(entry, prev)];
 
-    if entry.role == "assistant" {
+    // Only parse markdown for COMPLETED assistant messages. While
+    // streaming, the content is incomplete and partial markdown (a lone
+    // `#` before the rest of a header, an unclosed code fence) renders
+    // as fragments — fall back to plain text wrapping until the turn
+    // finishes (WO 30.0.13).
+    if entry.role == "assistant" && !is_streaming {
         let md_lines =
             render_markdown_lines_with_query(&entry.content, search_query, content_width, theme);
         for md_line in md_lines {
@@ -471,6 +483,7 @@ pub(super) fn build_chat_lines(
             content_width,
             &state.search.query,
             collapsed,
+            is_streaming_last,
             state.spinner_char(),
             &state.ui.theme,
         );

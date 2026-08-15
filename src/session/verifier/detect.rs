@@ -53,9 +53,27 @@ pub fn detect_project_languages(workspace: &Path) -> Vec<ProjectLanguage> {
 /// Python project root. Mirrors [`super::helpers::find_cargo_root`] for the
 /// Python side.
 pub fn find_python_root(path: &Path) -> Option<PathBuf> {
+    find_root_with_markers(path, PYTHON_MARKERS)
+}
+
+/// Walk up from `path` to the nearest Node project root (has `package.json`).
+/// Mirrors [`find_python_root`].
+pub fn find_node_root(path: &Path) -> Option<PathBuf> {
+    find_root_with_markers(path, NODE_MARKERS)
+}
+
+/// Walk up from `path` to the nearest Go project root (has `go.mod`).
+/// Mirrors [`find_python_root`].
+pub fn find_go_root(path: &Path) -> Option<PathBuf> {
+    find_root_with_markers(path, GO_MARKERS)
+}
+
+/// Shared walk-up used by every `find_<lang>_root`. Returns the nearest
+/// ancestor (inclusive) of `path` containing any of `markers`.
+fn find_root_with_markers(path: &Path, markers: &[&str]) -> Option<PathBuf> {
     let mut dir = path.parent()?;
     loop {
-        if has_any_marker(dir, PYTHON_MARKERS) {
+        if has_any_marker(dir, markers) {
             return Some(dir.to_path_buf());
         }
         match dir.parent() {
@@ -167,5 +185,37 @@ mod tests {
         std::fs::write(inner.join("pyproject.toml"), "").unwrap();
         let f = inner.join("mod.py");
         assert_eq!(find_python_root(&f), Some(inner.to_path_buf()));
+    }
+
+    #[test]
+    fn find_node_root_walks_up_to_package_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package.json"), "{}").unwrap();
+        let deep = tmp.path().join("src/lib/index.ts");
+        std::fs::create_dir_all(deep.parent().unwrap()).unwrap();
+        assert_eq!(find_node_root(&deep), Some(tmp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn find_node_root_returns_none_without_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("orphan.ts");
+        assert!(find_node_root(&f).is_none());
+    }
+
+    #[test]
+    fn find_go_root_walks_up_to_go_mod() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("go.mod"), "module x\n").unwrap();
+        let deep = tmp.path().join("pkg/foo/foo.go");
+        std::fs::create_dir_all(deep.parent().unwrap()).unwrap();
+        assert_eq!(find_go_root(&deep), Some(tmp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn find_go_root_returns_none_without_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("orphan.go");
+        assert!(find_go_root(&f).is_none());
     }
 }

@@ -1,7 +1,10 @@
 pub mod build;
 pub mod bus;
 pub mod detect;
+pub mod generic_test;
 pub mod git;
+pub mod go_test;
+pub mod go_vet;
 mod helpers;
 /// Verifier slots — deterministic post-execution checks and correction loop.
 ///
@@ -28,6 +31,8 @@ mod helpers;
 /// result is authoritative. The system runs verifiers in priority order
 /// and stops at the first definitive result.
 pub mod lint;
+pub mod node_lint;
+pub mod node_test;
 pub mod plugin;
 pub mod python_lint;
 pub mod python_test;

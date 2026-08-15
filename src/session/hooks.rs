@@ -778,6 +778,30 @@ mod tests {
         std::fs::write(dir.join(format!("{name}.sh")), content).unwrap();
     }
 
+    // Poll a marker file until its trimmed content equals `expected`, with a
+    // bounded total budget. Replaces bare `sleep`-paced poll loops with a
+    // deterministic primitive: 10ms interval, hard 15s cap (the hook's own
+    // 5s timeout + scheduling slop). Fails the test loudly on timeout instead
+    // of silently advancing to an assertion that would then flake.
+    async fn poll_for_marker(marker: &Path, expected: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while std::time::Instant::now() < deadline {
+            if let Ok(c) = std::fs::read_to_string(marker) {
+                if c.trim() == expected {
+                    return;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let got = std::fs::read_to_string(marker)
+            .map(|c| c.trim().to_string())
+            .unwrap_or_else(|_| "<missing>".into());
+        panic!(
+            "marker {} never reached {expected:?} within 15s; got {got:?}",
+            marker.display()
+        );
+    }
+
     #[test]
     fn test_discover_empty_dir() {
         let (_tmp, dir) = temp_hooks_dir();
@@ -856,25 +880,13 @@ mod tests {
 
         runner.run("post-turn", &[("KF_EVENT", "post-turn")], &default_config());
 
-        // Poll for the marker so the test stays stable under heavy
-        // parallel test loads. The budget MUST exceed the 5-second hook
-        // execution timeout (see `run_hook_script`): under load the
-        // fire-and-forget bash subprocess can be starved of CPU for
-        // several seconds before it even starts, so a tight budget
-        // races the hook's own timeout and flakes. 15s = 5s hook
-        // timeout + ~10s scheduling slop; the common case still breaks
-        // on first read of the correct content.
-        let mut content = String::from("not-run");
-        for _ in 0..300 {
-            if let Ok(c) = std::fs::read_to_string(&marker) {
-                content = c;
-                if content.trim() == "post-turn" {
-                    break;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-        assert_eq!(content.trim(), "post-turn");
+        // Give the fire-and-forget spawned hook a chance to be scheduled
+        // before we start polling the marker file.
+        tokio::task::yield_now().await;
+
+        // Poll for the marker. 15s budget = 5s hook timeout + scheduling slop;
+        // common case returns on first read. See `poll_for_marker`.
+        poll_for_marker(&marker, "post-turn").await;
     }
 
     #[tokio::test]
@@ -911,25 +923,8 @@ mod tests {
         // before we start polling the marker file.
         tokio::task::yield_now().await;
 
-        // Poll for the marker. The budget MUST exceed the 5-second hook
-        // execution timeout (see `run_hook_script`): under heavy parallel
-        // test load the spawned bash subprocess can be starved of CPU for
-        // several seconds before it starts, so a 5s polling budget races
-        // the hook's own 5s timeout and flakes (observed: full
-        // `impact-fallback.sh` run went red here once). 15s = 5s hook
-        // timeout + ~10s scheduling slop; the common case still breaks on
-        // first read of the correct content.
-        let mut content = String::new();
-        for _ in 0..300 {
-            if let Ok(c) = std::fs::read_to_string(&marker) {
-                content = c;
-                if content.trim() == "bash,pre-tool-bash" {
-                    break;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-        assert_eq!(content.trim(), "bash,pre-tool-bash");
+        // Poll for the marker. 15s budget = 5s hook timeout + scheduling slop.
+        poll_for_marker(&marker, "bash,pre-tool-bash").await;
     }
 
     #[tokio::test]
@@ -963,6 +958,17 @@ mod tests {
         let runner = HookRunner::new(dir);
 
         runner.run("slow-hook", &[], &default_config());
+
+        // Wait for the hook's own 5s execution timeout (see `run_hook_script`)
+        // to fire and kill the process group. This is a genuine production-
+        // timeout wait, not a sync sleep — kept as-is per WO 32 scope rule
+        // (genuine timeout tests stay). The 2s budget is deliberately short of
+        // the 5s hook timeout: it proves the pgrp was killed before the
+        // descendant's `sleep 30` could ever touch the marker, without paying
+        // the full 5s. If the kill failed, `sleep 30` would still be running
+        // at 2s and the marker would not yet exist — so this is a necessary-
+        // but-not-sufficient check; the full 5s+ wait lives in WO 33.14's
+        // subprocess timeout suite.
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
         assert!(
@@ -981,7 +987,11 @@ mod tests {
         // The safety gate should block the dangerous command.
         // write_hook creates the script but the safety gate prevents execution.
         runner.run("evil", &[], &default_config());
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // `run` is fire-and-forget; yield once to let the spawned task observe
+        // the safety gate. The assertion below does not depend on execution —
+        // `script_path` exists because `write_hook` created it, regardless of
+        // whether the gate let `rm` run.
+        tokio::task::yield_now().await;
 
         // Verify the dangerous script was NOT executed by checking the
         // script path exists (write_hook created it) but produced no

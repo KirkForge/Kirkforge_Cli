@@ -549,12 +549,13 @@ mod tests {
 
         let server_handle = tokio::spawn(run_daemon_at(socket.clone(), pid.clone()));
 
-        // Wait for the daemon to bind its socket.
-        for _ in 0..50 {
+        // Wait for the daemon to bind its socket. 1s budget, 5ms interval.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while std::time::Instant::now() < deadline {
             if socket.exists() {
                 break;
             }
-            sleep(Duration::from_millis(20)).await;
+            sleep(Duration::from_millis(5)).await;
         }
         assert!(socket.exists(), "daemon did not bind socket in time");
 

@@ -142,20 +142,30 @@ async fn test_compact_hooks_fire_pre_and_post() {
         },
     );
 
-    let mut pre_content = String::new();
-    let mut post_content = String::new();
-    for _ in 0..40 {
-        if let Ok(c) = std::fs::read_to_string(&pre_marker) {
-            pre_content = c;
+    // Poll for both hook marker files. Bounded to 15s (5s hook timeout +
+    // scheduling slop) with a 10ms interval — replaces a bare 50ms-paced loop.
+    let poll = async {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let (mut pre_content, mut post_content) = (String::new(), String::new());
+        while std::time::Instant::now() < deadline {
+            if pre_content.is_empty() {
+                if let Ok(c) = std::fs::read_to_string(&pre_marker) {
+                    pre_content = c;
+                }
+            }
+            if post_content.is_empty() {
+                if let Ok(c) = std::fs::read_to_string(&post_marker) {
+                    post_content = c;
+                }
+            }
+            if !pre_content.is_empty() && !post_content.is_empty() {
+                return (pre_content, post_content);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        if let Ok(c) = std::fs::read_to_string(&post_marker) {
-            post_content = c;
-        }
-        if !pre_content.is_empty() && !post_content.is_empty() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+        (pre_content, post_content)
+    };
+    let (pre_content, post_content) = poll.await;
 
     assert!(
         !pre_content.is_empty(),

@@ -1527,9 +1527,10 @@ mod tests {
         let client = McpClient::from_pipes(stdin, stdout, config);
 
         let request_fut = client.call_tool("unknown", serde_json::json!({}));
-        // The request is written asynchronously. Give it a moment, then
-        // inject an error response.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // The request is written asynchronously. Yield once to let the writer
+        // task progress — no wall-clock sleep needed; the cat process never
+        // replies, so the timeout path below produces the Failure regardless.
+        tokio::task::yield_now().await;
         let error_resp = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,

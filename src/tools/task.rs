@@ -605,7 +605,27 @@ impl Tool for TaskOutput {
 mod tests {
     use super::*;
     use crate::tools::ToolContext;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::AtomicBool;
+
+    // Poll a condition until it returns Some(T), with a bounded 1s total budget
+    // and a 10ms interval. Replaces `for _ in 0..50 { sleep(20ms) }` loops.
+    // Panics on timeout so a regression fails loudly instead of silently
+    // advancing to a flaky assertion.
+    async fn poll_until<T, F>(label: &str, mut cond: F) -> T
+    where
+        F: FnMut() -> Option<T>,
+    {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            if let Some(v) = cond() {
+                return v;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("{label}: condition never met within 1s");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
 
     struct MockSpawner {
         result: Result<String, String>,
@@ -627,9 +647,13 @@ mod tests {
     impl TaskSpawner for BlockingSpawner {
         async fn run_task(&self, _request: TaskRequest) -> Result<String, String> {
             self.started.notify_one();
-            while !self.finish.load(Ordering::Relaxed) {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
+            // Block forever. No test sets `finish` today — the worker is
+            // cancelled by drop/abort, not by this flag. Park cheaply instead
+            // of a 10ms busy-wait sleep loop.
+            // ponytail: finish flag kept for struct-construction parity; if a
+            // future test needs graceful completion, swap to Notify-wait.
+            let _ = &self.finish;
+            std::future::pending::<()>().await;
             Ok("done".to_string())
         }
     }
@@ -891,12 +915,10 @@ mod tests {
             content.contains("Started background task"),
             "got: {content}"
         );
-        for _ in 0..50 {
-            if *calls.lock().unwrap() > 0 {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        poll_until("spawner invoked", || {
+            (*calls.lock().unwrap() > 0).then_some(())
+        })
+        .await;
         assert!(*calls.lock().unwrap() >= 1, "spawner was not invoked");
     }
 
@@ -989,8 +1011,9 @@ mod tests {
     async fn task_reject_mode_returns_failure_when_semaphore_full() {
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let task = Task::with_config(manager, 1, TaskConcurrencyMode::Reject);
+        let started = Arc::new(tokio::sync::Notify::new());
         let spawner: Arc<dyn TaskSpawner> = Arc::new(BlockingSpawner {
-            started: Arc::new(tokio::sync::Notify::new()),
+            started: started.clone(),
             finish: Arc::new(AtomicBool::new(false)),
         });
         let ctx = ToolContext::with_spawner(spawner.clone());
@@ -1004,7 +1027,11 @@ mod tests {
             matches!(outcome1, ToolOutcome::Success { .. }),
             "first task should start: {outcome1:?}"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Wait deterministically for the first task to enter `run_task` (and
+        // thus hold the semaphore) before launching the second — replaces a
+        // 50ms bare sleep. 1s cap via Notify timeout guards against a
+        // regression where the worker never starts.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), started.notified()).await;
         let outcome2 = task
             .run(
                 &ctx,
@@ -1217,18 +1244,16 @@ mod tests {
         let id = extract_task_id(&content);
 
         // Wait for the mock spawner to finish and the worker to record duration.
-        for _ in 0..50 {
-            if manager
+        poll_until("task reaches terminal status", || {
+            manager
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .status(&id)
                 .as_ref()
                 .is_some_and(|s| s.is_terminal())
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+                .then_some(())
+        })
+        .await;
 
         let guard = manager.lock().unwrap_or_else(|e| e.into_inner());
         let entry = guard
@@ -1264,18 +1289,16 @@ mod tests {
             other => panic!("expected Success, got {other:?}"),
         };
         let id = extract_task_id(&content);
-        for _ in 0..50 {
-            if manager
+        poll_until("task reaches terminal status", || {
+            manager
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .status(&id)
                 .as_ref()
                 .is_some_and(|s| s.is_terminal())
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+                .then_some(())
+        })
+        .await;
         let m = manager
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1310,18 +1333,17 @@ mod tests {
         let id = extract_task_id(&content);
 
         // Wait until the worker has started (Pending -> Running).
-        for _ in 0..50 {
-            if matches!(
+        poll_until("task reaches Running status", || {
+            matches!(
                 manager
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .status(&id),
                 Some(TaskStatus::Running)
-            ) {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+            )
+            .then_some(())
+        })
+        .await;
 
         // cancel() sets the flag synchronously, so status reflects Cancelled
         // immediately — distinct from Failed, and without waiting for the

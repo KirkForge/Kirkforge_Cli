@@ -591,12 +591,15 @@ mod tests {
     use tokio::time::{sleep, Duration};
 
     /// Poll until `socket` appears on disk (the daemon bound it).
+    /// 1s total budget, 5ms interval — the daemon bind is near-instant
+    /// once spawned; the budget only covers scheduling slop.
     async fn wait_for_socket(socket: &std::path::Path) {
-        for _ in 0..50 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while std::time::Instant::now() < deadline {
             if socket.exists() {
                 return;
             }
-            sleep(Duration::from_millis(20)).await;
+            sleep(Duration::from_millis(5)).await;
         }
         panic!("daemon did not bind socket at {}", socket.display());
     }

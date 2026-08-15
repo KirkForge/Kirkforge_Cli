@@ -291,9 +291,12 @@ fn mtime_rebuild_single_file_change() {
 
     std::fs::write(&a_path, "fn alpha_v2() {}\nfn new_func() {}\n").unwrap();
 
-    // Ensure mtime actually changes (fs may round to second).
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    std::fs::write(&a_path, "fn alpha_v2() {}\nfn new_func() {}\n").unwrap();
+    // Force a distinct mtime deterministically without a wall-clock sleep.
+    // Filesystems may round mtimes to whole seconds, so bump by 2s to be safe.
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+    let file = std::fs::File::open(&a_path).unwrap();
+    file.set_modified(later).unwrap();
+    drop(file);
 
     let cached = ContextIndex::load(&cache_path).unwrap();
     let (rebuilt, changed) = ContextIndex::mtime_rebuild(cached, repo_root);

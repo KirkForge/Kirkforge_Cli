@@ -259,6 +259,21 @@ mod tests {
         TEST_REGISTRY_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
     }
 
+    // Poll a spawned job until it leaves the Running state, with a bounded 2s
+    // total budget and a 10ms interval. Replaces `for _ in 0..40 { sleep(50ms) }`
+    // loops. Panics on timeout so a regression fails loudly.
+    async fn wait_for_job_done(registry: &crate::session::bash_jobs::BashJobRegistry, id: u64) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            let job = registry.get(id).await.expect("job must exist");
+            if !matches!(job.status, JobStatus::Running) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("job {id} did not leave Running within 2s");
+    }
+
     #[tokio::test]
     async fn handle_jobs_command_list_includes_spawned_job() {
         let _guard = test_registry_lock().lock().await;
@@ -276,13 +291,7 @@ mod tests {
             )
             .await
             .unwrap();
-        for _ in 0..40 {
-            let job = registry.get(id).await.unwrap();
-            if !matches!(job.status, JobStatus::Running) {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
+        wait_for_job_done(&registry, id).await;
 
         let out = handle_jobs_command("", &mut app_state()).await;
         assert!(out.starts_with("Background jobs:"), "got: {out}");
@@ -307,13 +316,7 @@ mod tests {
             )
             .await
             .unwrap();
-        for _ in 0..40 {
-            let job = registry.get(id).await.unwrap();
-            if !matches!(job.status, JobStatus::Running) {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
+        wait_for_job_done(&registry, id).await;
 
         let out = handle_jobs_command(&id.to_string(), &mut app_state()).await;
         assert!(out.contains(&format!("#{id}")), "got: {out}");
@@ -404,13 +407,7 @@ mod tests {
             .await
             .unwrap();
 
-        for _ in 0..40 {
-            let job = registry.get(id).await.unwrap();
-            if !matches!(job.status, JobStatus::Running) {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
+        wait_for_job_done(&registry, id).await;
 
         let out = handle_jobs_command(&format!("{id} cancel"), &mut app_state()).await;
         assert!(out.contains("not running"), "got: {out}");

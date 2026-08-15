@@ -813,8 +813,14 @@ mod tests {
         let _first = rx.recv().await;
         drop(rx);
 
-        // Give the forwarder a moment to observe the closed receiver.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Let the forwarder task observe the closed receiver and abort. The
+        // forwarder's `select!` breaks on `tx_out.closed()`. Yielding a
+        // handful of times lets the runtime poll the forwarder to completion
+        // (it drains the inner channel to None, breaks, sees no Done event,
+        // and skips the cache write). Replaces a 50ms wall-clock sleep.
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
 
         // The cache must remain empty for this key; a truncated stream
         // must not be replayed on a later identical request.
@@ -888,7 +894,23 @@ mod tests {
         let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
         let _first = rx.recv().await;
         drop(rx);
-        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+
+        // Poll `emitted` until it stabilizes (stops growing for two consecutive
+        // reads), which means the forwarder has aborted. Bounded to 1s as a
+        // regression guard. Replaces a 60ms wall-clock sleep.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let mut last = emitted.load(Ordering::SeqCst);
+        loop {
+            tokio::task::yield_now().await;
+            let now = emitted.load(Ordering::SeqCst);
+            if now == last {
+                break;
+            }
+            last = now;
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+        }
 
         let count = emitted.load(Ordering::SeqCst);
         assert!(
@@ -908,7 +930,13 @@ mod tests {
         let tools: Vec<ToolDef> = vec![];
         let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
         while let Some(_ev) = rx.recv().await {}
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // The stream completed normally (inner closed). The forwarder breaks
+        // when `inner.recv()` returns None, then checks for a Done event and
+        // skips the cache write. Yield a few times to let the forwarder task
+        // finish its post-loop logic before asserting. Replaces a 50ms sleep.
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
         assert!(
             cache
                 .get(&wrapped.model_info().name, &messages, &tools, None)

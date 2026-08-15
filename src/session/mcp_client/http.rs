@@ -1044,14 +1044,17 @@ mod tests {
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nMcp-Session-Id: {sid}\r\n\r\n"
             );
             sock.write_all(response.as_bytes()).await.unwrap();
-            // Hold the socket open briefly so the client can read the
-            // headers before the stream closes. On Windows, dropping
-            // the socket immediately after write_all races the client's
-            // read — the close propagates faster than the headers,
-            // causing a connection-reset error. A short sleep gives
-            // reqwest time to read the response headers. The `sock`
-            // drops at the end of this block, closing the stream.
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            // Hold the socket open briefly so reqwest can read the response
+            // headers before the stream closes. On Windows, dropping the
+            // socket immediately after write_all races the client's read —
+            // the close propagates faster than the headers, causing a
+            // connection-reset error. This is a cross-library read race, not
+            // a test-sync sleep; 20ms is the empirically-shortest stable
+            // duration (down from 100ms). The `sock` drops at end of block.
+            // ponytail: a oneshot wired through the mock would be fully
+            // deterministic but doubles the helper's surface for a Windows-
+            // only race; revisit if this flakes again.
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             let _ = sock;
         });
 

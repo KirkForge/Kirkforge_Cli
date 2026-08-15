@@ -14,6 +14,13 @@
 use crate::shared::retry_backoff;
 use crate::shared::{Message, Role};
 use regex::Regex;
+use std::sync::OnceLock;
+
+static RE_BORROWER: OnceLock<Regex> = OnceLock::new();
+static RE_ORIGINAL_REF: OnceLock<Regex> = OnceLock::new();
+static RE_MISSING_SYMBOL: OnceLock<Regex> = OnceLock::new();
+static RE_TYPE_MISMATCH: OnceLock<Regex> = OnceLock::new();
+static RE_MISSING_METHOD: OnceLock<Regex> = OnceLock::new();
 
 /// A recovery hint: what went wrong and how to fix it.
 #[derive(Debug, Clone)]
@@ -110,8 +117,12 @@ fn classify_borrow_conflict(error: &str) -> Option<ErrorHint> {
     // first quoted token after "cannot borrow" is the name of the
     // borrow that *conflicts*. This order is consistent across rustc
     // editions and clippy rewrites of the same diagnostic.
-    let re_borrower = Regex::new(r"cannot borrow `([^`]+)`").ok()?;
-    let re_original = Regex::new(r"also (?:mutably )?borrowed as `([^`]+)`").ok()?;
+    let re_borrower = RE_BORROWER.get_or_init(|| {
+        Regex::new(r"cannot borrow `([^`]+)`").expect("borrower regex")
+    });
+    let re_original = RE_ORIGINAL_REF.get_or_init(|| {
+        Regex::new(r"also (?:mutably )?borrowed as `([^`]+)`").expect("original ref regex")
+    });
     let lower = error.to_lowercase();
     if !lower.contains("cannot borrow") {
         return None;
@@ -142,7 +153,9 @@ fn classify_missing_import(error: &str) -> Option<ErrorHint> {
     if !(is_missing_value || is_missing_type) {
         return None;
     }
-    let re = Regex::new(r"cannot find (?:value|type) `([^`]+)`").ok()?;
+    let re = RE_MISSING_SYMBOL.get_or_init(|| {
+        Regex::new(r"cannot find (?:value|type) `([^`]+)`").expect("missing symbol regex")
+    });
     let symbol = re
         .captures(error)
         .and_then(|c| c.get(1))
@@ -167,7 +180,9 @@ fn classify_type_mismatch(error: &str) -> Option<ErrorHint> {
     // `expected \`T\`, found \`U\`` may appear with extra prose on either
     // side (e.g. on a separate line of the rendered diagnostic). Match
     // on the canonical short form.
-    let re = Regex::new(r"expected `([^`]+)`, found `([^`]+)`").ok()?;
+    let re = RE_TYPE_MISMATCH.get_or_init(|| {
+        Regex::new(r"expected `([^`]+)`, found `([^`]+)`").expect("type mismatch regex")
+    });
     let caps = re.captures(error)?;
     let expected = caps.get(1)?.as_str().to_string();
     let found = caps.get(2)?.as_str().to_string();
@@ -185,8 +200,10 @@ fn classify_missing_method(error: &str) -> Option<ErrorHint> {
     if !lower.contains("no method named") {
         return None;
     }
-    let re =
-        Regex::new(r"no method named `([^`]+)` found for (?:type|struct|enum) `([^`]+)`").ok()?;
+    let re = RE_MISSING_METHOD.get_or_init(|| {
+        Regex::new(r"no method named `([^`]+)` found for (?:type|struct|enum) `([^`]+)`")
+            .expect("missing method regex")
+    });
     let caps = re.captures(error)?;
     let method_name = caps.get(1)?.as_str().to_string();
     let type_name = caps.get(2)?.as_str().to_string();

@@ -88,7 +88,7 @@ Every PR that changes observable behavior must either:
 - add a line to `CHANGELOG.md` under `## [Unreleased]` that references the PR
   number (`#NNN`).
 
-`.github/workflows/ci.yml` runs a `changelog` job that checks this rule.
+`.github/workflows/ci-merge.yml` runs the `fmt` job that checks this rule (the `check-artifact-consistency.sh` script catches dead workflow references).
 
 ## Emergency patch release
 

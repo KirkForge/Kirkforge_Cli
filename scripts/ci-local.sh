@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local CI gate — runs the same checks as .github/workflows/ci.yml.
+# Local CI gate — runs the same checks as .github/workflows/ci-merge.yml.
 #
 # Usage:
 #   scripts/ci-local.sh           # run all checks

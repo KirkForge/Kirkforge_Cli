@@ -5,7 +5,7 @@
 use super::super::*;
 use super::common::*;
 use crate::adapters::ModelAdapter;
-use crate::shared::{FinishReason, Message, ModelInfo, StreamEvent, ToolDef, ToolOutcome};
+use crate::shared::{FinishReason, Message, ModelInfo, Role, StreamEvent, ToolDef, ToolOutcome};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
@@ -227,5 +227,109 @@ async fn max_continuation_cap_aborts_after_limit() {
         cap_errors[0].contains("(1)"),
         "cap message should name the configured limit (1), got: {}",
         cap_errors[0]
+    );
+}
+
+// ── R4.5 — turn resumes correctly after compaction ─────────────────────
+//
+// After a compaction rewrites the conversation log (via
+// `replace_all_async`), the next turn must still drain cleanly and
+// append a new assistant turn. This pins that the executor's turn
+// path is not poisoned by a mid-session compaction: the conversation
+// log is still writable and the adapter still receives a complete
+// message list. Uses the shared `MockAdapter` (no live LLM).
+
+#[tokio::test]
+async fn turn_resumes_correctly_after_compaction() {
+    use crate::session::prompt::compact_to_budget;
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::Text("resumed after compaction".to_string()),
+            StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![], make_config(false)).unwrap();
+
+    // Seed a long conversation that would trigger compaction.
+    exe.conversation
+        .append_async(Message {
+            role: Role::System,
+            content: "anchor".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    for i in 0..20 {
+        exe.conversation
+            .append_async(Message {
+                role: Role::User,
+                content: format!("question {i}"),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        exe.conversation
+            .append_async(Message {
+                role: Role::Assistant,
+                content: "x".repeat(2000),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    let pre_count = exe.conversation_log().all().len();
+    assert!(pre_count > 10, "fixture must be non-trivial: {pre_count}");
+
+    // Run a compaction in-place: compact the current history and swap it.
+    let history = exe.conversation_log().all().to_vec();
+    let result = compact_to_budget(&history, 2, Some(1000));
+    assert!(
+        result.tokens_after < result.tokens_before,
+        "compaction must reduce tokens before the turn resumes"
+    );
+    exe.conversation
+        .replace_all_async(result.new_messages.clone())
+        .await
+        .unwrap();
+    // Naive compaction replaces content (stub/condense) but does not
+    // delete slots, so the count stays equal — verify the token count
+    // dropped instead (the real compaction signal).
+    let compacted_count = exe.conversation_log().all().len();
+    assert_eq!(
+        compacted_count, pre_count,
+        "naive compaction preserves slot count (replacement, not deletion)"
+    );
+
+    // The turn after compaction must drain and append a new assistant turn.
+    let events = exe
+        .run_turn_collecting("continue the work", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, TurnEvent::Token(t) if t.contains("resumed after compaction"))),
+        "post-compaction turn must produce the assistant text, got: {events:?}"
+    );
+
+    // The conversation log must have grown (user turn + assistant turn).
+    let post_count = exe.conversation_log().all().len();
+    assert!(
+        post_count > compacted_count,
+        "post-compaction turn must append to the log: {compacted_count} -> {post_count}"
+    );
+    // The new user turn must be in the log.
+    assert!(
+        exe.conversation_log()
+            .all()
+            .iter()
+            .any(|m| m.role == Role::User && m.content == "continue the work"),
+        "the new user turn must be persisted after compaction"
     );
 }

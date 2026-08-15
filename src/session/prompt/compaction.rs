@@ -820,4 +820,287 @@ mod tests {
             );
         }
     }
+
+    // ── R3.1 — slice trips when context exceeds threshold ──────────────
+    //
+    // `compact_to_budget` with a `target_budget_tokens` of `Some(b)`
+    // expands the tail backwards only when `original_tokens > b`.
+    // Under the threshold it behaves like `compact` (no expansion).
+    // Pin both branches so a contributor who flips the inequality
+    // surfaces here.
+
+    #[test]
+    fn slice_trips_when_context_exceeds_threshold() {
+        // 1 system + 12 messages: 6 short user + 6 expensive assistant.
+        let mut msgs = vec![system("anchor")];
+        for i in 0..6 {
+            msgs.push(user(&format!("q{i}")));
+            msgs.push(assistant(&"x".repeat(2000)));
+        }
+        let original_tokens = estimate_tokens(&msgs);
+        // Under the threshold: no expansion beyond the minimum tail.
+        let under = compact_to_budget(&msgs, 2, Some(original_tokens + 10_000));
+        assert_eq!(
+            under.compacted_count, under.original_count,
+            "under-threshold compaction must not delete slots (replacement only)"
+        );
+        let r_plain = compact(&msgs, 2);
+        assert_eq!(
+            under.compacted_count, r_plain.compacted_count,
+            "under-threshold path must match the budget-less path"
+        );
+
+        // Over the threshold: the tail expands backwards to include
+        // cheap messages while the expensive middle is condensed.
+        let over = compact_to_budget(&msgs, 2, Some(500));
+        assert!(
+            over.tokens_after < over.tokens_before,
+            "over-threshold compaction must reduce tokens: {} -> {}",
+            over.tokens_before,
+            over.tokens_after
+        );
+        assert!(
+            over.condensed_assistant_turns > 0,
+            "over-threshold compaction must condense at least one assistant"
+        );
+    }
+
+    // ── R3.2 — slice selects correct messages for compaction ───────────
+    //
+    // The three-region split: anchor (system, kept verbatim), middle
+    // (compacted: tools stubbed, assistants condensed, users kept), tail
+    // (preserved verbatim). Pin each region's shape.
+
+    #[test]
+    fn slice_selects_correct_messages_for_compaction() {
+        let mut msgs = vec![system("anchor")];
+        // Middle (4 messages): user, tool, assistant, tool.
+        msgs.push(user("old question"));
+        msgs.push(tool_result("huge output", "c1", "bash"));
+        msgs.push(assistant("old answer with prose"));
+        msgs.push(tool_result("more output", "c2", "read_file"));
+        // Tail (2 messages): preserved verbatim.
+        msgs.push(user("recent q"));
+        msgs.push(assistant("recent a"));
+
+        let r = compact(&msgs, 2);
+        assert_eq!(r.original_count, 7);
+        assert_eq!(r.dropped_tool_results, 2);
+        assert_eq!(r.condensed_assistant_turns, 1);
+
+        // Anchor: first message, verbatim system.
+        assert_eq!(r.new_messages[0].role, Role::System);
+        assert_eq!(r.new_messages[0].content, "anchor");
+
+        // Middle: the user is verbatim, both tools are stubbed, the
+        // assistant is condensed (carries the condense prefix).
+        assert_eq!(r.new_messages[1].content, "old question");
+        assert_eq!(r.new_messages[2].role, Role::Tool);
+        assert_eq!(r.new_messages[2].content, TOOL_RESULT_STUB);
+        assert!(
+            r.new_messages[3]
+                .content
+                .starts_with(ASSISTANT_CONDENSED_PREFIX),
+            "middle assistant must be condensed, got: {:?}",
+            r.new_messages[3].content
+        );
+        assert_eq!(r.new_messages[4].content, TOOL_RESULT_STUB);
+
+        // Tail: last 2 messages verbatim.
+        assert_eq!(r.new_messages[5].content, "recent q");
+        assert_eq!(r.new_messages[6].content, "recent a");
+    }
+
+    // ── R3.3 — slice preserves conversation order ──────────────────────
+    //
+    // Compaction replaces middle content (stub/condense) but must not
+    // reorder messages. The relative order of anchor → middle → tail
+    // and the order *within* the middle must be preserved.
+
+    #[test]
+    fn slice_preserves_conversation_order() {
+        let mut msgs = vec![system("anchor")];
+        // Middle: a recognisable sequence of roles.
+        msgs.push(user("m1"));
+        msgs.push(assistant("m2"));
+        msgs.push(tool_result("m3", "c1", "bash"));
+        msgs.push(user("m4"));
+        msgs.push(assistant("m5"));
+        // Tail: 2 messages.
+        msgs.push(user("t1"));
+        msgs.push(assistant("t2"));
+
+        let r = compact(&msgs, 2);
+
+        // The role sequence must be identical to the original —
+        // compaction replaces content, never reorders slots.
+        let original_roles: Vec<Role> = msgs.iter().map(|m| m.role.clone()).collect();
+        let compacted_roles: Vec<Role> = r.new_messages.iter().map(|m| m.role.clone()).collect();
+        assert_eq!(
+            original_roles, compacted_roles,
+            "compaction must preserve message order (roles), got: {compacted_roles:?}"
+        );
+
+        // The anchor stays first, the tail stays last.
+        assert_eq!(
+            r.new_messages.first().map(|m| m.content.as_str()),
+            Some("anchor")
+        );
+        assert_eq!(
+            r.new_messages.last().map(|m| m.content.as_str()),
+            Some("t2")
+        );
+    }
+
+    // ── R4.1 — compaction triggers at threshold ────────────────────────
+    //
+    // When the estimated token count exceeds `target_budget_tokens`,
+    // `compact_to_budget` must produce a strictly smaller token count
+    // in `tokens_after` (the tail-expansion + middle-condense path).
+    // Below the threshold it's a no-op on token count.
+
+    #[test]
+    fn compaction_triggers_at_threshold() {
+        let mut msgs = vec![system("anchor")];
+        for i in 0..10 {
+            msgs.push(user(&format!("q{i}")));
+            msgs.push(assistant(&"x".repeat(2000)));
+        }
+        let original_tokens = estimate_tokens(&msgs);
+        assert!(
+            original_tokens > 1000,
+            "fixture must be large enough to trigger compaction: {original_tokens}"
+        );
+
+        // Over: the threshold is set well below the original tokens.
+        let r = compact_to_budget(&msgs, 2, Some(1000));
+        assert!(
+            r.tokens_after < r.tokens_before,
+            "over-threshold compaction must reduce tokens: {} -> {}",
+            r.tokens_before,
+            r.tokens_after
+        );
+        assert!(
+            r.condensed_assistant_turns > 0,
+            "over-threshold compaction must condense assistants"
+        );
+
+        // Under-threshold: the middle is still compacted (content
+        // replacement), so tokens still drop — the budget only
+        // controls *tail expansion*, not whether the middle is
+        // touched. Pin that the under-threshold path matches the
+        // budget-less `compact` (no tail expansion).
+        let r_noop = compact_to_budget(&msgs, 2, Some(original_tokens * 10));
+        let r_plain = compact(&msgs, 2);
+        assert_eq!(
+            r_noop.compacted_count, r_plain.compacted_count,
+            "under-threshold path must match the budget-less path (no tail expansion)"
+        );
+        assert_eq!(
+            r_noop.tokens_after, r_plain.tokens_after,
+            "under-threshold token count must match the budget-less path"
+        );
+        // The over-budget path must keep at least as many tokens as
+        // the budget-less path when the budget is generous (no
+        // expansion), and fewer when the budget is tight. Here we
+        // just assert the over path compressed strictly more.
+        assert!(
+            r.tokens_after <= r_noop.tokens_after,
+            "tight budget must not produce more tokens than the generous budget"
+        );
+    }
+
+    // ── R4.3 — compaction preserves verifier findings tail ─────────────
+    //
+    // Verifier findings (tool_name starts with `verifier:` and content
+    // indicates an unresolved failure) that land in the *tail* region
+    // (within the last `preserve_recent` messages) must survive
+    // compaction verbatim — they are NOT in the middle, so they are
+    // never stubbed. The `extract_unresolved_verifier_findings` helper
+    // must still find them in the post-compaction message list.
+
+    #[test]
+    fn compaction_preserves_verifier_findings_tail() {
+        let mut msgs = vec![system("anchor")];
+        // Middle: a resolved verifier finding (should be skipped by
+        // the extractor because its content says "Auto-fixed").
+        msgs.push(tool_result(
+            "Auto-fixed: warning — removed dead code",
+            "c0",
+            "verifier:lint",
+        ));
+        // Padding so the middle is non-empty.
+        for i in 0..6 {
+            msgs.push(user(&format!("q{i}")));
+            msgs.push(assistant(&"x".repeat(500)));
+        }
+        // Tail (2 messages): one unresolved verifier finding + one user.
+        msgs.push(tool_result(
+            "Verification failed: unused import — src/lib.rs",
+            "c_tail",
+            "verifier:lint",
+        ));
+        msgs.push(user("recent q"));
+
+        let r = compact(&msgs, 2);
+        // The tail tool result must survive verbatim.
+        let tail_finding = r
+            .new_messages
+            .iter()
+            .find(|m| {
+                m.role == Role::Tool
+                    && m.tool_name.as_deref() == Some("verifier:lint")
+                    && m.content.contains("Verification failed")
+            })
+            .expect("unresolved verifier finding in tail must survive compaction");
+        assert_eq!(
+            tail_finding.content, "Verification failed: unused import — src/lib.rs",
+            "tail verifier finding must be verbatim, not stubbed"
+        );
+
+        // The extractor must surface the unresolved finding from the
+        // post-compaction list.
+        let findings = extract_unresolved_verifier_findings(&r.new_messages)
+            .expect("at least one unresolved finding survives");
+        assert!(findings.contains("Verification failed:"));
+        // The resolved middle finding must NOT appear (it was stubbed).
+        assert!(
+            !findings.contains("Auto-fixed:"),
+            "resolved finding in the middle must be stubbed away: {findings}"
+        );
+    }
+
+    // ── R4.4 — compaction re-triggers on long session ──────────────────
+    //
+    // A long session may need compaction more than once. Run
+    // `compact_to_budget` on the result of a first compaction; the
+    // second run must still be able to reduce tokens (or at minimum
+    // remain stable — never grow). The invariant: compaction is
+    // idempotent in token count (a second pass does not increase it).
+
+    #[test]
+    fn compaction_retriggers_on_long_session() {
+        let mut msgs = vec![system("anchor")];
+        for i in 0..30 {
+            msgs.push(user(&format!("q{i}")));
+            msgs.push(assistant(&"x".repeat(2000)));
+            msgs.push(tool_result(&"y".repeat(2000), "c", "bash"));
+        }
+        // First compaction: tight budget.
+        let r1 = compact_to_budget(&msgs, 4, Some(2000));
+        assert!(
+            r1.tokens_after < r1.tokens_before,
+            "first compaction must reduce tokens: {} -> {}",
+            r1.tokens_before,
+            r1.tokens_after
+        );
+        // Second compaction on the result: must not grow tokens.
+        let r2 = compact_to_budget(&r1.new_messages, 4, Some(2000));
+        assert!(
+            r2.tokens_after <= r1.tokens_after,
+            "second compaction must not increase tokens: r1={} r2={}",
+            r1.tokens_after,
+            r2.tokens_after
+        );
+    }
 }

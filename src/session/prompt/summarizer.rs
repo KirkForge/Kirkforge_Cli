@@ -675,4 +675,88 @@ mod tests {
     fn estimate_token_count_zero_for_empty_messages() {
         assert_eq!(estimate_token_count(&[]), 0);
     }
+
+    // ── R4.2 — compaction calls LLM for summary ────────────────────────
+    //
+    // `summarize_conversation` is the LLM-backed compaction path. When
+    // the Ollama `/api/chat` endpoint returns a `message.content` that
+    // is non-empty and compresses the input below the configured
+    // `min_compression_ratio`, the result carries a `Some(summary)` and
+    // `fell_back == false`. This test uses a wiremock Ollama so no live
+    // LLM is needed. It pins the contract: a summary is produced from
+    // the LLM response and the token count drops.
+
+    #[tokio::test]
+    async fn compaction_calls_llm_for_summary() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let server = MockServer::start().await;
+        // A short summary that compresses well below 0.4 (the configured
+        // ratio). The fixture messages are large enough that a 1-line
+        // summary is a >60% reduction.
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": { "content": "- decided to use the cache module\n- fixed the off-by-one in slicing.rs\n- tests green" }
+            })))
+            .mount(&server)
+            .await;
+
+        // Build a conversation large enough to clear `min_turns_for_summary`
+        // and to make the short summary a real compression.
+        let messages: Vec<Message> = (0..8)
+            .flat_map(|i| {
+                vec![
+                    Message {
+                        role: Role::User,
+                        content: format!("question {i} with some detail to bulk it out a bit"),
+                        ..Default::default()
+                    },
+                    Message {
+                        role: Role::Assistant,
+                        content: "x".repeat(400),
+                        ..Default::default()
+                    },
+                ]
+            })
+            .collect();
+        let tokens_before = estimate_token_count(&messages);
+        assert!(
+            tokens_before > 100,
+            "fixture must be non-trivial: {tokens_before}"
+        );
+
+        let config = SummarizerConfig {
+            model: "test-model".into(),
+            min_turns_for_summary: 4,
+            min_compression_ratio: 0.4,
+            max_summary_tokens: 500,
+        };
+        let result = summarize_conversation(&config, &messages, &server.uri()).await;
+
+        assert!(
+            result.summary.is_some(),
+            "summary must be produced from the LLM response: {:?}",
+            result.error
+        );
+        assert!(
+            !result.fell_back,
+            "a successful LLM summary must not set fell_back"
+        );
+        assert!(
+            result.tokens_after < result.tokens_before,
+            "summary must compress tokens: {} -> {}",
+            result.tokens_before,
+            result.tokens_after
+        );
+        assert_eq!(result.summarised_messages, messages.len());
+        assert!(
+            result.summary.as_ref().unwrap().contains("slicing.rs"),
+            "summary content must come from the LLM response, got: {:?}",
+            result.summary
+        );
+    }
 }

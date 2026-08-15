@@ -848,4 +848,247 @@ mod tests {
             "findings from the Rust emitter are already typed VerdictEntry"
         );
     }
+
+    // ── R5.1 — bus broadcasts every tool result to all verifiers ────────
+    //
+    // `VerifierBus::run` must call EVERY registered verifier (no
+    // short-circuit on the first error). Pin that N verifiers each
+    // contributing M verdicts yields N*M total verdicts — proving the
+    // broadcast reaches all of them.
+
+    #[test]
+    fn verifier_bus_broadcasts_every_tool_result() {
+        let mut bus = VerifierBus::new();
+        for i in 0..3 {
+            bus.register(Box::new(StubVerifier {
+                name: format!("v{i}"),
+                entries: vec![
+                    VerdictEntry {
+                        source: VerifierSource::Build,
+                        severity: Severity::Info,
+                        message: format!("v{i}-a"),
+                        file: None,
+                        line: None,
+                    },
+                    VerdictEntry {
+                        source: VerifierSource::Lint,
+                        severity: Severity::Warning,
+                        message: format!("v{i}-b"),
+                        file: None,
+                        line: None,
+                    },
+                ],
+            }));
+        }
+        assert_eq!(bus.verifier_count(), 3);
+        bus.run(&make_verify_ctx());
+        // 3 verifiers × 2 verdicts each = 6.
+        assert_eq!(
+            bus.verdicts().len(),
+            6,
+            "all 3 verifiers must run and each contribute 2 verdicts: {:?}",
+            bus.verdicts()
+        );
+        // Each verifier's name should appear in at least one message
+        // (proving all ran, not just the first).
+        for i in 0..3 {
+            assert!(
+                bus.verdicts()
+                    .iter()
+                    .any(|v| v.message == format!("v{i}-a")),
+                "verifier v{i} must have run"
+            );
+        }
+    }
+
+    // ── R5.2 — registration supports dynamic add/remove ────────────────
+    //
+    // `register` adds and `retain_verifiers` (the reload prune path)
+    // removes verifiers by name. Pin both: after a register + retain
+    // cycle the bus reports the correct count and only the kept
+    // verifiers run.
+
+    #[test]
+    fn verifier_registration_supports_dynamic_add_remove() {
+        let mut bus = VerifierBus::new();
+        assert_eq!(bus.verifier_count(), 0, "fresh bus has no verifiers");
+
+        // Add three.
+        bus.register(Box::new(StubVerifier {
+            name: "a".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Build,
+                severity: Severity::Info,
+                message: "a".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+        bus.register(Box::new(StubVerifier {
+            name: "b".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Build,
+                severity: Severity::Info,
+                message: "b".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+        bus.register(Box::new(StubVerifier {
+            name: "c".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Build,
+                severity: Severity::Info,
+                message: "c".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+        assert_eq!(bus.verifier_count(), 3);
+
+        // Remove "b" by keeping only a and c.
+        bus.retain_verifiers(|n| n != "b");
+        assert_eq!(
+            bus.verifier_count(),
+            2,
+            "retain must drop the removed verifier"
+        );
+
+        // Only a and c run.
+        bus.run(&make_verify_ctx());
+        let names: Vec<&str> = bus.verdicts().iter().map(|v| v.message.as_str()).collect();
+        assert!(names.contains(&"a"), "kept verifier a must run");
+        assert!(names.contains(&"c"), "kept verifier c must run");
+        assert!(
+            !names.contains(&"b"),
+            "removed verifier b must NOT run: {names:?}"
+        );
+    }
+
+    // ── R5.3 — verdicts aggregate across multiple verifiers ─────────────
+    //
+    // Multiple verifiers with different severities must all contribute
+    // to the aggregate. `has_errors` must reflect any Error verdict
+    // across all verifiers, not just the first.
+
+    #[test]
+    fn verifier_verdicts_aggregate_across_multiple_verifiers() {
+        let mut bus = VerifierBus::new();
+        // Verifier 1: only Info.
+        bus.register(Box::new(StubVerifier {
+            name: "info_only".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Lint,
+                severity: Severity::Info,
+                message: "info finding".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+        // Verifier 2: only Warning.
+        bus.register(Box::new(StubVerifier {
+            name: "warn_only".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Git,
+                severity: Severity::Warning,
+                message: "warn finding".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+        // Verifier 3: an Error.
+        bus.register(Box::new(StubVerifier {
+            name: "err_only".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Security,
+                severity: Severity::Error,
+                message: "err finding".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+
+        bus.run(&make_verify_ctx());
+        // All three verdicts aggregate.
+        assert_eq!(
+            bus.verdicts().len(),
+            3,
+            "all three verifiers' verdicts must aggregate: {:?}",
+            bus.verdicts()
+        );
+        // has_errors reflects the Error from the third verifier.
+        assert!(
+            bus.has_errors(),
+            "has_errors must be true when any verifier reports an Error"
+        );
+
+        // Drop the error verifier; has_errors must go false.
+        bus.retain_verifiers(|n| n != "err_only");
+        bus.run(&make_verify_ctx());
+        assert_eq!(bus.verdicts().len(), 2);
+        assert!(
+            !bus.has_errors(),
+            "has_errors must be false after removing the error verifier"
+        );
+    }
+
+    // ── R5.4 — bus disconnect mid-turn does not panic ───────────────────
+    //
+    // If a verifier panics mid-run (simulating a disconnect/crash),
+    // `run()` must catch the unwind, convert it to a Warning verdict,
+    // and continue to the next verifier. After the panic, the bus
+    // must still be usable — running again without the panicking
+    // verifier (removed via `retain_verifiers`) must produce clean
+    // verdicts from the survivors, proving the bus recovered.
+
+    #[test]
+    fn bus_disconnect_mid_turn_does_not_panic() {
+        let mut bus = VerifierBus::new();
+        bus.register(Box::new(PanickingVerifier {
+            name: "crash".into(),
+        }));
+        bus.register(Box::new(StubVerifier {
+            name: "survivor".into(),
+            entries: vec![VerdictEntry {
+                source: VerifierSource::Lint,
+                severity: Severity::Error,
+                message: "survivor finding".into(),
+                file: None,
+                line: None,
+            }],
+        }));
+
+        // First run: must not propagate the panic.
+        bus.run(&make_verify_ctx());
+        assert!(
+            bus.verdicts()
+                .iter()
+                .any(|v| v.severity == Severity::Warning
+                    && v.message.contains("verifier panicked")),
+            "panicking verifier must surface a warning verdict: {:?}",
+            bus.verdicts()
+        );
+        assert!(
+            bus.verdicts()
+                .iter()
+                .any(|v| v.message == "survivor finding"),
+            "sibling verifier must still run after the panic"
+        );
+
+        // Disconnect (remove) the crashing verifier and run again.
+        bus.retain_verifiers(|n| n != "crash");
+        bus.run(&make_verify_ctx());
+        assert!(
+            !bus.verdicts()
+                .iter()
+                .any(|v| v.message.contains("verifier panicked")),
+            "after removing the crashing verifier, no panic warning should appear"
+        );
+        assert!(
+            bus.verdicts()
+                .iter()
+                .any(|v| v.message == "survivor finding"),
+            "survivor must still run after the crash is removed"
+        );
+    }
 }

@@ -55,7 +55,7 @@ async fn tui_tool_approval_approve_flow() {
     ui.wait_for_contains(
         "Type a message",
         Duration::from_secs(15),
-        Duration::from_millis(500),
+        Duration::from_millis(25),
     )
     .expect("e2e: TUI did not render within 15s");
 
@@ -71,13 +71,13 @@ async fn tui_tool_approval_approve_flow() {
     ui.wait_for_contains(
         "Tool executed successfully",
         Duration::from_secs(30),
-        Duration::from_millis(500),
+        Duration::from_millis(25),
     )
     .expect("e2e: second model response did not appear within 30s");
 
     // Quit cleanly.
     ui.send_keys("/quit").expect("e2e: send /quit");
     ui.send_enter().expect("e2e: send_enter");
-    ui.wait_stable(Duration::from_secs(2), Duration::from_millis(500))
+    ui.wait_stable(Duration::from_secs(2), Duration::from_millis(25))
         .expect("e2e: TUI did not exit within 2s");
 }

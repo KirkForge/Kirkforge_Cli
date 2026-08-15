@@ -1618,7 +1618,10 @@ mod tests {
         let handle = tokio::spawn(async move {
             run_shell_with_token("sleep 30", &tmp, 30, Some(&token_clone), None, &[]).await
         });
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Yield once so the spawned task reaches the select! where the
+        // cancellation token is polled. The token works regardless of
+        // whether `sleep 30` has started — the select! is already armed.
+        tokio::task::yield_now().await;
         token.cancel();
         let result = handle.await.expect("task join");
         assert!(

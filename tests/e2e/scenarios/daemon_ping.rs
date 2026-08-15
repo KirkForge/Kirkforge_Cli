@@ -55,6 +55,12 @@ fn daemon_creates_socket_and_exits_cleanly() {
     let _ = child.kill();
     let _ = child.wait();
 
-    // Give it a moment to clean up.
-    std::thread::sleep(Duration::from_millis(200));
+    // Poll for socket removal instead of a blind 200ms sleep.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while socket.exists() {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }

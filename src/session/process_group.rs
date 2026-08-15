@@ -91,9 +91,8 @@ mod tests {
         let mut child = tokio::process::Command::new("true")
             .spawn()
             .expect("spawn true");
-        // Let it exit
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        // reap_child returns () — if we get here, it succeeded.
+        // `true` exits near-instantly; reap_child waits for it directly
+        // instead of a blind sleep that races the process under load.
         reap_child(&mut child, std::time::Duration::from_secs(1)).await;
         // Verify the child is truly gone by checking its exit status.
         let status = child.try_wait().expect("child should be waitable");

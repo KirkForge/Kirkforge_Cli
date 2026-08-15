@@ -486,6 +486,24 @@ impl BashJobRegistry {
 mod tests {
     use super::*;
 
+    // Poll a job's status until it reaches a terminal state (Completed,
+    // Failed, Cancelled), panicking if it hasn't within `timeout`. Replaces
+    // blind wall-clock sleeps that race the watcher under a saturated runtime.
+    async fn wait_for_job_done(reg: &BashJobRegistry, id: u64, timeout: Duration) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let job = reg.get(id).await.unwrap();
+            match job.status {
+                JobStatus::Completed(_) | JobStatus::Failed(_) | JobStatus::Cancelled => return,
+                JobStatus::Running => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("job {id} did not finish within {timeout:?}");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     #[tokio::test]
     async fn test_spawn_and_complete() {
         let reg = BashJobRegistry::new();
@@ -503,8 +521,8 @@ mod tests {
             .unwrap();
         assert!(id > 0);
 
-        // Wait for completion
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Wait for completion by polling status, not a blind sleep.
+        wait_for_job_done(&reg, id, Duration::from_secs(5)).await;
 
         let job = reg.get(id).await.unwrap();
         assert_eq!(job.status, JobStatus::Completed(0));
@@ -626,7 +644,7 @@ mod tests {
     #[tokio::test]
     async fn test_clean_completed_jobs() {
         let reg = BashJobRegistry::new();
-        let _ = reg
+        let echo_id = reg
             .spawn(
                 "echo a",
                 None,
@@ -651,7 +669,10 @@ mod tests {
             .await
             .unwrap();
 
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // Wait for the echo job to finish before testing clean(), so the
+        // only Running job is the sleep 5. Polling is deterministic; a blind
+        // sleep races the watcher under a saturated runtime.
+        wait_for_job_done(&reg, echo_id, Duration::from_secs(5)).await;
 
         // Clean should remove the completed one but keep the running one
         let cleaned = reg.clean().await;
@@ -799,7 +820,9 @@ mod tests {
             .await
             .unwrap();
 
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // Wait for pwd to finish by polling status, not a blind sleep.
+        wait_for_job_done(&reg, id, Duration::from_secs(5)).await;
+
         let job = reg.get(id).await.unwrap();
         assert_eq!(job.status, JobStatus::Completed(0));
         assert_eq!(

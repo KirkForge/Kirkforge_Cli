@@ -856,3 +856,28 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, not(unix)))]
+mod windows_stub_tests {
+    use super::windows_imp::{try_list_recent, try_resolve_id, try_resolve_recent, try_touch};
+
+    #[tokio::test]
+    async fn try_list_recent_returns_none() {
+        assert!(try_list_recent().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn try_resolve_recent_returns_none() {
+        assert!(try_resolve_recent().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn try_resolve_id_returns_none() {
+        assert!(try_resolve_id("foo").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn try_touch_is_noop() {
+        try_touch("foo", std::path::PathBuf::from("/tmp/nope")).await;
+    }
+}

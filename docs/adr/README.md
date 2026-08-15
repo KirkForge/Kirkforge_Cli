@@ -113,6 +113,7 @@ verifies the table and the file headers agree.
 | [071](./071-structured-output.md) | JSON-Schema Structured Output | Accepted | CLI |
 | [072](./072-mcp-sampling-trust-model.md) | MCP Sampling Trust Model and Approval Flow | Accepted | CLI |
 | [073](./073-tools-session-layering-ports.md) | tools↔session Layering Ports (break the cycle) | Accepted (partially implemented) | CLI |
+| [074](./074-ci-architecture-reset.md) | CI architecture reset — PR / merge / nightly tiers | Accepted | CLI |
 
 ## Cross-references
 

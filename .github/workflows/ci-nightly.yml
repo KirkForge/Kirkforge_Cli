@@ -2,7 +2,7 @@ name: CI (nightly)
 
 # Nightly: slow / exhaustive jobs that don't gate PRs or merges.
 # Schedule + manual dispatch. cancel-in-progress: false so a partial
-# nightly run is not superseded (we want the full report).
+# nightly run is not superseded (we want the full report). See ADR-074.
 on:
   schedule:
     - cron: "0 2 * * *"
@@ -51,10 +51,9 @@ jobs:
       - name: Coverage regression gate
         run: bash scripts/check-cov-regression.sh
 
+  # Real-model integration tests against a live Ollama instance. Network,
+  # model download, GPU variance — wrong shape for PR/merge CI (ADR-074).
   ollama:
-    # Real-model integration tests against a live Ollama instance.
-    # Same suite as ci-merge.yml `integration`, renamed to match the
-    # nightly "real model tests" scope.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -109,9 +108,10 @@ jobs:
       - name: Run smoke tests
         run: cargo test --test smoke_test
 
+  # Full e2e suite. Same as ci-merge.yml `e2e`; runs nightly so a flaky e2e
+  # failure does not block merge but is still observed. e2e profile
+  # (binary(e2e), 600s slow-timeout) declaratively.
   e2e-exhaustive:
-    # Full e2e suite (WO 28.10). Same as ci-merge.yml `e2e`; runs nightly
-    # so a flaky e2e failure does not block merge but is still observed.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -132,10 +132,7 @@ jobs:
           tool: cargo-nextest
 
       - name: Run e2e suite
-        run: |
-          cargo nextest run --locked --test e2e --features e2e-tests --no-fail-fast \
-            --config 'profile.default.timeout-period="60s"' \
-            --config 'profile.default.fail-timeout="10s"'
+        run: cargo nextest run --profile e2e --features e2e-tests --no-fail-fast --locked
 
   audit:
     runs-on: ubuntu-latest
@@ -161,10 +158,11 @@ jobs:
         continue-on-error: true
         run: cargo audit
 
+  # Release compile validation on linux + windows. The tag-triggered
+  # release.yml does the actual publish; this just verifies the release
+  # profile compiles on both platforms overnight (ADR-074: release-build
+  # validation is decoupled from the Windows test job in ci-merge).
   release-build:
-    # Smoke-test release builds on linux + windows. The tag-triggered
-    # release.yml does the actual publish; this just verifies the
-    # release profile compiles on both platforms overnight.
     strategy:
       fail-fast: false
       matrix:

@@ -50,7 +50,7 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-orchestrator ← orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of @kirkforge/orchestrator (WO 29.7)
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── benches/tasks/             ← 30 benchmark task definitions (TOML)
-└── docs/adr/                  ← 90 Architecture Decision Records
+└── docs/adr/                  ← 91 Architecture Decision Records
 ```
 
 The workspace has ~3,300 `#[test]` functions (~2,400 under `src/`,

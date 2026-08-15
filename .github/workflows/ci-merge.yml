@@ -1,7 +1,8 @@
 name: CI (merge)
 
 # Post-merge gate: full matrix on push to main/dev.
-# Runs the PR gate + full tests + windows + e2e + integration.
+# static → {full-tests, clippy, windows, e2e} as parallel siblings.
+# No Ollama, no coverage (both nightly). See ADR-074 for the tier architecture.
 on:
   push:
     branches: [main, dev]
@@ -12,16 +13,15 @@ env:
   RUST_TOOLCHAIN: "1.88.0"
 
 concurrency:
-  group: ci-merge-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Fast-fail gate. Lint repo files BEFORE installing Rust (no toolchain
-  # needed for grep/python), then check formatting. Catches the regression
-  # class that disabled the old workflows: unresolved merge-conflict
-  # markers committed under benches/tasks/use_*.toml (commit 4028424 fixed
-  # the source; this guard prevents recurrence).
-  fmt:
+  # Cheap static gate: conflict markers + TOML schema + artifact
+  # consistency + rustfmt. Repo-file linting runs BEFORE installing Rust.
+  # Everything else depends on this only — no artificial needs chains
+  # between test jobs (ADR-074).
+  static:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -38,8 +38,8 @@ jobs:
             exit 1
           fi
           # 2. Every benches/tasks/*.toml must parse as valid TOML AND carry
-          #    the required keys (WO 28.11 R2). The required-key set is
-          #    pinned from real tasks (`name`, `difficulty`, `prompt`) —
+          #    the required keys. The required-key set is pinned from real
+          #    tasks (`name`, `difficulty`, `prompt`) —
           #    ponytail: heuristic ceiling; bump this set when a legitimate
           #    task lands without one of these keys (none today).
           python3 - <<'PY'
@@ -83,9 +83,13 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+  # Full clippy: --all-targets (compiles tests/benches/examples) for merge,
+  # vs --lib --bins on PR. Clippy is the compile gate; no separate
+  # `cargo check` (ADR-074). --features e2e-tests keeps the gated e2e crate
+  # under the lint gate.
   clippy:
     runs-on: ubuntu-latest
-    needs: fmt
+    needs: static
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -100,43 +104,15 @@ jobs:
         with:
           key: merge-clippy
 
-      - name: Run Clippy
-        # --lib --bins (NOT --all-targets) skips test-target compilation.
-        # --features e2e-tests keeps the gated e2e crate under the lint
-        # gate so it cannot silently rot (WO 28.10).
-        # No separate `cargo check` step: clippy with `-D warnings` fails on
-        # any compile error, and same-scope `cargo check` after clippy only
-        # re-runs the build without adding coverage (WO 33.4).
-        run: cargo clippy --lib --bins --features e2e-tests --locked -- -D warnings
+      - name: Run Clippy (all targets)
+        run: cargo clippy --all-targets --features e2e-tests --locked -- -D warnings
 
-  fast-tests:
-    runs-on: ubuntu-latest
-    needs: fmt
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: merge-tests
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-
-      - name: Run fast test suite (lib only, fail-fast)
-        # ci-fast profile: kind(lib), fail-fast=true, 60s slow-timeout.
-        run: cargo nextest run --profile ci-fast --workspace --lib --locked
-
+  # Full tests: ci-full profile (fail-fast=false, 120s slow-timeout),
+  # --no-fail-fast to collect all failures. Sibling of clippy (both depend
+  # on static only), not a dependent of clippy.
   full-tests:
     runs-on: ubuntu-latest
-    needs: [clippy, fast-tests]
+    needs: static
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -156,22 +132,24 @@ jobs:
           tool: cargo-nextest
 
       - name: Run full test suite (no-fail-fast)
-        # ci-full profile: fail-fast=false, 120s slow-timeout.
-        # --workspace no longer picks up the e2e suite since WO 28.10
-        # gated it behind the `e2e-tests` feature; the dedicated `e2e`
-        # job below runs it with the feature on every push to dev.
+        # ci-full profile: fail-fast=false, 120s slow-timeout. --workspace
+        # does not pick up the e2e crate (gated behind required-features
+        # e2e-tests); the dedicated `e2e` job below runs it with the feature.
         run: cargo nextest run --profile ci-full --workspace --no-fail-fast --locked
 
       - name: Run doctests
-        # Doctests are not collected by nextest by default. Run them
-        # under plain cargo test, with a hard wall-clock cap so a
-        # hanging doctest cannot wedge the job (cargo test has no
-        # per-test timeout of its own).
+        # Doctests are not collected by nextest by default. Run them under
+        # plain cargo test, with a hard wall-clock cap so a hanging doctest
+        # cannot wedge the job (cargo test has no per-test timeout).
         run: timeout 300 cargo test --locked --doc --workspace --no-fail-fast
 
+  # Windows tests only — NO release build. Release compile validation lives
+  # in the nightly release-build job / tag-triggered release.yml (ADR-074).
+  # ci-full profile (fail-fast=false, 120s slow-timeout) declaratively;
+  # no inline --config flags.
   windows:
     runs-on: windows-latest
-    needs: fmt
+    needs: static
     timeout-minutes: 45
     env:
       RUSTFLAGS: -Dwarnings
@@ -193,25 +171,20 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - name: Run tests on Windows (nextest; 60s per-test timeout)
+      - name: Run tests on Windows
         shell: bash
-        # `--workspace` no longer picks up the e2e suite since WO 28.10
-        # gated it behind `required-features = ["e2e-tests"]`. The e2e
-        # binary-spawn scenarios were the historic Windows-flake source;
-        # they now run only in the dedicated `e2e` job below (Linux).
-        run: |
-          cargo nextest run --locked --workspace --no-fail-fast \
-            --config 'profile.default.timeout-period="60s"' \
-            --config 'profile.default.fail-timeout="10s"'
+        # --workspace does not pick up the e2e crate (required-features =
+        # e2e-tests); e2e runs in the dedicated job below (Linux).
+        run: cargo nextest run --profile ci-full --workspace --no-fail-fast --locked
 
-  # Dedicated e2e suite (WO 28.10). The `e2e` integration test crate is
-  # feature-gated (`required-features = ["e2e-tests"]`) so the default
-  # `--workspace` runs above skip it. This job turns the feature on so
-  # the full e2e suite still runs on every push to dev/main —
-  # without making every other job pay the compile + run cost.
+  # Dedicated e2e suite. The e2e integration test crate is feature-gated
+  # (required-features = e2e-tests) so --workspace runs above skip it. This
+  # job turns the feature on so the full e2e suite runs on every push to
+  # dev/main without making every other job pay the compile + run cost.
+  # e2e profile (binary(e2e), 600s slow-timeout) declaratively.
   e2e:
     runs-on: ubuntu-latest
-    needs: fmt
+    needs: static
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -231,61 +204,4 @@ jobs:
           tool: cargo-nextest
 
       - name: Run e2e suite
-        run: |
-          cargo nextest run --locked --test e2e --features e2e-tests --no-fail-fast \
-            --config 'profile.default.timeout-period="60s"' \
-            --config 'profile.default.fail-timeout="10s"'
-
-  integration:
-    runs-on: ubuntu-latest
-    needs: fmt
-    timeout-minutes: 20
-    env:
-      TEST_MODEL: qwen2.5:0.5b
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Cache Ollama models
-        uses: actions/cache@v4
-        with:
-          path: ~/.ollama/models
-          key: ollama-models-${{ env.TEST_MODEL }}-${{ runner.os }}-${{ hashFiles('tests/integration_test.rs') }}
-          restore-keys: |
-            ollama-models-${{ env.TEST_MODEL }}-${{ runner.os }}-
-            ollama-models-${{ env.TEST_MODEL }}-
-
-      - name: Install and start Ollama
-        shell: bash
-        run: |
-          curl -fsSL https://ollama.com/install.sh | sh
-          ollama serve >/tmp/ollama.log 2>&1 &
-          for i in {1..30}; do
-            if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then
-              echo "Ollama ready"
-              break
-            fi
-            sleep 1
-          done
-          curl -fsS http://localhost:11434/api/tags >/dev/null || { echo "Ollama failed to start"; cat /tmp/ollama.log; exit 1; }
-
-      - name: Pull test model
-        shell: bash
-        run: |
-          if ! curl -fsS http://localhost:11434/api/tags | grep -q "${TEST_MODEL}"; then
-            ollama pull "${TEST_MODEL}"
-          else
-            echo "Test model ${TEST_MODEL} already cached"
-          fi
-
-      - name: Run integration tests against Ollama
-        run: cargo test --test integration_test -- --include-ignored
-
-      - name: Run smoke tests
-        run: cargo test --test smoke_test
+        run: cargo nextest run --profile e2e --features e2e-tests --no-fail-fast --locked

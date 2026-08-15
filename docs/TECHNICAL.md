@@ -985,7 +985,8 @@ comparison.
 
 ### Coverage gate (WO 12.9, ADR-065; per-crate regression gate WO 28.7)
 
-The CI `coverage` job runs `cargo llvm-cov --workspace --lcov
+The CI `coverage` job (now in `ci-merge.yml` + `ci-nightly.yml`; was in the
+deleted `ci.yml`) runs `cargo llvm-cov --workspace --lcov
 --output-path lcov.info` and uploads `lcov.info` as an artifact.
 `scripts/check-cov-regression.sh` (WO 28.7) parses that lcov per-crate
 (by source-path prefix) and fails if any crate drops >1% below its floor
@@ -1005,6 +1006,64 @@ live under `npm/kf-plugin/` (ESLint) was deleted in WO 29.9 when the TS→Rust
 migration completed; there is no in-tree JavaScript to lint. No Python source
 is linted in-tree; the only `.py` files are test fixtures and a release
 script, so `ruff` is not wired.
+
+### CI workflows (2026-08-15 split)
+
+The monolithic `.github/workflows/ci.yml` was split into three
+trigger-scoped files (WO 33.3). No job was dropped; the old `quality` job
+was decomposed into separate `clippy` / `fast-tests` / `full-tests` jobs.
+CI references below should read as the new files, not the deleted `ci.yml`:
+
+| File | Trigger | Jobs | Target |
+|---|---|---|---|
+| `.github/workflows/ci-pr.yml` | `pull_request` | `fmt`, `clippy`, `fast-tests` (nextest `ci-fast`), `dead-refs`, `adr-xref` | <5 min PR gate, fail-fast + concurrency cancellation |
+| `.github/workflows/ci-merge.yml` | `push` to `main`/`dev` | everything in `ci-pr.yml` + `full-tests` (nextest `ci-full`) + `doctests` + `windows` + `e2e` + `integration` + `coverage` | pre-merge gate; parallel jobs |
+| `.github/workflows/ci-nightly.yml` | `schedule` + `workflow_dispatch` | `coverage` (full llvm-cov), `ollama` (live model integration), `e2e-exhaustive`, `cargo-audit`, `release-build` matrix | nightly depth + slow jobs that don't belong on PRs |
+
+Coverage gate (`scripts/check-cov-regression.sh`, WO 28.7) now runs in
+`ci-merge.yml` and `ci-nightly.yml`, not just `ci-local.sh full`. The PR
+`clippy` gate is `--lib --bins` (was `--all-targets`) for faster feedback;
+the merge job still runs `--all-targets`.
+
+### Nextest profiles (WO 33.5)
+
+`.config/nextest.toml` defines four profiles so CI doesn't inline `--config`
+flags:
+
+| Profile | Scope | Used by |
+|---|---|---|
+| `ci-fast` | lib + bins, no integration/e2e | `ci-pr.yml` `fast-tests` |
+| `ci-full` | whole workspace, no e2e/integration | `ci-merge.yml` `full-tests` |
+| `integration` | integration tests (needs live Ollama) | `ci-merge.yml` + `ci-nightly.yml` `integration` |
+| `e2e` | binary-spawn e2e suite (feature-gated `e2e`) | `ci-nightly.yml` `e2e-exhaustive` |
+
+Invoke locally: `cargo nextest run --profile ci-fast`.
+
+### `kf-code update` subcommand (WO 33.17)
+
+`kf-code update` self-updates the binary: downloads the latest GitHub
+release, verifies the SHA256 checksum against the release `SHA256SUMS.txt`,
+extracts the `kf-code` binary, and replaces the running binary in place via
+an atomic rename. `kf-code update --check` prints current vs latest version
+without installing. Target-triple detection mirrors `scripts/install.sh`
+(linux x86_64/aarch64, macOS x86_64/aarch64). Uses only existing deps
+(reqwest, sha2, hex, tempfile); extraction shells out to `tar` (present on
+every Linux/macOS) to avoid pulling `flate2`+`tar` crates into the
+size-optimized release binary. Windows is not supported (running binary is
+locked) — matches `install.sh`'s stance.
+
+### LSP disabled in editor config (2026-08-15)
+
+The opencode `lsp: true` config entry in `~/.config/opencode/opencode.jsonc`
+was flipped to `false` after it caused worktree data loss. rust-analyzer
+indexes one workspace per process, so the main checkout's LSP server
+returned stale cross-workspace diagnostics for files a linked git worktree
+had changed; subagents that trusted those stale diagnostics reverted files
+to "fix" them, destroying other subagents' work. This is a local-config
+change to the *editor-embedded* LSP, not a change to the in-repo `kf-lsp`
+crate or the model-facing `lsp_query` tool (both unchanged and still
+shipped). See AGENTS.md §7 "LSP diagnostics are workspace-scoped" for the
+full rationale.
 
 ---
 

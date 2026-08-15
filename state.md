@@ -6,6 +6,112 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
+## Version
+
+**Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
+
+## Session 2026-08-15 — test-health + CI split + update subcommand + cleanup
+
+Landed across the WO 32/33 series (worktree `.worktrees/wo32-series-c` and
+main checkout). All items below are shipped to the working tree; none is
+over-claimed.
+
+### What changed this session
+
+- **P0 deadlock in approval tests fixed.** Three approval tests
+  (`approval::deny::test_always_approve_does_not_overwrite_existing_deny`,
+  `approval::deny::test_deny_rule_blocks_bash_even_with_auto_approve`,
+  `approval::auto::test_always_approve_dedups_repeated_calls`) hung ~860 s
+  each under the full suite. Root cause: the spawner's `parent_approval`
+  clone was held for the subagent's lifetime and never released, so the
+  parent approval channel saturated and the test's `recv()` parked forever.
+  Fix releases the clone once forwarding is wired. Suite runtime for those
+  three: 860 s → ~2 s. This was the "Executor approval test hang" pending
+  item from the 2026-08-14 config-drift session — now closed.
+- **CI split into 3 workflows** (WO 33.3). Monolithic `ci.yml` (7 jobs,
+  full matrix on every PR) → `ci-pr.yml` (PR gate: fmt + clippy + fast lib
+  tests, <5 min target, fail-fast + concurrency cancellation),
+  `ci-merge.yml` (push to main/dev: PR gate + full tests + doctests +
+  windows + e2e + integration, parallel jobs), `ci-nightly.yml`
+  (schedule + dispatch: coverage + ollama + e2e-exhaustive + audit +
+  release-build matrix). `ci.yml` deleted. No job dropped; `quality` job
+  decomposed into `clippy`/`fast-tests`/`full-tests`.
+- **LSP disabled** in `~/.config/opencode/opencode.jsonc` (`lsp: true` →
+  `false`). Root cause: rust-analyzer indexes one workspace per process,
+  so the main checkout's server returned stale cross-workspace diagnostics
+  for files a linked worktree had changed; subagents that trusted the
+  stale LSP diagnostics reverted files to "fix" them, destroying other
+  subagents' work. This is the editor-embedded LSP only — the in-repo
+  `kf-lsp` crate and `lsp_query` tool are unchanged. See AGENTS.md §7.
+- **Config migration from legacy kirkforge path.** First-run migration
+  moves `~/.local/share/kirkforge/` → `~/.local/share/kf-code/` (and the
+  config equivalent) so pre-rename installs keep their state.
+- **116 env mutations killed in tests.** Shared `EnvGuard` serializes env
+  access across the test suite; 116 `std::env::set_var`/`remove_var` sites
+  converted. Removes a flaky cross-thread race class.
+- **Wall-clock sleeps killed in 10 test files.** Replaced with
+  `tokio::time::pause` / `interval` / channel-driven pacing.
+- **5 regexes cached in `error_recovery.rs`.** `LazyLock<Regex>` instead
+  of recompiling per diagnostic.
+- **RSA key shared in `kf-rbac` tests.** One keypair per file instead of
+  per test.
+- **`bash.require_allowlist` config (default-off)** (WO 32.18). New
+  `bash.require_allowlist: bool` + `bash.allowlist: Vec<String>`. When
+  `true`, bash commands must prefix-match the allowlist on the command
+  head or be denied; compound commands require every clause to match.
+  Default `false` preserves current behavior. Env: `KF_CODE_BASH_REQUIRE_ALLOWLIST`,
+  `KF_CODE_BASH_ALLOWLIST`.
+- **Click-in-prompt cursor positioning.** TUI input box places the cursor
+  at the click site instead of the end of the buffer.
+- **Configurable streaming timeout.** The 90 s `STREAM_IDLE_TIMEOUT`
+  constant is now `stream_idle_timeout_secs` in config (with env override).
+- **`kf-code update` subcommand** (WO 33.17). Self-update: downloads
+  latest GitHub release, verifies SHA256 against `SHA256SUMS.txt`,
+  extracts the binary, replaces the running exe via atomic rename.
+  `--check` prints current vs latest without installing. 8 unit tests.
+  See `src/main/handle_update.rs`.
+- **Cross-tool benchmark harness.** `docs/benchmarks/cross-tool-2026-08.md`
+  + harness for running the same task across kf-code / Codex / Claude Code
+  under descending budget ceilings — the WO 30.7 experiment that validates
+  the context-efficiency thesis.
+- **Port-trait residuals cut.** The 3 non-cyclic port-trait residuals
+  left after WO 28.1's `tools↔session` cycle cut (bash I/O, bash-jobs
+  registry, remember/memory) are removed — 0 `session` imports remain in
+  `tools/`. Closes the WO 28.1 follow-up note from the 8th-ed review.
+- **11 missing WO 28.9 tests added.** Session coverage gap tests the
+  workorder named but never landed.
+- **TUI Esc bug fixed.** Esc was invisibly toggling the thinking-panel
+  visibility instead of its documented cancel/exit role. The toggle is
+  now on an explicit key; Esc does what help says.
+- **e2e tests feature-gated (not `#[ignore]`'d).** The 7 binary-spawn e2e
+  tests that were `#[ignore]`'d since the 5th edition are now behind an
+  `e2e` Cargo feature — runnable with `--features e2e`, absent from the
+  default gate. `#[ignore]` count drops by 7 (35 → 28).
+- **Coverage gate wired into CI.** `scripts/check-cov-regression.sh`
+  (WO 28.7) now runs in `ci-merge.yml` + `ci-nightly.yml`, not just
+  `ci-local.sh full`. Closes WO 32.14.
+- **Nextest profiles** (WO 33.5). `.config/nextest.toml` defines
+  `ci-fast` / `ci-full` / `integration` / `e2e`; CI uses
+  `cargo nextest run --profile <name>` instead of inline `--config` flags.
+- **Concurrency cancellation + parallel jobs + fail-fast on PR.** PR runs
+  cancel superseded runs; merge-job steps run in parallel where safe;
+  PR gate fails fast on the first red job.
+
+### Pending / blocked (this session)
+
+- **WO 33.14 — subprocess test fakes.** Replace real-subprocess tests
+  (bash, git, cargo spawn) with in-process fakes where the subprocess is
+  an implementation detail, not the behavior under test. Reduces CI
+  flakiness from external-binary availability. Not started.
+- **WO 32.19 / 32.20.** Not started this session; see workorder files.
+- **Full env-mutation cleanup.** 116 sites converted this session; a
+  residual set remains in integration/e2e tests that spawn real
+  subprocesses (those need the real env). Tracked in WO 33.13.
+- **`main` fast-forward: still pending.** `origin/main` sits at `d848b37`;
+  HEAD is several WO merges ahead.
+- **Version bump to `0.3.9`: pending.** Noted above; do not bump
+  `Cargo.toml` until the release cut.
+
 ## Session 2026-08-15 — `kf-code update` subcommand (branch `wo/32-series-c`, worktree `.worktrees/wo32c`)
 
 - **Self-update command shipped.** New `kf-code update [--check]` subcommand
@@ -55,20 +161,12 @@
 
 ### Pending / pre-existing (disclosed, not fixed here)
 
-- **Executor approval test hang** blocks `scripts/test-fast.sh` at branch
-  tip: `approval::deny::test_always_approve_does_not_overwrite_existing_deny`,
-  `approval::deny::test_deny_rule_blocks_bash_even_with_auto_approve`,
-  `approval::auto::test_always_approve_dedups_repeated_calls` hang
-  indefinitely (isolated single-test run killed at 400 s, `EXIT:124`).
-  Reproduces on pristine HEAD with only the conflict-marker resolution —
-  NOT caused by the config-drift fix. Why unfixed: out of task scope, and
-  HEAD `45c82b1` did not compile, so the hang predates any runnable state
-  of this branch. Remaining work: bisect (suspects: `78fdd35` "auto_approve
-  honored as single gate" era changes; the approval flow's
-  `write_shared_config` at `src/session/executor/approval.rs:113`; or the
-  turn loop re-querying an exhausted MockAdapter after AlwaysApprove hits
-  a Deny rule), fix root cause, re-run the full fast gate. Tracked here
-  (next worker: pick up before merging `woconfig` → `dev`).
+- **Executor approval test hang** — ✅ **RESOLVED 2026-08-15** (see the
+  Session 2026-08-15 block above). Root cause was the spawner's
+  `parent_approval` clone held for the subagent lifetime; fix releases it
+  once forwarding is wired. The three tests now run in ~2 s instead of
+  ~860 s each. The bisect suspects below were superseded by the actual
+  root-cause fix.
 
 ## Session 2026-08-14 — WO 30 misc: subagent provider + TUI fixes (branch `wo30misc`)
 

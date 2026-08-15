@@ -185,6 +185,7 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use crate::session::verifier::types::FileReadEvent;
+    #[cfg(unix)]
     use crate::shared::test_util::EnvGuard;
     use kf_plugin_host::{PluginRegistry, TrustPolicy};
     use std::path::PathBuf;

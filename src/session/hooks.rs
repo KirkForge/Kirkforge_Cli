@@ -783,6 +783,7 @@ mod tests {
     // deterministic primitive: 10ms interval, hard 15s cap (the hook's own
     // 5s timeout + scheduling slop). Fails the test loudly on timeout instead
     // of silently advancing to an assertion that would then flake.
+    #[cfg(unix)]
     async fn poll_for_marker(marker: &Path, expected: &str) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         while std::time::Instant::now() < deadline {

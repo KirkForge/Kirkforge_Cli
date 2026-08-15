@@ -1,9 +1,9 @@
-name: CI
+name: CI (merge)
 
+# Post-merge gate: full matrix on push to main/dev.
+# Runs the PR gate + full tests + windows + e2e + integration.
 on:
   push:
-    branches: [main, dev, merge, "phase/**"]
-  pull_request:
     branches: [main, dev]
 
 env:
@@ -12,7 +12,7 @@ env:
   RUST_TOOLCHAIN: "1.88.0"
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-merge-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -83,10 +83,10 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
-  quality:
+  clippy:
     runs-on: ubuntu-latest
     needs: fmt
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -97,41 +97,77 @@ jobs:
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: merge-clippy
+
+      - name: Run Clippy
+        # --lib --bins (NOT --all-targets) skips test-target compilation.
+        # --features e2e-tests keeps the gated e2e crate under the lint
+        # gate so it cannot silently rot (WO 28.10).
+        run: cargo clippy --lib --bins --features e2e-tests --locked -- -D warnings
+
+      - name: Typecheck (lib + bins)
+        run: cargo check --workspace --lib --bins --features e2e-tests --locked
+
+  fast-tests:
+    runs-on: ubuntu-latest
+    needs: fmt
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: merge-tests
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
 
-      - name: Run tests (nextest; PR=lib fast suite, push=full workspace)
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            cargo nextest run --locked --lib \
-              --config 'profile.default.timeout-period="60s"' \
-              --config 'profile.default.fail-timeout="10s"'
-          else
-            # --workspace no longer picks up the e2e suite since WO 28.10
-            # gated it behind the `e2e-tests` feature. The dedicated `e2e`
-            # job below runs it with the feature on every push to dev.
-            cargo nextest run --locked --workspace --no-fail-fast \
-              --config 'profile.default.timeout-period="60s"' \
-              --config 'profile.default.fail-timeout="10s"'
-            # Doctests are not collected by nextest by default. Run them
-            # under plain cargo test, but with a hard wall-clock cap so a
-            # hanging doctest cannot wedge the job (cargo test has no
-            # per-test timeout of its own).
-            timeout 300 cargo test --locked --doc --workspace --no-fail-fast
-          fi
+      - name: Run fast test suite (lib only, fail-fast)
+        # ci-fast profile: kind(lib), fail-fast=true, 60s slow-timeout.
+        run: cargo nextest run --profile ci-fast --workspace --lib --locked
 
-      - name: Run Clippy
-        # --features e2e-tests keeps the gated e2e crate under the lint
-        # gate so it cannot silently rot behind the feature flag (WO 28.10).
-        run: cargo clippy --all-targets --features e2e-tests --locked -- -D warnings
+  full-tests:
+    runs-on: ubuntu-latest
+    needs: [clippy, fast-tests]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Typecheck all targets
-        # Same rationale as Clippy: include the e2e crate in the typecheck.
-        run: cargo check --workspace --all-targets --features e2e-tests --locked
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: merge-full-tests
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run full test suite (no-fail-fast)
+        # ci-full profile: fail-fast=false, 120s slow-timeout.
+        # --workspace no longer picks up the e2e suite since WO 28.10
+        # gated it behind the `e2e-tests` feature; the dedicated `e2e`
+        # job below runs it with the feature on every push to dev.
+        run: cargo nextest run --profile ci-full --workspace --no-fail-fast --locked
+
+      - name: Run doctests
+        # Doctests are not collected by nextest by default. Run them
+        # under plain cargo test, with a hard wall-clock cap so a
+        # hanging doctest cannot wedge the job (cargo test has no
+        # per-test timeout of its own).
+        run: timeout 300 cargo test --locked --doc --workspace --no-fail-fast
 
   windows:
     runs-on: windows-latest
@@ -168,16 +204,14 @@ jobs:
             --config 'profile.default.timeout-period="60s"' \
             --config 'profile.default.fail-timeout="10s"'
 
-      - name: Build release binary on Windows
-        run: cargo build --release --locked
-
   # Dedicated e2e suite (WO 28.10). The `e2e` integration test crate is
   # feature-gated (`required-features = ["e2e-tests"]`) so the default
   # `--workspace` runs above skip it. This job turns the feature on so
-  # the full e2e suite still runs on every push to dev/main/merge —
+  # the full e2e suite still runs on every push to dev/main —
   # without making every other job pay the compile + run cost.
   e2e:
     runs-on: ubuntu-latest
+    needs: fmt
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -204,6 +238,7 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    needs: fmt
     timeout-minutes: 20
     env:
       TEST_MODEL: qwen2.5:0.5b
@@ -254,58 +289,3 @@ jobs:
 
       - name: Run smoke tests
         run: cargo test --test smoke_test
-
-  audit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      # cargo-audit reads Cargo.lock directly; it does not compile the
-      # workspace, so the pinned toolchain + rust-cache are not needed.
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-audit
-
-      # Block on critical/high CVSS + unsound only; lower severities are
-      # warnings. Severity blocking is configured in .cargo/audit.toml
-      # (severity_threshold); --deny only accepts advisory *categories*.
-      - name: Audit dependencies (critical/high/unsound)
-        run: cargo audit --deny unsound
-
-      - name: Audit dependencies (informational warnings)
-        if: always()
-        continue-on-error: true
-        run: cargo audit
-
-  coverage:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: llvm-tools-preview
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov
-
-      - name: Generate coverage report
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
-
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: lcov.info
-
-      - name: Coverage regression gate
-        run: bash scripts/check-cov-regression.sh

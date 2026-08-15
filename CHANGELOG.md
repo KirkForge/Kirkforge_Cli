@@ -5,6 +5,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- CI workflow split: monolithic `.github/workflows/ci.yml` (7 jobs, ran full matrix on every PR) replaced by three trigger-scoped files: `ci-pr.yml` (PR gate: fmt + clippy + fast lib tests, <5 min target), `ci-merge.yml` (push to main/dev: PR gate + full tests + doctests + windows + e2e + integration), `ci-nightly.yml` (schedule + dispatch: coverage + ollama + e2e-exhaustive + audit + release-build matrix). No job dropped; `quality` job decomposed into separate `clippy`/`fast-tests`/`full-tests`. clippy gate now `--lib --bins` (was `--all-targets`) for faster PR feedback; nextest profiles `ci-fast`/`ci-full` used instead of inline `--config` flags.
+
 ### Fixed
 - Version bump `0.3.6 → 3.8.0` (commit `6e2e0d4`; `Cargo.toml` + `Cargo.lock` both updated). The architecture changed enough across WO 27/28/29/30 to warrant a minor+ bump.
 - TUI event-loop lost-message bug: the `select!` arm consumed an executor/approval event via `recv()` but stored only a boolean (`had_executor_event`), discarding the event itself. `drain_turn_events`/`drain_approval_requests` then only saw events that arrived *after* the first one — losing the first chunk of every burst, and in slow-stream scenarios every token. Fix: retain the `Option<TurnEvent>`/`Option<ApprovalRequest>` from `select!` and pass it to the drain functions, which dispatch it before `try_recv`-ing the rest. Regression tests `drain_turn_events_dispatches_first_event` + `drain_turn_events_dispatches_first_plus_drained_burst` pin the contract.

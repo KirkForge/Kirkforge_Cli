@@ -110,6 +110,7 @@ Decision tree:
 - **Stale cleanup items are a real risk**: Before starting work on a "cleanup" or "missing feature" item from state.md or a workorder, grep the codebase first. Multiple items listed as "open" (persist plugin state, agent steps limit) turned out to be already shipped. Thirty seconds of `grep` saves an hour of duplicate work.
 - **`lessons.md` is gitignored**: If you need it tracked, use `git add -f`. Otherwise, fold permanent lessons into `AGENTS.md` at session close and let `lessons.md` stay scratch-only.
 - **`cargo clippy --all-targets` can be slow** (3-4 min on this repo). Budget time for full gate runs. Consider running just the failing test first to verify the fix, then run the full gate.
+- **LSP diagnostics are workspace-scoped — do NOT trust them when working in a worktree.** rust-analyzer indexes one workspace per process. When subagents work in `.worktrees/woXX`, the LSP server for the main checkout returns stale diagnostics from files the worktree has changed. Subagents that see LSP "errors" will revert files to "fix" them — destroying other subagents' work. Only trust `cargo check` / `cargo clippy` output (runs in the correct worktree). If LSP diagnostics cause file reverts in a worktree, kill the stale rust-analyzer process (`pkill -f rust-analyzer`) and rely on cargo check only. This is the root cause of the "lost work" / "external process reverting files" reports from subagents.
 
 ## Task management
 1. **Plan**: write `workplan.md` (gitignored) with files to touch + root cause + gate.

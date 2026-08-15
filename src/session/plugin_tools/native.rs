@@ -229,12 +229,11 @@ impl Tool for PluginToolsList {
 fn deferred_message(cmd: &str, remaining: &str) -> String {
     format!(
         "{cmd}: not yet implemented as a native Rust call (WO 29.1 Phase 1).\n\
-         The orchestrator crate landed in WO 29.7 but its model client is still a\n\
-         stub (`PanickingClient`); the verification pipeline + audit hash-chain\n\
-         need a real model-backed path before these tools do real verification.\n\
-         Remaining work: {remaining}\n\
-         (The TS fallback that shelled out to `node <kf-plugin-cli>` was removed\n\
-         in WO 29.9 when the npm/kf-plugin tree was deleted.)"
+         The orchestrator crate (WO 29.7) and audit hash-chain (WO 29.4) both\n\
+         \x20shipped, but the ModelClient trait still has no production impl\n\
+         \x20(`PanickingClient` stub only); these tools need a real model-backed\n\
+         \x20path before they do real verification.\n\
+         \x20Remaining work: {remaining}"
     )
 }
 

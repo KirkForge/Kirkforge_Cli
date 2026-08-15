@@ -6,6 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- WO 32.11: disclosed three stale deferral comments in `kf-routing` (ClassifierMemory learned-examples, buildCorrectionPrompt real template, PathGuard unification) that pointed at closed WOs (29.6, 29.7) as if still pending. Comment-only — no code changed. Each now names the concrete blocker, remaining work, and tracks at WO 32.11 / `state.md` pending.
 - CI workflow split: monolithic `.github/workflows/ci.yml` (7 jobs, ran full matrix on every PR) replaced by three trigger-scoped files: `ci-pr.yml` (PR gate: fmt + clippy + fast lib tests, <5 min target), `ci-merge.yml` (push to main/dev: PR gate + full tests + doctests + windows + e2e + integration), `ci-nightly.yml` (schedule + dispatch: coverage + ollama + e2e-exhaustive + audit + release-build matrix). No job dropped; `quality` job decomposed into separate `clippy`/`fast-tests`/`full-tests`. clippy gate now `--lib --bins` (was `--all-targets`) for faster PR feedback; nextest profiles `ci-fast`/`ci-full` used instead of inline `--config` flags.
 
 ### Fixed

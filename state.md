@@ -99,6 +99,27 @@ over-claimed.
 
 ### Pending / blocked (this session)
 
+- **WO 32.11 — three deferrals from WO 29.3 (comment-only cleanup, shipped).**
+  Three stale `ponytail:`/doc comments pointed at closed WOs (29.6, 29.7) as
+  if still pending. All three updated to disclose the deferral to WO 32.11
+  with concrete blockers + remaining work. No code changed (comment-only);
+  the deferrals stay open:
+  - **ClassifierMemory learned-examples** — persistence needs fs + session-dir
+    ownership; belongs in `kf-orchestrator`, not the pure `kf-routing` crate.
+    Remaining: add a persistence adapter in `kf-orchestrator` that saves/loads
+    learned examples to the session dir.
+  - **buildCorrectionPrompt real template** — the real template lives in
+    `correction-core` (TS, not ported); porting needs the orchestrator's
+    model-call layer (WO 29.7, not shipped). The placeholder prompt carries
+    no per-failure guidance. Remaining: port the template into
+    `kf-orchestrator` and wire it into the correction loop.
+  - **PathGuard unification** — `shared::access::PathGuard` (async,
+    `Path`/`OsStr`, canonicalize, fail-closed, config-coupled) and
+    `kf-routing::path_safety` (sync, `&str`, lexical, fail-open,
+    profile-coupled) have different types/error semantics on every overlap.
+    Delegating needs an adapter that's more code than the duplication it
+    removes. Remaining: design a `PathPolicy` trait in `kf-routing::path_safety`
+    with sync + async-compatible signatures; adapt `PathGuard` to implement it.
 - **WO 33.14 — subprocess test fakes.** Replace real-subprocess tests
   (bash, git, cargo spawn) with in-process fakes where the subprocess is
   an implementation detail, not the behavior under test. Reduces CI

@@ -2,7 +2,14 @@
 //!
 //! Two-layer task classifier: regex scoring (`classify_task`) with NLP/TF-IDF
 //! fallback (`classify_nlp`) for low-confidence inputs. Pure: no model calls,
-//! no persistence (ClassifierMemory learned-examples is deferred to WO 29.6).
+//! no persistence.
+//!
+//! ClassifierMemory learned-examples persistence is DEFERRED to WO 32.11:
+//! persistence requires fs + session-dir ownership, which is the orchestrator's
+//! job, not this pure crate's. The classifier works without it (regex + NLP
+//! fallback); persistence is a recall optimization, not a correctness gap.
+//! Remaining work: add a ClassifierMemory persistence adapter in
+//! `kf-orchestrator` that saves/loads learned examples to the session dir.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;

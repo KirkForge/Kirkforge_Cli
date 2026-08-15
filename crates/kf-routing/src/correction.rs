@@ -147,11 +147,16 @@ fn slot_policy(policy: Option<&VerifierPolicy>, slot: &str) -> SlotPolicy {
     }
 }
 
-// ponytail: the real `buildCorrectionPrompt` template lives in
-// correction-core (not ported in WO 29.3 — pure decision logic only). The
-// decision function only needs to mark that a correction is required; WO
-// 29.7 swaps this for the real template. Tests assert `correctionPrompt` is
-// truthy, which a non-empty string satisfies.
+// ponytail: placeholder prompt, not the real `buildCorrectionPrompt` template.
+// The real template lives in `correction-core` (TS, not ported — porting it
+// requires the orchestrator's model-call layer, which is WO 29.7 and hasn't
+// shipped). The pure decision function (`decide_correction`) only needs to
+// signal that a correction is required; tests assert `correction_prompt` is
+// truthy, which this non-empty string satisfies.
+// DEFERRED to WO 32.11: port the `correction-core` template into
+// `kf-orchestrator` and wire it into the correction loop's prompt emission.
+// ceiling: placeholder string carries no per-failure guidance; the model gets
+// a generic prompt instead of one tailored to the specific verifier failure.
 fn correction_prompt(packet: &ReducedStatePacket) -> String {
     format!(
         "targeted correction: overall={:?}, broken_edges={}, lint_errors={}",

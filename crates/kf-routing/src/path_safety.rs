@@ -3,10 +3,22 @@
 //! Pure path + content safety checks for artifact writes, plus an atomic
 //! `write_artifacts` that applies all guards before touching the filesystem.
 //!
-//! Overlap with `src/session/access/mod.rs` (`PathGuard`): `PathGuard` is the
+//! Overlap with `src/shared/access/mod.rs` (`PathGuard`): `PathGuard` is the
 //! async, config/DenyList-coupled guard used by the live agent loop. This
 //! module is the pure, synchronous artifact-emission policy that the
-//! orchestrator (WO 29.7) will call. Unifying them is a separate refactor.
+//! orchestrator (WO 29.7) calls.
+//!
+//! Unifying them is DEFERRED to WO 32.11. The two impls have genuinely
+//! different contracts: `PathGuard` is per-file, `Path`/`OsStr`-based,
+//! `canonicalize`-resolved (fail-closed on metadata error), config-coupled,
+//! async (gitignore probe); `path_safety` is batch-write, `&str`-based,
+//! lexical `is_inside_cwd` (no fs canonicalize, fail-open on metadata error),
+//! profile-coupled, sync. Every overlapping check (extension, symlink,
+//! sandbox, dotfile) has different types or error semantics. Delegating
+//! without behavior change needs an adapter (OsStr→str, fail-closed→fail-open
+//! wrapping) that is more code than the duplication it removes.
+//! Remaining work: design a `PathPolicy` trait here with sync + async-compatible
+//! signatures; adapt `PathGuard` to implement it; reconcile error semantics.
 
 use std::path::{Component, Path, PathBuf};
 

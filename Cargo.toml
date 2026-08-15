@@ -1,6 +1,6 @@
 [package]
 name = "kf-code"
-version = "3.8.0"
+version = "0.3.9"
 edition = "2021"
 description = "Provider-agnostic, verification-first coding agent"
 repository = "https://github.com/KirkForge/KirkForge-Cli"

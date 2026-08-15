@@ -53,14 +53,15 @@ use tokio::sync::mpsc;
 ///   (offset shrinks), drag up reveals later content.
 /// - `Up(Left)` — end drag (clears the baseline).
 ///
-/// ponytail: click-to-position the text cursor inside the prompt /
-/// approval input is NOT implemented here — our `LineReader` does not
-/// expose a set-position API cleanly, so R2-cursor is deferred to
-/// 27.7-R2-later (tracked in `docs/workorders/27.7-tui-mouse.md`).
-/// A related ceiling: because the handler does not see the terminal
-/// height, clicks in the input row are not distinguished from clicks
-/// in the chat body (both just stick auto-scroll); precise per-rect
-/// hit-testing lands together with cursor positioning.
+/// ponytail: click-to-position the text cursor inside the prompt is
+/// implemented via `last_input_rect` stored on `UiState` during render
+/// (WO 32.12). The handler hit-tests the click against the stored rect,
+/// maps the click column (minus the 1-char left border) to a char index
+/// on the current line, and calls `set_cursor_line_col`. Clicks outside
+/// the input rect keep the existing behavior (drag-scroll / tab switch).
+/// Ceiling: the mapping assumes the click column maps 1:1 to a char
+/// column (no horizontal scroll offset); the input box does not
+/// currently scroll horizontally, so this holds.
 pub fn handle_mouse_event(state: &mut AppState, mouse: MouseEvent) {
     match mouse.kind {
         MouseEventKind::ScrollDown => {
@@ -76,9 +77,17 @@ pub fn handle_mouse_event(state: &mut AppState, mouse: MouseEvent) {
                 if let Some(tab) = tab_at_column(mouse.column as usize) {
                     apply_tab_switch(state, tab);
                 }
+            } else if let Some(rect) = state.ui.last_input_rect {
+                if mouse.row >= rect.y && mouse.row < rect.y + rect.height {
+                    let line = (mouse.row - rect.y).saturating_sub(1) as usize;
+                    let col = (mouse.column as usize).saturating_sub(rect.x as usize + 1);
+                    state.set_cursor_line_col(line, col);
+                    state.mark_dirty();
+                    return;
+                }
+                state.conversation.auto_scroll = false;
+                state.ui.mouse_drag_row = Some(mouse.row);
             } else {
-                // Grab the chat for drag-scroll: stop following and
-                // record the drag baseline row.
                 state.conversation.auto_scroll = false;
                 state.ui.mouse_drag_row = Some(mouse.row);
             }
@@ -1532,5 +1541,66 @@ mod tests {
         }
         // Past the last tab → None.
         assert_eq!(tab_at_column(expected.len()), None);
+    }
+
+    // ── Click-in-prompt cursor positioning (WO 32.12) ──────────────
+
+    #[test]
+    fn mouse_click_in_input_moves_cursor() {
+        use ratatui::layout::Rect;
+        let mut s = app_state();
+        s.conversation.input = "hello world".to_string();
+        s.conversation.cursor_position = 0;
+        s.ui.last_input_rect = Some(Rect::new(0, 20, 40, 3));
+        handle_mouse_event(
+            &mut s,
+            mouse(MouseEventKind::Down(MouseButton::Left), 21, 6),
+        );
+        assert_eq!(s.conversation.cursor_position, 5);
+    }
+
+    #[test]
+    fn mouse_click_past_end_clamps() {
+        use ratatui::layout::Rect;
+        let mut s = app_state();
+        s.conversation.input = "hi".to_string();
+        s.conversation.cursor_position = 0;
+        s.ui.last_input_rect = Some(Rect::new(0, 20, 40, 3));
+        handle_mouse_event(
+            &mut s,
+            mouse(MouseEventKind::Down(MouseButton::Left), 21, 30),
+        );
+        assert_eq!(s.conversation.cursor_position, 2);
+    }
+
+    #[test]
+    fn mouse_click_outside_input_still_drags_chat() {
+        use ratatui::layout::Rect;
+        let mut s = app_state();
+        s.conversation.input = "hello".to_string();
+        s.conversation.cursor_position = 0;
+        s.conversation.auto_scroll = true;
+        s.ui.last_input_rect = Some(Rect::new(0, 20, 40, 3));
+        handle_mouse_event(
+            &mut s,
+            mouse(MouseEventKind::Down(MouseButton::Left), 10, 5),
+        );
+        assert_eq!(s.conversation.cursor_position, 0);
+        assert!(!s.conversation.auto_scroll);
+        assert_eq!(s.ui.mouse_drag_row, Some(10));
+    }
+
+    #[test]
+    fn set_cursor_line_col_handles_multiline() {
+        let mut s = app_state();
+        s.conversation.input = "abc\ndefgh\nij".to_string();
+        s.set_cursor_line_col(0, 1);
+        assert_eq!(s.conversation.cursor_position, 1);
+        s.set_cursor_line_col(1, 2);
+        assert_eq!(s.conversation.cursor_position, 6);
+        s.set_cursor_line_col(1, 100);
+        assert_eq!(s.conversation.cursor_position, 9);
+        s.set_cursor_line_col(5, 0);
+        assert_eq!(s.conversation.cursor_position, 12);
     }
 }

@@ -1039,6 +1039,9 @@ pub(crate) fn render_app(f: &mut Frame, state: &mut AppState) {
     // Show input and status for all tabs; the main content area
     // already rendered above.
     render_input(f, chunks[2], state);
+    // Stash the input rect so the mouse handler can hit-test clicks
+    // against the input box (WO 32.12).
+    state.ui.last_input_rect = Some(chunks[2]);
     render_status(f, chunks[3], state);
 
     // Session picker overlay (daemon follow-up). Shown when the

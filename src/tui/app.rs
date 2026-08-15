@@ -521,6 +521,10 @@ pub struct UiState {
     /// countdown instead of a `bool` so the indicator can fade on its own
     /// without a second field (WO 30.0.11).
     pub paste_flash: u8,
+    /// Last-rendered input-box rect, set by `render_app` each frame so the
+    /// mouse handler can hit-test clicks against the input area (WO 32.12).
+    /// `None` until the first render completes.
+    pub last_input_rect: Option<ratatui::layout::Rect>,
 }
 
 impl Default for UiState {
@@ -534,6 +538,7 @@ impl Default for UiState {
             theme: Theme::default(),
             mouse_drag_row: None,
             paste_flash: 0,
+            last_input_rect: None,
         }
     }
 }
@@ -770,6 +775,29 @@ impl AppState {
     pub fn input_visible_height(&self, max_rows: u16, content_width: usize) -> u16 {
         let lines = self.input_visual_line_count(content_width);
         lines.min(max_rows as usize).max(1) as u16 + 2
+    }
+
+    /// Move the text cursor to the character at `(line, col)` char indices,
+    /// clamping to the input buffer bounds. Used by the click-in-prompt
+    /// handler (WO 32.12). `line` and `col` are logical (not visual/wrapped)
+    /// char indices into the input string.
+    pub fn set_cursor_line_col(&mut self, line: usize, col: usize) {
+        let input = &self.conversation.input;
+        let mut current_line = 0usize;
+        for (char_idx, c) in input.char_indices() {
+            if current_line == line {
+                let line_rest: String = input[char_idx..]
+                    .chars()
+                    .take_while(|c2| *c2 != '\n')
+                    .collect();
+                self.conversation.cursor_position = char_idx + col.min(line_rest.chars().count());
+                return;
+            }
+            if c == '\n' {
+                current_line += 1;
+            }
+        }
+        self.conversation.cursor_position = input.chars().count();
     }
 }
 

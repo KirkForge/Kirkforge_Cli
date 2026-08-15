@@ -612,6 +612,7 @@ fn xdg_config_path() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use crate::session::hooks::{HookContext, HookDecision, PostHook};
+    use crate::shared::test_util::EnvGuard;
     use crate::tools::ToolContext;
 
     #[tokio::test]
@@ -933,15 +934,14 @@ mod tests {
     #[test]
     fn xdg_config_path_uses_xdg_config_home_when_set() {
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        let _env = EnvGuard::set("XDG_CONFIG_HOME", tmp.path());
         let path = xdg_config_path().expect("XDG_CONFIG_HOME set should resolve a path");
         assert!(path.ends_with("stratum/pipeline.toml"), "got {path:?}");
-        std::env::remove_var("XDG_CONFIG_HOME");
     }
 
     #[test]
     fn xdg_config_path_falls_back_to_home_dot_config() {
-        std::env::remove_var("XDG_CONFIG_HOME");
+        let _env = EnvGuard::remove("XDG_CONFIG_HOME");
         let home = std::env::var_os("HOME");
         if home.is_some() {
             let path = xdg_config_path().expect("HOME set should resolve a path");

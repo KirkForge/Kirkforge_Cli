@@ -44,6 +44,56 @@
 
 ---
 
+## Session 2026-08-15 — WO 33.16 Phase 2: kill env mutation in tests (worktree `.worktrees/wo-envmut`)
+
+### What changed this session
+Phase 2 env-mutation elimination (gpt-test_and_ci.md): replaced every raw
+`std::env::set_var`/`remove_var` in test code with the `EnvGuard` RAII helper
+(`src/shared/test_util.rs`) that restores the prior value on Drop, making
+parallel `#[test]` execution safe without serialization mutexes.
+
+- **adapters** (commit d89689d): auth.rs (14 raw + ENV_LOCK mutex → EnvGuard,
+  mutex dropped), vertex_auth.rs, bedrock_vertex_mocks.rs (AwsCredsGuard
+  struct → 3 EnvGuards)
+- **shared + tools** (f9b7a19): metrics.rs, web_search.rs
+- **tui** (3862589): jobs.rs, plugins/mod.rs; widened EnvGuard::set to
+  `impl AsRef<OsStr>` so paths work without to_string_lossy
+- **daemon** (a2a2f80): server.rs, client.rs, mod.rs (with_empty_data_dir/
+  restore_data_dir helper pair → DataDirGuard struct)
+- **session** (ba7ba85): mod.rs, plugin_ops.rs, plugin_tools/tests.rs,
+  plugin_tools/wrapper.rs, undo.rs, verifier/plugin.rs, stratum.rs
+- **kf-bench** (32fdd28): bench_tests.rs (local EnvGuard — kf-bench has no
+  shared test util module)
+- fmt fix commit f5691eb (struct literal wrap from prior commits)
+
+### Stale targets (already migrated by a prior session, ZERO work)
+The task list named files that a prior session already converted to
+EnvGuard. Grep confirmed zero raw mutations: session_index.rs,
+verifier/security.rs, adapters/anthropic/mod.rs, bedrock_signing.rs,
+session/config/mod.rs.
+
+### Out of scope (production code, not test)
+- `src/session/bench.rs:155,244` — production `run_task` runner code
+  (not `#[cfg(test)]`). The task says "in test code".
+- `crates/kf-budget-core/src/test_support.rs` — that crate's own sanctioned
+  EnvGuard (Rust 2024 edition, wraps in `unsafe`).
+- `crates/kf-testdoctor/*` — the testdoctor tool DETECTS/REWRITES set_var
+  calls; the hits are string literals / regex patterns / test fixtures,
+  not real mutations.
+
+### Final state
+Zero raw `std::env::set_var`/`remove_var` calls remain in test bodies. The
+only remaining hits are: the EnvGuard helpers themselves (test_util.rs,
+kf-bench local, kf-budget-core test_support), one comment, production
+bench.rs, and testdoctor string literals.
+
+### Gate
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS
+- `cargo fmt --check`: PASS
+- `cargo nextest run -p kf-code --lib`: 3298 passed, 17 skipped (pre-existing #[ignore])
+- `cargo clippy -p kf-bench --tests -- -D warnings`: PASS
+- `cargo nextest run -p kf-bench --test bench_tests`: 12/12 PASS
+
 ## Session 2026-08-15 — WO 33.6 + 33.15 + 32.20 + 32.17 (worktree `.worktrees/wo32e`)
 
 ### What changed this session

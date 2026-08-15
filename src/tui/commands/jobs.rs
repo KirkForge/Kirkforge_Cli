@@ -757,17 +757,22 @@ mod tests {
         state_with_config(cfg)
     }
 
-    fn tmp_jobs_dir() -> (tempfile::TempDir, JobStore) {
+    fn tmp_jobs_dir() -> (
+        tempfile::TempDir,
+        JobStore,
+        crate::shared::test_util::EnvGuard,
+    ) {
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path().as_os_str());
+        let env =
+            crate::shared::test_util::EnvGuard::set("KF_CODE_DATA_DIR", dir.path().as_os_str());
         let store = job_store().unwrap();
-        (dir, store)
+        (dir, store, env)
     }
 
     #[tokio::test]
     async fn schedule_bash_job_parses_and_saves() {
         let _guard = scheduled_test_lock().lock().await;
-        let (_tmp, store) = tmp_jobs_dir();
+        let (_tmp, store, _env) = tmp_jobs_dir();
         let mut state = state();
 
         let out = handle_jobs_command(
@@ -786,7 +791,7 @@ mod tests {
     #[tokio::test]
     async fn scheduled_list_and_cancel() {
         let _guard = scheduled_test_lock().lock().await;
-        let (_tmp, store) = tmp_jobs_dir();
+        let (_tmp, store, _env) = tmp_jobs_dir();
         let mut state = state();
 
         let out = handle_jobs_command("schedule @hourly bash echo hourly", &mut state).await;
@@ -814,7 +819,7 @@ mod tests {
     #[tokio::test]
     async fn run_now_and_logs_and_notifier() {
         let _guard = scheduled_test_lock().lock().await;
-        let (_tmp, _store) = tmp_jobs_dir();
+        let (_tmp, _store, _env) = tmp_jobs_dir();
         let mut state = state_auto_approve();
 
         let out = handle_jobs_command(
@@ -857,7 +862,7 @@ mod tests {
     #[tokio::test]
     async fn schedule_without_kind_returns_usage() {
         let _guard = scheduled_test_lock().lock().await;
-        let (_tmp, _store) = tmp_jobs_dir();
+        let (_tmp, _store, _env) = tmp_jobs_dir();
         let mut state = state();
 
         let out = handle_jobs_command("schedule @daily echo hi", &mut state).await;

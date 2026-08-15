@@ -492,27 +492,21 @@ Then configure `plugin_signature_validation = true` and
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::EnvGuard;
     use crate::shared::Config;
 
     struct DataDirGuard {
-        prev: Option<std::ffi::OsString>,
+        _env: EnvGuard,
         _lock: tokio::sync::MutexGuard<'static, ()>,
     }
 
     impl DataDirGuard {
         fn new(dir: &std::path::Path) -> Self {
             let lock = crate::session::test_data_dir_lock().blocking_lock();
-            let prev = std::env::var_os("KF_CODE_DATA_DIR");
-            std::env::set_var("KF_CODE_DATA_DIR", dir.as_os_str());
-            Self { prev, _lock: lock }
-        }
-    }
-
-    impl Drop for DataDirGuard {
-        fn drop(&mut self) {
-            match &self.prev {
-                Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-                None => std::env::remove_var("KF_CODE_DATA_DIR"),
+            let env = EnvGuard::set("KF_CODE_DATA_DIR", dir.as_os_str());
+            Self {
+                _env: env,
+                _lock: lock,
             }
         }
     }

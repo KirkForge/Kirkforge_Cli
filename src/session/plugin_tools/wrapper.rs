@@ -404,8 +404,9 @@ async fn join_plugin_drain(
 }
 
 #[cfg(test)]
-mod wrapper_tests {
+mod tests {
     use super::*;
+    use crate::shared::test_util::EnvGuard;
     use crate::shared::Config;
     use crate::tools::{Tool, ToolContext};
     use std::sync::Arc;
@@ -572,10 +573,9 @@ mod wrapper_tests {
         let wrapper = make_wrapper();
         let mut cfg = Config::default();
         // Force a var that we set in the test process to be forwarded.
-        std::env::set_var("KF_CODE_TEST_ENVVAR", "forwarded");
+        let _env = EnvGuard::set("KF_CODE_TEST_ENVVAR", "forwarded");
         cfg.tools.plugin_allowed_env_vars = vec!["KF_CODE_TEST_ENVVAR".into()];
         let env = wrapper.curated_env(&cfg, &serde_json::json!({}));
-        std::env::remove_var("KF_CODE_TEST_ENVVAR");
         let hit = env
             .iter()
             .any(|(k, v)| k == "KF_CODE_TEST_ENVVAR" && v == "forwarded");

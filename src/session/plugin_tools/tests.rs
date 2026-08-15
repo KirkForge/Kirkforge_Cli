@@ -1,4 +1,5 @@
 use super::*;
+use crate::shared::test_util::EnvGuard;
 use crate::shared::{Config, SharedConfig, ToolOutcome};
 use crate::tools::ToolContext;
 use kf_plugin_host::{PluginRegistry, TrustPolicy};
@@ -198,12 +199,11 @@ async fn curated_env_blocks_unlisted_vars() {
         std::fs::set_permissions(plugin_dir.join("greet.sh"), perms).unwrap();
     }
 
-    std::env::set_var("KF_CODE_SECRET_VAR", "leaked");
+    let _env = EnvGuard::set("KF_CODE_SECRET_VAR", "leaked");
     let tools = all_plugin_tools(&reg, cfg, None);
     let outcome = tools[0]
         .run(&ToolContext::new(), serde_json::Value::Null)
         .await;
-    std::env::remove_var("KF_CODE_SECRET_VAR");
 
     assert!(
         matches!(outcome, ToolOutcome::Success { ref content } if content.is_empty()),
@@ -244,26 +244,7 @@ async fn curated_env_sanitizes_path_for_plugin_tools() {
         std::fs::set_permissions(plugin_dir.join("greet.sh"), perms).unwrap();
     }
 
-    struct PathGuard {
-        prior: Option<String>,
-    }
-    impl PathGuard {
-        fn set(value: &str) -> Self {
-            let prior = std::env::var("PATH").ok();
-            std::env::set_var("PATH", value);
-            Self { prior }
-        }
-    }
-    impl Drop for PathGuard {
-        fn drop(&mut self) {
-            match &self.prior {
-                Some(p) => std::env::set_var("PATH", p),
-                None => std::env::remove_var("PATH"),
-            }
-        }
-    }
-
-    let _guard = PathGuard::set("/tmp/evil");
+    let _guard = EnvGuard::set("PATH", "/tmp/evil");
     let tools = all_plugin_tools(&reg, cfg, None);
     let outcome = tools[0]
         .run(&ToolContext::new(), serde_json::Value::Null)
@@ -328,25 +309,15 @@ fn load_workspace_plugins_warns_for_missing_source() {
 }
 
 struct DataDirGuard {
-    prior: Option<String>,
+    _env: EnvGuard,
     _lock: tokio::sync::MutexGuard<'static, ()>,
 }
 
 impl DataDirGuard {
     fn set(value: &str) -> Self {
         let _lock = crate::session::test_data_dir_lock().blocking_lock();
-        let prior = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", value);
-        Self { prior, _lock }
-    }
-}
-
-impl Drop for DataDirGuard {
-    fn drop(&mut self) {
-        match &self.prior {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
+        let env = EnvGuard::set("KF_CODE_DATA_DIR", value);
+        Self { _env: env, _lock }
     }
 }
 

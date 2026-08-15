@@ -625,32 +625,23 @@ async fn toggle_plugin(
 mod tests {
     use super::*;
     use crate::shared::test_util::app_state;
+    use crate::shared::test_util::EnvGuard;
 
     /// Sets `KF_CODE_DATA_DIR` to `dir` for the lifetime of the guard.
     /// Uses the crate-wide `test_data_dir_lock()` so every test that mutates
     /// the data directory is serialized against every other such test.
     struct TempDataDir {
-        prev: Option<std::ffi::OsString>,
+        _env: EnvGuard,
         _guard: tokio::sync::MutexGuard<'static, ()>,
     }
 
     impl TempDataDir {
         async fn new(dir: &std::path::Path) -> Self {
             let guard = crate::session::test_data_dir_lock().lock().await;
-            let prev = std::env::var_os("KF_CODE_DATA_DIR");
-            std::env::set_var("KF_CODE_DATA_DIR", dir.as_os_str());
+            let env = EnvGuard::set("KF_CODE_DATA_DIR", dir.as_os_str());
             Self {
-                prev,
+                _env: env,
                 _guard: guard,
-            }
-        }
-    }
-
-    impl Drop for TempDataDir {
-        fn drop(&mut self) {
-            match &self.prev {
-                Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-                None => std::env::remove_var("KF_CODE_DATA_DIR"),
             }
         }
     }

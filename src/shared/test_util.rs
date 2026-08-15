@@ -73,7 +73,7 @@ pub(crate) struct EnvGuard {
 }
 #[cfg(test)]
 impl EnvGuard {
-    pub fn set(key: &str, val: &str) -> Self {
+    pub fn set(key: &str, val: impl AsRef<std::ffi::OsStr>) -> Self {
         let old = std::env::var(key).ok();
         std::env::set_var(key, val);
         Self {

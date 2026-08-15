@@ -1211,7 +1211,7 @@ pub(crate) async fn handle_input_key(
             if state.ui.active_tab != ActiveTab::Chat {
                 state.ui.active_tab = ActiveTab::Chat;
                 state.ui.tab_list_state = None;
-            } else {
+            } else if !state.generation.thinking_buffer.is_empty() {
                 state.generation.thinking_panel_visible = !state.generation.thinking_panel_visible;
             }
             // Also dismiss any slash menu or file completer popup.

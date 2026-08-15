@@ -198,75 +198,35 @@ pub(crate) mod tests {
     #[test]
     fn resolve_credentials_reads_from_env() {
         let _guard = env_lock().lock().unwrap();
-        let access_key = "AWS_ACCESS_KEY_ID";
-        let secret_key = "AWS_SECRET_ACCESS_KEY";
-        let session_key = "AWS_SESSION_TOKEN";
-        let prev_access = std::env::var(access_key).ok();
-        let prev_secret = std::env::var(secret_key).ok();
-        let prev_session = std::env::var(session_key).ok();
-        std::env::set_var(access_key, "AKIATEST");
-        std::env::set_var(secret_key, "secretkey");
-        std::env::set_var(session_key, "sessiontoken");
+        let _g1 = crate::shared::test_util::EnvGuard::set("AWS_ACCESS_KEY_ID", "AKIATEST");
+        let _g2 = crate::shared::test_util::EnvGuard::set("AWS_SECRET_ACCESS_KEY", "secretkey");
+        let _g3 = crate::shared::test_util::EnvGuard::set("AWS_SESSION_TOKEN", "sessiontoken");
         let creds = resolve_credentials().unwrap();
         assert_eq!(creds.access_key_id(), "AKIATEST");
         assert_eq!(creds.secret_access_key(), "secretkey");
-        match prev_access {
-            Some(v) => std::env::set_var(access_key, v),
-            None => std::env::remove_var(access_key),
-        }
-        match prev_secret {
-            Some(v) => std::env::set_var(secret_key, v),
-            None => std::env::remove_var(secret_key),
-        }
-        match prev_session {
-            Some(v) => std::env::set_var(session_key, v),
-            None => std::env::remove_var(session_key),
-        }
     }
 
     #[test]
     fn resolve_credentials_fails_without_access_key() {
         let _guard = env_lock().lock().unwrap();
-        let access_key = "AWS_ACCESS_KEY_ID";
-        let prev = std::env::var(access_key).ok();
-        std::env::remove_var(access_key);
+        let _g = crate::shared::test_util::EnvGuard::remove("AWS_ACCESS_KEY_ID");
         assert!(resolve_credentials().is_err());
-        if let Some(v) = prev {
-            std::env::set_var(access_key, v)
-        }
     }
 
     #[test]
     fn resolve_credentials_fails_without_secret_key() {
         let _guard = env_lock().lock().unwrap();
-        let access_key = "AWS_ACCESS_KEY_ID";
-        let secret_key = "AWS_SECRET_ACCESS_KEY";
-        let prev_access = std::env::var(access_key).ok();
-        let prev_secret = std::env::var(secret_key).ok();
-        std::env::set_var(access_key, "AKIATEST");
-        std::env::remove_var(secret_key);
+        let _g1 = crate::shared::test_util::EnvGuard::set("AWS_ACCESS_KEY_ID", "AKIATEST");
+        let _g2 = crate::shared::test_util::EnvGuard::remove("AWS_SECRET_ACCESS_KEY");
         assert!(resolve_credentials().is_err());
-        match prev_access {
-            Some(v) => std::env::set_var(access_key, v),
-            None => std::env::remove_var(access_key),
-        }
-        if let Some(v) = prev_secret {
-            std::env::set_var(secret_key, v);
-        }
     }
 
     #[test]
     fn sign_request_produces_authorization_header() {
         let _guard = env_lock().lock().unwrap();
-        let access_key = "AWS_ACCESS_KEY_ID";
-        let secret_key = "AWS_SECRET_ACCESS_KEY";
-        let session_key = "AWS_SESSION_TOKEN";
-        let prev_access = std::env::var(access_key).ok();
-        let prev_secret = std::env::var(secret_key).ok();
-        let prev_session = std::env::var(session_key).ok();
-        std::env::set_var(access_key, "AKIATEST");
-        std::env::set_var(secret_key, "secretkey");
-        std::env::remove_var(session_key);
+        let _g1 = crate::shared::test_util::EnvGuard::set("AWS_ACCESS_KEY_ID", "AKIATEST");
+        let _g2 = crate::shared::test_util::EnvGuard::set("AWS_SECRET_ACCESS_KEY", "secretkey");
+        let _g3 = crate::shared::test_util::EnvGuard::remove("AWS_SESSION_TOKEN");
         let url = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test/invoke-with-response-stream";
         let body = b"{\"hello\":\"world\"}";
         let signed = sign_request(url, body, "us-east-1").unwrap();
@@ -286,67 +246,25 @@ pub(crate) mod tests {
         assert!(signed.headers.contains_key("x-amz-content-sha256"));
         assert!(signed.headers.contains_key("host"));
         assert!(signed.headers.contains_key("x-amz-date"));
-        match prev_access {
-            Some(v) => std::env::set_var(access_key, v),
-            None => std::env::remove_var(access_key),
-        }
-        match prev_secret {
-            Some(v) => std::env::set_var(secret_key, v),
-            None => std::env::remove_var(secret_key),
-        }
-        match prev_session {
-            Some(v) => std::env::set_var(session_key, v),
-            None => std::env::remove_var(session_key),
-        }
     }
 
     #[test]
     fn sign_request_includes_security_token_when_set() {
         let _guard = env_lock().lock().unwrap();
-        let access_key = "AWS_ACCESS_KEY_ID";
-        let secret_key = "AWS_SECRET_ACCESS_KEY";
-        let session_key = "AWS_SESSION_TOKEN";
-        let prev_access = std::env::var(access_key).ok();
-        let prev_secret = std::env::var(secret_key).ok();
-        let prev_session = std::env::var(session_key).ok();
-        std::env::set_var(access_key, "AKIATEST");
-        std::env::set_var(secret_key, "secretkey");
-        std::env::set_var(session_key, "mysessiontoken");
+        let _g1 = crate::shared::test_util::EnvGuard::set("AWS_ACCESS_KEY_ID", "AKIATEST");
+        let _g2 = crate::shared::test_util::EnvGuard::set("AWS_SECRET_ACCESS_KEY", "secretkey");
+        let _g3 = crate::shared::test_util::EnvGuard::set("AWS_SESSION_TOKEN", "mysessiontoken");
         let url =
             "https://bedrock-runtime.us-east-1.amazonaws.com/model/x/invoke-with-response-stream";
         let signed = sign_request(url, b"{}", "us-east-1").unwrap();
         assert!(signed.headers.contains_key("x-amz-security-token"));
-        match prev_access {
-            Some(v) => std::env::set_var(access_key, v),
-            None => std::env::remove_var(access_key),
-        }
-        match prev_secret {
-            Some(v) => std::env::set_var(secret_key, v),
-            None => std::env::remove_var(secret_key),
-        }
-        match prev_session {
-            Some(v) => std::env::set_var(session_key, v),
-            None => std::env::remove_var(session_key),
-        }
     }
 
     #[test]
     fn sign_request_fails_for_invalid_url() {
         let _guard = env_lock().lock().unwrap();
-        let access_key = "AWS_ACCESS_KEY_ID";
-        let secret_key = "AWS_SECRET_ACCESS_KEY";
-        let prev_access = std::env::var(access_key).ok();
-        let prev_secret = std::env::var(secret_key).ok();
-        std::env::set_var(access_key, "AKIATEST");
-        std::env::set_var(secret_key, "secretkey");
+        let _g1 = crate::shared::test_util::EnvGuard::set("AWS_ACCESS_KEY_ID", "AKIATEST");
+        let _g2 = crate::shared::test_util::EnvGuard::set("AWS_SECRET_ACCESS_KEY", "secretkey");
         assert!(sign_request("not a url", b"{}", "us-east-1").is_err());
-        match prev_access {
-            Some(v) => std::env::set_var(access_key, v),
-            None => std::env::remove_var(access_key),
-        }
-        match prev_secret {
-            Some(v) => std::env::set_var(secret_key, v),
-            None => std::env::remove_var(secret_key),
-        }
     }
 }

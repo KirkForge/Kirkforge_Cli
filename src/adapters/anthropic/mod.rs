@@ -44,6 +44,7 @@ pub struct AnthropicAdapter {
     budget_tokens: usize,
     max_tokens: u32,
     tool_choice: Option<crate::shared::ToolChoice>,
+    stream_idle_timeout: std::time::Duration,
     /// Hosted computer_use display dims. `Some((w,h))` activates the hosted
     /// coordinate-vision path (requires the `computer_use` Cargo feature +
     /// `anthropic-beta: computer-use-2025-01-24` header). `None` = off.
@@ -66,6 +67,7 @@ impl AnthropicAdapter {
             budget_tokens: 10_000,
             max_tokens: 8192,
             tool_choice: None,
+            stream_idle_timeout: super::STREAM_IDLE_TIMEOUT,
             computer_use_dims: None,
         }
     }
@@ -118,6 +120,10 @@ impl ModelAdapter for AnthropicAdapter {
 
     fn set_max_tokens(&mut self, max_tokens: u32) {
         self.max_tokens = max_tokens;
+    }
+
+    fn set_streaming_timeout(&mut self, secs: u64) {
+        self.stream_idle_timeout = std::time::Duration::from_secs(secs);
     }
 
     async fn stream(
@@ -180,7 +186,11 @@ impl ModelAdapter for AnthropicAdapter {
         .await?;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
-        tokio::spawn(parse_anthropic_stream(tx, response.bytes_stream()));
+        tokio::spawn(parse_anthropic_stream(
+            tx,
+            response.bytes_stream(),
+            self.stream_idle_timeout,
+        ));
         Ok(rx)
     }
 }
@@ -454,6 +464,8 @@ mod tests {
     use crate::shared::{FinishReason, ToolCallStyle};
     use serde_json::json;
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn line(s: &str) -> Vec<u8> {
         format!("data: {s}\n\n").into_bytes()
     }
@@ -668,7 +680,7 @@ mod tests {
         ];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         let texts: Vec<&str> = events
@@ -718,7 +730,7 @@ mod tests {
         ];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         let thinking: Vec<&str> = events
@@ -755,7 +767,7 @@ mod tests {
         )];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(events
@@ -1527,7 +1539,7 @@ mod tests {
         let events: Vec<Vec<u8>> = vec![b"data: [DONE]\n\n".to_vec()];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(matches!(
@@ -1546,7 +1558,7 @@ mod tests {
         )];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(matches!(
@@ -1564,7 +1576,7 @@ mod tests {
             vec![line(r#"{"type":"message_stop","stop_reason":"tool_use"}"#)];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(matches!(
@@ -1583,7 +1595,7 @@ mod tests {
         )];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(matches!(
@@ -1602,7 +1614,7 @@ mod tests {
         )];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         match events.last() {
@@ -1624,7 +1636,7 @@ mod tests {
         ];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(matches!(
@@ -1643,7 +1655,7 @@ mod tests {
         )];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(events
@@ -1659,7 +1671,7 @@ mod tests {
         ];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(events.iter().any(|e| matches!(e, StreamEvent::Done { .. })));
@@ -1671,7 +1683,7 @@ mod tests {
         let events: Vec<Vec<u8>> = vec![b"data: {not valid json\n\n".to_vec()];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(events
@@ -1684,7 +1696,8 @@ mod tests {
         let bad = b"data: \xC3\n\n".to_vec();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(vec![bad])).await;
+            parse_anthropic_stream(tx, chunks(vec![bad]), crate::adapters::STREAM_IDLE_TIMEOUT)
+                .await;
         });
         let events = drain(rx, 64).await;
         assert!(events
@@ -1699,7 +1712,7 @@ mod tests {
         ))];
         let stream = tokio_stream::iter(items);
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        parse_anthropic_stream(tx, stream).await;
+        parse_anthropic_stream(tx, stream, crate::adapters::STREAM_IDLE_TIMEOUT).await;
         let events = drain(rx, 64).await;
         assert!(events
             .iter()
@@ -1713,7 +1726,7 @@ mod tests {
         )];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(events
@@ -1734,7 +1747,7 @@ mod tests {
         ];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         let tool = events
@@ -1761,7 +1774,7 @@ mod tests {
         )];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         let tool = events
@@ -1791,7 +1804,7 @@ mod tests {
         ];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         let tool = events
@@ -1816,7 +1829,7 @@ mod tests {
         ];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         let tool = events
@@ -1835,7 +1848,12 @@ mod tests {
         let frame = format!("data: {payload}\r\n\r\n");
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(vec![frame.into_bytes()])).await;
+            parse_anthropic_stream(
+                tx,
+                chunks(vec![frame.into_bytes()]),
+                crate::adapters::STREAM_IDLE_TIMEOUT,
+            )
+            .await;
         });
         let events = drain(rx, 64).await;
         assert!(events
@@ -1848,7 +1866,7 @@ mod tests {
         let events: Vec<Vec<u8>> = vec![line(r#"{"type":"error","error":"something broke"}"#)];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(events
@@ -1866,7 +1884,7 @@ mod tests {
         ];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(!events.iter().any(|e| matches!(e, StreamEvent::Thinking(_))));
@@ -1882,7 +1900,7 @@ mod tests {
         ];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(!events.iter().any(|e| matches!(e, StreamEvent::Text(_))));
@@ -1898,7 +1916,7 @@ mod tests {
         ];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert!(!events.iter().any(|e| matches!(e, StreamEvent::Text(_))));
@@ -1912,7 +1930,7 @@ mod tests {
         ];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
-            parse_anthropic_stream(tx, chunks(events)).await;
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
         });
         let events = drain(rx, 64).await;
         assert_eq!(events.len(), 1);
@@ -1955,7 +1973,8 @@ mod tests {
     fn stream_returns_error_when_no_api_key() {
         // With no key configured and no env var, stream should fail
         // with a clear error message.
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::shared::test_util::EnvGuard::remove("ANTHROPIC_API_KEY");
         let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4", 30, None);
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(a.stream(&[], &[]));
@@ -1971,7 +1990,8 @@ mod tests {
     fn stream_returns_error_when_empty_api_key() {
         // An empty config key should still fall through to env,
         // and if env is also missing, produce the error.
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::shared::test_util::EnvGuard::remove("ANTHROPIC_API_KEY");
         let a = AnthropicAdapter::new(
             "https://api.anthropic.com",
             "claude-4",
@@ -1991,15 +2011,16 @@ mod tests {
     #[test]
     fn config_key_takes_priority_over_env() {
         // When both config and env are set, config wins.
-        std::env::set_var("ANTHROPIC_API_KEY", "env-key");
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::shared::test_util::EnvGuard::set("ANTHROPIC_API_KEY", "env-key");
         let key = super::super::auth::resolve_api_key("anthropic", Some("config-key"));
         assert_eq!(key, Some("config-key".to_string()));
-        std::env::remove_var("ANTHROPIC_API_KEY");
     }
 
     #[test]
     fn none_when_both_missing() {
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::shared::test_util::EnvGuard::remove("ANTHROPIC_API_KEY");
         let key = super::super::auth::resolve_api_key("anthropic", None);
         assert!(key.is_none());
     }

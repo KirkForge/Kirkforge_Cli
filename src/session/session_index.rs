@@ -803,8 +803,10 @@ mod tests {
     fn test_session_index_roundtrip() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -817,19 +819,16 @@ mod tests {
 
         // Index file should have been created.
         assert!(sessions_dir.join(".index.ndjson").exists());
-
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     #[test]
     fn test_search_sessions_filters_by_id_and_date() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -848,11 +847,6 @@ mod tests {
         // Every session should have a rfc3339 date containing the current year.
         let all = search_sessions("2026").unwrap();
         assert_eq!(all.len(), 2);
-
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     /// `save()` re-creates its parent directory if it was removed
@@ -888,8 +882,10 @@ mod tests {
     fn test_search_sessions_matches_content() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -910,11 +906,6 @@ mod tests {
 
         let none = search_sessions("notfound").unwrap();
         assert!(none.is_empty());
-
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     /// `build_fork_tree` on a directory with two top-level
@@ -924,8 +915,10 @@ mod tests {
     fn test_build_fork_tree_nests_children() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -970,11 +963,6 @@ mod tests {
 
         assert_eq!(tree[1].id, "beta-session");
         assert_eq!(tree[1].children.len(), 0);
-
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     /// `build_fork_tree` returns orphan forks (parent not in
@@ -983,8 +971,10 @@ mod tests {
     fn test_build_fork_tree_orphan_fork_is_a_root() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -1009,11 +999,6 @@ mod tests {
         assert_eq!(tree.len(), 1, "orphan fork is shown as a root");
         assert_eq!(tree[0].id, "orphan-fork");
         assert!(!tree[0].is_root, "orphan forks are flagged non-root");
-
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     /// `build_fork_tree` returns an empty tree when no sessions
@@ -1022,19 +1007,16 @@ mod tests {
     fn test_build_fork_tree_empty() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
 
         let tree = build_fork_tree().expect("build tree");
         assert!(tree.is_empty());
-
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     #[test]
@@ -1182,24 +1164,24 @@ mod tests {
     fn test_delete_session_returns_false_when_missing() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let deleted = delete_session("does-not-exist-12345").unwrap();
         assert!(!deleted);
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     #[test]
     fn test_delete_session_removes_file_when_present() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let path = sessions_dir.join("to-delete.conv.ndjson");
@@ -1207,70 +1189,62 @@ mod tests {
         let deleted = delete_session("to-delete").unwrap();
         assert!(deleted);
         assert!(!path.exists());
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     #[test]
     fn test_resolve_session_id_returns_none_when_no_match() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let resolved = resolve_session_id("missing").unwrap();
         assert!(resolved.is_none());
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     #[test]
     fn test_resolve_session_id_matches_exact_id() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let path = sessions_dir.join("exact-id.conv.ndjson");
         std::fs::write(&path, "{\"role\":\"user\",\"content\":\"x\"}\n").unwrap();
         let resolved = resolve_session_id("exact-id").unwrap();
         assert_eq!(resolved, Some(path));
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     #[test]
     fn test_resolve_session_id_matches_id_prefix() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let path = sessions_dir.join("2026-06-10-long-session.conv.ndjson");
         std::fs::write(&path, "{\"role\":\"user\",\"content\":\"x\"}\n").unwrap();
         let resolved = resolve_session_id("2026-06-10").unwrap();
         assert_eq!(resolved, Some(path));
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     #[test]
     fn test_resolve_session_id_prefers_exact_match_over_prefix() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let prefix_path = sessions_dir.join("2026-prefix-id.conv.ndjson");
@@ -1279,34 +1253,30 @@ mod tests {
         std::fs::write(&exact_path, "{\"role\":\"user\",\"content\":\"x\"}\n").unwrap();
         let resolved = resolve_session_id("2026").unwrap();
         assert_eq!(resolved, Some(exact_path));
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     #[test]
     fn test_open_resolved_returns_none_when_no_match() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let opened = open_resolved("not-present").unwrap();
         assert!(opened.is_none());
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     #[test]
     fn test_open_resolved_opens_conversation_log() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let path = sessions_dir.join("resume-target.conv.ndjson");
@@ -1316,18 +1286,16 @@ mod tests {
             .expect("should resolve");
         assert_eq!(log.len(), 1);
         assert_eq!(log.all()[0].content, "hello");
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     #[test]
     fn test_append_alert_writes_ndjson() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_DATA_DIR",
+            dir.path().to_str().unwrap(),
+        );
 
         // append_alert writes to <data_dir>/sessions/.alerts.ndjson, so the
         // sessions subdir must exist (OpenOptions::create makes the file, not
@@ -1352,10 +1320,5 @@ mod tests {
         let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(second["job_id"], "job-002");
         assert_eq!(second["kind"], "workflow");
-
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 }

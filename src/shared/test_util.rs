@@ -65,3 +65,37 @@ pub(crate) fn app_state_with_log(log_path: std::path::PathBuf) -> crate::tui::ap
     state.session.log_path = Some(log_path);
     state
 }
+
+#[cfg(test)]
+pub(crate) struct EnvGuard {
+    key: String,
+    old: Option<String>,
+}
+#[cfg(test)]
+impl EnvGuard {
+    pub fn set(key: &str, val: &str) -> Self {
+        let old = std::env::var(key).ok();
+        std::env::set_var(key, val);
+        Self {
+            key: key.to_string(),
+            old,
+        }
+    }
+    pub fn remove(key: &str) -> Self {
+        let old = std::env::var(key).ok();
+        std::env::remove_var(key);
+        Self {
+            key: key.to_string(),
+            old,
+        }
+    }
+}
+#[cfg(test)]
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match &self.old {
+            Some(v) => std::env::set_var(&self.key, v),
+            None => std::env::remove_var(&self.key),
+        }
+    }
+}

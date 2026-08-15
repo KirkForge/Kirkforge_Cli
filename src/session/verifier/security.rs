@@ -365,39 +365,6 @@ mod tests {
         LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
     }
 
-    // Captures the prior PATH on construction (and sets a marker env var);
-    // restores PATH and removes the marker on drop so a mid-test panic cannot
-    // leak the mutated environment. The caller sets PATH to its fake bin dir
-    // AFTER constructing the guard.
-    // ponytail: only used by the #[cfg(unix)] trufflehog-timeout test; gating
-    // the struct avoids a dead_code error on Windows where no caller exists.
-    #[cfg(unix)]
-    struct PathEnvGuard {
-        prior_path: Option<std::ffi::OsString>,
-        marker: &'static str,
-    }
-    #[cfg(unix)]
-    impl PathEnvGuard {
-        fn new(marker: &'static str) -> Self {
-            let g = Self {
-                prior_path: std::env::var_os("PATH"),
-                marker,
-            };
-            std::env::set_var(marker, "1");
-            g
-        }
-    }
-    #[cfg(unix)]
-    impl Drop for PathEnvGuard {
-        fn drop(&mut self) {
-            match &self.prior_path {
-                Some(p) => std::env::set_var("PATH", p),
-                None => std::env::remove_var("PATH"),
-            }
-            std::env::remove_var(self.marker);
-        }
-    }
-
     #[tokio::test]
     async fn test_skips_unrelated_events() {
         // Only FileWrite and Edit are scanned; BashExec, FileRead, etc. should skip
@@ -784,8 +751,9 @@ mod tests {
         // PathEnvGuard captures prior PATH and owns the sleep marker; drop
         // restores both even if the assertion panics. Set PATH AFTER the
         // guard so the guard captures the original.
+        let _marker_guard =
+            crate::shared::test_util::EnvGuard::set("KF_CODE_FAKE_TRUFFLEHOG_SLEEP", "1");
         let original_path = std::env::var_os("PATH");
-        let _path_guard = PathEnvGuard::new("KF_CODE_FAKE_TRUFFLEHOG_SLEEP");
         let new_path = format!(
             "{}:{}",
             fake_bin_dir.display(),
@@ -794,7 +762,7 @@ mod tests {
                 .map(|s| s.to_string_lossy())
                 .unwrap_or_default()
         );
-        std::env::set_var("PATH", new_path);
+        let _path_guard = crate::shared::test_util::EnvGuard::set("PATH", &new_path);
 
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
@@ -855,8 +823,8 @@ mod tests {
                 .map(|s| s.to_string_lossy())
                 .unwrap_or_default()
         );
-        std::env::set_var("PATH", new_path);
-        std::env::set_var("KF_CODE_FAKE_TRUFFLEHOG", "1");
+        let _path_guard = crate::shared::test_util::EnvGuard::set("PATH", &new_path);
+        let _marker_guard = crate::shared::test_util::EnvGuard::set("KF_CODE_FAKE_TRUFFLEHOG", "1");
 
         let event = BusEvent::FileWrite(FileWriteEvent {
             path: path.clone(),
@@ -865,12 +833,6 @@ mod tests {
         });
         let v = verify_security(&event).await;
 
-        if let Some(p) = original_path {
-            std::env::set_var("PATH", p);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        std::env::remove_var("KF_CODE_FAKE_TRUFFLEHOG");
         remove_test_file(&path);
         remove_test_file(&fake_trufflehog);
         let _ = std::fs::remove_dir(&fake_bin_dir);
@@ -1081,12 +1043,9 @@ mod tests {
 
     #[test]
     fn find_in_path_returns_none_when_path_unset() {
-        let original = std::env::var_os("PATH");
-        std::env::remove_var("PATH");
+        let _guard = path_mutating_test_lock().blocking_lock();
+        let _env = crate::shared::test_util::EnvGuard::remove("PATH");
         let result = find_in_path("definitely-not-on-path-xyz-987");
-        if let Some(p) = original {
-            std::env::set_var("PATH", p);
-        }
         assert!(
             result.is_none(),
             "with PATH unset, lookup should return None"

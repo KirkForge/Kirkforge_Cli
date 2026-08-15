@@ -160,8 +160,7 @@ fn legacy_config_path() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("KF_CODE_LEGACY_DATA_DIR") {
         return Some(PathBuf::from(dir).join("config.toml"));
     }
-    directories::ProjectDirs::from("", "", "kirkforge")
-        .map(|p| p.data_dir().join("config.toml"))
+    directories::ProjectDirs::from("", "", "kirkforge").map(|p| p.data_dir().join("config.toml"))
 }
 
 /// Load config and write a default file on first run.
@@ -348,6 +347,11 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Integer(v)) = table.get("request_timeout_secs") {
         if let Ok(n) = u64::try_from(*v) {
             cfg.model.request_timeout_secs = n.max(1);
+        }
+    }
+    if let Some(Value::Integer(v)) = table.get("streaming_timeout_secs") {
+        if let Ok(n) = u64::try_from(*v) {
+            cfg.model.streaming_timeout_secs = n.max(1);
         }
     }
     if let Some(Value::Boolean(v)) = table.get("follow_symlinks") {
@@ -958,10 +962,10 @@ mod tests {
 
     /// Helper to temporarily set an env var for a test. Must be called
     /// while `ENV_LOCK` is held.
-    fn set_env(key: &str, val: Option<&str>) {
+    fn set_env(key: &str, val: Option<&str>) -> crate::shared::test_util::EnvGuard {
         match val {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
+            Some(v) => crate::shared::test_util::EnvGuard::set(key, v),
+            None => crate::shared::test_util::EnvGuard::remove(key),
         }
     }
 
@@ -974,10 +978,9 @@ mod tests {
             "default_model is empty by default; configure it explicitly"
         );
 
-        set_env("KF_CODE_MODEL", Some("deepseek-v4:cloud"));
+        let _env = set_env("KF_CODE_MODEL", Some("deepseek-v4:cloud"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.model.default_model, "deepseek-v4:cloud");
-        set_env("KF_CODE_MODEL", None);
     }
 
     #[test]
@@ -986,10 +989,9 @@ mod tests {
         let mut cfg = Config::default();
         assert!(!cfg.security.auto_approve);
 
-        set_env("KF_CODE_AUTO_APPROVE", Some("true"));
+        let _env = set_env("KF_CODE_AUTO_APPROVE", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.security.auto_approve);
-        set_env("KF_CODE_AUTO_APPROVE", None);
     }
 
     #[test]
@@ -998,10 +1000,9 @@ mod tests {
         let mut cfg = Config::default();
         cfg.security.auto_approve = true;
 
-        set_env("KF_CODE_AUTO_APPROVE", Some("false"));
+        let _env = set_env("KF_CODE_AUTO_APPROVE", Some("false"));
         apply_env_overrides(&mut cfg);
         assert!(!cfg.security.auto_approve);
-        set_env("KF_CODE_AUTO_APPROVE", None);
     }
 
     #[test]
@@ -1010,10 +1011,9 @@ mod tests {
         let mut cfg = Config::default();
         assert!(!cfg.tools.dry_run);
 
-        set_env("KF_CODE_DRY_RUN", Some("true"));
+        let _env = set_env("KF_CODE_DRY_RUN", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.tools.dry_run);
-        set_env("KF_CODE_DRY_RUN", None);
     }
 
     #[test]
@@ -1022,40 +1022,36 @@ mod tests {
         let mut cfg = Config::default();
         cfg.tools.dry_run = true;
 
-        set_env("KF_CODE_DRY_RUN", Some("false"));
+        let _env = set_env("KF_CODE_DRY_RUN", Some("false"));
         apply_env_overrides(&mut cfg);
         assert!(!cfg.tools.dry_run);
-        set_env("KF_CODE_DRY_RUN", None);
     }
 
     #[test]
     fn test_env_block_dotfiles() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_BLOCK_DOTFILES", Some("true"));
+        let _env = set_env("KF_CODE_BLOCK_DOTFILES", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.security.block_dotfiles);
-        set_env("KF_CODE_BLOCK_DOTFILES", None);
     }
 
     #[test]
     fn test_env_follow_symlinks() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_FOLLOW_SYMLINKS", Some("true"));
+        let _env = set_env("KF_CODE_FOLLOW_SYMLINKS", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.tools.follow_symlinks);
-        set_env("KF_CODE_FOLLOW_SYMLINKS", None);
     }
 
     #[test]
     fn test_env_block_binary() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_BLOCK_BINARY", Some("true"));
+        let _env = set_env("KF_CODE_BLOCK_BINARY", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.tools.block_binary_reads);
-        set_env("KF_CODE_BLOCK_BINARY", None);
     }
 
     #[test]
@@ -1063,10 +1059,9 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert!(!cfg.tools.minify_write_side);
-        set_env("KF_CODE_MINIFY_WRITE_SIDE", Some("true"));
+        let _env = set_env("KF_CODE_MINIFY_WRITE_SIDE", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.tools.minify_write_side);
-        set_env("KF_CODE_MINIFY_WRITE_SIDE", None);
     }
 
     #[test]
@@ -1074,10 +1069,9 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert_eq!(cfg.tools.minify_above_bytes, 4096);
-        set_env("KF_CODE_MINIFY_ABOVE_BYTES", Some("512"));
+        let _env = set_env("KF_CODE_MINIFY_ABOVE_BYTES", Some("512"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.minify_above_bytes, 512);
-        set_env("KF_CODE_MINIFY_ABOVE_BYTES", None);
     }
 
     #[test]
@@ -1088,11 +1082,12 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         let default_ceiling = cfg.tools.budget_ceiling;
-        set_env("KF_CODE_BUDGET_CEILING", Some("32768"));
-        apply_env_overrides(&mut cfg);
-        assert_eq!(cfg.tools.budget_ceiling, 32_768);
-        set_env("KF_CODE_BUDGET_CEILING", None);
-        // Confirm removal restores the default (no stale leak).
+        {
+            let _env = set_env("KF_CODE_BUDGET_CEILING", Some("32768"));
+            apply_env_overrides(&mut cfg);
+            assert_eq!(cfg.tools.budget_ceiling, 32_768);
+        }
+        // Confirm removal restores the default (no stale leak). Guard dropped above.
         let mut cfg2 = Config::default();
         apply_env_overrides(&mut cfg2);
         assert_eq!(cfg2.tools.budget_ceiling, default_ceiling);
@@ -1103,30 +1098,27 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         let default_ceiling = cfg.tools.budget_ceiling;
-        set_env("KF_CODE_BUDGET_CEILING", Some("not-a-number"));
+        let _env = set_env("KF_CODE_BUDGET_CEILING", Some("not-a-number"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.budget_ceiling, default_ceiling);
-        set_env("KF_CODE_BUDGET_CEILING", None);
     }
 
     #[test]
     fn test_env_max_read_size() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_MAX_READ_SIZE", Some("65536"));
+        let _env = set_env("KF_CODE_MAX_READ_SIZE", Some("65536"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.security.max_file_read_size, 65536);
-        set_env("KF_CODE_MAX_READ_SIZE", None);
     }
 
     #[test]
     fn test_env_bad_max_read_size_ignored() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_MAX_READ_SIZE", Some("not-a-number"));
+        let _env = set_env("KF_CODE_MAX_READ_SIZE", Some("not-a-number"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.security.max_file_read_size, 1024 * 1024);
-        set_env("KF_CODE_MAX_READ_SIZE", None);
     }
 
     #[test]
@@ -1186,21 +1178,21 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
 
-        set_env("KF_CODE_BANG_REQUIRES_APPROVAL", Some("true"));
-        set_env("KF_CODE_JSON_MODE", Some("true"));
-        set_env("KF_CODE_BASH_SANDBOX_WORKDIR", Some("false"));
-        set_env("KF_CODE_BLOCK_GITIGNORED_DOTFILES", Some("false"));
-        set_env("KF_CODE_MAX_OVERWRITE_SIZE", Some("2097152"));
-        set_env("KF_CODE_SUMMARIZE_MODEL", Some("my-summarize-model"));
-        set_env("KF_CODE_ROUTING_ENABLED", Some("true"));
-        set_env("KF_CODE_ROUTER_MODEL", Some("my-router-model"));
-        set_env("KF_CODE_COMMIT_MAX_FILE_SIZE", Some("1048576"));
-        set_env("KF_CODE_PRESERVE_RECENT_MESSAGES", Some("5"));
-        set_env("KF_CODE_MAX_TOOL_CALLS_PER_TURN", Some("25"));
-        set_env("KF_CODE_MAX_PERSONA_TURNS", Some("3"));
-        set_env("KF_CODE_TOOL_TIMEOUT_SECS", Some("60"));
-        set_env("KF_CODE_AUDIT_LOG_PATH", Some("/tmp/kf-audit.ndjson"));
-        set_env("KF_CODE_HOOKS_DIR", Some("/tmp/kf-hooks"));
+        let _env = set_env("KF_CODE_BANG_REQUIRES_APPROVAL", Some("true"));
+        let _e2 = set_env("KF_CODE_JSON_MODE", Some("true"));
+        let _e3 = set_env("KF_CODE_BASH_SANDBOX_WORKDIR", Some("false"));
+        let _e4 = set_env("KF_CODE_BLOCK_GITIGNORED_DOTFILES", Some("false"));
+        let _e5 = set_env("KF_CODE_MAX_OVERWRITE_SIZE", Some("2097152"));
+        let _e6 = set_env("KF_CODE_SUMMARIZE_MODEL", Some("my-summarize-model"));
+        let _e7 = set_env("KF_CODE_ROUTING_ENABLED", Some("true"));
+        let _e8 = set_env("KF_CODE_ROUTER_MODEL", Some("my-router-model"));
+        let _e9 = set_env("KF_CODE_COMMIT_MAX_FILE_SIZE", Some("1048576"));
+        let _e10 = set_env("KF_CODE_PRESERVE_RECENT_MESSAGES", Some("5"));
+        let _e11 = set_env("KF_CODE_MAX_TOOL_CALLS_PER_TURN", Some("25"));
+        let _e12 = set_env("KF_CODE_MAX_PERSONA_TURNS", Some("3"));
+        let _e13 = set_env("KF_CODE_TOOL_TIMEOUT_SECS", Some("60"));
+        let _e14 = set_env("KF_CODE_AUDIT_LOG_PATH", Some("/tmp/kf-audit.ndjson"));
+        let _e15 = set_env("KF_CODE_HOOKS_DIR", Some("/tmp/kf-hooks"));
 
         apply_env_overrides(&mut cfg);
 
@@ -1222,22 +1214,6 @@ mod tests {
             Some(PathBuf::from("/tmp/kf-audit.ndjson"))
         );
         assert_eq!(cfg.tools.hooks_dir, Some(PathBuf::from("/tmp/kf-hooks")));
-
-        set_env("KF_CODE_BANG_REQUIRES_APPROVAL", None);
-        set_env("KF_CODE_JSON_MODE", None);
-        set_env("KF_CODE_BASH_SANDBOX_WORKDIR", None);
-        set_env("KF_CODE_BLOCK_GITIGNORED_DOTFILES", None);
-        set_env("KF_CODE_MAX_OVERWRITE_SIZE", None);
-        set_env("KF_CODE_SUMMARIZE_MODEL", None);
-        set_env("KF_CODE_ROUTING_ENABLED", None);
-        set_env("KF_CODE_ROUTER_MODEL", None);
-        set_env("KF_CODE_COMMIT_MAX_FILE_SIZE", None);
-        set_env("KF_CODE_PRESERVE_RECENT_MESSAGES", None);
-        set_env("KF_CODE_MAX_TOOL_CALLS_PER_TURN", None);
-        set_env("KF_CODE_MAX_PERSONA_TURNS", None);
-        set_env("KF_CODE_TOOL_TIMEOUT_SECS", None);
-        set_env("KF_CODE_AUDIT_LOG_PATH", None);
-        set_env("KF_CODE_HOOKS_DIR", None);
     }
 
     #[test]
@@ -1245,15 +1221,13 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
 
-        set_env("KF_CODE_TOOL_TIMEOUT_SECS", Some("0"));
+        let _env = set_env("KF_CODE_TOOL_TIMEOUT_SECS", Some("0"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.tool_timeout_secs, Some(1));
 
-        set_env("KF_CODE_TOOL_TIMEOUT_SECS", Some("7200"));
+        let _e2 = set_env("KF_CODE_TOOL_TIMEOUT_SECS", Some("7200"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.tool_timeout_secs, Some(3600));
-
-        set_env("KF_CODE_TOOL_TIMEOUT_SECS", None);
     }
 
     #[test]
@@ -1412,10 +1386,9 @@ mod tests {
         let mut cfg = Config::default();
         assert!(cfg.tools.reject_on_excess_plugin_trust);
 
-        set_env("KF_CODE_REJECT_ON_EXCESS_PLUGIN_TRUST", Some("false"));
+        let _env = set_env("KF_CODE_REJECT_ON_EXCESS_PLUGIN_TRUST", Some("false"));
         apply_env_overrides(&mut cfg);
         assert!(!cfg.tools.reject_on_excess_plugin_trust);
-        set_env("KF_CODE_REJECT_ON_EXCESS_PLUGIN_TRUST", None);
     }
 
     #[test]
@@ -1424,33 +1397,30 @@ mod tests {
         let mut cfg = Config::default();
         assert!(cfg.tools.plugin_signature_validation);
 
-        set_env("KF_CODE_PLUGIN_SIGNATURE_VALIDATION", Some("false"));
+        let _env = set_env("KF_CODE_PLUGIN_SIGNATURE_VALIDATION", Some("false"));
         apply_env_overrides(&mut cfg);
         assert!(!cfg.tools.plugin_signature_validation);
-        set_env("KF_CODE_PLUGIN_SIGNATURE_VALIDATION", None);
     }
 
     #[test]
     fn test_env_plugin_public_key_path() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_PLUGIN_PUBLIC_KEY_PATH", Some("/tmp/key.pub"));
+        let _env = set_env("KF_CODE_PLUGIN_PUBLIC_KEY_PATH", Some("/tmp/key.pub"));
         apply_env_overrides(&mut cfg);
         assert_eq!(
             cfg.tools.plugin_public_key_path.as_deref(),
             Some("/tmp/key.pub")
         );
-        set_env("KF_CODE_PLUGIN_PUBLIC_KEY_PATH", None);
     }
 
     #[test]
     fn test_env_plugin_allowed_env_vars() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_PLUGIN_ALLOWED_ENV_VARS", Some("FOO,BAR"));
+        let _env = set_env("KF_CODE_PLUGIN_ALLOWED_ENV_VARS", Some("FOO,BAR"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.plugin_allowed_env_vars, vec!["FOO", "BAR"]);
-        set_env("KF_CODE_PLUGIN_ALLOWED_ENV_VARS", None);
     }
 
     #[test]
@@ -1508,30 +1478,27 @@ mod tests {
         let mut cfg = Config::default();
         assert!(cfg.display.memory_enabled);
 
-        set_env("KF_CODE_MEMORY_ENABLED", Some("false"));
+        let _env = set_env("KF_CODE_MEMORY_ENABLED", Some("false"));
         apply_env_overrides(&mut cfg);
         assert!(!cfg.display.memory_enabled);
-        set_env("KF_CODE_MEMORY_ENABLED", None);
     }
 
     #[test]
     fn test_env_memory_max_tokens() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_MEMORY_MAX_TOKENS", Some("250"));
+        let _env = set_env("KF_CODE_MEMORY_MAX_TOKENS", Some("250"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.display.memory_max_tokens, 250);
-        set_env("KF_CODE_MEMORY_MAX_TOKENS", None);
     }
 
     #[test]
     fn test_env_memory_top_n() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_MEMORY_TOP_N", Some("5"));
+        let _env = set_env("KF_CODE_MEMORY_TOP_N", Some("5"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.display.memory_top_n, 5);
-        set_env("KF_CODE_MEMORY_TOP_N", None);
     }
 
     #[test]
@@ -1539,10 +1506,9 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert!(cfg.display.memory_auto_populate);
-        set_env("KF_CODE_MEMORY_AUTO_POPULATE", Some("false"));
+        let _env = set_env("KF_CODE_MEMORY_AUTO_POPULATE", Some("false"));
         apply_env_overrides(&mut cfg);
         assert!(!cfg.display.memory_auto_populate);
-        set_env("KF_CODE_MEMORY_AUTO_POPULATE", None);
     }
 
     #[test]
@@ -1550,10 +1516,9 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert!(cfg.display.memory_show_in_status);
-        set_env("KF_CODE_MEMORY_SHOW_IN_STATUS", Some("false"));
+        let _env = set_env("KF_CODE_MEMORY_SHOW_IN_STATUS", Some("false"));
         apply_env_overrides(&mut cfg);
         assert!(!cfg.display.memory_show_in_status);
-        set_env("KF_CODE_MEMORY_SHOW_IN_STATUS", None);
     }
 
     #[test]
@@ -1598,10 +1563,9 @@ mod tests {
     fn test_env_checkpoint_interval_messages() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_CHECKPOINT_INTERVAL_MESSAGES", Some("20"));
+        let _env = set_env("KF_CODE_CHECKPOINT_INTERVAL_MESSAGES", Some("20"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.session.checkpoint_interval_messages, 20);
-        set_env("KF_CODE_CHECKPOINT_INTERVAL_MESSAGES", None);
     }
 
     #[test]
@@ -1744,16 +1708,16 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
 
-        set_env("KF_CODE_ANTHROPIC_PROVIDER", Some("vertex"));
-        set_env("KF_CODE_AWS_REGION", Some("eu-west-1"));
-        set_env("KF_CODE_GCP_PROJECT_ID", Some("p2"));
-        set_env("KF_CODE_GCP_REGION", Some("europe-west1"));
-        set_env("KF_CODE_GCP_SERVICE_ACCOUNT_PATH", Some("/tmp/p2.json"));
-        set_env("KF_CODE_COMPUTER_USE_ENABLED", Some("true"));
-        set_env("KF_CODE_COMPUTER_USE_WIDTH", Some("1366"));
-        set_env("KF_CODE_COMPUTER_USE_HEIGHT", Some("768"));
-        set_env("KF_CODE_COMPUTER_USE_STARTUP_TIMEOUT", Some("60"));
-        set_env("KF_CODE_COMPUTER_USE_WAIT_TIMEOUT", Some("20"));
+        let _env = set_env("KF_CODE_ANTHROPIC_PROVIDER", Some("vertex"));
+        let _e2 = set_env("KF_CODE_AWS_REGION", Some("eu-west-1"));
+        let _e3 = set_env("KF_CODE_GCP_PROJECT_ID", Some("p2"));
+        let _e4 = set_env("KF_CODE_GCP_REGION", Some("europe-west1"));
+        let _e5 = set_env("KF_CODE_GCP_SERVICE_ACCOUNT_PATH", Some("/tmp/p2.json"));
+        let _e6 = set_env("KF_CODE_COMPUTER_USE_ENABLED", Some("true"));
+        let _e7 = set_env("KF_CODE_COMPUTER_USE_WIDTH", Some("1366"));
+        let _e8 = set_env("KF_CODE_COMPUTER_USE_HEIGHT", Some("768"));
+        let _e9 = set_env("KF_CODE_COMPUTER_USE_STARTUP_TIMEOUT", Some("60"));
+        let _e10 = set_env("KF_CODE_COMPUTER_USE_WAIT_TIMEOUT", Some("20"));
 
         apply_env_overrides(&mut cfg);
 
@@ -1770,17 +1734,6 @@ mod tests {
         assert_eq!(cfg.security.computer_use.height, 768);
         assert_eq!(cfg.security.computer_use.startup_timeout_secs, 60);
         assert_eq!(cfg.security.computer_use.wait_timeout_secs, 20);
-
-        set_env("KF_CODE_ANTHROPIC_PROVIDER", None);
-        set_env("KF_CODE_AWS_REGION", None);
-        set_env("KF_CODE_GCP_PROJECT_ID", None);
-        set_env("KF_CODE_GCP_REGION", None);
-        set_env("KF_CODE_GCP_SERVICE_ACCOUNT_PATH", None);
-        set_env("KF_CODE_COMPUTER_USE_ENABLED", None);
-        set_env("KF_CODE_COMPUTER_USE_WIDTH", None);
-        set_env("KF_CODE_COMPUTER_USE_HEIGHT", None);
-        set_env("KF_CODE_COMPUTER_USE_STARTUP_TIMEOUT", None);
-        set_env("KF_CODE_COMPUTER_USE_WAIT_TIMEOUT", None);
     }
 
     #[test]
@@ -1799,39 +1752,36 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert!(!cfg.tools.scheduled_bash_auto_approve);
-        set_env("KF_CODE_SCHEDULED_BASH_AUTO_APPROVE", Some("true"));
+        let _env = set_env("KF_CODE_SCHEDULED_BASH_AUTO_APPROVE", Some("true"));
         apply_env_overrides(&mut cfg);
         assert!(cfg.tools.scheduled_bash_auto_approve);
-        set_env("KF_CODE_SCHEDULED_BASH_AUTO_APPROVE", None);
     }
 
     #[test]
     fn test_env_max_concurrent_scheduled_jobs_is_clamped() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS", Some("0"));
+        let _env = set_env("KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS", Some("0"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.max_concurrent_scheduled_jobs, 1);
-        set_env("KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS", Some("8"));
+        let _e2 = set_env("KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS", Some("8"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.max_concurrent_scheduled_jobs, 8);
-        set_env("KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS", None);
     }
 
     #[test]
     fn test_env_max_background_tasks_is_clamped() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_MAX_BACKGROUND_TASKS", Some("0"));
+        let _env = set_env("KF_CODE_MAX_BACKGROUND_TASKS", Some("0"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.max_background_tasks, 1);
-        set_env("KF_CODE_MAX_BACKGROUND_TASKS", Some("16"));
+        let _e2 = set_env("KF_CODE_MAX_BACKGROUND_TASKS", Some("16"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.max_background_tasks, 16);
-        set_env("KF_CODE_MAX_BACKGROUND_TASKS", Some("100"));
+        let _e3 = set_env("KF_CODE_MAX_BACKGROUND_TASKS", Some("100"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.max_background_tasks, 64);
-        set_env("KF_CODE_MAX_BACKGROUND_TASKS", None);
     }
 
     #[test]
@@ -1839,19 +1789,18 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
         assert_eq!(cfg.tools.task_concurrency_mode, "queue");
-        set_env("KF_CODE_TASK_CONCURRENCY_MODE", Some("reject"));
+        let _env = set_env("KF_CODE_TASK_CONCURRENCY_MODE", Some("reject"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.task_concurrency_mode, "reject");
-        set_env("KF_CODE_TASK_CONCURRENCY_MODE", Some("QUEUE"));
+        let _e2 = set_env("KF_CODE_TASK_CONCURRENCY_MODE", Some("QUEUE"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.tools.task_concurrency_mode, "queue");
-        set_env("KF_CODE_TASK_CONCURRENCY_MODE", Some("invalid"));
+        let _e3 = set_env("KF_CODE_TASK_CONCURRENCY_MODE", Some("invalid"));
         apply_env_overrides(&mut cfg);
         assert_eq!(
             cfg.tools.task_concurrency_mode, "queue",
             "invalid value should not change mode"
         );
-        set_env("KF_CODE_TASK_CONCURRENCY_MODE", None);
     }
 
     #[test]
@@ -1930,18 +1879,16 @@ mod tests {
     fn test_env_request_timeout_override_and_clamp() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        set_env("KF_CODE_REQUEST_TIMEOUT_SECS", Some("0"));
+        let _env = set_env("KF_CODE_REQUEST_TIMEOUT_SECS", Some("0"));
         apply_env_overrides(&mut cfg);
         assert_eq!(
             cfg.model.request_timeout_secs, 1,
             "env zero timeout must be clamped"
         );
 
-        set_env("KF_CODE_REQUEST_TIMEOUT_SECS", Some("45"));
+        let _e2 = set_env("KF_CODE_REQUEST_TIMEOUT_SECS", Some("45"));
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.model.request_timeout_secs, 45);
-
-        set_env("KF_CODE_REQUEST_TIMEOUT_SECS", None);
     }
 
     #[test]
@@ -2123,7 +2070,7 @@ mod tests {
             "adapter_routing defaults to empty"
         );
 
-        set_env(
+        let _env = set_env(
             "KF_CODE_ADAPTER_ROUTING",
             Some("grok-=OpenAiCompat,my-llm=Ollama"),
         );
@@ -2137,7 +2084,6 @@ mod tests {
             cfg.model.adapter_routing.get("my-llm"),
             Some(&"Ollama".to_string())
         );
-        set_env("KF_CODE_ADAPTER_ROUTING", None);
     }
 
     #[test]
@@ -2145,13 +2091,12 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
 
-        set_env("KF_CODE_ADAPTER_ROUTING", Some(""));
+        let _env = set_env("KF_CODE_ADAPTER_ROUTING", Some(""));
         apply_env_overrides(&mut cfg);
         assert!(
             cfg.model.adapter_routing.is_empty(),
             "empty env value should not populate adapter_routing"
         );
-        set_env("KF_CODE_ADAPTER_ROUTING", None);
     }
 
     #[test]
@@ -2210,7 +2155,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        std::env::set_var("KF_CODE_DATA_DIR", dir.as_os_str());
+        let _env =
+            crate::shared::test_util::EnvGuard::set("KF_CODE_DATA_DIR", dir.to_str().unwrap());
         let config_path = super::super::config_path();
         assert!(!config_path.exists(), "precondition: no config yet");
 
@@ -2228,7 +2174,6 @@ mod tests {
         );
         let _cfg2 = load_or_create_config();
 
-        std::env::remove_var("KF_CODE_DATA_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2255,11 +2200,11 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=32 (31 direct + subagent_provider sub-struct handle),
+        // ModelConfig=33 (32 direct + subagent_provider sub-struct handle),
         // SecurityConfig=22, ToolConfig=33, SessionConfig=8,
-        // DisplayConfig=7 → 102 total pub fields.
+        // DisplayConfig=7 → 103 total pub fields.
         assert_eq!(
-            CONFIG_FIELD_COUNT, 102,
+            CONFIG_FIELD_COUNT, 103,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2275,6 +2220,7 @@ mod tests {
             block_dotfiles = true
             max_file_read_size = 999
             request_timeout_secs = 999
+            streaming_timeout_secs = 999
             follow_symlinks = true
             block_binary_reads = true
             minify_write_side = true
@@ -2378,9 +2324,9 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 69 top-level leaf keys + 9 array keys + 3 single-key inline
-        // tables + 7 computer_use sub-keys + 7 subagent_provider sub-keys = 95
-        const MERGE_TOML_EXPECTED: usize = 95;
+        // 70 top-level leaf keys + 9 array keys + 3 single-key inline
+        // tables + 7 computer_use sub-keys + 7 subagent_provider sub-keys = 96
+        const MERGE_TOML_EXPECTED: usize = 96;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2398,9 +2344,9 @@ mod tests {
             + env_overrides_src.matches("\"DEEPSEEK_API_KEY\"").count()
             + env_overrides_src.matches("\"GEMINI_API_KEY\"").count()
             + env_overrides_src.matches("\"KIMI_API_KEY\"").count();
-        // 86 KF_CODE_* literals (77 base + 7 KF_CODE_SUBAGENT_* + 2 bash
-        // allowlist) + 5 API-key literals = 91
-        const ENV_OVERRIDE_EXPECTED: usize = 91;
+        // 87 KF_CODE_* literals (77 base + 7 KF_CODE_SUBAGENT_* + 2 bash
+        // allowlist + 1 streaming_timeout_secs) + 5 API-key literals = 92
+        const ENV_OVERRIDE_EXPECTED: usize = 92;
         assert_eq!(
             env_var_count, ENV_OVERRIDE_EXPECTED,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
@@ -2485,7 +2431,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        std::env::set_var("KF_CODE_DATA_DIR", dir.as_os_str());
+        let _env =
+            crate::shared::test_util::EnvGuard::set("KF_CODE_DATA_DIR", dir.to_str().unwrap());
         let path = super::super::config_path();
         std::fs::write(
             &path,
@@ -2526,7 +2473,6 @@ mod tests {
             "user's budget_ceiling wiped on save:\n{on_disk}"
         );
 
-        std::env::remove_var("KF_CODE_DATA_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2551,8 +2497,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        std::env::set_var("KF_CODE_DATA_DIR", dir.as_os_str());
-        std::env::remove_var("KF_CODE_LEGACY_DATA_DIR");
+        let _env1 =
+            crate::shared::test_util::EnvGuard::set("KF_CODE_DATA_DIR", dir.to_str().unwrap());
+        let _env2 = crate::shared::test_util::EnvGuard::remove("KF_CODE_LEGACY_DATA_DIR");
         let path = super::super::config_path();
         // Seed a config with a user customization.
         std::fs::write(
@@ -2575,7 +2522,6 @@ mod tests {
             "config file on disk was overwritten with defaults:\n{on_disk}"
         );
 
-        std::env::remove_var("KF_CODE_DATA_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2620,8 +2566,12 @@ mod tests {
         )
         .unwrap();
 
-        std::env::set_var("KF_CODE_DATA_DIR", new_dir.as_os_str());
-        std::env::set_var("KF_CODE_LEGACY_DATA_DIR", legacy_dir.as_os_str());
+        let _env1 =
+            crate::shared::test_util::EnvGuard::set("KF_CODE_DATA_DIR", new_dir.to_str().unwrap());
+        let _env2 = crate::shared::test_util::EnvGuard::set(
+            "KF_CODE_LEGACY_DATA_DIR",
+            legacy_dir.to_str().unwrap(),
+        );
         let new_path = super::super::config_path();
         assert!(!new_path.exists(), "precondition: new config absent");
 
@@ -2640,8 +2590,6 @@ mod tests {
             "migrated file must contain user values, got:\n{on_disk}"
         );
 
-        std::env::remove_var("KF_CODE_DATA_DIR");
-        std::env::remove_var("KF_CODE_LEGACY_DATA_DIR");
         let _ = std::fs::remove_dir_all(&new_dir);
         let _ = std::fs::remove_dir_all(&legacy_dir);
     }

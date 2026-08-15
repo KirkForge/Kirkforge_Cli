@@ -10,6 +10,35 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+## Session 2026-08-16 — kf-rbac JWT test speedup (worktree `.worktrees/wo-jwks`, branch `wo/fake-jwks`)
+
+### What changed this session
+
+- **Eliminated real network + RSA-keygen cost from kf-rbac JWT tests.**
+  Injected a `JwksResolver` trait (`crates/kf-rbac/src/jwt.rs`) so the JWKS
+  fetch is the only network step in `verify_jwt` and tests can inject an
+  in-memory fake. Production keeps `HttpJwksResolver` (wraps the existing
+  OIDC-discovery + reqwest path verbatim; no behaviour change). The 8 slow
+  JWT tests dropped from 17-179s each (690.8s total, ~27% of the kf-rbac
+  suite wall time) to <0.07s each (<0.5s total). Root cause was two
+  compounding issues, NOT the JWKS network path the task brief assumed:
+  1. **RSA-2048 keygen per nextest process (7 of 8 tests).** `rsa::RsaPrivateKey::new(&mut rng, 2048)` ran in each nextest process (nextest isolates each test in its own process by default); the `OnceLock<RsaKey>` only shared within a single process, so every `*_local_jwks` test paid the full keygen cost (10-50s in a debug test binary). Replaced with two precomputed RSA-2048 keypairs embedded as PEM + base64url-JWK consts (`TEST_KEY_*`, `ATTACKER_KEY_*`). `EncodingKey::from_rsa_pem` parses the PEM in ~1ms. ES256 (P-256) keygen stays runtime-generated (~1ms, already fast).
+  2. **Real HTTP to an unreachable host (1 of 8 tests).** `verify_returns_invalid_token_when_jwks_unreachable` passed `jwks_set: None`, hitting `fetch_jwks` → `discover_jwks_uri` → real reqwest GET to `https://auth-unreachable.example.com/.well-known/openid-configuration` (DNS + connect timeout). Split into: (a) `verify_returns_invalid_token_when_resolver_fails` — injects `FailingJwksResolver` (returns `Err(invalid_token(...))` instantly), preserves the assertion (InvalidToken + "JWT verification failed"); (b) `verify_returns_invalid_token_when_jwks_unreachable_network` — `#[ignore]`d real-network smoke test (the task's required real-HTTP proof), run via `--run-ignored only` or a nightly profile.
+- **No tests deleted, no red→green `#[ignore]`.** 58 tests pass + 2 skipped (pre-existing `es512_verifier_gap_is_documented` WO 32.10 + the new network smoke test). The assertion count is preserved; the `#[ignore]`d test is the real-HTTP proof, not a hack.
+- **Impact:** LOW. `verify_jwt` / `fetch_jwks` / `VerifyJwtOptions` have ZERO callers outside `crates/kf-rbac/` (grep confirmed; no other workspace crate lists `kf-rbac` in `[dependencies]`). gitnexus index is for the main checkout and does not include kf-rbac crate symbols, so `impact()` returned "not found" — grep is the source of truth here.
+- **Files:** `crates/kf-rbac/src/jwt.rs` (+`JwksResolver` trait + `HttpJwksResolver` + `VerifyJwtOptions.resolver` field + manual `Debug` impl; renamed `fetch_jwks` → `http_fetch_jwks`), `crates/kf-rbac/src/lib.rs` (re-export `JwksResolver` + `HttpJwksResolver`), `crates/kf-rbac/tests/jwt.rs` (precomputed RSA keys, `FailingJwksResolver` fake, split unreachable test).
+
+### Gate (HEAD on `wo/fake-jwks`)
+- `cargo clippy -p kf-rbac --all-targets -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-rbac`: 58 passed, 2 skipped, 0.182s total
+- Top-10 durations (libtest-json + python sort): all 8 former-slow tests now ≤0.069s (was 17-179s each).
+
+### Pending
+- None from this task.
+
+---
+
 ## Session 2026-08-15 — Phase 1: kill remaining test sleeps (worktree `.worktrees/wo-sleeps`)
 
 ### What changed this session

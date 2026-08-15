@@ -9,8 +9,8 @@ pub mod rbac;
 pub use api_key::actor_from_api_key;
 pub use error::{AuthError, AuthErrorCode};
 pub use jwt::{
-    actor_from_jwt, clear_jwks_cache, validate_jwt_claims, verify_jwt, Aud, JwtClaims, OidcConfig,
-    VerifyJwtOptions, ALLOWED_ALGORITHMS,
+    actor_from_jwt, clear_jwks_cache, validate_jwt_claims, verify_jwt, Aud, HttpJwksResolver,
+    JwksResolver, JwtClaims, OidcConfig, VerifyJwtOptions, ALLOWED_ALGORITHMS,
 };
 pub use rbac::{
     authorize, authorize_tenant, has_permission, resolve_role, role_permissions, Actor,

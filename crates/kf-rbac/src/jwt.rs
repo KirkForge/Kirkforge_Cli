@@ -19,6 +19,45 @@ use std::collections::HashSet;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
+// ── JWKS resolver trait ─────────────────────────────────────────────────────
+//
+// The JWKS fetch is the only network step in `verify_jwt`. Extracting it
+// behind a trait lets tests inject an in-memory fake (instant, no DNS, no
+// connect timeout) while production keeps the real reqwest-based resolver.
+// `verify_jwt` reads the resolver from `VerifyJwtOptions::resolver`; when
+// unset it falls back to `HttpJwksResolver`, so existing call sites are
+// unchanged.
+
+/// Resolves a JWKS set for a given OIDC config. The HTTP path lives in
+/// `HttpJwksResolver`; tests inject a fake.
+pub trait JwksResolver: Send + Sync {
+    fn fetch_jwks<'a>(
+        &self,
+        config: &'a OidcConfig,
+        opts: &'a VerifyJwtOptions,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Arc<Value>, AuthError>> + Send + 'a>,
+    >;
+}
+
+/// Production JWKS resolver: OIDC discovery + reqwest fetch, with an
+/// issuer-keyed in-memory cache. Wraps the pre-trait `fetch_jwks` body
+/// verbatim — no behaviour change.
+#[derive(Debug, Default, Clone)]
+pub struct HttpJwksResolver;
+
+impl JwksResolver for HttpJwksResolver {
+    fn fetch_jwks<'a>(
+        &self,
+        config: &'a OidcConfig,
+        opts: &'a VerifyJwtOptions,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Arc<Value>, AuthError>> + Send + 'a>,
+    > {
+        Box::pin(http_fetch_jwks(config, opts))
+    }
+}
+
 /// The 10 OIDC algorithms the TS source allows (the policy list, verbatim).
 /// No algorithm is dropped from the policy.
 pub const ALLOWED_ALGORITHMS: &[&str] = &[
@@ -183,7 +222,7 @@ pub fn actor_from_jwt(
 
 // ── Full JWT verification (signature + JWKS) ────────────────────────────────
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct VerifyJwtOptions {
     /// Allowable clock skew in seconds. Default 30.
     pub clock_skew_sec: Option<u64>,
@@ -196,6 +235,26 @@ pub struct VerifyJwtOptions {
     /// Local JWKS set for testing / pre-fetched keys. Bypasses the network.
     /// Shape: `{ "keys": [ {jwk}, ... ] }`.
     pub jwks_set: Option<Value>,
+    /// Injectable JWKS resolver. When set, replaces the default HTTP path
+    /// (`HttpJwksResolver`). Tests inject a fake to avoid network waits;
+    /// production leaves this `None`.
+    pub resolver: Option<Arc<dyn JwksResolver>>,
+}
+
+impl std::fmt::Debug for VerifyJwtOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VerifyJwtOptions")
+            .field("clock_skew_sec", &self.clock_skew_sec)
+            .field("required_scopes", &self.required_scopes)
+            .field("jwks_uri", &self.jwks_uri)
+            .field("timeout_ms", &self.timeout_ms)
+            .field("jwks_set", &self.jwks_set)
+            .field(
+                "resolver",
+                &self.resolver.as_ref().map(|_| "<JwksResolver>"),
+            )
+            .finish()
+    }
 }
 
 // Global JWKS cache keyed by issuer URL. Faithful to the TS clearJwksCache hook.
@@ -295,7 +354,11 @@ pub async fn verify_jwt(
     let jwks_value: Arc<Value> = if let Some(local) = opts.jwks_set.clone() {
         Arc::new(local)
     } else {
-        fetch_jwks(config, &opts).await?
+        let resolver = opts
+            .resolver
+            .clone()
+            .unwrap_or_else(|| Arc::new(HttpJwksResolver));
+        resolver.fetch_jwks(config, &opts).await?
     };
 
     let jwks: JwkSet = serde_json::from_value((*jwks_value).clone())
@@ -340,7 +403,10 @@ pub async fn verify_jwt(
     Ok(claims)
 }
 
-async fn fetch_jwks(config: &OidcConfig, opts: &VerifyJwtOptions) -> Result<Arc<Value>, AuthError> {
+async fn http_fetch_jwks(
+    config: &OidcConfig,
+    opts: &VerifyJwtOptions,
+) -> Result<Arc<Value>, AuthError> {
     let issuer_key = config.issuer.clone();
     if let Some(cached) = JWKS_CACHE.lock().unwrap().get(&issuer_key) {
         return Ok(cached.clone());

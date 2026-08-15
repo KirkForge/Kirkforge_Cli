@@ -27,6 +27,7 @@
 
 use crate::adapters::anthropic_bedrock::parse_bedrock_event_stream;
 use crate::adapters::bedrock_signing::{sign_request, tests::env_lock, SignedRequest};
+use crate::shared::test_util::EnvGuard;
 use crate::shared::StreamEvent;
 use wiremock::matchers::{header_exists, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -48,54 +49,15 @@ impl wiremock::Match for SigV4Authorization {
     }
 }
 
-/// Hold fake AWS env credentials for the duration of a test, restoring the
-/// previous values (or unsetting) on drop. sign_request reads these from env.
-struct AwsCredsGuard {
-    prev_access: Option<String>,
-    prev_secret: Option<String>,
-    prev_session: Option<String>,
-}
-
-impl AwsCredsGuard {
-    fn install() -> Self {
-        let prev_access = std::env::var("AWS_ACCESS_KEY_ID").ok();
-        let prev_secret = std::env::var("AWS_SECRET_ACCESS_KEY").ok();
-        let prev_session = std::env::var("AWS_SESSION_TOKEN").ok();
-        std::env::set_var("AWS_ACCESS_KEY_ID", "AKIATEST");
-        std::env::set_var("AWS_SECRET_ACCESS_KEY", "secretkey");
-        std::env::remove_var("AWS_SESSION_TOKEN");
-        Self {
-            prev_access,
-            prev_secret,
-            prev_session,
-        }
-    }
-}
-
-impl Drop for AwsCredsGuard {
-    fn drop(&mut self) {
-        match self.prev_access.take() {
-            Some(v) => std::env::set_var("AWS_ACCESS_KEY_ID", v),
-            None => std::env::remove_var("AWS_ACCESS_KEY_ID"),
-        }
-        match self.prev_secret.take() {
-            Some(v) => std::env::set_var("AWS_SECRET_ACCESS_KEY", v),
-            None => std::env::remove_var("AWS_SECRET_ACCESS_KEY"),
-        }
-        match self.prev_session.take() {
-            Some(v) => std::env::set_var("AWS_SESSION_TOKEN", v),
-            None => std::env::remove_var("AWS_SESSION_TOKEN"),
-        }
-    }
-}
-
 /// Sign a request with fake env credentials, holding the shared env lock only
-/// for the synchronous sign call (never across an `.await`). The guard is
-/// dropped before return, so the caller's subsequent HTTP awaits never touch
-/// the env — the request is already signed.
+/// for the synchronous sign call (never across an `.await`). The EnvGuards
+/// are dropped before return, so the caller's subsequent HTTP awaits never
+/// touch the env — the request is already signed.
 fn sign_with_fake_creds(url: &str, body: &[u8], region: &str) -> SignedRequest {
     let _env = env_lock().lock().unwrap();
-    let _creds = AwsCredsGuard::install();
+    let _g1 = EnvGuard::set("AWS_ACCESS_KEY_ID", "AKIATEST");
+    let _g2 = EnvGuard::set("AWS_SECRET_ACCESS_KEY", "secretkey");
+    let _g3 = EnvGuard::remove("AWS_SESSION_TOKEN");
     sign_request(url, body, region).expect("sign_request")
 }
 

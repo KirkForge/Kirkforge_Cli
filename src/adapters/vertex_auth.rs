@@ -56,12 +56,11 @@ pub async fn service_account_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::EnvGuard;
 
     #[tokio::test]
     async fn service_account_token_fails_without_path_or_env() {
-        let env_key = "GOOGLE_APPLICATION_CREDENTIALS";
-        let prev = std::env::var(env_key).ok();
-        std::env::remove_var(env_key);
+        let _env = EnvGuard::remove("GOOGLE_APPLICATION_CREDENTIALS");
         let result =
             service_account_token(None, &["https://www.googleapis.com/auth/cloud-platform"]).await;
         assert!(result.is_err());
@@ -69,9 +68,6 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("no GCP service account configured"));
-        if let Some(v) = prev {
-            std::env::set_var(env_key, v)
-        }
     }
 
     #[tokio::test]

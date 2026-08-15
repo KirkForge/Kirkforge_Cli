@@ -546,6 +546,7 @@ impl DaemonState {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::shared::test_util::EnvGuard;
 
     fn entry(id: &str, path: &str) -> SessionEntry {
         SessionEntry {
@@ -558,26 +559,23 @@ mod tests {
     }
 
     /// Set `KF_CODE_DATA_DIR` to an empty temporary directory for the
-    /// duration of the test. Returns the temp dir and the previous env
-    /// value so it can be restored.
-    fn with_empty_data_dir() -> (tempfile::TempDir, Option<String>) {
-        let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
-        (dir, previous)
+    /// duration of the test. Returns a guard that restores the env and
+    /// drops the temp dir on Drop.
+    struct DataDirGuard {
+        _dir: tempfile::TempDir,
+        _env: EnvGuard,
     }
 
-    fn restore_data_dir(previous: Option<String>) {
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
+    fn with_empty_data_dir() -> DataDirGuard {
+        let dir = tempfile::tempdir().unwrap();
+        let env = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+        DataDirGuard { _dir: dir, _env: env }
     }
 
     #[test]
     fn touch_moves_entry_to_front() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
-        let (_dir, previous) = with_empty_data_dir();
+        let _dir = with_empty_data_dir();
 
         let mut state = DaemonState::new();
         state.recent.push_back(entry("a", "/a"));
@@ -588,14 +586,12 @@ mod tests {
         assert_eq!(state.recent[0].id, "b");
         assert_eq!(state.recent[0].path, std::path::PathBuf::from("/b2"));
         assert_eq!(state.recent.len(), 3);
-
-        restore_data_dir(previous);
     }
 
     #[test]
     fn touch_adds_unknown_entry() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
-        let (_dir, previous) = with_empty_data_dir();
+        let _dir = with_empty_data_dir();
 
         let mut state = DaemonState::new();
         state.recent.push_back(entry("a", "/a"));
@@ -605,14 +601,12 @@ mod tests {
         // Unknown entries refresh from disk, so the synthetic in-memory "a"
         // is replaced by whatever is on disk (nothing, in the empty temp dir).
         assert_eq!(state.recent.len(), 1);
-
-        restore_data_dir(previous);
     }
 
     #[test]
     fn check_auth_allows_when_no_token_configured() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
-        let (_dir, previous) = with_empty_data_dir();
+        let _dir = with_empty_data_dir();
         let state = DaemonState::new();
         assert!(
             state.check_auth(None).is_ok(),
@@ -622,13 +616,12 @@ mod tests {
             state.check_auth(Some("anything")).is_ok(),
             "no token configured, any token should pass"
         );
-        restore_data_dir(previous);
     }
 
     #[test]
     fn check_auth_rejects_missing_or_wrong_token() {
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
-        let (_dir, previous) = with_empty_data_dir();
+        let _dir = with_empty_data_dir();
         let mut state = DaemonState::new();
         state.expected_token = Some("secret-token".to_string());
         assert!(
@@ -643,7 +636,6 @@ mod tests {
             state.check_auth(Some("secret-token")).is_ok(),
             "correct token should pass"
         );
-        restore_data_dir(previous);
     }
 
     #[test]
@@ -651,10 +643,11 @@ mod tests {
         use std::time::Duration;
 
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
-        let (dir, previous) = with_empty_data_dir();
+        let dir = with_empty_data_dir();
+        let dir_path = dir._dir.path().to_path_buf();
 
         // Create real session files so the daemon's refresh sees them.
-        let sessions_dir = dir.path().join("sessions");
+        let sessions_dir = dir_path.join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         for i in 0..10 {
             let path = sessions_dir.join(format!("s{i}.conv.ndjson"));
@@ -670,7 +663,5 @@ mod tests {
         }
         assert_eq!(state.recent.len(), RECENT_SESSIONS_LIMIT);
         assert_eq!(state.recent[0].id, "s9");
-
-        restore_data_dir(previous);
     }
 }

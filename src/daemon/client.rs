@@ -586,6 +586,7 @@ pub use windows_imp::*;
 mod tests {
     use super::unix_imp::DaemonClient;
     use crate::daemon::{read_line_limited, Response, MAX_FRAME_SIZE};
+    use crate::shared::test_util::EnvGuard;
     use tokio::io::{AsyncWriteExt, BufStream};
     use tokio::net::UnixListener;
     use tokio::time::{sleep, Duration};
@@ -640,21 +641,13 @@ mod tests {
         });
 
         // Shrink the inner READ_TIMEOUT so the test does not wait 30s.
-        let prior = std::env::var("KF_TEST_DAEMON_READ_TIMEOUT_MS").ok();
-        // SAFETY: env var is read only by client.rs test helpers; setting
-        // it here only affects this test's connect_at call.
-        std::env::set_var("KF_TEST_DAEMON_READ_TIMEOUT_MS", "100");
+        let _env = EnvGuard::set("KF_TEST_DAEMON_READ_TIMEOUT_MS", "100");
 
         // Outer bound so a regression (timeout wrap removed in call())
         // fails the test instead of hanging the suite.
         let connect = DaemonClient::connect_at(socket);
         let result = tokio::time::timeout(Duration::from_secs(2), connect).await;
 
-        // Restore env before asserting so a panic does not leak.
-        match prior {
-            Some(v) => std::env::set_var("KF_TEST_DAEMON_READ_TIMEOUT_MS", v),
-            None => std::env::remove_var("KF_TEST_DAEMON_READ_TIMEOUT_MS"),
-        }
         accept_handle.abort();
 
         // Outer timeout should NOT have fired — connect_at should have
@@ -685,11 +678,7 @@ mod tests {
 
         let token_path = dir.path().join("token");
         std::fs::write(&token_path, "server-secret").unwrap();
-        let prior_token = std::env::var("KF_CODE_DAEMON_TOKEN_FILE").ok();
-        // SAFETY: test holds test_data_dir_lock; no neighbour test sets
-        // this var (server.rs's auth tests remove it on a different code
-        // path and don't run concurrently with this one).
-        std::env::set_var(
+        let _env = EnvGuard::set(
             "KF_CODE_DAEMON_TOKEN_FILE",
             token_path.to_string_lossy().as_ref(),
         );
@@ -708,12 +697,6 @@ mod tests {
         // Swap the file contents so the client now reads a wrong token.
         std::fs::write(&token_path, "wrong-secret").unwrap();
         let result = client.list_recent().await;
-
-        // Restore env before asserting so a panic does not leak.
-        match &prior_token {
-            Some(v) => std::env::set_var("KF_CODE_DAEMON_TOKEN_FILE", v),
-            None => std::env::remove_var("KF_CODE_DAEMON_TOKEN_FILE"),
-        }
 
         assert!(
             result.is_err(),
@@ -815,8 +798,7 @@ mod tests {
     async fn client_round_trips_ping_touch_list_resolve() {
         let _guard = crate::session::test_data_dir_lock().lock().await;
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -849,11 +831,6 @@ mod tests {
 
         assert!(!socket.exists(), "daemon left stale socket");
         assert!(!pid.exists(), "daemon left stale pid file");
-
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 }
 

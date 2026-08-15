@@ -489,6 +489,7 @@ async fn write_response(stream: &mut BufStream<UnixStream>, resp: Response) -> a
 mod tests {
     use super::*;
     use crate::daemon::client::DaemonClient;
+    use crate::shared::test_util::EnvGuard;
     use tokio::time::{sleep, Duration};
 
     #[tokio::test]
@@ -536,8 +537,7 @@ mod tests {
     async fn client_server_round_trip() {
         let _guard = crate::session::test_data_dir_lock().lock().await;
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var("KF_CODE_DATA_DIR").ok();
-        std::env::set_var("KF_CODE_DATA_DIR", dir.path());
+        let _env = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -587,11 +587,6 @@ mod tests {
 
         assert!(!socket.exists(), "daemon left stale socket");
         assert!(!pid.exists(), "daemon left stale pid file");
-
-        match previous {
-            Some(v) => std::env::set_var("KF_CODE_DATA_DIR", v),
-            None => std::env::remove_var("KF_CODE_DATA_DIR"),
-        }
     }
 
     #[tokio::test]
@@ -797,7 +792,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let token_path = dir.path().join("token");
         std::fs::write(&token_path, "secret-token-value").unwrap();
-        std::env::set_var(
+        let _env = EnvGuard::set(
             "KF_CODE_DAEMON_TOKEN_FILE",
             token_path.to_string_lossy().as_ref(),
         );
@@ -816,8 +811,6 @@ mod tests {
             state.check_auth(Some("secret-token-value")).is_ok(),
             "correct token should be accepted"
         );
-
-        std::env::remove_var("KF_CODE_DAEMON_TOKEN_FILE");
     }
 
     // WO 19.5: daemon allows all ops when no auth token is configured.
@@ -825,7 +818,7 @@ mod tests {
     async fn daemon_allows_all_when_no_auth_configured() {
         use crate::daemon::DaemonState;
 
-        std::env::remove_var("KF_CODE_DAEMON_TOKEN_FILE");
+        let _env = EnvGuard::remove("KF_CODE_DAEMON_TOKEN_FILE");
         let state = DaemonState::new();
         assert!(
             state.check_auth(None).is_ok(),

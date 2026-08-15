@@ -985,8 +985,8 @@ comparison.
 
 ### Coverage gate (WO 12.9, ADR-065; per-crate regression gate WO 28.7)
 
-The CI `coverage` job (now in `ci-merge.yml` + `ci-nightly.yml`; was in the
-deleted `ci.yml`) runs `cargo llvm-cov --workspace --lcov
+The CI `coverage` job (now in `ci-nightly.yml`; was in the old
+monolithic workflow that was split in WO 33.3) runs `cargo llvm-cov --workspace --lcov
 --output-path lcov.info` and uploads `lcov.info` as an artifact.
 `scripts/check-cov-regression.sh` (WO 28.7) parses that lcov per-crate
 (by source-path prefix) and fails if any crate drops >1% below its floor
@@ -1009,10 +1009,10 @@ script, so `ruff` is not wired.
 
 ### CI workflows (2026-08-15 split)
 
-The monolithic `.github/workflows/ci.yml` was split into three
+The monolithic CI workflow was split into three
 trigger-scoped files (WO 33.3). No job was dropped; the old `quality` job
 was decomposed into separate `clippy` / `fast-tests` / `full-tests` jobs.
-CI references below should read as the new files, not the deleted `ci.yml`:
+CI references below should read as the new files:
 
 | File | Trigger | Jobs | Target |
 |---|---|---|---|

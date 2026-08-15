@@ -220,6 +220,18 @@ impl Executor {
         adapter.set_budget_tokens(cfg.model.budget_tokens);
         adapter.set_streaming_timeout(cfg.model.streaming_timeout_secs);
 
+        // Activate the Anthropic hosted computer_use beta when configured.
+        // `hosted` is inert without the `computer_use` Cargo feature (the
+        // adapter's `set_computer_use_dims` is a no-op for non-Anthropic
+        // adapters and the wire rewrite compiles out). See WO 32.17.
+        if cfg.security.computer_use.hosted && cfg.security.computer_use.enabled {
+            #[cfg(feature = "computer_use")]
+            adapter.set_computer_use_dims(Some((
+                cfg.security.computer_use.width.max(1),
+                cfg.security.computer_use.height.max(1),
+            )));
+        }
+
         let adapter_swap = AdapterSwap::new(
             model_name.clone(),
             cfg.model.ollama_host.clone(),
@@ -466,6 +478,16 @@ impl Executor {
         self.adapter.set_budget_tokens(fresh.model.budget_tokens);
         self.adapter
             .set_streaming_timeout(fresh.model.streaming_timeout_secs);
+        if fresh.security.computer_use.hosted && fresh.security.computer_use.enabled {
+            #[cfg(feature = "computer_use")]
+            self.adapter.set_computer_use_dims(Some((
+                fresh.security.computer_use.width.max(1),
+                fresh.security.computer_use.height.max(1),
+            )));
+        } else {
+            #[cfg(feature = "computer_use")]
+            self.adapter.set_computer_use_dims(None);
+        }
         config_diff_summary(&old, &fresh)
     }
 
@@ -661,6 +683,111 @@ impl Executor {
         {
             let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
             if s.register(Arc::new(PyTypeV)).is_ok() {
+                count += 1;
+            }
+        }
+
+        // Node/Go/generic verifiers (WO 32.20). Each self-gates on language
+        // detection + toolchain presence inside its verify fn — they return
+        // Skipped unless the relevant marker is found at the edited file's
+        // project root, so registering them alongside the Rust/Python
+        // verifiers is safe for pure-Rust workspaces.
+        struct NodeTestV;
+        #[async_trait::async_trait]
+        impl Verifier for NodeTestV {
+            fn name(&self) -> &str {
+                "node_test"
+            }
+            fn priority(&self) -> u8 {
+                9
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::node_test::verify_node_test(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            if s.register(Arc::new(NodeTestV)).is_ok() {
+                count += 1;
+            }
+        }
+
+        struct NodeLintV;
+        #[async_trait::async_trait]
+        impl Verifier for NodeLintV {
+            fn name(&self) -> &str {
+                "node_lint"
+            }
+            fn priority(&self) -> u8 {
+                10
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::node_lint::verify_node_lint(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            if s.register(Arc::new(NodeLintV)).is_ok() {
+                count += 1;
+            }
+        }
+
+        struct GoTestV;
+        #[async_trait::async_trait]
+        impl Verifier for GoTestV {
+            fn name(&self) -> &str {
+                "go_test"
+            }
+            fn priority(&self) -> u8 {
+                11
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::go_test::verify_go_test(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            if s.register(Arc::new(GoTestV)).is_ok() {
+                count += 1;
+            }
+        }
+
+        struct GoVetV;
+        #[async_trait::async_trait]
+        impl Verifier for GoVetV {
+            fn name(&self) -> &str {
+                "go_vet"
+            }
+            fn priority(&self) -> u8 {
+                12
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::go_vet::verify_go_vet(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            if s.register(Arc::new(GoVetV)).is_ok() {
+                count += 1;
+            }
+        }
+
+        struct GenericTestV;
+        #[async_trait::async_trait]
+        impl Verifier for GenericTestV {
+            fn name(&self) -> &str {
+                "generic_test"
+            }
+            fn priority(&self) -> u8 {
+                13
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                crate::session::verifier::generic_test::verify_generic_test(event).await
+            }
+        }
+        {
+            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
+            if s.register(Arc::new(GenericTestV)).is_ok() {
                 count += 1;
             }
         }

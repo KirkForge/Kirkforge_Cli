@@ -653,6 +653,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
         if let Some(Value::Integer(n)) = v.get("wait_timeout_secs") {
             cfg.security.computer_use.wait_timeout_secs = (*n).max(1) as u64;
         }
+        if let Some(Value::Boolean(b)) = v.get("hosted") {
+            cfg.security.computer_use.hosted = *b;
+        }
     }
 
     // Arrays
@@ -2311,6 +2314,7 @@ mod tests {
             height = 999
             startup_timeout_secs = 999
             wait_timeout_secs = 999
+            hosted = true
 
             [subagent_provider]
             model = "x"
@@ -2332,8 +2336,8 @@ mod tests {
             }
         }
         // 70 top-level leaf keys + 9 array keys + 3 single-key inline
-        // tables + 7 computer_use sub-keys + 7 subagent_provider sub-keys = 96
-        const MERGE_TOML_EXPECTED: usize = 96;
+        // tables + 8 computer_use sub-keys + 7 subagent_provider sub-keys = 97
+        const MERGE_TOML_EXPECTED: usize = 97;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2351,9 +2355,10 @@ mod tests {
             + env_overrides_src.matches("\"DEEPSEEK_API_KEY\"").count()
             + env_overrides_src.matches("\"GEMINI_API_KEY\"").count()
             + env_overrides_src.matches("\"KIMI_API_KEY\"").count();
-        // 87 KF_CODE_* literals (77 base + 7 KF_CODE_SUBAGENT_* + 2 bash
-        // allowlist + 1 streaming_timeout_secs) + 5 API-key literals = 92
-        const ENV_OVERRIDE_EXPECTED: usize = 92;
+        // 88 KF_CODE_* literals (77 base + 7 KF_CODE_SUBAGENT_* + 2 bash
+        // allowlist + 1 streaming_timeout_secs + 1 computer_use_hosted)
+        // + 5 API-key literals = 93
+        const ENV_OVERRIDE_EXPECTED: usize = 93;
         assert_eq!(
             env_var_count, ENV_OVERRIDE_EXPECTED,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"

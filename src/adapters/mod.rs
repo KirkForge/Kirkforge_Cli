@@ -369,6 +369,13 @@ pub trait ModelAdapter: Send + Sync {
     /// the executor with `config.model.streaming_timeout_secs` (WO 32.13).
     fn set_streaming_timeout(&mut self, _secs: u64) {}
 
+    /// Activate the Anthropic hosted computer_use beta (coordinate-vision
+    /// model). `Some((w,h))` rewrites the `computer` tool to the hosted
+    /// tool type and tags requests with the `computer-use-2025-01-24` beta
+    /// header. `None` = off. Default no-op; only the Anthropic adapter
+    /// honours it. Feature-gated behind `computer_use`. See WO 32.17.
+    fn set_computer_use_dims(&mut self, _dims: Option<(u32, u32)>) {}
+
     async fn stream(
         &self,
         messages: &[crate::shared::Message],

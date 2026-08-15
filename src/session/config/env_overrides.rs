@@ -533,6 +533,10 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
             cfg.security.computer_use.wait_timeout_secs = n.max(1);
         }
     }
+    env_bool!(
+        "KF_CODE_COMPUTER_USE_HOSTED",
+        cfg.security.computer_use.hosted
+    );
 
     // Clamp after all layers so a config file or env override cannot set an
     // unusable zero-second timeout.

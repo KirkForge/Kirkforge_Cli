@@ -126,6 +126,10 @@ impl ModelAdapter for AnthropicAdapter {
         self.stream_idle_timeout = std::time::Duration::from_secs(secs);
     }
 
+    fn set_computer_use_dims(&mut self, dims: Option<(u32, u32)>) {
+        self.computer_use_dims = dims;
+    }
+
     async fn stream(
         &self,
         messages: &[Message],

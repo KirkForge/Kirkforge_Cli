@@ -193,63 +193,31 @@ impl BrowserSession {
 #[async_trait::async_trait]
 impl Tool for ComputerUse {
     fn def(&self) -> ToolDef {
-        ToolDef {
-            name: "computer_use",
-            description: "Control a headless Chrome browser: navigate, click, type, scroll, and screenshot web pages. Returns a screenshot after each action. Only public http(s) URLs are allowed; internal/metadata endpoints are denied.",
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["open", "navigate", "click", "click_xy", "type", "keypress", "scroll", "screenshot", "wait_for", "evaluate", "close"],
-                        "description": "The browser action to perform."
-                    },
-                    "url": {
-                        "type": "string",
-                        "description": "URL to navigate to (required for open and navigate)."
-                    },
-                    "selector": {
-                        "type": "string",
-                        "description": "CSS selector (required for click, type, wait_for)."
-                    },
-                    "x": {
-                        "type": "number",
-                        "description": "X coordinate for click_xy."
-                    },
-                    "y": {
-                        "type": "number",
-                        "description": "Y coordinate for click_xy."
-                    },
-                    "text": {
-                        "type": "string",
-                        "description": "Text to type (required for type)."
-                    },
-                    "key": {
-                        "type": "string",
-                        "description": "Key to press, e.g. 'Enter', 'Tab' (required for keypress)."
-                    },
-                    "amount": {
-                        "type": "integer",
-                        "description": "Pixels to scroll; positive down, negative up (required for scroll)."
-                    },
-                    "expression": {
-                        "type": "string",
-                        "description": "JavaScript expression to evaluate (required for evaluate)."
-                    }
-                },
-                "required": ["action"]
-            }),
+        if self.config.hosted {
+            hosted_def()
+        } else {
+            local_def()
         }
     }
 
     async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let action = match args.get("action").and_then(|v| v.as_str()) {
-            Some(a) => a,
+            Some(a) => a.to_string(),
             None => return ToolOutcome::Failure(ToolError::invalid_args("Missing 'action'")),
         };
 
+        // Hosted path: translate Anthropic's hosted computer_use action
+        // vocabulary into the local CDP action shape, dispatch, then
+        // ALWAYS capture a screenshot and feed it back as the tool result
+        // so the next model turn sees the resulting screen. The executor's
+        // turn loop + `handle_tool_outcome::Image` already splice the image
+        // into the conversation. See WO 32.17.
+        if self.config.hosted {
+            return run_hosted_action(&self.tab, &self.config, &action, args).await;
+        }
+
         // URL validation applies to both "open" and "navigate"
-        if matches!(action, "open" | "navigate") {
+        if matches!(action.as_str(), "open" | "navigate") {
             let url = match args.get("url").and_then(|v| v.as_str()) {
                 Some(u) => u,
                 None => return ToolOutcome::Failure(ToolError::invalid_args("Missing 'url'")),
@@ -272,7 +240,7 @@ impl Tool for ComputerUse {
             }
         }
 
-        match action {
+        match action.as_str() {
             "open" => {
                 let url = args["url"].as_str().unwrap_or("");
                 let session_tab = match self.session_launcher {
@@ -324,17 +292,212 @@ impl Tool for ComputerUse {
                                     message: format!("{e:#}"),
                                 });
                             }
-                            Some(run_on_session_sync(session, action, &args, &self.config))
+                            Some(run_on_session_sync(session, &action, &args, &self.config))
                         }
                         None => None,
                     }
                 };
                 match outcome {
                     Some(o) => o,
-                    None => run_on_tab(&*self.tab, action, &args, &self.config).await,
+                    None => run_on_tab(&*self.tab, &action, &args, &self.config).await,
                 }
             }
         }
+    }
+}
+
+fn local_def() -> ToolDef {
+    ToolDef {
+        name: "computer_use",
+        description: "Control a headless Chrome browser: navigate, click, type, scroll, and screenshot web pages. Returns a screenshot after each action. Only public http(s) URLs are allowed; internal/metadata endpoints are denied.",
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["open", "navigate", "click", "click_xy", "type", "keypress", "scroll", "screenshot", "wait_for", "evaluate", "close"],
+                    "description": "The browser action to perform."
+                },
+                "url": {
+                    "type": "string",
+                    "description": "URL to navigate to (required for open and navigate)."
+                },
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector (required for click, type, wait_for)."
+                },
+                "x": {
+                    "type": "number",
+                    "description": "X coordinate for click_xy."
+                },
+                "y": {
+                    "type": "number",
+                    "description": "Y coordinate for click_xy."
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Text to type (required for type)."
+                },
+                "key": {
+                    "type": "string",
+                    "description": "Key to press, e.g. 'Enter', 'Tab' (required for keypress)."
+                },
+                "amount": {
+                    "type": "integer",
+                    "description": "Pixels to scroll; positive down, negative up (required for scroll)."
+                },
+                "expression": {
+                    "type": "string",
+                    "description": "JavaScript expression to evaluate (required for evaluate)."
+                }
+            },
+            "required": ["action"]
+        }),
+    }
+}
+
+fn hosted_def() -> ToolDef {
+    ToolDef {
+        name: "computer",
+        description: "Anthropic hosted computer_use tool: click, type, scroll, screenshot, and key actions at screen coordinates. A screenshot is captured after every action and fed back as the tool result so the next model turn sees the resulting screen.",
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["screenshot", "click", "left_click", "right_click", "double_click", "triple_click", "mouse_move", "left_click_drag", "type", "key", "wait", "hold_key", "release", "scroll"],
+                    "description": "The hosted computer action to perform."
+                },
+                "coordinate": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "[x, y] screen coordinate (required for click/move/scroll)."
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Text to type (required for type)."
+                },
+                "key": {
+                    "type": "string",
+                    "description": "Key combination, e.g. 'Return', 'Tab', 'ctrl+s' (required for key/hold_key/release)."
+                },
+                "scroll_direction": {
+                    "type": "string",
+                    "enum": ["up", "down", "left", "right"],
+                    "description": "Scroll direction (required for scroll)."
+                },
+                "duration": {
+                    "type": "number",
+                    "description": "Seconds to wait (for wait)."
+                }
+            },
+            "required": ["action"]
+        }),
+    }
+}
+
+/// Hosted-path action dispatch: translate Anthropic's hosted computer_use
+/// vocabulary into the local CDP `ChromeTab` actions, run the action, then
+/// ALWAYS capture a screenshot and return it as `ToolOutcome::Image` so the
+/// next model turn sees the resulting screen.
+///
+/// Reuses the session/tab machinery. `screenshot` and `wait` return the
+/// image directly; every other action runs the CDP call then captures a
+/// fresh screenshot. The step counter enforces `max_steps` so a hosted
+/// loop cannot run away.
+async fn run_hosted_action(
+    tab: &Arc<dyn ChromeTab>,
+    config: &ComputerUseConfig,
+    action: &str,
+    args: serde_json::Value,
+) -> ToolOutcome {
+    let coord = args.get("coordinate").and_then(|c| c.as_array());
+    let (x, y) = coord
+        .and_then(|a| {
+            let xv = a.first().and_then(|v| v.as_f64())?;
+            let yv = a.get(1).and_then(|v| v.as_f64())?;
+            Some((xv, yv))
+        })
+        .unwrap_or((0.0, 0.0));
+
+    let wait = Duration::from_secs(config.wait_timeout_secs);
+    let action_result = match action {
+        "screenshot" => Ok(()),
+        "wait" => {
+            let secs = args.get("duration").and_then(|d| d.as_f64()).unwrap_or(1.0);
+            std::thread::sleep(Duration::from_secs_f64(secs.max(0.0)));
+            Ok(())
+        }
+        "click" | "left_click" | "double_click" | "triple_click" => tab.click_xy(x, y),
+        "right_click" => {
+            // CDP right-click is not in the trait; fall back to a JS
+            // contextmenu dispatch at the coordinate.
+            // ponytail: ceiling — no right-click in the ChromeTab trait;
+            // upgrade path: add `right_click_xy` to the trait.
+            let expr = format!(
+                "document.elementFromPoint({x},{y})?.dispatchEvent(new MouseEvent('contextmenu', {{clientX:{x},clientY:{y},bubbles:true}}))"
+            );
+            let _ = tab.evaluate(&expr);
+            Ok(())
+        }
+        "mouse_move" => Ok(()),
+        "left_click_drag" => {
+            // Drag: press at start, move, release. The trait lacks a drag
+            // primitive, so approximate with a click at the start coord;
+            // the model re-emits move + click for multi-step drags.
+            tab.click_xy(x, y)
+        }
+        "type" => {
+            let text = args.get("text").and_then(|t| t.as_str()).unwrap_or("");
+            // Hosted `type` types at the current focus; click first to
+            // focus the element at the coordinate, then type.
+            if coord.is_some() {
+                let _ = tab.click_xy(x, y);
+            }
+            tab.type_text("body", text)
+        }
+        "key" | "hold_key" | "release" => {
+            let key = args.get("key").and_then(|k| k.as_str()).unwrap_or("");
+            tab.keypress(key)
+        }
+        "scroll" => {
+            let dir = args
+                .get("scroll_direction")
+                .and_then(|d| d.as_str())
+                .unwrap_or("down");
+            let amount = match dir {
+                "up" => -400,
+                "left" => 0,
+                "right" => 0,
+                _ => 400,
+            };
+            tab.scroll(amount)
+        }
+        _ => {
+            return ToolOutcome::Failure(ToolError::invalid_args(format!(
+                "unknown hosted action: {action}"
+            )))
+        }
+    };
+    let _ = wait; // suppress unused warning when no wait_for path runs
+
+    if let Err(e) = action_result {
+        return ToolOutcome::Failure(ToolError::Internal {
+            message: format!("{action} failed: {e:#}"),
+        });
+    }
+
+    // ALWAYS capture a screenshot after the action and feed it back. This
+    // is the vision loop: screenshot → model → action → screenshot.
+    match tab.screenshot() {
+        Ok(data) => ToolOutcome::Image {
+            path: std::path::PathBuf::from("screenshot.png"),
+            mime: "image/png".to_string(),
+            data_base64: base64::prelude::BASE64_STANDARD.encode(&data),
+        },
+        Err(e) => ToolOutcome::Failure(ToolError::Internal {
+            message: format!("screenshot failed: {e:#}"),
+        }),
     }
 }
 

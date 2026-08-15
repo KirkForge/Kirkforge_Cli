@@ -247,6 +247,10 @@ impl ModelAdapter for CachingAdapter {
         self.inner.set_streaming_timeout(secs);
     }
 
+    fn set_computer_use_dims(&mut self, dims: Option<(u32, u32)>) {
+        self.inner.set_computer_use_dims(dims);
+    }
+
     async fn stream(
         &self,
         messages: &[Message],

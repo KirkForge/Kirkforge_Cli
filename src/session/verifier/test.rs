@@ -1,5 +1,5 @@
 use crate::session::verifier::helpers::find_cargo_root;
-use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
+use crate::session::verifier::types::{BusEvent, CommandRunner, EditEvent, FileWriteEvent};
 /// Test verifier — runs targeted `cargo test` for the edited Rust file.
 ///
 /// This verifier subscribes to `Edit` and `FileWrite` events. When a Rust file
@@ -11,7 +11,7 @@ use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
 /// a correction prompt.
 ///
 /// The test verifier is registered at priority 5 (after rustfmt).
-use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
+use crate::session::verifier::{FixSuggestion, Verdict};
 use std::path::Path;
 
 /// Convert a file path inside a crate into a likely Rust module path prefix.
@@ -53,7 +53,11 @@ fn module_path_prefix(file_path: &Path, cargo_root: &Path) -> Option<String> {
 }
 
 /// Run the test verifier against an event.
-pub async fn verify_test(event: &BusEvent) -> Verdict {
+///
+/// `runner` abstracts the `cargo test` subprocess so unit tests can feed
+/// canned test output through the full event→Verdict path without spawning
+/// real Cargo. Production passes [`SystemCommandRunner`].
+pub async fn verify_test(event: &BusEvent, runner: &dyn CommandRunner) -> Verdict {
     let path = match event {
         BusEvent::Edit(EditEvent { path, .. }) => path.clone(),
         BusEvent::FileWrite(FileWriteEvent { path, .. }) => path.clone(),
@@ -85,25 +89,15 @@ pub async fn verify_test(event: &BusEvent) -> Verdict {
         args.insert(1, prefix.clone());
     }
 
-    let test_output = tokio::process::Command::new("cargo")
-        .current_dir(&cargo_root)
-        .args(&args)
-        .output()
-        .await;
+    // `CommandRunner::run` takes `&[&str]`; build owned-string args then
+    // borrow. The args live for the `runner.run` call scope.
+    // See build.rs for the rationale on not wrapping in `spawn_blocking`.
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let test_output = runner.run("cargo", &arg_refs, &cargo_root);
 
-    let test_output = match test_output {
-        Ok(o) => o,
-        Err(e) => {
-            return Verdict::Unfixable(VerificationError {
-                description: "failed to spawn cargo test".into(),
-                file: Some(path),
-                details: e.to_string(),
-                line: None,
-            })
-        }
-    };
-
-    if test_output.status.success() {
+    use crate::session::verifier::types::ExitState;
+    let success = matches!(test_output.status, ExitState::Success);
+    if success {
         return Verdict::Clean;
     }
 
@@ -132,6 +126,38 @@ pub async fn verify_test(event: &BusEvent) -> Verdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::verifier::types::{CommandOutcome, ExitState, SystemCommandRunner};
+
+    // Hand-rolled fake runner returning canned `cargo test` output. See
+    // build.rs tests for the same pattern. WO 33.14 phase 3: no mock framework.
+    struct FakeRunner {
+        stdout: Vec<u8>,
+        code: i32,
+    }
+
+    impl FakeRunner {
+        fn success(stdout: Vec<u8>) -> Self {
+            Self { stdout, code: 0 }
+        }
+        fn failure(stdout: Vec<u8>) -> Self {
+            Self { stdout, code: 101 }
+        }
+    }
+
+    impl CommandRunner for FakeRunner {
+        fn run(&self, _cmd: &str, _args: &[&str], _cwd: &std::path::Path) -> CommandOutcome {
+            let status = if self.code == 0 {
+                ExitState::Success
+            } else {
+                ExitState::Code(self.code)
+            };
+            CommandOutcome {
+                status,
+                stdout: self.stdout.clone(),
+                stderr: Vec::new(),
+            }
+        }
+    }
 
     #[tokio::test]
     async fn test_skips_unknown_file_types() {
@@ -139,7 +165,7 @@ mod tests {
             path: std::path::PathBuf::from("readme.md"),
             diff: "".into(),
         });
-        let v = verify_test(&event).await;
+        let v = verify_test(&event, &SystemCommandRunner).await;
         assert!(matches!(v, Verdict::Skipped(_)));
     }
 
@@ -152,7 +178,7 @@ mod tests {
             stderr_len: 0,
             workdir: None,
         });
-        let v = verify_test(&event).await;
+        let v = verify_test(&event, &SystemCommandRunner).await;
         assert!(matches!(v, Verdict::Skipped(_)));
     }
 
@@ -168,7 +194,7 @@ mod tests {
             path: rs.clone(),
             diff: "".into(),
         });
-        let v = verify_test(&event).await;
+        let v = verify_test(&event, &SystemCommandRunner).await;
         match v {
             Verdict::Skipped(msg) => assert!(msg.contains("Cargo.toml")),
             other => panic!("expected Skipped for rs file with no cargo root, got {other:?}"),
@@ -186,7 +212,7 @@ mod tests {
             content_length: 12,
             content_hash: 0,
         });
-        let v = verify_test(&event).await;
+        let v = verify_test(&event, &SystemCommandRunner).await;
         assert!(matches!(v, Verdict::Skipped(_)));
     }
 
@@ -292,13 +318,81 @@ mod tests {
         assert_eq!(module_path_prefix(&root, &root), None);
     }
 
-    // This test spawns `cargo test` in a temporary project. It cannot run
-    // concurrently with another `cargo` invocation because the Cargo package
-    // cache lock serializes all cargo processes, so it is ignored by default.
-    // Run it separately when needed: `cargo test --workspace -- --ignored`.
+    // WO 33.14 phase 3: was `#[ignore = "spawns cargo"]` — now uses a
+    // `FakeRunner` returning canned `cargo test` output. Exercises the full
+    // event → cargo_root → spawn → parse → Verdict path in-process.
     #[tokio::test]
-    #[ignore = "spawns cargo; run separately with cargo test --workspace -- --ignored"]
-    async fn test_test_failure_on_temp_project() {
+    async fn test_test_failure_via_fake_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"fake-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let path = dir.path().join("src/lib.rs");
+        std::fs::write(
+            &path,
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn it_fails() {\n        assert_eq!(add(1, 1), 3);\n    }\n}\n",
+        )
+        .unwrap();
+
+        let canned = "running 1 test\ntest tests::it_fails ... FAILED\n\nfailures:\n\n---- tests::it_fails stdout ----\nassertion failed: `(left == right)`\n";
+        let runner = FakeRunner::failure(canned.as_bytes().to_vec());
+
+        let event = BusEvent::FileWrite(FileWriteEvent {
+            path: path.clone(),
+            content_length: 120,
+            content_hash: 0,
+        });
+        let v = verify_test(&event, &runner).await;
+        match v {
+            Verdict::Fixable(suggestion) => {
+                assert_eq!(suggestion.file, path);
+                assert!(suggestion.description.contains("test failure"));
+                assert!(
+                    suggestion.description.contains("assertion failed")
+                        || suggestion.description.contains("it_fails")
+                );
+                assert_eq!(suggestion.severity, "error");
+                assert!(suggestion.original.is_empty());
+                assert!(suggestion.replacement.is_empty());
+                assert!(suggestion.command.is_none());
+            }
+            other => panic!("expected Fixable test failure, got {other:?}"),
+        }
+    }
+
+    // WO 33.14 phase 3: clean test run via fake runner returns Verdict::Clean.
+    #[tokio::test]
+    async fn test_test_clean_via_fake_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"fake-test-clean\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let path = dir.path().join("src/lib.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+
+        let runner = FakeRunner::success(b"running 0 tests\n".to_vec());
+        let event = BusEvent::FileWrite(FileWriteEvent {
+            path: path.clone(),
+            content_length: 14,
+            content_hash: 0,
+        });
+        let v = verify_test(&event, &runner).await;
+        assert!(matches!(v, Verdict::Clean), "expected Clean, got {v:?}");
+    }
+
+    // Integration test: actually invokes `cargo test` in a temp project.
+    // Gated behind `#[ignore]` — run with `cargo test -- --ignored` or the
+    // integration nextest profile. This is the 1 real-Cargo test for the
+    // test verifier (WO 33.14 phase 3).
+    #[tokio::test]
+    #[ignore = "integration: spawns real cargo test; run with cargo test -- --ignored"]
+    async fn test_test_failure_on_temp_project_real_cargo() {
         let dir = std::env::temp_dir().join("kf_code_test_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -323,7 +417,7 @@ edition = "2021"
             content_length: 120,
             content_hash: 0,
         });
-        let v = verify_test(&event).await;
+        let v = verify_test(&event, &SystemCommandRunner).await;
         match v {
             Verdict::Fixable(suggestion) => {
                 assert_eq!(suggestion.file, path);

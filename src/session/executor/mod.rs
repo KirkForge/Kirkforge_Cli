@@ -533,7 +533,11 @@ impl Executor {
                 2
             }
             async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::lint::verify_lint(event).await
+                crate::session::verifier::lint::verify_lint(
+                    event,
+                    &crate::session::verifier::SystemCommandRunner,
+                )
+                .await
             }
         }
         {
@@ -553,7 +557,11 @@ impl Executor {
                 3
             }
             async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::build::verify_build(event).await
+                crate::session::verifier::build::verify_build(
+                    event,
+                    &crate::session::verifier::SystemCommandRunner,
+                )
+                .await
             }
         }
         {
@@ -613,7 +621,11 @@ impl Executor {
                 5
             }
             async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::test::verify_test(event).await
+                crate::session::verifier::test::verify_test(
+                    event,
+                    &crate::session::verifier::SystemCommandRunner,
+                )
+                .await
             }
         }
         {

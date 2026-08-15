@@ -52,9 +52,10 @@ pub use correction::{CorrectionLoop, CorrectionResult};
 pub use handler::VerifierHandler;
 pub use slots::VerifierSlots;
 pub use types::{
-    BashExecEvent, BusEvent, EditEvent, EventKind, FileReadEvent, FileWriteEvent, FixSuggestion,
-    LintFinding, LintRunEvent, SecurityIssue, SecurityScanEvent, ToolErrorEvent, TypeCheckEvent,
-    Verdict, VerificationError, Verifier,
+    BashExecEvent, BusEvent, CommandOutcome, CommandRunner, EditEvent, EventKind, ExitState,
+    FileReadEvent, FileWriteEvent, FixSuggestion, LintFinding, LintRunEvent, SecurityIssue,
+    SecurityScanEvent, SystemCommandRunner, ToolErrorEvent, TypeCheckEvent, Verdict,
+    VerificationError, Verifier,
 };
 
 #[cfg(test)]

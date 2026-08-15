@@ -9,7 +9,7 @@ use crate::harness::mock::{HttpError, MockProvider, Reply};
 use crate::harness::shard;
 use crate::harness::IsolatedEnv;
 
-#[ignore = "slow binary-spawn e2e (real kf-code binary + mock provider); WO 27.2 startup hang is fixed — run with `cargo test --test e2e --features e2e-tests -- --ignored adapter_retries_on_5xx`"]
+#[cfg_attr(not(feature = "e2e-tests"), ignore)]
 #[tokio::test]
 async fn adapter_retries_on_5xx() {
     if !shard::shard_gate("adapter_retries_on_5xx") {

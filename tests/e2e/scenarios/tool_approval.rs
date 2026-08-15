@@ -11,7 +11,7 @@ use crate::harness::mock::{MockProvider, Reply};
 use crate::harness::shard;
 use crate::harness::IsolatedEnv;
 
-#[ignore = "slow binary-spawn e2e (real kf-code binary + mock provider); WO 27.2 startup hang is fixed — run with `cargo test --test e2e --features e2e-tests -- --ignored tool_approval_auto_approve_round_trip`"]
+#[cfg_attr(not(feature = "e2e-tests"), ignore)]
 #[tokio::test]
 async fn tool_approval_auto_approve_round_trip() {
     if !shard::shard_gate("tool_approval_auto_approve_round_trip") {

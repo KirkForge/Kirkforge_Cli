@@ -15,7 +15,7 @@ use crate::harness::IsolatedEnv;
 /// stdout.  Uses `--no-tui --non-interactive` mode so we don't need a
 /// PTY.  Regression: C-001 (binary crashes when Ollama returns a
 /// single text chunk and closes).
-#[ignore = "slow binary-spawn e2e (real kf-code binary + mock provider); WO 27.2 startup hang is fixed — run with `cargo test --test e2e --features e2e-tests -- --ignored plain_chat_turn_completes`"]
+#[cfg_attr(not(feature = "e2e-tests"), ignore)]
 #[tokio::test]
 async fn plain_chat_turn_completes() {
     if !shard::shard_gate("plain_chat_turn_completes") {

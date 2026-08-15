@@ -20,7 +20,7 @@ use crate::harness::IsolatedEnv;
 /// Headless round-trip: pipe a prompt into `kf-code run --no-tui
 /// --non-interactive` and verify the mock response appears in stdout.
 /// This proves the mock, config, and adapter wiring all work.
-#[ignore = "slow binary-spawn e2e (real kf-code binary + mock provider); WO 27.2 startup hang is fixed — run with `cargo test --test e2e --features e2e-tests -- --ignored tui_chat_headless_round_trip`"]
+#[cfg_attr(not(feature = "e2e-tests"), ignore)]
 #[tokio::test]
 async fn tui_chat_headless_round_trip() {
     let mock = MockProvider::start(vec![Reply::text("Hello from mock!")]).await;

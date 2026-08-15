@@ -719,6 +719,13 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
                 if s.is_empty() { None } else { Some(s.clone()) };
         }
     }
+
+    if let Some(Value::Integer(v)) = table.get("budget_ceiling") {
+        cfg.tools.budget_ceiling = (*v as usize).max(0);
+    }
+    if let Some(Value::Boolean(v)) = table.get("summarize_enabled") {
+        cfg.model.summarize_enabled = *v;
+    }
 }
 
 /// Human-readable summary of config changes. Security/internal knobs

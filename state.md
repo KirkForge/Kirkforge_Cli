@@ -10,6 +10,59 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+## Session 2026-08-15 — WO 33.6 + 33.15 + 32.20 + 32.17 (worktree `.worktrees/wo32e`)
+
+### What changed this session
+
+- **WO 33.6: Path-aware changed-package test selection.**
+  `scripts/changed-packages.sh` maps `git diff --name-only <base>..HEAD` to
+  affected cargo packages including reverse-dep closure (4 internal edges,
+  hardcoded adjacency table — ponytail: ceiling documented in script).
+  `ci-pr.yml` adds a `changes` job that gates clippy + fast-tests on the
+  output; docs-only / non-Rust changes emit `__NO_RUST_CHANGES__` and skip.
+- **WO 33.15: Reduce #[serial] usage.** No-op: zero `#[serial]` in repo.
+  The codebase went straight to `EnvGuard` (WO 33.13), never adopted
+  `#[serial]`. Documented the 0→0 finding; remaining env-mutation cleanup
+  is WO 33.13's scope (Pending).
+- **WO 32.20: Node/Go/Generic multi-language verifiers.** Five new
+  verifier files following the Python pattern (WO 31.1): `node_test.rs`
+  (npm test / vitest), `node_lint.rs` (eslint / tsc --noEmit),
+  `go_test.rs` (go test), `go_vet.rs` (go vet), `generic_test.rs`
+  (make test / ctest / ./test.sh). `detect.rs` refactored to a shared
+  `find_root_with_markers` helper + `find_node_root` / `find_go_root`.
+  Each self-gates on language-marker detection; safe for pure-Rust
+  workspaces.
+- **WO 32.17: Anthropic hosted computer_use beta.** Completes the R4
+  deferred item (see deferrals #3 below — now DONE). `ComputerUseConfig.hosted`
+  flag (env `KF_CODE_COMPUTER_USE_HOSTED`, TOML `[computer_use].hosted`).
+  `ModelAdapter::set_computer_use_dims` trait method (default no-op;
+  Anthropic honours it). `computer_use.rs` splits into `local_def()` /
+  `hosted_def()` and dispatches to `run_hosted_action()` which translates
+  Anthropic's action vocabulary to CDP + always captures a screenshot.
+  Executor activates at startup + config refresh (feature-gated
+  `computer_use`). Config drift guards bumped: ENV_OVERRIDE_EXPECTED
+  92→93, MERGE_TOML_EXPECTED 96→97 (added `hosted` to test fixture).
+
+### Session incident
+
+- **gitnexus MCP drop killed 3 subagents at 17:36:29Z.** Recurring
+  gitnexus instability (8th drop since 08-08). All 3 subagent sessions
+  aborted (error=Aborted). Work survived in worktree `wo32e` uncommitted.
+  Resumed: fixed 2 clippy errors + fmt drift (the exact point where the
+  subagent died at step 22), bumped config drift guards, split into 4
+  logical commits. One file (`executor/mod.rs`) was lost during stash
+  recovery and rebuilt from `/tmp/opencode/executor-full.diff`.
+
+### Gate
+
+- `cargo check --workspace --all-targets`: PASS
+- `cargo clippy --workspace --all-targets -- -D warnings`: PASS
+- `cargo clippy -p kf-code --lib --tests --features computer_use -- -D warnings`: PASS
+- `cargo fmt --check`: PASS
+- `cargo nextest run -p kf-code --lib`: 3298 passed, 17 skipped (159s)
+
+---
+
 ## Session 2026-08-15 — WO 32.5 parallel orchestration (worktree `.worktrees/wo32d`)
 
 ### What changed this session
@@ -672,7 +725,7 @@ A "completed" deps subagent left a detached `cargo run -p kf-context-index --exa
 0. **24.6-R1..R5 / 25.16**: Raise `src/session` coverage above 75%. CI coverage job added in WO 25.4-R1. Remaining: R1 fill baseline from first CI run, R2 executor loop tests (6), R3 budget slicing tests (4), R4 compaction tests (5), R5 verifier bus tests (4). Tracked in WO 25.16.
 1. **21.5-R2-R3 / 25.18-R1**: Stream partial bash output to TUI via TurnEvent::BashPartialOutput. DONE (WO 26.7-R1) — `TurnEvent::BashPartialOutput` added, PTY output forwarded through event_tx, TUI tool-result card renders streaming spinner + incremental text. Non-PTY path unchanged.
 2. **21.5-R4 / 25.15-R2+R3**: MCP sampling/createMessage. R1 (roots/list capability) DONE in WO 25.15. R2 (approval-gated handler + headless policy + ADR-072) DONE in WO 26.7-R2. Resolved — sampling routes through the approval bus with default-deny headless policy.
-3. **21.5-R9 / 25.18-R2 / 26.7-R4 / 28.16-R1-3**: Anthropic computer_use beta (coordinate-vision model). PARTIAL — R1–R3 DONE in WO 28.16, R4 still deferred. (a) What shipped: opt-in hosted beta path at the adapter seam, gated behind a `computer_use` Cargo feature (default OFF). `AnthropicAdapter::stream` adds `anthropic-beta: computer-use-2025-01-24` + rewrites the `computer` tool to `{"type":"computer_20250124","name":"computer","display_width_px":W,"display_height_px":H}` when `with_computer_use(Some((w,h)))` is set; `computer_tool_result` content blocks are parsed (surfaced as a text placeholder until R4 lands). Feature-OFF assertion test (`feature_off_emits_no_computer_tool_type`) confirms zero hosted wire bytes in a default build; feature-ON tests cover the rewrite + parser. (b) Why R4 deferred: the coordinate-vision execution loop (screenshot capture via the existing CDP path, model turn → coordinate-action execution → screenshot until terminal, config→adapter wiring, `ComputerUseConfig.hosted` runtime switch) is the L-sized long pole the workorder flagged; the adapter wire format is the half that unblocks API correctness and ships safely default-OFF. (c) Remaining: build the screenshot→action loop reusing `src/tools/computer_use.rs` CDP capture (do NOT duplicate plumbing); distinguish hosted from local via `computer_use.hosted`; wire `config.security.computer_use.hosted` → `AnthropicAdapter::with_computer_use`; replace the text-placeholder `computer_tool_result` handling with a structured `TurnEvent` variant; live-model smoke test (out of CI). (d) Tracked in WO 28.16 (Status: Partial) + this state.md item. The local headless-Chrome CDP `computer_use` tool remains a separate, unaffected capability.
+3. **21.5-R9 / 25.18-R2 / 26.7-R4 / 28.16-R1-3**: Anthropic computer_use beta (coordinate-vision model). DONE (WO 32.17) — R4 shipped. `ComputerUseConfig.hosted` flag (env `KF_CODE_COMPUTER_USE_HOSTED`, TOML `[computer_use].hosted`); `ModelAdapter::set_computer_use_dims` trait method; `computer_use.rs` splits into `local_def()` / `hosted_def()` and dispatches to `run_hosted_action()` which translates Anthropic's action vocabulary to CDP + always captures a screenshot; executor activates at startup + config refresh (feature-gated `computer_use`). The local headless-Chrome CDP `computer_use` tool remains a separate, unaffected capability.
 4. **22.4-R2/R3 / 25.18-R3**: TUI memory visibility + config flag. DONE (WO 26.7-R3) — memory indicator widget in status bar (`🧠N@tT`), `memory_show_in_status` config flag (default true), real-time updates via `TurnEvent::MemoryExtracted`.
 5. **25.11-R2**: Daemon sessions-list refresh on dirty. DONE (WO 26.6-R1) — `sessions_dirty` flag now wired to a refresh path in the TUI event loop (mirrors `jobs_dirty`).
 6. **25.12-R1**: AppState decomposition — DONE (WO 26.8). `AppState` is now 11 sub-structs (conversation, generation, budget, session, provider, approval, search, ui, doom, services + `dirty`). All call sites migrated; helper methods retained as accessor shims. TUI renders identically; session persistence format unchanged.
@@ -696,6 +749,8 @@ A "completed" deps subagent left a detached `cargo run -p kf-context-index --exa
 - `cargo fmt --check`: PASS
 - `cargo clippy --workspace -- -D warnings`: PASS
 - `cargo clippy --workspace --features pty -- -D warnings`: PASS
+- `cargo clippy -p kf-code --lib --tests --features computer_use -- -D warnings`: PASS
+- `cargo nextest run -p kf-code --lib`: 3298 passed, 17 skipped (159s)
 - `cargo test -p kf-budget-core --test adr_xref_drift`: PASS
 
 ## Known pre-existing test failures (NOT from WO 21/22)

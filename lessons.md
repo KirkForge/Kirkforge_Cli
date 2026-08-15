@@ -442,3 +442,51 @@
   tool kills background processes at 120s. Use `setsid`/`nohup` with
   `disown`, or run in the foreground with a large timeout. `CARGO_BUILD_JOBS=1`
   avoids OOM kills on memory-constrained hosts.
+
+## Session 2026-08-15 — WO 32.18 bash.require_allowlist config (worktree `wo32`)
+
+### What I learned about this codebase
+- **The bash safety gate is a single function**: `check_bash_command_str` in
+  `src/shared/bash_safety.rs` (NOT `src/session/bash_runner/safety.rs` as
+  gitnexus's stale index says — the file moved). It takes a `&DenyList` param
+  that ALL 35 callers pass. Adding new gate logic via `DenyList` fields (not
+  new function params) means ZERO signature changes → CRITICAL-risk symbol
+  touched with zero caller impact. This is the lazy pattern for extending
+  the bash gate.
+- **DenyList is the config→gate bridge**: `access_from_config` in
+  `src/shared/access/mod.rs` is the single production site that builds a
+  `DenyList` from `SecurityConfig`. Thread new bash-gate config there.
+  `DenyList::default()` (empty allowlist) is used everywhere in tests and
+  stays a no-op.
+- **CONFIG_FIELD_COUNT drift-guard is strict**: adding 2 fields to
+  SecurityConfig requires updating 4 places in `session/config/mod.rs`:
+  (1) `CONFIG_FIELD_COUNT` const 100→102, (2) the test assertion
+  `CONFIG_FIELD_COUNT, N`, (3) `merge_toml_source` TOML + `MERGE_TOML_EXPECTED`,
+  (4) `ENV_OVERRIDE_EXPECTED` if adding env vars. The serde count check
+  auto-adjusts (it counts `obj.len()`). Miss any and the test fails.
+- **Edit tool + git worktree quirk**: my first round of Edit calls all
+  reported "success" but did NOT persist to disk (verified by grep showing
+  0 occurrences after). Re-running the same edits worked. Always verify
+  edits persisted with a grep/read BEFORE building — I wasted 15+ min
+  building and "testing" code that wasn't on disk.
+- **Pre-existing worktree state**: the `wo32` worktree had 5 uncommitted
+  files from a prior session (`coverage_gaps.rs`, `plugin_tools/native.rs`,
+  `compaction.rs`, `summarizer.rs`, `verifier/bus.rs`). These caused 2
+  pre-existing test failures (`schema_drift_preserves_user_values`,
+  `request_with_wrong_auth_token_is_rejected`) and 2 flaky-by-pollution
+  failures (`test_compact_hooks_fire_pre_and_post`,
+  `test_run_hook_with_env_vars`) when run in parallel. All 4 pass in
+  isolation. NOT my changes — verified by stashing and re-running.
+- **3 approval tests hang**: `test_always_approve_dedups_repeated_calls`,
+  `test_always_approve_does_not_overwrite_existing_deny`,
+  `test_deny_rule_blocks_bash_even_with_auto_approve` run >60s and appear
+  stuck. Pre-existing (lessons.md already notes this). Skip with
+  `--skip test_always_approve --skip test_deny_rule_blocks`.
+
+### What I'd do differently
+- Verify edits persisted with `grep` immediately after each Edit, before
+  any build. The Edit tool's "success" report is not always trustworthy in
+  this worktree.
+- Run `cargo test -- -p kf-code --lib -- <my_module>` first (fast, isolated)
+  before the full workspace gate. The full gate takes 5+ min and pre-existing
+  flakiness obscures whether MY changes are green.

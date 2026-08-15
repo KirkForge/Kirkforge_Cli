@@ -149,6 +149,7 @@ fn format_results(results: &[BraveResult]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::EnvGuard;
     use crate::tools::ToolContext;
 
     #[test]
@@ -162,7 +163,7 @@ mod tests {
     #[tokio::test]
     async fn missing_api_key_returns_configuration_error() {
         // Ensure no key is present for this test.
-        std::env::remove_var("BRAVE_SEARCH_API_KEY");
+        let _env = EnvGuard::remove("BRAVE_SEARCH_API_KEY");
         let tool = WebSearch::new();
         let outcome = tool
             .run(&ToolContext::new(), serde_json::json!({"query": "rust"}))
@@ -229,7 +230,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_api_key_treated_as_unconfigured() {
-        std::env::remove_var("BRAVE_SEARCH_API_KEY");
+        let _env = EnvGuard::remove("BRAVE_SEARCH_API_KEY");
         let tool = WebSearch::with_key("");
         let outcome = tool
             .run(&ToolContext::new(), serde_json::json!({"query": "rust"}))

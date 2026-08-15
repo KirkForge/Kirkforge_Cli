@@ -144,13 +144,63 @@ fn first_run_banner(path: &std::path::Path) -> String {
     )
 }
 
+/// Compute the legacy pre-rename config path
+/// (`~/.local/share/kirkforge/config.toml`).
+///
+/// Commit ae0e37d (2026-08-04) renamed the data dir from `kirkforge` to
+/// `kf-code`. Existing users have their customized `config.toml` at the
+/// old path; without migration, `load_or_create_config` writes fresh
+/// defaults and the user's customizations vanish. This helper returns
+/// the old path so `load_or_create_config` can migrate the file on
+/// first run of the new binary.
+///
+/// Respects `KF_CODE_LEGACY_DATA_DIR` (mirrors `KF_CODE_DATA_DIR`) so
+/// the migration is unit-testable without touching the real legacy dir.
+fn legacy_config_path() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("KF_CODE_LEGACY_DATA_DIR") {
+        return Some(PathBuf::from(dir).join("config.toml"));
+    }
+    directories::ProjectDirs::from("", "", "kirkforge")
+        .map(|p| p.data_dir().join("config.toml"))
+}
+
 /// Load config and write a default file on first run.
 ///
 /// If the config file doesn't exist, creates it with default values
-/// and prints a brief info message.
+/// and prints a brief info message. If a config exists at the legacy
+/// pre-rename path, it is migrated (copied) to the new location
+/// instead of writing defaults — preserving user customizations across
+/// the `kirkforge → kf-code` rename.
 pub fn load_or_create_config() -> Config {
     let path = super::config_path();
     let exists = path.exists();
+
+    // Migration: if the config file is absent at the current path but
+    // exists at the legacy pre-rename path (~/.local/share/kirkforge/),
+    // copy it across instead of writing fresh defaults. Commit ae0e37d
+    // renamed the data dir; without this, upgrading users lose their
+    // customizations on first run of the new binary.
+    if !exists {
+        if let Some(legacy) = legacy_config_path() {
+            if legacy.exists() {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if std::fs::copy(&legacy, &path).is_ok() {
+                    tracing::info!(
+                        from = %legacy.display(),
+                        to = %path.display(),
+                        "Migrated config from legacy kirkforge data dir"
+                    );
+                    let (cfg, warning) = load_config();
+                    if let Some(w) = warning {
+                        eprintln!("Warning: {} ({})", w, path.display());
+                    }
+                    return cfg;
+                }
+            }
+        }
+    }
 
     let (cfg, warning) = load_config();
     if let Some(w) = warning {
@@ -2478,5 +2528,121 @@ mod tests {
 
         std::env::remove_var("KF_CODE_DATA_DIR");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Contract:** an existing `config.toml` at the current data-dir
+    /// path must NOT be overwritten by `load_or_create_config`. This is
+    /// the core pin against the reported "config gets reset on install"
+    /// bug: the function's `!exists` guard is what protects returning
+    /// users. If this regresses, the banner prints on every run and the
+    /// user's customizations are wiped.
+    #[test]
+    fn existing_config_not_overwritten_on_startup() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = std::env::temp_dir().join(format!(
+            "kf_code_keep_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::env::set_var("KF_CODE_DATA_DIR", dir.as_os_str());
+        std::env::remove_var("KF_CODE_LEGACY_DATA_DIR");
+        let path = super::super::config_path();
+        // Seed a config with a user customization.
+        std::fs::write(
+            &path,
+            "ollama_host = \"http://user-custom:9999\"\n\
+             auto_approve = true\n",
+        )
+        .unwrap();
+
+        let cfg = load_or_create_config();
+        assert_eq!(
+            cfg.model.ollama_host, "http://user-custom:9999",
+            "existing user config must not be overwritten"
+        );
+        assert!(cfg.security.auto_approve);
+        // The file on disk must still contain the user's values, not defaults.
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("http://user-custom:9999"),
+            "config file on disk was overwritten with defaults:\n{on_disk}"
+        );
+
+        std::env::remove_var("KF_CODE_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Contract:** when the config is absent at the current path but a
+    /// legacy `kirkforge`-era config exists at the pre-rename path,
+    /// `load_or_create_config` must migrate it (copy) to the new path
+    /// instead of writing fresh defaults. This is the migration pin for
+    /// the `kirkforge → kf-code` rename (commit ae0e37d). Without it,
+    /// upgrading users lose every customization on first run of the new
+    /// binary — the exact "dead on startup" report.
+    #[test]
+    fn legacy_kirkforge_config_migrated_not_overwritten() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let new_dir = std::env::temp_dir().join(format!(
+            "kf_code_mig_new_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let legacy_dir = std::env::temp_dir().join(format!(
+            "kf_code_mig_legacy_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+                .wrapping_add(1)
+        ));
+        let _ = std::fs::remove_dir_all(&new_dir);
+        let _ = std::fs::remove_dir_all(&legacy_dir);
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+
+        // Simulate a pre-rename user: config lives at the legacy path
+        // with a customization. The new path must not exist yet.
+        std::fs::write(
+            legacy_dir.join("config.toml"),
+            "ollama_host = \"http://user-custom:9999\"\n\
+             auto_approve = true\n",
+        )
+        .unwrap();
+
+        std::env::set_var("KF_CODE_DATA_DIR", new_dir.as_os_str());
+        std::env::set_var("KF_CODE_LEGACY_DATA_DIR", legacy_dir.as_os_str());
+        let new_path = super::super::config_path();
+        assert!(!new_path.exists(), "precondition: new config absent");
+
+        let cfg = load_or_create_config();
+        // User values migrated, not wiped to defaults.
+        assert_eq!(
+            cfg.model.ollama_host, "http://user-custom:9999",
+            "legacy config must be migrated, not overwritten with defaults"
+        );
+        assert!(cfg.security.auto_approve);
+        // The migration wrote the user's file to the new path verbatim.
+        assert!(new_path.exists(), "migrated config written to new path");
+        let on_disk = std::fs::read_to_string(&new_path).unwrap();
+        assert!(
+            on_disk.contains("http://user-custom:9999"),
+            "migrated file must contain user values, got:\n{on_disk}"
+        );
+
+        std::env::remove_var("KF_CODE_DATA_DIR");
+        std::env::remove_var("KF_CODE_LEGACY_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&new_dir);
+        let _ = std::fs::remove_dir_all(&legacy_dir);
     }
 }

@@ -825,7 +825,16 @@ mod tests {
         );
     }
 
-    #[ignore = "requires Docker installed and running"]
+    // WO 33.14 phase 3 DEFERRED: Docker mock not injected. run_docker
+    // (bash.rs:54) spawns `docker` directly; faking needs a DockerRunner
+    // trait threaded through Bash::new. The security-critical deny-list
+    // path is already covered in-process by bash_docker_path_blocks_
+    // dangerous_command (short-circuits before spawn). This is the 1
+    // real-Docker smoke test. ponytail: ceiling — 1 real-Docker test,
+    // not mocked. Upgrade path: add DockerRunner trait + FakeDockerRunner,
+    // inject at Bash::new, unit-test the docker_args construction +
+    // workdir-sanitization logic in-process. Tracked in state.md pending.
+    #[ignore = "requires Docker installed and running; real-Docker smoke test"]
     #[tokio::test]
     async fn bash_docker_executes_command_in_container() {
         let docker_cfg = DockerConfig {

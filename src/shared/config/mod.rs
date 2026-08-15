@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Breakdown:
 ///   ModelConfig    32  (31 direct + subagent_provider sub-struct handle)
-///   SecurityConfig 20  (17 direct + 3 sub-struct handles)
+///   SecurityConfig 22  (19 direct + 3 sub-struct handles)
 ///   ToolConfig     33
 ///   SessionConfig   8
 ///   DisplayConfig   7
@@ -36,7 +36,9 @@ use serde::{Deserialize, Serialize};
 // for several WO cycles; un-ignoring it forced the correction.
 // WO 27.1: bumped 98 → 99 (added SecurityConfig.landlock_extra_paths).
 // WO 30.0.6: bumped 99 → 100 (added ModelConfig.subagent_provider).
-pub const CONFIG_FIELD_COUNT: usize = 100;
+// WO 32.18: bumped 100 → 102 (added SecurityConfig.bash_require_allowlist,
+//           SecurityConfig.bash_allowlist).
+pub const CONFIG_FIELD_COUNT: usize = 102;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

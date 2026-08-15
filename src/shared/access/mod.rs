@@ -603,7 +603,12 @@ pub fn access_from_config(config: &crate::shared::Config) -> (DenyList, PathGuar
     base.path_patterns
         .extend(config.security.deny_paths.clone());
     base.url_patterns.extend(config.security.deny_urls.clone());
-    let deny_list = DenyList::new(base.path_patterns, base.url_patterns);
+    let deny_list = DenyList::with_bash_allowlist(
+        base.path_patterns,
+        base.url_patterns,
+        config.security.bash_require_allowlist,
+        config.security.bash_allowlist.clone(),
+    );
 
     let sandbox_dir = config
         .security

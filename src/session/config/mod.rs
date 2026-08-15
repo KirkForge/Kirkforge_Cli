@@ -371,6 +371,15 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Boolean(v)) = table.get("bash_sandbox_workdir") {
         cfg.security.bash_sandbox_workdir = *v;
     }
+    if let Some(Value::Boolean(v)) = table.get("bash_require_allowlist") {
+        cfg.security.bash_require_allowlist = *v;
+    }
+    if let Some(Value::Array(v)) = table.get("bash_allowlist") {
+        cfg.security.bash_allowlist = v
+            .iter()
+            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+            .collect();
+    }
     if let Some(Value::Boolean(v)) = table.get("block_gitignored_dotfiles") {
         cfg.security.block_gitignored_dotfiles = *v;
     }
@@ -2197,10 +2206,10 @@ mod tests {
 
         // ── 1. Total struct-level fields ──────────────────────────
         // ModelConfig=32 (31 direct + subagent_provider sub-struct handle),
-        // SecurityConfig=20, ToolConfig=33, SessionConfig=8,
-        // DisplayConfig=7 → 100 total pub fields.
+        // SecurityConfig=22, ToolConfig=33, SessionConfig=8,
+        // DisplayConfig=7 → 102 total pub fields.
         assert_eq!(
-            CONFIG_FIELD_COUNT, 100,
+            CONFIG_FIELD_COUNT, 102,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2237,6 +2246,8 @@ mod tests {
             budget_tokens = 999
             max_tokens = 999
             bash_sandbox_workdir = true
+            bash_require_allowlist = true
+            bash_allowlist = ["ls", "echo"]
             block_gitignored_dotfiles = true
             max_overwrite_size = 999
             summarize_model = "x"
@@ -2317,9 +2328,9 @@ mod tests {
                 toml_key_count += 1;
             }
         }
-        // 68 top-level leaf keys + 8 array keys + 3 single-key inline
-        // tables + 7 computer_use sub-keys + 7 subagent_provider sub-keys = 93
-        const MERGE_TOML_EXPECTED: usize = 93;
+        // 69 top-level leaf keys + 9 array keys + 3 single-key inline
+        // tables + 7 computer_use sub-keys + 7 subagent_provider sub-keys = 95
+        const MERGE_TOML_EXPECTED: usize = 95;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2337,9 +2348,9 @@ mod tests {
             + env_overrides_src.matches("\"DEEPSEEK_API_KEY\"").count()
             + env_overrides_src.matches("\"GEMINI_API_KEY\"").count()
             + env_overrides_src.matches("\"KIMI_API_KEY\"").count();
-        // 84 KF_CODE_* literals (77 base + 7 KF_CODE_SUBAGENT_*) +
-        // 5 API-key literals = 89
-        const ENV_OVERRIDE_EXPECTED: usize = 89;
+        // 86 KF_CODE_* literals (77 base + 7 KF_CODE_SUBAGENT_* + 2 bash
+        // allowlist) + 5 API-key literals = 91
+        const ENV_OVERRIDE_EXPECTED: usize = 91;
         assert_eq!(
             env_var_count, ENV_OVERRIDE_EXPECTED,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"

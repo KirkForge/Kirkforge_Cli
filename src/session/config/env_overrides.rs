@@ -158,6 +158,21 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         cfg.security.bash_sandbox_workdir
     );
 
+    // KF_CODE_BASH_REQUIRE_ALLOWLIST (WO 32.18)
+    env_bool!(
+        "KF_CODE_BASH_REQUIRE_ALLOWLIST",
+        cfg.security.bash_require_allowlist
+    );
+
+    // KF_CODE_BASH_ALLOWLIST — colon-separated command prefixes (WO 32.18)
+    if let Ok(val) = std::env::var("KF_CODE_BASH_ALLOWLIST") {
+        cfg.security.bash_allowlist = val
+            .split(':')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+
     // KF_CODE_LANDLOCK_EXTRA_PATHS — colon-separated extra landlock allow-list
     // paths (WO 27.1). Mirrors PATH-style splitting.
     if let Ok(val) = std::env::var("KF_CODE_LANDLOCK_EXTRA_PATHS") {

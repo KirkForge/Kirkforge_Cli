@@ -151,6 +151,14 @@
 # rejects explicit `workdir` args that escape it. Default: true.
 # bash_sandbox_workdir = true
 
+# When true, bash commands must match `bash_allowlist` or be denied (WO 32.18).
+# Match policy: prefix-match on the command head (first token). Compound
+# commands (`&&`, `;`, `|`) require every clause to match or the whole
+# command is denied. Default: false (no regression for existing configs).
+# Env: KF_CODE_BASH_REQUIRE_ALLOWLIST (bool), KF_CODE_BASH_ALLOWLIST (colon-separated).
+# bash_require_allowlist = false
+# bash_allowlist = ["ls", "echo", "grep", "cat", "cargo", "git"]
+
 # Lightweight rlimit hardening for the non-Docker bash path (ADR-054).
 # When `harden` is true and Docker is NOT enabled, the bash tool applies
 # RLIMIT_CPU / RLIMIT_AS / RLIMIT_FSIZE to the child shell in a pre_exec

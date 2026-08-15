@@ -289,6 +289,63 @@ fn tee_to_dangerous_path(cmd: &str) -> Option<&'static str> {
     None
 }
 
+/// Check a bash command against an allowlist (WO 32.18).
+///
+/// When `deny_list.bash_require_allowlist` is true, every clause of the
+/// command must have its head (first token) prefix-match an entry in
+/// `deny_list.bash_allowlist`, or the whole command is denied. Compound
+/// commands (`&&`, `;`, `|`) require every clause to match. When false
+/// (default) or the allowlist is empty, this is a no-op.
+///
+/// Returns `Some(reason)` naming the offending clause when denied, `None`
+/// when allowed or the allowlist is not enforced.
+///
+/// ponytail: prefix-match on the head is the simplest non-theatrical
+/// command gate. It does not parse shell syntax — a determined payload
+/// can still evade via `eval`, variables, or encoding. The real boundary
+/// remains landlock (WO 27.1); this allowlist is operator-curated
+/// blast-radius narrowing for trusted-command environments.
+fn check_bash_allowlist(cmd: &str, deny_list: &DenyList) -> Option<String> {
+    if !deny_list.bash_require_allowlist || deny_list.bash_allowlist.is_empty() {
+        return None;
+    }
+    // Normalize first so quoted heads and mixed whitespace collapse cleanly,
+    // then split on the compound separators.
+    let normalized = normalize_for_safety(cmd);
+    let clauses = split_compound_clauses(&normalized);
+    for clause in clauses {
+        let head = match clause.split_whitespace().next() {
+            Some(h) => h,
+            None => continue, // empty clause (e.g. trailing `;`) — skip
+        };
+        let matched = deny_list
+            .bash_allowlist
+            .iter()
+            .any(|prefix| head.starts_with(prefix.trim()));
+        if !matched {
+            return Some(format!(
+                "🔒 Command blocked by bash allowlist: clause '{clause}' does not match any allowed prefix"
+            ));
+        }
+    }
+    None
+}
+
+/// Split a normalized command string into clauses on `&&`, `||`, `;`, and `|`.
+/// Each returned clause is trimmed; empty clauses are dropped.
+fn split_compound_clauses(cmd: &str) -> Vec<String> {
+    // The normalized command has collapsed whitespace, so separators are
+    // always single-token. Replace each with a sentinel, then split.
+    let mut s = cmd.to_string();
+    for sep in ["&&", "||", ";", "|"] {
+        s = s.replace(sep, "\u{0}");
+    }
+    s.split('\u{0}')
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect()
+}
+
 /// Safety check for a bash command. Returns `Some(reason)` if the command
 /// should be blocked, `None` if it may proceed.
 ///
@@ -474,6 +531,13 @@ pub fn check_bash_command_str(
                 "🔒 Command blocked: references denied path '{token}'"
             ));
         }
+    }
+
+    // 9. Bash command allowlist (WO 32.18). When `require_allowlist` is
+    //    true, every clause's head must prefix-match an allowed prefix.
+    //    No-op when false (default) or the allowlist is empty.
+    if let Some(reason) = check_bash_allowlist(cmd, deny_list) {
+        return Some(reason);
     }
 
     None
@@ -1051,5 +1115,135 @@ mod private_tests {
                 .is_some_and(|m| m.contains("parameter expansion")),
             "backtick substitution should be blocked, got: {result:?}"
         );
+    }
+
+    // ── WO 32.18: bash allowlist ───────────────────────────────────
+
+    fn allowlist_deny_list(prefixes: &[&str]) -> DenyList {
+        DenyList::with_bash_allowlist(
+            vec![],
+            vec![],
+            true,
+            prefixes.iter().map(|s| s.to_string()).collect(),
+        )
+    }
+
+    #[test]
+    fn allowlist_allows_matching_command() {
+        let dl = allowlist_deny_list(&["ls", "echo", "cargo"]);
+        assert!(
+            check_bash_command_str("ls -la /tmp", None, &dl, &PathGuard::default(), false,)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn allowlist_denies_non_matching_command() {
+        let dl = allowlist_deny_list(&["ls", "echo"]);
+        let r = check_bash_command_str("rm -rf /tmp/x", None, &dl, &PathGuard::default(), false);
+        assert!(
+            r.as_ref()
+                .is_some_and(|m| m.contains("allowlist") && m.contains("rm -rf /tmp/x")),
+            "non-matching command should be denied by allowlist, got: {r:?}"
+        );
+    }
+
+    #[test]
+    fn allowlist_compound_all_clauses_match_is_allowed() {
+        let dl = allowlist_deny_list(&["ls", "echo"]);
+        assert!(check_bash_command_str(
+            "ls -la && echo done",
+            None,
+            &dl,
+            &PathGuard::default(),
+            false,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn allowlist_compound_one_clause_off_is_denied() {
+        let dl = allowlist_deny_list(&["ls", "echo"]);
+        let r = check_bash_command_str(
+            "ls -la && rm /tmp/x",
+            None,
+            &dl,
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            r.as_ref()
+                .is_some_and(|m| m.contains("allowlist") && m.contains("rm /tmp/x")),
+            "compound command with one non-matching clause should be denied, got: {r:?}"
+        );
+    }
+
+    #[test]
+    fn allowlist_compound_pipe_separator() {
+        let dl = allowlist_deny_list(&["ls"]);
+        let r =
+            check_bash_command_str("ls -la | grep foo", None, &dl, &PathGuard::default(), false);
+        assert!(
+            r.as_ref()
+                .is_some_and(|m| m.contains("allowlist") && m.contains("grep foo")),
+            "pipe to non-allowed command should be denied, got: {r:?}"
+        );
+    }
+
+    #[test]
+    fn allowlist_compound_semicolon_separator() {
+        let dl = allowlist_deny_list(&["ls", "grep"]);
+        assert!(check_bash_command_str(
+            "ls; grep foo bar",
+            None,
+            &dl,
+            &PathGuard::default(),
+            false,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn allowlist_disabled_by_default_is_noop() {
+        // require_allowlist = false → allowlist ignored, rm passes the gate
+        // (rm is not in the dangerous-pattern list by itself).
+        let dl = DenyList::with_bash_allowlist(vec![], vec![], false, vec!["ls".into()]);
+        assert!(
+            check_bash_command_str("rm /tmp/x", None, &dl, &PathGuard::default(), false,).is_none()
+        );
+    }
+
+    #[test]
+    fn allowlist_empty_when_required_denies_nothing() {
+        // require_allowlist = true but allowlist empty → no-op (can't match
+        // anything, so we don't block — documented behavior: empty allowlist
+        // is treated as "not enforced" to avoid locking out all bash).
+        let dl = DenyList::with_bash_allowlist(vec![], vec![], true, vec![]);
+        assert!(
+            check_bash_command_str("rm /tmp/x", None, &dl, &PathGuard::default(), false,).is_none()
+        );
+    }
+
+    #[test]
+    fn allowlist_does_not_override_dangerous_pattern_block() {
+        // A dangerous command is still blocked even if its head is allowlisted.
+        let dl = allowlist_deny_list(&["rm"]);
+        let r = check_bash_command_str("rm -rf /", None, &dl, &PathGuard::default(), false);
+        assert!(
+            r.as_ref().is_some_and(|m| m.contains("dangerous pattern")),
+            "dangerous pattern must block before allowlist allows, got: {r:?}"
+        );
+    }
+
+    #[test]
+    fn split_compound_clauses_handles_all_separators() {
+        let got = split_compound_clauses("ls && echo a; cat b | grep c");
+        assert_eq!(got, vec!["ls", "echo a", "cat b", "grep c"]);
+    }
+
+    #[test]
+    fn split_compound_clauses_drops_empty() {
+        let got = split_compound_clauses("ls;; echo a");
+        assert_eq!(got, vec!["ls", "echo a"]);
     }
 }

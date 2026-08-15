@@ -19,6 +19,13 @@ pub struct DenyList {
     pub path_patterns: Vec<String>,
     /// URL prefix patterns (blocked if the target URL starts with any).
     pub url_patterns: Vec<String>,
+    /// When true, bash commands must match `bash_allowlist` or be denied
+    /// (WO 32.18). No-op when false (default).
+    pub bash_require_allowlist: bool,
+    /// Command-prefix allowlist for the bash gate (WO 32.18). Each entry is
+    /// matched as a prefix against the command head (first token of each
+    /// clause). Only enforced when `bash_require_allowlist` is true.
+    pub bash_allowlist: Vec<String>,
 }
 
 impl DenyList {
@@ -37,7 +44,24 @@ impl DenyList {
             path_matchers,
             path_patterns,
             url_patterns,
+            bash_require_allowlist: false,
+            bash_allowlist: Vec::new(),
         }
+    }
+
+    /// Build a DenyList with an explicit bash allowlist (WO 32.18).
+    /// The path/url deny patterns come from the arguments; the allowlist
+    /// fields are set from the config.
+    pub fn with_bash_allowlist(
+        path_patterns: Vec<String>,
+        url_patterns: Vec<String>,
+        bash_require_allowlist: bool,
+        bash_allowlist: Vec<String>,
+    ) -> Self {
+        let mut dl = Self::new(path_patterns, url_patterns);
+        dl.bash_require_allowlist = bash_require_allowlist;
+        dl.bash_allowlist = bash_allowlist;
+        dl
     }
 
     /// Returns true if `path` matches any deny pattern.

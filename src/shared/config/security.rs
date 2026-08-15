@@ -82,6 +82,19 @@ pub struct SecurityConfig {
     /// cache). Env: `KF_CODE_LANDLOCK_EXTRA_PATHS` (colon-separated).
     #[serde(default)]
     pub landlock_extra_paths: Vec<String>,
+    /// When true, bash commands must match `bash_allowlist` or be denied
+    /// (WO 32.18). Default false preserves current behavior. Match policy:
+    /// prefix-match on the command head (first token). Compound commands
+    /// (`&&`, `;`, `|`) require every clause to match or the whole
+    /// command is denied. Env: `KF_CODE_BASH_REQUIRE_ALLOWLIST`.
+    #[serde(default)]
+    pub bash_require_allowlist: bool,
+    /// Command-prefix allowlist for the bash gate (WO 32.18). Each entry is
+    /// matched as a prefix against the command head (first token of each
+    /// clause). Only enforced when `bash_require_allowlist` is true.
+    /// Env: `KF_CODE_BASH_ALLOWLIST` (colon-separated).
+    #[serde(default)]
+    pub bash_allowlist: Vec<String>,
 }
 
 impl Default for SecurityConfig {
@@ -107,6 +120,8 @@ impl Default for SecurityConfig {
             diff_review: true,
             audit_log_path: None,
             landlock_extra_paths: vec![],
+            bash_require_allowlist: false,
+            bash_allowlist: vec![],
         }
     }
 }

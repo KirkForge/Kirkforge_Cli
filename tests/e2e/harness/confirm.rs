@@ -19,12 +19,23 @@ pub fn approve(ui: &TmuxDriver, timeout: std::time::Duration) -> std::io::Result
     let pane = ui.wait_for_contains(
         APPROVAL_TITLE,
         timeout,
-        std::time::Duration::from_millis(200),
+        std::time::Duration::from_millis(50),
     )?;
     ui.send_keys("y")?;
-    // Wait for the approval to be processed and the modal to clear.
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    Ok(pane)
+    // Wait for the modal to clear instead of a blind sleep: poll until
+    // the approval title is no longer in the pane.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Ok(p) = ui.capture_pane() {
+            if !p.contains(APPROVAL_TITLE) {
+                return Ok(pane);
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(pane);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
 }
 
 /// Detect an approval modal and send 'n' to reject.
@@ -33,11 +44,22 @@ pub fn reject(ui: &TmuxDriver, timeout: std::time::Duration) -> std::io::Result<
     let pane = ui.wait_for_contains(
         APPROVAL_TITLE,
         timeout,
-        std::time::Duration::from_millis(200),
+        std::time::Duration::from_millis(50),
     )?;
     ui.send_keys("n")?;
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    Ok(pane)
+    // Wait for the modal to clear instead of a blind sleep.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Ok(p) = ui.capture_pane() {
+            if !p.contains(APPROVAL_TITLE) {
+                return Ok(pane);
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(pane);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
 }
 
 /// Check whether the tmux pane currently shows the approval modal.

@@ -55,8 +55,23 @@ impl TmuxDriver {
             )));
         }
 
-        // Give the TUI a moment to render.
-        std::thread::sleep(Duration::from_millis(500));
+        // Readiness probe: poll the pane until it renders content, instead
+        // of a fixed 500ms sleep. The TUI may take variable time to start
+        // depending on build mode and machine load.
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Ok(pane) = self.capture_pane() {
+                if !pane.trim().is_empty() {
+                    break;
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(std::io::Error::other(
+                    "tmux session did not render within 15s",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
         Ok(())
     }
 

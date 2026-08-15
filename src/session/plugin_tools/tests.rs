@@ -1058,10 +1058,9 @@ prompt = "hi"
         let _watcher = crate::session::plugin_tools::spawn_plugin_watcher(plugins_dir.clone(), tx);
         assert!(_watcher.is_some(), "watcher should start");
 
-        // Give the watcher a moment to initialize.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        // Modify the manifest.
+        // Modify the manifest. The watcher's reload signal is awaited below
+        // with a 3s timeout; no init sleep is needed — the debounce + watcher
+        // latency is covered by that timeout.
         std::fs::write(
             plugin_dir.join("kf-code.toml"),
             r#"

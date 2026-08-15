@@ -117,9 +117,8 @@ fn classify_borrow_conflict(error: &str) -> Option<ErrorHint> {
     // first quoted token after "cannot borrow" is the name of the
     // borrow that *conflicts*. This order is consistent across rustc
     // editions and clippy rewrites of the same diagnostic.
-    let re_borrower = RE_BORROWER.get_or_init(|| {
-        Regex::new(r"cannot borrow `([^`]+)`").expect("borrower regex")
-    });
+    let re_borrower =
+        RE_BORROWER.get_or_init(|| Regex::new(r"cannot borrow `([^`]+)`").expect("borrower regex"));
     let re_original = RE_ORIGINAL_REF.get_or_init(|| {
         Regex::new(r"also (?:mutably )?borrowed as `([^`]+)`").expect("original ref regex")
     });

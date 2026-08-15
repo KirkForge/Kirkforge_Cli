@@ -964,17 +964,13 @@ differentiator vs Claude Code / Vix / opencode.
 
 A `bench` workflow runs all tasks on Ollama with `qwen2.5:0.5b` on push to main.
 It posts a delta summary as a PR comment comparing against the `main` baseline
-(ADR-045). A nightly `bench-baseline` workflow on `main` stores the
-canonical baseline report as a workflow artifact. **This whole workflow is
-currently OFFLINE** — the file is checked in as
-`.github/workflows/bench-baseline.yml.disabled`, so none of the jobs below
-currently run. The disabled state is documented up front so the job
-descriptions below are read as the *design*, not a live system.
+(ADR-045). The bench-baseline workflow file was deleted in the CI
+architecture reset (ADR-074) as an obsolete artifact.
 
-### Bench CI loop (WO 10.9) — *currently disabled* (file: `bench-baseline.yml.disabled`)
+### Bench CI loop (WO 10.9) — *deleted* (ADR-074 CI reset)
 
-The bench CI loop has three jobs in `.github/workflows/bench-baseline.yml.disabled`
-(all currently disabled; described as designed, not as running):
+The bench CI loop was previously a disabled workflow file (deleted in
+ADR-074 CI reset). The design was:
 
 1. **`bench-baseline`** (push to main): runs `bench run` with
    `qwen2.5:0.5b`, uploads the report as a 90-day-retention artifact.

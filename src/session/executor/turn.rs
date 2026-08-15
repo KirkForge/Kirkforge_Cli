@@ -79,6 +79,14 @@ impl Executor {
             .run_turn_inner(user_input, approval_sender, cancelled, event_tx)
             .await;
 
+        // Release the spawner's clone of the approval sender so the
+        // channel closes when the caller drops its own sender. Without
+        // this, an approval handler that loops on `recv().await` until
+        // channel closure blocks forever (the spawner's clone outlives
+        // the turn). Subagent approval forwarding is only needed during
+        // a turn; re-set at the next turn's start above.
+        self.clear_spawner_parent_approval();
+
         // TurnComplete: emitted exactly once on every Ok exit path from
         // run_turn_inner (normal completion, max-iterations, parse-error
         // exhaustion, cancellation). The TUI relies on this to clear

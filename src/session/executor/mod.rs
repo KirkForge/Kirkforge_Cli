@@ -433,6 +433,15 @@ impl Executor {
         }
     }
 
+    /// Clear the task spawner's parent-approval forwarder. Drops the
+    /// cloned sender so the approval channel closes when the caller
+    /// releases its own sender. Called at turn end.
+    pub fn clear_spawner_parent_approval(&self) {
+        if let Some(spawner) = &self.task_spawner {
+            spawner.clear_parent_approval();
+        }
+    }
+
     /// Replace the shared config with `new` and rebuild access-control
     /// structures from it. Returns a human-readable diff summary.
     fn reload_config(&mut self, new: Config) -> String {

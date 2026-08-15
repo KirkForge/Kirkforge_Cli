@@ -61,6 +61,16 @@ impl InProcessTaskSpawner {
             *guard = Some(tx);
         }
     }
+
+    /// Clear the parent-approval forwarder, dropping the cloned sender.
+    /// Called at turn end so the approval channel closes when the caller
+    /// releases its own sender — without this, a handler that loops on
+    /// `recv().await` until channel closure blocks forever.
+    pub fn clear_parent_approval(&self) {
+        if let Ok(mut guard) = self.parent_approval.lock() {
+            *guard = None;
+        }
+    }
 }
 
 #[async_trait::async_trait]

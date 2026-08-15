@@ -124,7 +124,18 @@ over-claimed.
   (bash, git, cargo spawn) with in-process fakes where the subprocess is
   an implementation detail, not the behavior under test. Reduces CI
   flakiness from external-binary availability. Not started.
-- **WO 32.19 / 32.20.** Not started this session; see workorder files.
+- **WO 32.19 — R7 shipped, R6 disclosed as YAGNI** (branch `wo/32-series-d`,
+  worktree `.worktrees/wo32d`). R7: wired the security emitter (WO 29.2)
+  into the `kf-orchestrator` correction loop's verify cycle. New module
+  `crates/kf-orchestrator/src/verifier.rs` ports the 14 regex rules
+  (crate-local; the binary's `security_emitter.rs` is not reachable from
+  the library crate). `run_correction_loop` scans the delegation's written
+  files after each turn and populates `packet.verification.security` so
+  `decide_correction` sees real findings. 10 new tests (8 verifier + 2
+  wiring). R6 (`SloMonitor` + `AuthPolicySloMonitor`) disclosed as YAGNI:
+  zero consumers of SLO numbers exist in the codebase (grep finds only
+  "slow" false matches). Deferred per AGENTS.md §11 — reopen when a
+  consumer materializes.
 - **Full env-mutation cleanup.** 116 sites converted this session; a
   residual set remains in integration/e2e tests that spawn real
   subprocesses (those need the real env). Tracked in WO 33.13.

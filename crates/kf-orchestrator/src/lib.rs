@@ -24,6 +24,7 @@ pub mod model;
 pub mod modes;
 pub mod sink;
 pub mod types;
+pub mod verifier;
 pub mod workspace;
 
 pub use correction::{run_correction_loop, LoopDelegate};
@@ -46,6 +47,7 @@ pub use types::{
     Emission, EmittedFileInfo, OrchestratorStats, Signal, SubtaskExecutionResult, TaskInput,
     TaskNode, TaskValidationResult, ValidatorConfig,
 };
+pub use verifier::{apply_security_findings, scan_files, SecurityFinding};
 pub use workspace::{IsolatedWorkspace, OverlaySpec, WorkspaceManager};
 
 // Re-export the upstream kf-routing pieces the orchestrator surface

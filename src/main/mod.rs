@@ -20,6 +20,7 @@ mod handle_doctor;
 mod handle_plugin;
 mod handle_replay;
 mod handle_sessions;
+mod handle_update;
 mod line_mode;
 mod run_session;
 mod turn_events;

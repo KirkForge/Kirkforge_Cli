@@ -12,6 +12,7 @@ use super::handle_doctor::handle_doctor_command;
 use super::handle_plugin::handle_plugin_command;
 use super::handle_replay::handle_replay_command;
 use super::handle_sessions::handle_sessions_command;
+use super::handle_update::handle_update_command;
 use super::run_session::{run_session, RunArgs};
 
 /// Initialize tracing so logs go to a file instead of corrupting the TUI.
@@ -230,6 +231,7 @@ pub async fn main() {
         Command::Bench { command } => handle_bench_command(command).await,
         Command::Plugin { command } => handle_plugin_command(command),
         Command::Doctor { command } => handle_doctor_command(command),
+        Command::Update { check } => handle_update_command(check).await,
     }
     .map_err(KirkForgeError::from);
 

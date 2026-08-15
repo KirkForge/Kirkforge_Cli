@@ -6,6 +6,33 @@
 
 **`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
 
+## Session 2026-08-15 — `kf-code update` subcommand (branch `wo/32-series-c`, worktree `.worktrees/wo32c`)
+
+- **Self-update command shipped.** New `kf-code update [--check]` subcommand
+  downloads the latest GitHub release, verifies SHA256 against
+  `SHA256SUMS.txt`, extracts the binary, and replaces the running exe in
+  place via atomic rename. `--check` prints current vs latest without
+  installing. Mirrors `scripts/install.sh` logic; uses existing deps only
+  (reqwest, sha2, hex, tempfile). Extraction shells out to `tar` (no
+  `flate2`/`tar` crate dep — binary size matters per the `opt-level="z"`
+  release profile). Target-triple detection via `std::env::consts::{OS,ARCH}`
+  (4 supported: linux x86_64/aarch64, macOS x86_64/aarch64). Windows
+  unsupported (locked binary) — matches install.sh.
+- **Files:** `src/main/handle_update.rs` (NEW, 8 unit tests), `src/cli.rs`
+  (+`Update { check: bool }` variant + 2 parse tests), `src/main/mod.rs`
+  (+`mod handle_update`), `src/main/cli_dispatch.rs` (dispatch wire),
+  `CHANGELOG.md`, `state.md`.
+- **Impact:** LOW — `Command` enum has 0 upstream consumers; the only
+  `match` is in `cli_dispatch.rs:120`, updated in the same commit.
+- **Gate green:** `cargo check -p kf-code --bin kf-code` ✓ ·
+  `cargo test -p kf-code --bin kf-code` (30 passed) ✓ ·
+  `cargo test -p kf-code --lib cli::tests::update` (2 passed) ✓ ·
+  `cargo clippy -p kf-code -- -D warnings` ✓ · `cargo fmt --check` ✓.
+- **Environment note:** `headless_chrome` build script fetches CDP JSON
+  over the network; on the first lib/test build after a clean it fails
+  offline. The host build reuses the cached `protocol.rs` so subsequent
+  builds work. NOT caused by this change.
+
 ## Session 2026-08-14 — Config drift wipe fix (branch `woconfig`, worktree `.worktrees/woconfig`)
 
 - **Config regeneration no longer wipes user values on schema drift.**

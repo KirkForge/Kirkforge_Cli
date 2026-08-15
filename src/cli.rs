@@ -249,6 +249,14 @@ pub enum Command {
         #[command(subcommand)]
         command: DoctorCommand,
     },
+    /// Self-update: download the latest GitHub release, verify SHA256, and
+    /// replace this binary in place. `--check` only prints current vs
+    /// latest without installing.
+    Update {
+        /// Print current vs latest version without installing.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 /// Subcommands for the `doctor` command (WO 12.4, ADR-0029).
@@ -978,6 +986,24 @@ mod tests {
                 assert!(yes);
             }
             _ => panic!("expected Apply"),
+        }
+    }
+
+    #[test]
+    fn update_subcommand_parses_default() {
+        let cli = Cli::try_parse_from(["kf-code", "update"]).expect("parse");
+        match cli.command {
+            Command::Update { check } => assert!(!check),
+            _ => panic!("expected Update"),
+        }
+    }
+
+    #[test]
+    fn update_check_flag_parses() {
+        let cli = Cli::try_parse_from(["kf-code", "update", "--check"]).expect("parse");
+        match cli.command {
+            Command::Update { check } => assert!(check),
+            _ => panic!("expected Update"),
         }
     }
 }

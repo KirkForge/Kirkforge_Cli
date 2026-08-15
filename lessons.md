@@ -103,3 +103,47 @@
   flag if the name itself ends with "parallel"). A proper arg parser would
   be cleaner, but the workorder asked for minimal — this works for the
   documented `/workflow run <name> --parallel` form.
+
+## Phase 1 sleep elimination (session 2026-08-15, worktree wo-sleeps)
+
+### What I learned
+- A prior WO 32 session already eliminated most Phase 1 targets
+  (edge_cases, caching, turn, hooks, task, tui/commands, daemon,
+  mcp_client, loop_ yield_now). The `lessons.md` "Sleeps removed" section
+  + the `poll_for_marker`/`poll_until`/`yield_now` helpers already in the
+  code were the evidence. ALWAYS check `lessons.md` + grep for existing
+  helpers before re-doing work a prior session shipped.
+- `BashJobRegistry` has no completion-notification channel — the watcher
+  updates job status in-place. The deterministic wait pattern is a status
+  poll (`get(id).status` until terminal), not a channel. The
+  `wait_for_job_done` helper I added follows the existing `poll_until`
+  pattern from task.rs.
+- `tokio::process::Child::wait()` is idempotent — once reaped, calling
+  `wait()` again returns the cached `ExitStatus`. So `reap_child` on an
+  already-exited child is a no-op, not an error. This means
+  `reap_child` can *be* the wait (no need to sleep-then-reap).
+- `run_shell_with_token`'s `select!` arms the cancellation token branch
+  immediately on spawn. A `yield_now()` before `token.cancel()` is enough
+  to let the spawned task reach the `select!` — no wall-clock sleep needed.
+  The token works whether or not the child process has started exec.
+- The e2e tests are feature-gated (`#[cfg_attr(not(feature = "e2e-tests"),
+  ignore)]`) and NOT in the default gate, but the task explicitly listed
+  them. Fixed them anyway (readiness probes, 25ms poll). They only run
+  with `--features e2e-tests` + tmux + display.
+- Machine was heavily contended (load avg 21-28) from parallel worktree
+  builds (wo-envmut, wo-profs, wo-fakes) + a nextest run. `cargo check`
+  took 8min, clippy 9min. Killed a stale cargo process holding the
+  package-cache lock to unblock. Budget time for contention.
+
+### What I tried that didn't work
+- Initially replaced the process_group 50ms sleep with
+  `child.wait().await` *before* `reap_child` — shifted the test semantics
+  (testing reap_child on already-reaped child, not live child). Reverted
+  to letting `reap_child` do the wait directly — that's its job, and the
+  1s timeout is the ceiling for `true` which exits in <1ms.
+
+### What I'd do differently
+- Should have checked `lessons.md` FIRST before reading the target files —
+  spent 10 min reading edge_cases/caching/bash_jobs before realizing WO 32
+  had already done most of the work. The lessons file would have told me
+  immediately which sleeps were already killed.

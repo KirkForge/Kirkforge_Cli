@@ -10,6 +10,40 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+## Session 2026-08-15 — Phase 1: kill remaining test sleeps (worktree `.worktrees/wo-sleeps`)
+
+### What changed this session
+
+- **Phase 1 sleep elimination (commit `ac8df2b`).** Killed the remaining
+  wall-clock sleeps in tests that the prior WO 32 session did not reach.
+  9 files, 8 blind sleeps replaced with event-driven synchronization:
+  - `bash_jobs.rs`: 3× blind sleeps (500ms/300ms/300ms) → `wait_for_job_done`
+    poll helper (status poll, 5s ceiling, panic-on-timeout).
+  - `process_group.rs`: 50ms sleep → let `reap_child` wait directly.
+  - `plugin_tools/tests.rs`: removed redundant 200ms watcher-init sleep (3s
+    timeout on `rx.recv` already covers watcher latency).
+  - `bash_runner/mod.rs`: 100ms cancel-timing sleep → `yield_now` (the
+    `select!` is already armed; token works regardless of child start).
+  - `tests/e2e/harness/ui.rs`: 500ms startup sleep → readiness probe (poll
+    pane until non-empty, 15s ceiling).
+  - `tests/e2e/harness/confirm.rs`: 2× 500ms post-approve sleeps → poll for
+    modal clear (pane no longer contains APPROVAL_TITLE).
+  - `tests/e2e/scenarios/daemon_ping.rs`: 200ms cleanup sleep → poll for
+    socket removal (2s ceiling).
+  - `tui_approval.rs` + `tui_chat.rs`: 500ms poll interval → 25ms.
+  Genuine timeout tests kept as-is: bash_runner descendant-survival 2s,
+  tools/bash cancellation-in-flight 500ms+1s, bash_jobs ignored 6s timeout,
+  loop_ mid-batch cancel 150ms. Prior WO 32 session already eliminated:
+  edge_cases, caching, turn, hooks, task, tui/commands, daemon, mcp_client.
+
+### Gate (commit `ac8df2b`)
+- `cargo check -p kf-code --lib --tests`: PASS (8m02s, 0 warnings)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (9m10s, 0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib` (touched tests): 80 passed, 0 failed
+
+---
+
 ## Session 2026-08-15 — WO 33.6 + 33.15 + 32.20 + 32.17 (worktree `.worktrees/wo32e`)
 
 ### What changed this session

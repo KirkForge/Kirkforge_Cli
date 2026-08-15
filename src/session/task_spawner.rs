@@ -349,7 +349,7 @@ impl TaskSpawner for InProcessTaskSpawner {
     }
 }
 
-fn build_task_prompt(persona: &str, task: &str) -> String {
+pub(crate) fn build_task_prompt(persona: &str, task: &str) -> String {
     match persona {
         "explore" => format!(
             "You are an exploratory research assistant. Read files, search, and gather context. \

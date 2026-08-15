@@ -76,3 +76,30 @@
   Cross-library read race on Windows — not a test-sync sleep. A oneshot
   wired through the mock would be fully deterministic but doubles helper
   surface. Remaining: wire oneshot; tracked in this workplan.
+## WO 32.5 — parallel orchestration (session 2026-08-15, worktree wo32d)
+
+### What I learned
+- `TaskHandle` has private fields (`started`, `cancel_requested`,
+  `cancel_signal`) — can't construct it with a struct literal from outside
+  `tools::task`. Use `TaskHandle::default()` + `TaskManager::get_mut` to set
+  metadata after insert. Added `get_mut` for this (LOW risk, 0 impacted).
+- `InProcessTaskSpawner::run_task` is a trait method (`TaskSpawner`), not an
+  inherent method — must `use crate::tools::task::TaskSpawner;` to call it.
+  LSP didn't flag this; cargo check did.
+- `build_task_prompt` in `task_spawner.rs` was private; made it `pub(crate)`
+  so the orchestrator's fallback role-prompt builder can delegate to it.
+- The worktree's `target/debug/.cargo-lock` got held by orphaned `cargo`
+  processes from timed-out build commands. `fuser` identified the PIDs; `kill`
+  + `rm -f .cargo-lock` unblocked. Watch for this when builds time out.
+- LSP diagnostics from other worktrees (wo32, wo32b, wo32c) bled into this
+  worktree — exactly the AGENTS.md warning. Only trusted `cargo check`.
+- An edit to `src/session/mod.rs` (adding `pub mod parallel_orchestrator;`)
+  was silently reverted — likely the stale rust-analyzer LSP revert issue.
+  Re-applied and verified with `grep`. Always verify edits took.
+
+### What I'd do differently
+- The `--parallel` flag parsing uses `strip_suffix("--parallel")` which is
+  fragile (requires the flag at the very end, no spaces between name and
+  flag if the name itself ends with "parallel"). A proper arg parser would
+  be cleaner, but the workorder asked for minimal — this works for the
+  documented `/workflow run <name> --parallel` form.

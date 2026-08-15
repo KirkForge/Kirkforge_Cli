@@ -755,6 +755,21 @@ subagent personas within a single session. Workflows are invoked two ways: the
 TUI `/workflow run` slash command, and the `workflow_run` tool (WO 9.1) which
 lets the agent loop and bench harness run a named template via a tool call.
 
+### Parallel orchestration (WO 32.5)
+
+`ParallelOrchestrator` (`src/session/parallel_orchestrator.rs`) spawns three
+subagents in parallel — Scout (`explore` persona, read-only), Coder (`coder`
+persona, write), Reviewer (`plan` persona, read-only critique) — via
+`tokio::join!` on `InProcessTaskSpawner::run_task`. Each subagent gets its own
+`TaskManager` entry for `/jobs` lifecycle visibility. Triggered by
+`/workflow run <name> --parallel`; the workflow's first prompt-bearing step
+becomes the task description for all three roles. Sequential fallback
+(`run_sequential`) runs the three roles one-by-one when `worktree_enabled` is
+false (without CWD confinement, parallel bash calls can interfere). The
+orchestrator reuses the existing `InProcessTaskSpawner` seam — no new executor
+construction, inheriting WO 32.4 landlock/CWD confinement and WO 30.6 approval
+forwarding.
+
 ---
 
 ## Benchmarks (KIRK-BENCH)

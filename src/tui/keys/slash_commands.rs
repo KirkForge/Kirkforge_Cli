@@ -221,7 +221,7 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         triggers: &["/workflow"],
         description: "Run a programmable JSON workflow",
-        usage: "/workflow run <name>, /workflow status, /workflow cancel",
+        usage: "/workflow run <name> [--parallel], /workflow status, /workflow cancel",
         group: "Workflow",
     },
     SlashCommand {

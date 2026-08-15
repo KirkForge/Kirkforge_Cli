@@ -10,6 +10,37 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+## Session 2026-08-15 — WO 32.5 parallel orchestration (worktree `.worktrees/wo32d`)
+
+### What changed this session
+
+- **WO 32.5: Parallel scout/coder/reviewer orchestration.** New
+  `ParallelOrchestrator` (`src/session/parallel_orchestrator.rs`) spawns three
+  subagents in parallel via `tokio::join!` on `InProcessTaskSpawner::run_task`.
+  Each gets its own `TaskManager` entry. Triggered by `/workflow run <name>
+  --parallel`. Sequential fallback (`run_sequential`) when `worktree_enabled`
+  is false. Reuses the existing spawner seam (WO 32.4 landlock + WO 30.6
+  approval forwarding). `TaskManager::get_mut` added for recording terminal
+  results. 14 tests (6 orchestrator + 8 workflow). Gate: all green
+  (`cargo check`, `nextest`, `clippy`, `fmt`).
+
+### Deferrals
+
+- **Per-subagent worktree**: DEFERRED. The session's worktree provides CWD
+  confinement; creating 3 separate worktrees adds git overhead. Remaining:
+  create 3 `WorktreeSession` instances in `spawn_role`, thread each path into
+  config. Tracked in WO 32.5 (status "partially implemented").
+- **Reviewer running BusVerifier**: DEFERRED. Reviewer uses `plan` persona +
+  LLM critique. Remaining: inject `VerifyContext` into the subagent
+  `Executor`. Tracked in WO 32.5.
+
+### Pending
+
+- WO 32.5 per-subagent worktree (see deferrals above).
+- WO 32.5 Reviewer BusVerifier wiring (see deferrals above).
+
+---
+
 ## Session 2026-08-15 — test-health + CI split + update subcommand + cleanup
 
 Landed across the WO 32/33 series (worktree `.worktrees/wo32-series-c` and

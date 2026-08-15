@@ -224,6 +224,15 @@ impl TaskManager {
         self.tasks.get(id)
     }
 
+    /// Mutable handle lookup — needed by the parallel orchestrator (WO 32.5)
+    /// to record terminal results on a handle inserted before the subagent
+    /// completed. The `task` tool's background path doesn't need this because
+    /// it inserts the handle and updates it inside the spawned worker closure,
+    /// but `ParallelOrchestrator` inserts then awaits `run_task` directly.
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut TaskHandle> {
+        self.tasks.get_mut(id)
+    }
+
     /// Current lifecycle state of a task, or `None` if the id is unknown.
     pub fn status(&self, id: &str) -> Option<TaskStatus> {
         self.tasks.get(id).map(|h| h.status())

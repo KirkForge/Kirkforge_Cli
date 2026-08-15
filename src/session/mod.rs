@@ -17,6 +17,7 @@ pub mod mcp_client;
 pub mod mcp_resource_tools;
 pub mod mcp_tools;
 pub mod memory;
+pub mod parallel_orchestrator;
 pub mod plugin_ops;
 pub mod plugin_tools;
 pub mod process_group;

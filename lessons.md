@@ -76,6 +76,43 @@
   Cross-library read race on Windows — not a test-sync sleep. A oneshot
   wired through the mock would be fully deterministic but doubles helper
   surface. Remaining: wire oneshot; tracked in this workplan.
+## WO 33.14 phase 3 — verifier CommandRunner (session 2026-08-15, worktree wo-fakes)
+
+### What I learned
+- **`tokio::task::spawn_blocking` requires `'static`** on captured `&dyn Trait`.
+  I first wrapped the `CommandRunner::run` call in `spawn_blocking` to keep
+  the sync `SystemCommandRunner` off the async worker pool; the borrow
+  checker rejected it (`runner` escapes the closure, `'1` must outlive
+  `'static`). Fix: call `runner.run` directly in the async fn. The prior
+  code blocked the worker on `tokio::process::Command::output().await` too,
+  so this is no worse. A `spawn_blocking` wrap would need an
+  `Arc<dyn CommandRunner + Send + Sync>` — not worth the indirection for a
+  post-edit verifier that runs outside the hot path. Documented as a
+  `ponytail:` ceiling with the upgrade path.
+- **The verifier subsystem was already half-faked.** The pure parse helpers
+  (`parse_build_json`, `parse_clippy_json`, `module_path_prefix`) were
+  already unit-tested in-process; only the orchestration path
+  (event → cargo_root → spawn → parse → Verdict) was `#[ignore]`d. The
+  `CommandRunner` trait closes that gap — the orchestration is now
+  unit-testable with a fake. Lesson: read the existing test coverage before
+  assuming a full fake framework is needed.
+- **WO 33.14's prior `#[ignore]` approach for items 4/5 was the pragmatic
+  minimal.** The `BashJobRegistry::spawn` blast radius is CRITICAL (96
+  callers, 18 modules). Faking it = the "full fake process framework" the
+  workorder explicitly scoped out. The cap bookkeeping is pure HashMap
+  logic already tested without subprocess. The 64-process test is a stress
+  test, not a correctness test — `#[ignore]` is the right call there.
+- **`rustfmt.rs` was in the grep hit list for `Command::new` but out of
+  scope.** It spawns `rustfmt` (not `cargo`), has no `#[ignore]`d happy-path
+  test, and its tests all skip before reaching the subprocess. The task
+  scope is Cargo/Clippy. Leaving it untouched is correct, not lazy.
+
+### What I'd do differently
+- Considered making `CommandRunner::run` `async` for object-safety with the
+  spawn_blocking wrap. Rejected: `async fn` in traits needs `async-trait`
+  (a dep the repo avoids) and the sync `run` + direct call is simpler and
+  matches the prior blocking behavior. The trait is object-safe as written.
+
 ## WO 32.5 — parallel orchestration (session 2026-08-15, worktree wo32d)
 
 ### What I learned

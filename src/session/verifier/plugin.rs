@@ -185,6 +185,7 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use crate::session::verifier::types::FileReadEvent;
+    use crate::shared::test_util::EnvGuard;
     use kf_plugin_host::{PluginRegistry, TrustPolicy};
     use std::path::PathBuf;
 
@@ -274,7 +275,7 @@ mod tests {
         perms.set_mode(0o755);
         std::fs::set_permissions(&script, perms).unwrap();
 
-        std::env::set_var("OPENAI_API_KEY", "sk-leaked-secret");
+        let _env = EnvGuard::set("OPENAI_API_KEY", "sk-leaked-secret");
         let pv = PluginVerifier {
             name: "envleak".into(),
             command: PathBuf::from("envleak.sh"),
@@ -287,7 +288,6 @@ mod tests {
             truncated: false,
         });
         let verdict = adapter.verify(&event).await;
-        std::env::remove_var("OPENAI_API_KEY");
 
         match verdict {
             Verdict::Unfixable(err) => {

@@ -159,6 +159,7 @@ pub fn new_session_id() -> SessionId {
 mod session_tests {
     use super::*;
     use crate::shared::test_util::remove_test_dir;
+    use crate::shared::test_util::EnvGuard;
 
     #[tokio::test]
     async fn data_dir_respects_env_override() {
@@ -171,10 +172,9 @@ mod session_tests {
                 .unwrap()
                 .as_nanos()
         ));
-        std::env::set_var("KF_CODE_DATA_DIR", &temp);
+        let _env = EnvGuard::set("KF_CODE_DATA_DIR", &temp);
         let dir = data_dir().expect("data_dir should succeed");
         assert_eq!(dir, temp);
-        std::env::remove_var("KF_CODE_DATA_DIR");
         remove_test_dir(&temp);
     }
 
@@ -196,11 +196,10 @@ mod session_tests {
         std::fs::write(sessions_dir.join(format!("{date}-session-1.ndjson")), "").unwrap();
         std::fs::write(sessions_dir.join(format!("{date}-session-7.ndjson")), "").unwrap();
         std::fs::write(sessions_dir.join(format!("{date}-session-3.ndjson")), "").unwrap();
-        std::env::set_var("KF_CODE_DATA_DIR", &temp);
+        let _env = EnvGuard::set("KF_CODE_DATA_DIR", &temp);
         let id = new_session_id();
         assert_eq!(id.date, date);
         assert_eq!(id.seq, 8, "should pick max(1,3,7) + 1 = 8");
-        std::env::remove_var("KF_CODE_DATA_DIR");
         remove_test_dir(&temp);
     }
 
@@ -217,10 +216,9 @@ mod session_tests {
         ));
         let sessions_dir = temp.join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
-        std::env::set_var("KF_CODE_DATA_DIR", &temp);
+        let _env = EnvGuard::set("KF_CODE_DATA_DIR", &temp);
         let id = new_session_id();
         assert_eq!(id.seq, 1, "empty sessions dir should return seq=1");
-        std::env::remove_var("KF_CODE_DATA_DIR");
         remove_test_dir(&temp);
     }
 
@@ -237,10 +235,9 @@ mod session_tests {
         ));
         std::fs::create_dir_all(&temp).unwrap();
         // No "sessions" subdirectory
-        std::env::set_var("KF_CODE_DATA_DIR", &temp);
+        let _env = EnvGuard::set("KF_CODE_DATA_DIR", &temp);
         let id = new_session_id();
         assert_eq!(id.seq, 1, "no sessions dir should return seq=1");
-        std::env::remove_var("KF_CODE_DATA_DIR");
         remove_test_dir(&temp);
     }
 
@@ -255,10 +252,9 @@ mod session_tests {
                 .unwrap()
                 .as_nanos()
         ));
-        std::env::set_var("KF_CODE_DATA_DIR", &temp);
+        let _env = EnvGuard::set("KF_CODE_DATA_DIR", &temp);
         let dir = jobs_dir().expect("jobs_dir should succeed");
         assert!(dir.ends_with("jobs"));
-        std::env::remove_var("KF_CODE_DATA_DIR");
         remove_test_dir(&temp);
     }
 }

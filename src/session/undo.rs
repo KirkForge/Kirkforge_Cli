@@ -495,6 +495,7 @@ mod tests {
     /// temp directories.
     struct DataDirGuard {
         dir: PathBuf,
+        _env: crate::shared::test_util::EnvGuard,
         _lock: tokio::sync::MutexGuard<'static, ()>,
     }
 
@@ -509,14 +510,17 @@ mod tests {
                     .as_nanos()
             ));
             std::fs::create_dir_all(&dir).expect("create temp data dir");
-            env::set_var("KF_CODE_DATA_DIR", &dir);
-            Self { dir, _lock }
+            let env = crate::shared::test_util::EnvGuard::set("KF_CODE_DATA_DIR", &dir);
+            Self {
+                dir,
+                _env: env,
+                _lock,
+            }
         }
     }
 
     impl Drop for DataDirGuard {
         fn drop(&mut self) {
-            env::remove_var("KF_CODE_DATA_DIR");
             let _ = std::fs::remove_dir_all(&self.dir);
         }
     }

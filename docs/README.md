@@ -2,6 +2,7 @@ docs/
   adr/                          — Architecture Decision Records (numbered, immutable once accepted)
   archive/                      — Superseded ideas and historical documents
   bench/                        — Benchmark leaderboard
+  benchmarks/                   — Cross-tool benchmark reports (WO 32.6)
   ideas/                        — Redirect: new ideas go to ADRs (see archive/ for historical ideas)
   runbooks/                     — Operational runbooks
   workorders/                   — Planned and in-progress work

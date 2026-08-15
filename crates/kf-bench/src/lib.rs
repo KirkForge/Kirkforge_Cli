@@ -655,6 +655,102 @@ pub struct BudgetChallengeReport {
     pub entries: Vec<BudgetChallengeEntry>,
 }
 
+// ── Cross-tool comparison (WO 32.6) ──
+
+/// Result of running a single benchmark task on an external tool
+/// (Codex, Claude Code, etc.) for the cross-tool benchmark. Unlike
+/// `TaskResult` (kf-code internal metrics), this captures only the
+/// fields an external tool's report can reliably expose: the tool
+/// name, the task, the context budget pinned for the run, the total
+/// tokens consumed, the turn count, whether the task succeeded, and
+/// the wall-clock duration. See WO 32.6.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalToolReport {
+    pub tool_name: String,
+    pub task_name: String,
+    /// Context budget pinned for the run, in tokens (e.g. 131072 = 128k).
+    pub context_budget: usize,
+    pub tokens_consumed: u64,
+    pub turns_taken: u32,
+    pub success: bool,
+    pub wall_clock_secs: f64,
+}
+
+/// A batch of cross-tool reports serialized as a JSON file. This is
+/// the import/export format for the runner script (`scripts/run-cross-tool-bench.sh`)
+/// and the external-tool templates it emits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalToolReportBatch {
+    pub reports: Vec<ExternalToolReport>,
+}
+
+/// Write a batch of external-tool reports to disk as pretty JSON.
+pub fn write_external_reports(batch: &ExternalToolReportBatch, path: &Path) -> Result<()> {
+    let json = serde_json::to_string_pretty(batch)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
+/// Load a batch of external-tool reports from a JSON file.
+pub fn load_external_reports(path: &Path) -> Result<ExternalToolReportBatch> {
+    let content = std::fs::read_to_string(path)?;
+    let batch: ExternalToolReportBatch = serde_json::from_str(&content)?;
+    Ok(batch)
+}
+
+/// Build the cross-tool comparison markdown table. Reports are
+/// grouped by `task_name`; within each task, rows are ordered by
+/// `context_budget` descending then by `tool_name` for a stable layout.
+/// An empty slice yields the literal `"No cross-tool reports to compare"`.
+///
+/// The table columns mirror WO 32.6: tool, task, budget, tokens,
+/// turns, success, wall-clock. This is the raw comparison view; the
+/// thesis-validation writeup lives in `docs/benchmarks/cross-tool-2026-08.md`.
+pub fn compare_cross_tool(reports: &[ExternalToolReport]) -> String {
+    if reports.is_empty() {
+        return "No cross-tool reports to compare".to_string();
+    }
+
+    let mut sorted: Vec<&ExternalToolReport> = reports.iter().collect();
+    sorted.sort_by(|a, b| {
+        a.task_name
+            .cmp(&b.task_name)
+            .then(b.context_budget.cmp(&a.context_budget))
+            .then(a.tool_name.cmp(&b.tool_name))
+    });
+
+    let mut md = String::new();
+    md.push_str("# Cross-Tool Comparison\n\n");
+    md.push_str("| Tool | Task | Budget | Tokens | Turns | Success | Wall-clock (s) |\n");
+    md.push_str("|------|------|--------|--------|-------|----------|----------------|\n");
+    for r in &sorted {
+        md.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {:.1} |\n",
+            r.tool_name,
+            r.task_name,
+            r.context_budget,
+            r.tokens_consumed,
+            r.turns_taken,
+            if r.success { "Yes" } else { "No" },
+            r.wall_clock_secs,
+        ));
+    }
+    md
+}
+
+/// Write the cross-tool comparison markdown table to disk.
+pub fn write_cross_tool_comparison(reports: &[ExternalToolReport], path: &Path) -> Result<()> {
+    let md = compare_cross_tool(reports);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, md)?;
+    Ok(())
+}
+
 /// Write the Token Budget Challenge markdown scoreboard to disk.
 ///
 /// The table has one row per ceiling level (descending) and the six
@@ -1149,5 +1245,78 @@ mod tests {
         assert!(md.contains("| Ceiling | Success |"));
         // No data rows, just the header line.
         assert!(!md.contains("| 131072 |"));
+    }
+
+    // ── WO 32.6: cross-tool comparison tests ──
+
+    fn ext_report(tool: &str, task: &str, budget: usize, success: bool) -> ExternalToolReport {
+        ExternalToolReport {
+            tool_name: tool.to_string(),
+            task_name: task.to_string(),
+            context_budget: budget,
+            tokens_consumed: 1000,
+            turns_taken: 3,
+            success,
+            wall_clock_secs: 12.5,
+        }
+    }
+
+    #[test]
+    fn compare_cross_tool_empty_returns_placeholder() {
+        assert_eq!(compare_cross_tool(&[]), "No cross-tool reports to compare");
+    }
+
+    #[test]
+    fn compare_cross_tool_renders_table_sorted_by_task_then_budget_desc() {
+        let reports = vec![
+            ext_report("kf-code", "bug-fix", 32_768, true),
+            ext_report("kf-code", "bug-fix", 131_072, true),
+            ext_report("codex", "bug-fix", 131_072, false),
+            ext_report("claude-code", "refactor", 65_536, true),
+        ];
+        let md = compare_cross_tool(&reports);
+        assert!(md.contains("# Cross-Tool Comparison"));
+        assert!(md.contains("| Tool | Task | Budget | Tokens | Turns | Success | Wall-clock (s) |"));
+        // Descending-budget sort: 131072 before 32768 for the same task.
+        let bug_rows: Vec<&str> = md
+            .lines()
+            .filter(|l| l.starts_with("| ") && l.contains("bug-fix"))
+            .collect();
+        assert_eq!(bug_rows.len(), 3);
+        // First two rows are the 131072 entries (descending), 32768 is last.
+        assert!(bug_rows[0].contains("131072"));
+        assert!(bug_rows[2].contains("32768"));
+        assert!(bug_rows[0].contains("codex") || bug_rows[1].contains("codex"));
+        // Success column renders Yes/No.
+        assert!(md.contains("| codex | bug-fix | 131072 | 1000 | 3 | No | 12.5 |"));
+    }
+
+    #[test]
+    fn external_tool_report_json_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let batch = ExternalToolReportBatch {
+            reports: vec![
+                ext_report("kf-code", "feature-add", 131_072, true),
+                ext_report("codex", "feature-add", 131_072, false),
+            ],
+        };
+        let path = dir.path().join("cross_tool.json");
+        write_external_reports(&batch, &path).unwrap();
+        let loaded = load_external_reports(&path).unwrap();
+        assert_eq!(loaded.reports.len(), 2);
+        assert_eq!(loaded.reports[0].tool_name, "kf-code");
+        assert_eq!(loaded.reports[1].tool_name, "codex");
+        assert_eq!(loaded.reports[0].context_budget, 131_072);
+        assert!(!loaded.reports[1].success);
+    }
+
+    #[test]
+    fn write_cross_tool_comparison_writes_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports = vec![ext_report("kf-code", "docs", 8_192, true)];
+        let path = dir.path().join("cmp.md");
+        write_cross_tool_comparison(&reports, &path).unwrap();
+        let md = std::fs::read_to_string(&path).unwrap();
+        assert!(md.contains("| kf-code | docs | 8192 |"));
     }
 }

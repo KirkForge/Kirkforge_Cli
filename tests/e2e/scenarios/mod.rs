@@ -7,18 +7,21 @@
 //! runtime tmux check.
 //!
 //! WO 33.14 phase 3 DEFERRED: collapsing binary-spawn E2E assertions
-//! into in-process integration tests. `src/session/executor/tests/
-//! wiremock_integration.rs` is the canonical in-process layer (adapter
-//! + executor turn against WireMock). The scenarios here exercise
-//! binary wiring (argv, env, stdin, TUI) that in-process tests
-//! structurally cannot cover — that is the point of keeping 2-4 true
-//! binary E2Es (the task's target). The TUI scenarios (tui_chat,
-//! tui_approval) cannot move in-process by construction. ponytail:
-//! ceiling — the current split (in-process wiremock + #[ignore]d
-//! binary E2Es) already matches the "leave only 2-4 true binary E2Es"
-//! intent; the non-TUI scenarios (adapter_routing, retry_5xx,
-//! mock_error_response, plain_chat, tool_approval) are candidates to
-//! fold into wiremock_integration if their assertions are moveable.
+//! into in-process integration tests. The canonical in-process layer is
+//! `src/session/executor/tests/wiremock_integration.rs` (adapter and
+//! executor turn against WireMock). The scenarios here exercise binary
+//! wiring (argv, env, stdin, TUI) that in-process tests structurally
+//! cannot cover — that is the point of keeping 2-4 true binary E2Es
+//! (the task's target). The TUI scenarios (tui_chat, tui_approval)
+//! cannot move in-process by construction.
+//!
+//! ponytail: ceiling — the current split (in-process wiremock plus
+//! `#[ignore]`d binary E2Es) already matches the "leave only 2-4 true
+//! binary E2Es" intent; the non-TUI scenarios (adapter_routing,
+//! retry_5xx, mock_error_response, plain_chat, tool_approval) are
+//! candidates to fold into wiremock_integration if their assertions
+//! are moveable.
+//!
 //! Upgrade path: audit each non-TUI scenario, move moveable
 //! assertions into wiremock_integration.rs, delete the binary-spawn
 //! version. Tracked in state.md pending.

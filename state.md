@@ -36,6 +36,16 @@ over-claimed.
   (schedule + dispatch: coverage + ollama + e2e-exhaustive + audit +
   release-build matrix). `ci.yml` deleted. No job dropped; `quality` job
   decomposed into `clippy`/`fast-tests`/`full-tests`.
+- **Redundant `cargo check` removed from CI** (WO 33.4). Both `ci-pr.yml`
+  and `ci-merge.yml` ran `cargo clippy --lib --bins --features e2e-tests`
+  then a `cargo check` on the same scope. Clippy with `-D warnings` fails
+  on any compile error, so the check step re-ran the build without adding
+  coverage. Removed from both `clippy` jobs (comment left explaining why).
+- **Windows release build split verified** (WO 33.9). No code change
+  needed: `ci-merge.yml` `windows` job already runs only `cargo nextest
+  run` (no `--release`), and `ci-nightly.yml` `release-build` matrix
+  already includes `windows-latest` / `x86_64-pc-windows-msvc`. The split
+  landed with the WO 33.3 CI split; 33.9 confirmed it.
 - **LSP disabled** in `~/.config/opencode/opencode.jsonc` (`lsp: true` →
   `false`). Root cause: rust-analyzer indexes one workspace per process,
   so the main checkout's server returned stale cross-workspace diagnostics

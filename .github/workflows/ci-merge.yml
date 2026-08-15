@@ -104,10 +104,10 @@ jobs:
         # --lib --bins (NOT --all-targets) skips test-target compilation.
         # --features e2e-tests keeps the gated e2e crate under the lint
         # gate so it cannot silently rot (WO 28.10).
+        # No separate `cargo check` step: clippy with `-D warnings` fails on
+        # any compile error, and same-scope `cargo check` after clippy only
+        # re-runs the build without adding coverage (WO 33.4).
         run: cargo clippy --lib --bins --features e2e-tests --locked -- -D warnings
-
-      - name: Typecheck (lib + bins)
-        run: cargo check --workspace --lib --bins --features e2e-tests --locked
 
   fast-tests:
     runs-on: ubuntu-latest

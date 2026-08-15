@@ -10,7 +10,6 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
-<<<<<<< HEAD
 ## Session 2026-08-15 — Phase 1: kill remaining test sleeps (worktree `.worktrees/wo-sleeps`)
 
 ### What changed this session
@@ -162,6 +161,74 @@ bench.rs, and testdoctor string literals.
 - `cargo fmt --check`: PASS
 - `cargo nextest run -p kf-code --lib session::verifier`: 284 passed, 0 failed (9 new fake-runner tests)
 - `cargo nextest run -p kf-code --lib --no-fail-fast`: 3307 passed, 17 skipped (150s)
+
+---
+
+## Session 2026-08-15 — CI architecture reset (worktree `.worktrees/wo-ci`, branch `wo/ci-reset`)
+
+### What changed this session
+
+- **CI architecture reset** per `gpt-test_and_ci.md` P0/P1/P2 priority order.
+  Pinned in [ADR-074](docs/adr/074-ci-architecture-reset.md). No Rust code
+  changed — workflow YAML + docs only. The repo already had the 3-workflow
+  split (ci-pr/ci-merge/ci-nightly) + nextest profile system
+  (`.config/nextest.toml`: ci-fast/ci-full/integration/e2e) from prior WOs;
+  this task completed the reset:
+  - **P0-2:** Removed artificial `needs:` chain in ci-merge — `full-tests`
+    was `needs: [clippy, fast-tests]`; now all merge jobs are parallel
+    siblings depending on `static` only. They depend on the source checkout,
+    not on each other's test success.
+  - **P0-4:** Removed the `integration` (Ollama) job from ci-merge —
+    real-model integration tests now run **nightly only** (ci-nightly
+    `ollama` job). PR + merge CI no longer install Ollama.
+  - **P1-6:** Replaced inline `--config 'profile.default.timeout-period=...'`
+    flags in ci-merge `windows` + `e2e` and ci-nightly `e2e-exhaustive` with
+    declarative `--profile` (`ci-full` for windows, `e2e` for e2e).
+    `.config/nextest.toml` is now the single source of truth for timeout /
+    fail-fast / filter policy.
+  - **P1-7:** Scoped clippy — PR uses `--lib --bins` (fast, skip
+    test-target/bench/example compilation); merge uses `--all-targets`
+    (full validation).
+  - **P1-9:** PR fail-fast (ci-fast profile `fail-fast = true`); merge/nightly
+    `--no-fail-fast` (collect all failures). Already correct from prior WOs;
+    confirmed.
+  - **P2-11:** Renamed `fmt` job → `static` in ci-pr + ci-merge. It does
+    conflict markers + TOML schema + artifact consistency + rustfmt — only
+    one step is formatting. Now the name matches the concern.
+  - **P2-12:** Stripped WO-incident comments (WO 28.10/28.11 R2/33.4/33.6,
+    "historic Windows-flake source", commit `4028424`) from all three
+    workflows. Historical rationale moved to ADR-074; workflow comments now
+    document the CURRENT architecture.
+  - **P2-13:** Deleted `.github/workflows/bench-baseline.yml.disabled`
+    (obsolete artifact).
+  - **Concurrency cancellation** already present on ci-pr + ci-merge from a
+    prior WO; the group key was normalized to
+    `ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}`
+    per the file's spec.
+  - ADR count bumped 90 → 91 in `docs/TECHNICAL.md`; ADR-074 row added to
+    `docs/adr/README.md` index (status "Accepted" in both header + table —
+    `adr_xref_drift` will pass).
+
+### Pending
+
+- None from this task. The file's P0/P1/P2 items are all addressed. The
+  file's separate "test-level" recommendations (kill wall-clock waits, kill
+  global env state, fake DNS/Cargo/Chrome/Docker, nextest slow-test
+  reporting) are out of scope for the CI architecture reset and remain as
+  future test-tier work (tracked in `gpt-test_and_ci.md` Phase 1-4).
+
+### Gate
+
+- YAML parse: all 4 workflows (`ci-pr.yml`, `ci-merge.yml`, `ci-nightly.yml`,
+  `release.yml`) parse as valid YAML.
+- No inline `--config` nextest flags in any workflow.
+- No redundant `cargo check` step in any workflow.
+- `concurrency:` with `cancel-in-progress: true` on ci-pr + ci-merge.
+- No Ollama/coverage install in ci-pr or ci-merge (nightly only).
+- `bash scripts/changed-packages.sh origin/dev` works (exit 0).
+- ci-merge all jobs `needs: static` only (parallel siblings).
+- clippy scope: PR `--lib --bins`, merge `--all-targets`.
+- (Rust gates not run — no Rust code changed in this task.)
 
 ## Session 2026-08-15 — WO 33.6 + 33.15 + 32.20 + 32.17 (worktree `.worktrees/wo32e`)
 

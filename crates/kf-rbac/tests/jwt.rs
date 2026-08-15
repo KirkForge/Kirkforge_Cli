@@ -306,6 +306,48 @@ async fn verify_accepts_es256_token_local_jwks() {
     assert_eq!(claims.sub, "ec-user");
 }
 
+// ── ES512 gap (WO 32.10) ────────────────────────────────────────────────────
+
+/// ES512 (P-521 ECDSA) is in the `ALLOWED_ALGORITHMS` policy list but the
+/// `jsonwebtoken` verifier has no ES512 variant — it bundles `p256`/`p384`
+/// only. Closing the gap requires either the `p521` crate as a non-dev
+/// dependency (manual JWK→verifying-key + DER signature decode) or a fuller
+/// JOSE crate. Both inflate the release binary for an alg with zero
+/// production consumers, so the gap is deferred until an operator
+/// requests ES512. Tracked in WO 32.10 / state.md pending.
+#[tokio::test]
+#[ignore = "ES512 verifier not implemented — needs p521 non-dev dep; tracked in WO 32.10"]
+async fn es512_verifier_gap_is_documented() {
+    clear_jwks_cache();
+    let jwk = json!({
+        "kty": "EC",
+        "crv": "P-521",
+        "x": "Aec0mBhZGjPl1c1c3jX1c1c1c1c1c1c1c1c1c1c1c1c",
+        "y": "Ad1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c",
+        "kid": "es512-key",
+        "use": "sig",
+        "alg": "ES512",
+    });
+    let now = now_sec();
+    let k = shared_key();
+    let token = sign(
+        json!({"sub":"es512-user","iss":issuer(),"aud":"kirkforge","exp":now+3600,"iat":now}),
+        Algorithm::RS256,
+        "es512-key",
+        &k.encoding,
+    );
+    let err = verify_jwt(&token, &config(), None, Some(&local_jwks(&jwk)))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, kf_rbac::AuthErrorCode::InvalidToken);
+    assert!(
+        err.message.contains("unsupported key type")
+            || err.message.contains("JWT verification failed"),
+        "ES512 JWK should be rejected at the key-family gate, got: {}",
+        err.message
+    );
+}
+
 // ── validateJwtClaims (3 tests) ─────────────────────────────────────────────
 
 fn claim(sub: &str, exp: i64, iat: i64) -> JwtClaims {

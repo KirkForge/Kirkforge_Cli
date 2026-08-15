@@ -31,8 +31,10 @@ pub const ALLOWED_ALGORITHMS: &[&str] = &[
 /// at header parsing with INVALID_TOKEN.
 // ponytail: ceiling — ES512 verifier coverage gap. Upgrade path: add the `p521`
 // crate and a manual ES512 verify branch, OR switch to a fuller JOSE crate
-// (openssl-backed). Tracked in state.md pending / WO 29.5 defer note. None of
-// the 58 ported tests exercise ES512 (TS tests RS256 + ES256 only).
+// (openssl-backed). Tracked in WO 32.10 / state.md pending. None of the 58
+// ported tests exercise ES512 (TS tests RS256 + ES256 only). Adding `p521`
+// as a non-dev dependency would inflate the release binary for an alg with
+// zero production consumers — deferred until an operator requests ES512.
 fn algorithms_for_key(jwk: &Jwk) -> Vec<Algorithm> {
     match &jwk.algorithm {
         // RSASSA-PKCS1-v1_5 AND RSASSA-PSS share the RSA key family.

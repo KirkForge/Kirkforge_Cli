@@ -2,6 +2,32 @@ use kf_bench::*;
 use std::collections::HashMap;
 use tempfile::TempDir;
 
+/// RAII guard: removes `key` on construction, restores the prior value
+/// (or unsets) on Drop. Local to this test file — kf-bench has no shared
+/// test util module and this is the only env-mutation site.
+struct EnvGuard {
+    key: &'static str,
+    old: Option<String>,
+}
+
+impl EnvGuard {
+    fn remove(key: &'static str) -> Self {
+        let old = std::env::var(key).ok();
+        std::env::remove_var(key);
+        Self { key, old }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        if let Some(v) = &self.old {
+            std::env::set_var(self.key, v);
+        } else {
+            std::env::remove_var(self.key);
+        }
+    }
+}
+
 #[test]
 fn load_tasks_parses_toml() {
     let dir = TempDir::new().unwrap();
@@ -187,7 +213,7 @@ fn verify_task_inherits_curated_budget_env() {
     // would need a file, so use CommandExitsZero with a shell test that
     // succeeds only when the env var matches the curated value.
     let dir = TempDir::new().unwrap();
-    std::env::remove_var(BUDGET_CEILING_ENV);
+    let _env = EnvGuard::remove(BUDGET_CEILING_ENV);
     let task = BenchTask {
         name: "curated-env".into(),
         difficulty: Difficulty::Easy,

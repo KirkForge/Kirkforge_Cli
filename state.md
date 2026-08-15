@@ -10,6 +10,7 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+<<<<<<< HEAD
 ## Session 2026-08-15 — Phase 1: kill remaining test sleeps (worktree `.worktrees/wo-sleeps`)
 
 ### What changed this session
@@ -93,6 +94,74 @@ bench.rs, and testdoctor string literals.
 - `cargo nextest run -p kf-code --lib`: 3298 passed, 17 skipped (pre-existing #[ignore])
 - `cargo clippy -p kf-bench --tests -- -D warnings`: PASS
 - `cargo nextest run -p kf-bench --test bench_tests`: 12/12 PASS
+
+---
+
+## Session 2026-08-15 — WO 33.14 phase 3 verifier CommandRunner (worktree `.worktrees/wo-fakes`)
+
+### What changed this session
+
+- **WO 33.14 phase 3 item 2: verifier Cargo/Clippy CommandRunner trait.**
+  Injected a `CommandRunner` trait (`src/session/verifier/types.rs`)
+  abstracting `cargo`/`clippy` subprocess execution. Production uses
+  `SystemCommandRunner` (wraps `std::process::Command`); tests inject a
+  hand-rolled `FakeRunner` returning canned cargo JSON. `verify_build` /
+  `verify_lint` / `verify_test` now take `&dyn CommandRunner`, so the full
+  event → cargo_root → spawn → parse → Verdict orchestration path runs
+  in-process against the fake. The pure parse helpers were already
+  unit-tested; this closes the gap so the *orchestration* is unit-tested too.
+  Un-ignored 3 verifier happy-path tests (were `#[ignore = "spawns cargo"]`),
+  replaced with 9 fake-runner unit tests (Fixable/Clean/Unfixable/spawn-fail
+  variants across build/lint/test). Kept 1 real-Cargo/Clippy integration
+  test per verifier, gated behind `#[ignore]` with an `integration:`
+  reason naming the nextest profile. No production behavior changed — the
+  executor passes `&SystemCommandRunner` at the 3 `verify_*` call sites.
+  rustfmt.rs left untouched (out of Cargo/Clippy scope; no `#[ignore]`d tests).
+  Impact: LOW/MEDIUM (verifier module only); 3 call sites in
+  `executor/mod.rs`. Commits `f2d53ab` + `e9e43dc`.
+
+### Deferred (disclosed per AGENTS.md §11)
+
+- **Item 4 (bash Docker mock):** `run_docker` (`src/tools/bash.rs:54`)
+  spawns `docker` directly. Faking needs a `DockerRunner` trait threaded
+  through `Bash::new`. **Blocker:** the security-critical deny-list path is
+  already covered in-process (`bash_docker_path_blocks_dangerous_command`
+  short-circuits before spawn); the 1 real-Docker test is `#[ignore]`d.
+  **Remaining:** add `DockerRunner` trait + `FakeDockerRunner`, inject at
+  `Bash::new`, unit-test `docker_args` construction + workdir-sanitization
+  in-process. **Tracked:** WO 33.14 future phase + here (pending).
+- **Item 5 (bash_jobs 64-process fake):** `BashJobRegistry::spawn` is
+  CRITICAL blast radius (96 direct callers, 18 modules, 19 processes).
+  Faking requires abstracting the `tokio::process::Child` lifecycle — the
+  "full fake process framework" WO 33.14 explicitly scoped out. The cap
+  bookkeeping is pure HashMap logic already tested via
+  `mark_failed_if_running` / clean/evict tests without subprocess. The
+  64-process test is a *stress* test, not a *correctness* test.
+  **Blocker:** CRITICAL blast radius; the correctness of the cap is
+  provable without subprocess. **Remaining:** a `ProcessSpawner` trait +
+  `FakeSpawner` if a correctness regression surfaces that the bookkeeping
+  tests miss; keep the stress test gated nightly. **Tracked:** WO 33.14
+  future phase + here (pending).
+- **Item 6 (E2E collapse):** `wiremock_integration.rs` is the canonical
+  in-process layer (adapter + executor turn against WireMock). The
+  scenarios in `tests/e2e/scenarios/` exercise binary wiring (argv, env,
+  stdin, TUI) that in-process tests structurally cannot cover — that's the
+  point of keeping 2-4 true binary E2Es. The TUI scenarios (`tui_chat`,
+  `tui_approval`) cannot move in-process by construction.
+  **Blocker:** the current split (in-process wiremock + `#[ignore]`d
+  binary E2Es) already matches the "leave only 2-4 true binary E2Es"
+  intent. **Remaining:** audit the non-TUI scenarios
+  (`adapter_routing`, `retry_5xx`, `mock_error_response`, `plain_chat`,
+  `tool_approval`); move moveable assertions into
+  `wiremock_integration.rs`; delete the binary-spawn version.
+  **Tracked:** WO 33.14 future phase + here (pending).
+
+### Gate
+
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS
+- `cargo fmt --check`: PASS
+- `cargo nextest run -p kf-code --lib session::verifier`: 284 passed, 0 failed (9 new fake-runner tests)
+- `cargo nextest run -p kf-code --lib --no-fail-fast`: 3307 passed, 17 skipped (150s)
 
 ## Session 2026-08-15 — WO 33.6 + 33.15 + 32.20 + 32.17 (worktree `.worktrees/wo32e`)
 
@@ -288,10 +357,15 @@ over-claimed.
     Delegating needs an adapter that's more code than the duplication it
     removes. Remaining: design a `PathPolicy` trait in `kf-routing::path_safety`
     with sync + async-compatible signatures; adapt `PathGuard` to implement it.
-- **WO 33.14 — subprocess test fakes.** Replace real-subprocess tests
-  (bash, git, cargo spawn) with in-process fakes where the subprocess is
-  an implementation detail, not the behavior under test. Reduces CI
-  flakiness from external-binary availability. Not started.
+- **WO 33.14 — subprocess test fakes.** Phase 3 minimal win shipped
+  (commit `e6b7ccb`): DNS fake resolver (web_fetch, item 1) + Chrome
+  fake driver (computer_use, item 3) + 4 subprocess tests gated
+  `#[ignore]`. Phase 3 item 2 (verifier Cargo/Clippy) shipped this
+  session (commit `f2d53ab`): `CommandRunner` trait + `FakeRunner`,
+  3 verifier happy-path tests un-ignored → in-process, 1 real-Cargo
+  integration test per verifier kept gated. Items 4/5/6 deferred (see
+  this session's block above). Reduces CI flakiness from external-binary
+  availability.
 - **WO 32.19 — R7 shipped, R6 disclosed as YAGNI** (branch `wo/32-series-d`,
   worktree `.worktrees/wo32d`). R7: wired the security emitter (WO 29.2)
   into the `kf-orchestrator` correction loop's verify cycle. New module

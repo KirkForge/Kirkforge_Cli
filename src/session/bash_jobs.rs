@@ -717,8 +717,22 @@ mod tests {
     /// cancels+reaps each sequentially (~0.9s each), ~58s wall-clock. Genuine
     /// subprocess-management cost, not unnecessary setup. Run explicitly with
     /// `cargo test -- --ignored` when validating the job cap.
+    ///
+    /// WO 33.14 phase 3 DEFERRED: not replaced with a fake process. The cap
+    /// bookkeeping (jobs.len() >= MAX_JOBS, evict-oldest, re-check-under-lock)
+    /// is pure HashMap logic already exercised by mark_failed_if_running and
+    /// the clean/evict tests without subprocess. A fake would need a
+    /// ProcessSpawner trait abstracting tokio::process::Child lifecycle across
+    /// the 96 direct callers of BashJobRegistry::spawn (CRITICAL blast radius,
+    /// 18 modules) — that is the "full fake process framework" WO 33.14
+    /// explicitly scoped out as over-engineering. ponytail: ceiling — the
+    /// correctness of the cap is provable without subprocess; this test is a
+    /// stress test of the real process-management path. Upgrade path: add a
+    /// ProcessSpawner trait + FakeSpawner if a correctness regression surfaces
+    /// that the bookkeeping tests miss; keep the stress test gated nightly.
+    /// Tracked in state.md pending.
     #[tokio::test]
-    #[ignore = "spawns MAX_JOBS subprocesses"]
+    #[ignore = "spawns MAX_JOBS subprocesses; stress test, run with --ignored"]
     async fn test_job_cap_enforced_when_all_running() {
         let reg = BashJobRegistry::new();
         for i in 0..MAX_JOBS {

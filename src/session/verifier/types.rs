@@ -1,5 +1,88 @@
 use std::hash::Hash;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+// ── Command execution boundary ───────────────────────────────────────────
+//
+// Abstraction over `tokio::process::Command` so the build/lint/test verifiers
+// can be unit-tested without spawning real `cargo`/`clippy` subprocesses. The
+// orchestration path (event → path → cargo_root → spawn → parse → Verdict) is
+// the thing under test; the pure parse helpers (`parse_build_json`,
+// `parse_clippy_json`, `module_path_prefix`) were already in-process. This
+// trait lets a `FakeRunner` feed canned cargo JSON through the full path.
+// Production uses `SystemCommandRunner` (wraps `tokio::process::Command`).
+// WO 33.14 phase 3: no mock framework — hand-rolled fakes only.
+
+/// Exit state of a spawned command, mirroring the cases the verifiers branch on.
+#[derive(Debug, Clone)]
+pub enum ExitState {
+    /// Exited with status 0 (`status.success()` is true).
+    Success,
+    /// Exited with a non-zero code.
+    Code(i32),
+    /// The command could not be spawned (binary missing, permission denied, …).
+    SpawnFailed(String),
+}
+
+/// Outcome of a `CommandRunner::run` call. The verifiers only inspect
+/// `stdout` (JSON message stream) and `stderr` (human-readable summary);
+/// `status` drives the Clean-vs-Unfixable-vs-Fixable decision.
+#[derive(Debug, Clone)]
+pub struct CommandOutcome {
+    pub status: ExitState,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+/// Sync command execution boundary for the build/lint/test verifiers.
+///
+/// `run` spawns (or fakes) `<cmd> <args..>` in `cwd`, waits for it to finish,
+/// and returns the captured stdout/stderr. The trait is sync because the
+/// verifiers call it inside `async` functions but the spawn+wait is a single
+/// blocking-ish operation that `tokio::process::Command::output` already
+/// wraps; a `spawn_blocking` adapter is unnecessary for the fake (instant)
+/// and tolerable for the real runner (cargo builds are long anyway).
+pub trait CommandRunner: Send + Sync {
+    fn run(&self, cmd: &str, args: &[&str], cwd: &Path) -> CommandOutcome;
+}
+
+/// Production runner: delegates to `std::process::Command` (blocking). The
+/// verifiers are `async`, but `cargo build`/`clippy`/`test` are long-running
+/// subprocesses where the spawn+wait cost dominates any blocking overhead;
+/// using the sync `std::process` avoids the `tokio::process::Child` handle
+/// ownership dance and keeps the trait object-safe with no `async` in the
+/// signature. The verifier `async fn`s `.await` a `tokio::task::spawn_blocking`
+/// around this call so the runtime stays responsive.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemCommandRunner;
+
+impl CommandRunner for SystemCommandRunner {
+    fn run(&self, cmd: &str, args: &[&str], cwd: &Path) -> CommandOutcome {
+        let result = std::process::Command::new(cmd)
+            .args(args)
+            .current_dir(cwd)
+            .output();
+        match result {
+            Ok(out) => {
+                let code = out.status.code().unwrap_or(-1);
+                let status = if out.status.success() {
+                    ExitState::Success
+                } else {
+                    ExitState::Code(code)
+                };
+                CommandOutcome {
+                    status,
+                    stdout: out.stdout,
+                    stderr: out.stderr,
+                }
+            }
+            Err(e) => CommandOutcome {
+                status: ExitState::SpawnFailed(e.to_string()),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            },
+        }
+    }
+}
 
 // ── Event Kinds ─────────────────────────────────────────────────────────
 

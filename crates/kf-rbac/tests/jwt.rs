@@ -1,6 +1,8 @@
 //! Port of `@kirkforge/core-rbac/tests/jwt-verify.test.ts` (12 JWT tests).
 //! Test keypairs are generated at runtime (rsa + p256 dev-deps) — no network.
 
+use std::sync::OnceLock;
+
 use base64::Engine;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use kf_rbac::{
@@ -56,6 +58,21 @@ fn gen_rsa(kid: &str) -> RsaKey {
     RsaKey { encoding, jwk }
 }
 
+// ponytail: RSA-2048 keygen is ~7-40s; share one key across all JWT tests via OnceLock.
+// Ceiling: all RS256 tests share one keypair — fine for verify-only tests; if any test
+// mutates the key or depends on a fresh keypair, add a separate OnceLock.
+// Upgrade path: per-test keys if isolation is ever required.
+static TEST_KEY: OnceLock<RsaKey> = OnceLock::new();
+static ATTACKER_KEY: OnceLock<RsaKey> = OnceLock::new();
+
+fn shared_key() -> &'static RsaKey {
+    TEST_KEY.get_or_init(|| gen_rsa("test-key-1"))
+}
+
+fn attacker_key() -> &'static RsaKey {
+    ATTACKER_KEY.get_or_init(|| gen_rsa("attacker-key"))
+}
+
 fn sign(payload: Value, alg: Algorithm, kid: &str, encoding: &EncodingKey) -> String {
     let mut header = Header::new(alg);
     header.kid = Some(kid.to_string());
@@ -97,9 +114,9 @@ fn gen_ec(kid: &str) -> EcKey {
     EcKey { encoding, jwk }
 }
 
-fn local_jwks(jwk: Value) -> VerifyJwtOptions {
+fn local_jwks(jwk: &Value) -> VerifyJwtOptions {
     VerifyJwtOptions {
-        jwks_set: Some(json!({ "keys": [jwk] })),
+        jwks_set: Some(json!({ "keys": [jwk.clone()] })),
         ..Default::default()
     }
 }
@@ -109,7 +126,7 @@ fn local_jwks(jwk: Value) -> VerifyJwtOptions {
 #[tokio::test]
 async fn verify_accepts_valid_jwt_local_jwks() {
     clear_jwks_cache();
-    let k = gen_rsa("test-key-1");
+    let k = shared_key();
     let now = now_sec();
     let token = sign(
         json!({"sub":"user-1","iss":issuer(),"aud":"kirkforge","exp":now+3600,"iat":now,"groups":["developers"]}),
@@ -117,7 +134,7 @@ async fn verify_accepts_valid_jwt_local_jwks() {
         "test-key-1",
         &k.encoding,
     );
-    let claims = verify_jwt(&token, &config(), None, Some(&local_jwks(k.jwk)))
+    let claims = verify_jwt(&token, &config(), None, Some(&local_jwks(&k.jwk)))
         .await
         .expect("valid token");
     assert_eq!(claims.sub, "user-1");
@@ -128,7 +145,7 @@ async fn verify_accepts_valid_jwt_local_jwks() {
 #[tokio::test]
 async fn verify_rejects_wrong_issuer_local_jwks() {
     clear_jwks_cache();
-    let k = gen_rsa("test-key-1");
+    let k = shared_key();
     let now = now_sec();
     let token = sign(
         json!({"sub":"user-1","iss":"https://evil.com","aud":"kirkforge","exp":now+3600,"iat":now}),
@@ -136,7 +153,7 @@ async fn verify_rejects_wrong_issuer_local_jwks() {
         "test-key-1",
         &k.encoding,
     );
-    let err = verify_jwt(&token, &config(), None, Some(&local_jwks(k.jwk)))
+    let err = verify_jwt(&token, &config(), None, Some(&local_jwks(&k.jwk)))
         .await
         .unwrap_err();
     assert_eq!(err.code, kf_rbac::AuthErrorCode::InvalidToken);
@@ -145,7 +162,7 @@ async fn verify_rejects_wrong_issuer_local_jwks() {
 #[tokio::test]
 async fn verify_rejects_wrong_audience_local_jwks() {
     clear_jwks_cache();
-    let k = gen_rsa("test-key-1");
+    let k = shared_key();
     let now = now_sec();
     let token = sign(
         json!({"sub":"user-1","iss":issuer(),"aud":"wrong-audience","exp":now+3600,"iat":now}),
@@ -154,7 +171,7 @@ async fn verify_rejects_wrong_audience_local_jwks() {
         &k.encoding,
     );
     assert!(
-        verify_jwt(&token, &config(), None, Some(&local_jwks(k.jwk)))
+        verify_jwt(&token, &config(), None, Some(&local_jwks(&k.jwk)))
             .await
             .is_err()
     );
@@ -163,7 +180,7 @@ async fn verify_rejects_wrong_audience_local_jwks() {
 #[tokio::test]
 async fn verify_rejects_expired_token_local_jwks() {
     clear_jwks_cache();
-    let k = gen_rsa("test-key-1");
+    let k = shared_key();
     let now = now_sec();
     let token = sign(
         json!({"sub":"user-1","iss":issuer(),"aud":"kirkforge","exp":now-300,"iat":now-3600}),
@@ -175,7 +192,7 @@ async fn verify_rejects_expired_token_local_jwks() {
         clock_skew_sec: Some(10),
         ..config()
     };
-    assert!(verify_jwt(&token, &cfg, None, Some(&local_jwks(k.jwk)))
+    assert!(verify_jwt(&token, &cfg, None, Some(&local_jwks(&k.jwk)))
         .await
         .is_err());
 }
@@ -183,7 +200,7 @@ async fn verify_rejects_expired_token_local_jwks() {
 #[tokio::test]
 async fn verify_resolves_roles_from_group_mapping() {
     clear_jwks_cache();
-    let k = gen_rsa("test-key-1");
+    let k = shared_key();
     let now = now_sec();
     let token = sign(
         json!({"sub":"admin-user","iss":issuer(),"aud":"kirkforge","exp":now+3600,"iat":now,"groups":["platform-admins"]}),
@@ -196,7 +213,7 @@ async fn verify_resolves_roles_from_group_mapping() {
             .into_iter()
             .collect(),
     );
-    let claims = verify_jwt(&token, &config(), Some(&mapping), Some(&local_jwks(k.jwk)))
+    let claims = verify_jwt(&token, &config(), Some(&mapping), Some(&local_jwks(&k.jwk)))
         .await
         .expect("valid");
     assert_eq!(claims.groups, Some(vec!["platform-admins".to_string()]));
@@ -205,8 +222,8 @@ async fn verify_resolves_roles_from_group_mapping() {
 #[tokio::test]
 async fn verify_rejects_token_signed_with_wrong_key_local_jwks() {
     clear_jwks_cache();
-    let right = gen_rsa("test-key-1");
-    let wrong = gen_rsa("attacker-key");
+    let right = shared_key();
+    let wrong = attacker_key();
     let now = now_sec();
     let token = sign(
         json!({"sub":"attacker","iss":issuer(),"aud":"kirkforge","exp":now+3600,"iat":now}),
@@ -215,7 +232,7 @@ async fn verify_rejects_token_signed_with_wrong_key_local_jwks() {
         &wrong.encoding,
     );
     assert!(
-        verify_jwt(&token, &config(), None, Some(&local_jwks(right.jwk)))
+        verify_jwt(&token, &config(), None, Some(&local_jwks(&right.jwk)))
             .await
             .is_err()
     );
@@ -224,7 +241,7 @@ async fn verify_rejects_token_signed_with_wrong_key_local_jwks() {
 #[tokio::test]
 async fn verify_enforces_required_scopes_local_jwks() {
     clear_jwks_cache();
-    let k = gen_rsa("test-key-1");
+    let k = shared_key();
     let now = now_sec();
     let token = sign(
         json!({"sub":"user-1","iss":issuer(),"aud":"kirkforge","exp":now+3600,"iat":now,"scope":"read write"}),
@@ -234,7 +251,7 @@ async fn verify_enforces_required_scopes_local_jwks() {
     );
     let opts_ok = VerifyJwtOptions {
         required_scopes: vec!["read".to_string()],
-        ..local_jwks(k.jwk.clone())
+        ..local_jwks(&k.jwk)
     };
     assert!(verify_jwt(&token, &config(), None, Some(&opts_ok))
         .await
@@ -242,7 +259,7 @@ async fn verify_enforces_required_scopes_local_jwks() {
 
     let opts_fail = VerifyJwtOptions {
         required_scopes: vec!["read".to_string(), "admin".to_string()],
-        ..local_jwks(k.jwk)
+        ..local_jwks(&k.jwk)
     };
     let err = verify_jwt(&token, &config(), None, Some(&opts_fail))
         .await
@@ -253,7 +270,7 @@ async fn verify_enforces_required_scopes_local_jwks() {
 #[tokio::test]
 async fn verify_returns_invalid_token_when_jwks_unreachable() {
     clear_jwks_cache();
-    let k = gen_rsa("test-key-1");
+    let k = shared_key();
     let now = now_sec();
     let token = sign(
         json!({"sub":"user-1","iss":"https://auth-unreachable.example.com","aud":"kirkforge","exp":now+3600,"iat":now}),
@@ -283,7 +300,7 @@ async fn verify_accepts_es256_token_local_jwks() {
         "test-ec-key",
         &k.encoding,
     );
-    let claims = verify_jwt(&token, &config(), None, Some(&local_jwks(k.jwk)))
+    let claims = verify_jwt(&token, &config(), None, Some(&local_jwks(&k.jwk)))
         .await
         .expect("valid es256");
     assert_eq!(claims.sub, "ec-user");

@@ -1,7 +1,8 @@
-use crate::session::bash_jobs::global_registry;
-use crate::session::bash_runner::{is_timeout_marker, run_shell_with_token, ShellError};
 use crate::shared::access::{DenyList, PathGuard};
 use crate::shared::bash_safety::check_bash_command_str;
+use crate::shared::shell::{
+    global_registry, is_timeout_marker, run_shell_with_token, JobStatus, ShellError, ShellOutput,
+};
 use crate::shared::{DockerConfig, SandboxConfig, ToolDef, ToolError, ToolOutcome};
 use crate::tools::bash_minify;
 use crate::tools::{Tool, ToolContext};
@@ -347,7 +348,7 @@ impl Tool for Bash {
 
             #[cfg(feature = "pty")]
             if interactive {
-                use crate::session::bash_runner::pty::run_with_pty;
+                use crate::shared::shell::run_with_pty;
                 return match run_with_pty(&cmd, &workdir_path, 80, 24, ctx.event_tx.clone()) {
                     Ok(pty_result) => {
                         let code = pty_result.exit_code.unwrap_or(-1);
@@ -399,7 +400,7 @@ impl Tool for Bash {
                                 std::process::ExitStatus::default()
                             }
                         };
-                        Ok(crate::session::bash_runner::ShellOutput {
+                        Ok(ShellOutput {
                             status,
                             stdout,
                             stderr,
@@ -587,8 +588,8 @@ impl Tool for BashStatus {
         match registry.get(job_id).await {
             Some(job) => {
                 let status_label = match &job.status {
-                    crate::session::bash_jobs::JobStatus::Running => "running",
-                    crate::session::bash_jobs::JobStatus::Completed(code) => {
+                    JobStatus::Running => "running",
+                    JobStatus::Completed(code) => {
                         return ToolOutcome::Success {
                             content: format!(
                                 "Job #{} completed (exit code {})\nstdout:\n{}\nstderr:\n{}",
@@ -596,14 +597,14 @@ impl Tool for BashStatus {
                             ),
                         };
                     }
-                    crate::session::bash_jobs::JobStatus::Failed(e) => {
+                    JobStatus::Failed(e) => {
                         return ToolOutcome::Failure(ToolError::Execution {
                             message: format!("Job #{} failed: {}", job.id, e),
                             exit_code: None,
                             stderr: String::new(),
                         });
                     }
-                    crate::session::bash_jobs::JobStatus::Cancelled => "cancelled",
+                    JobStatus::Cancelled => "cancelled",
                 };
                 ToolOutcome::Success {
                     content: format!(

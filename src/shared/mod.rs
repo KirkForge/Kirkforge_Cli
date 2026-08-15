@@ -52,6 +52,14 @@ pub mod bash_safety;
 // WO 28.1: UndoKind relocated from session::undo — pure enum. session::undo
 // re-exports it for its own callers (UndoOp/UndoStack stay in session).
 pub mod undo;
+// WO 32.8: shell I/O + background-job registry port. Re-exports
+// session::bash_runner / session::bash_jobs so tools/ depends on shared,
+// not session. Impls stay in session (process_group/landlock/seccomp deps).
+pub mod shell;
+// WO 32.8: prompt-injection memory store port. Re-exports session::memory
+// so tools/ depends on shared, not session. Impl stays in session
+// (data_dir/prompt deps). Not the routing store (crates/kf-memory-store).
+pub mod memory;
 
 pub use config::{Config, DisplayConfig, ModelConfig, SecurityConfig, SessionConfig, ToolConfig};
 

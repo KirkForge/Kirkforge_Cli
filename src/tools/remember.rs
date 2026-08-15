@@ -4,7 +4,7 @@
 //! The fact is saved as a markdown file with YAML frontmatter, keyed by a
 //! slug derived from the fact text. Duplicate slugs overwrite (idempotent).
 
-use crate::session::memory::{slugify_description, MemoryStore};
+use crate::shared::memory::{slugify_description, MemoryStore};
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 

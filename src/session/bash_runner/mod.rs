@@ -473,7 +473,10 @@ where
 /// Heuristic to distinguish a timeout produced by `run_shell` from a
 /// genuine non-zero exit. `run_shell` prefixes stdout with the timeout
 /// marker when the timer fires, and synthesises a killed exit status.
-pub(crate) fn is_timeout_marker(output: &ShellOutput, timeout_secs: u64) -> bool {
+// WO 32.8: widened from pub(crate) to pub so shared::shell can re-export
+// it for tools/bash.rs. The only caller outside bash_runner is the bash
+// tool's timeout detection (tools/bash.rs).
+pub fn is_timeout_marker(output: &ShellOutput, timeout_secs: u64) -> bool {
     !output.status.success()
         && output
             .stdout

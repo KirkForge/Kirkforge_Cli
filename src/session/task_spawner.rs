@@ -155,12 +155,29 @@ impl TaskSpawner for InProcessTaskSpawner {
             session_launcher: None,
             docker_config: Some(cfg.security.docker.clone()),
             sandbox_config: cfg.security.sandbox.clone(),
-            landlock_extra_paths: cfg
-                .security
-                .landlock_extra_paths
-                .iter()
-                .map(std::path::PathBuf::from)
-                .collect(),
+            // WO 32.4: include the sandbox_dir (worktree path when worktree
+            // isolation is active) in the landlock allow-list so subagent
+            // bash calls get full r/w to the worktree. Without this, the
+            // landlock workspace is the bash workdir (process CWD = repo
+            // root), and the worktree at a temp path is only covered by the
+            // read-only /tmp rule — writes to the worktree hit EACCES.
+            landlock_extra_paths: {
+                let mut paths: Vec<std::path::PathBuf> = cfg
+                    .security
+                    .landlock_extra_paths
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                if let Some(dir) = &cfg.security.sandbox_dir {
+                    if !dir.is_empty() {
+                        let pb = std::path::PathBuf::from(dir);
+                        if !paths.contains(&pb) {
+                            paths.push(pb);
+                        }
+                    }
+                }
+                paths
+            },
             block_edits: cfg.security.sandbox.block_edits,
             max_background_tasks: cfg.tools.max_background_tasks,
             task_concurrency_mode: cfg

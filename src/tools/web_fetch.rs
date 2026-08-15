@@ -3,6 +3,7 @@ use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use percent_encoding::percent_decode_str;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Maximum response body we will accept (1 MiB). This caps both memory usage
@@ -20,9 +21,40 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// Explicit, honest user agent so targets know a bot is calling.
 const USER_AGENT: &str = "KirkForge-Cli/0.1.0 (https://github.com/KirkForge/KirkForge-Cli)";
 
+// Abstraction over DNS resolution so the SSRF guards can be unit-tested
+// without real NXDOMAIN I/O (~5s per lookup). Production uses `SystemResolver`
+// (wraps `std::net::ToSocketAddrs`); tests inject a fake. The trait is sync+
+// object-safe so a `Box<dyn DnsResolver>` can be cloned cheaply via `Arc`.
+// ponytail: only the two guard functions that do real DNS (`host_resolves_`
+// `to_internal_ip` and `resolve_and_pin_dns`) consult the resolver; the
+// literal-IP guard is pure string parsing and stays resolver-free.
+pub trait DnsResolver: Send + Sync {
+    // Resolve `host:port` to a list of socket addresses.
+    // Mirrors `ToSocketAddrs::to_socket_addrs`: `Ok` yields addrs, `Err` means
+    // resolution failure (NXDOMAIN / network error).
+    fn resolve(&self, host_port: &str) -> std::io::Result<Vec<SocketAddr>>;
+}
+
+// Production resolver: delegates to the OS resolver via `to_socket_addrs`.
+// `Arc` inner lets the `SystemResolver` itself be cloned (it's a unit struct,
+// so cloning is free, but `Arc` lets us share it via `Box<dyn>`).
+#[derive(Clone, Default)]
+pub struct SystemResolver;
+
+impl DnsResolver for SystemResolver {
+    fn resolve(&self, host_port: &str) -> std::io::Result<Vec<SocketAddr>> {
+        host_port.to_socket_addrs().map(|i| i.collect())
+    }
+}
+
+// A resolver handle held by `WebFetch`. `Arc<dyn>` so cloning the tool clones
+// the resolver reference, not the (stateless) resolver itself.
+type ResolverHandle = Arc<dyn DnsResolver>;
+
 pub struct WebFetch {
     deny_list: DenyList,
     client: reqwest::Client,
+    resolver: ResolverHandle,
 }
 
 impl WebFetch {
@@ -41,12 +73,24 @@ impl WebFetch {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-        Self { deny_list, client }
+        Self {
+            deny_list,
+            client,
+            resolver: Arc::new(SystemResolver),
+        }
     }
 
     #[cfg(test)]
-    fn with_client(deny_list: DenyList, client: reqwest::Client) -> Self {
-        Self { deny_list, client }
+    fn with_resolver(
+        deny_list: DenyList,
+        client: reqwest::Client,
+        resolver: ResolverHandle,
+    ) -> Self {
+        Self {
+            deny_list,
+            client,
+            resolver,
+        }
     }
 }
 
@@ -104,7 +148,7 @@ impl Tool for WebFetch {
                 message: "URL resolves to a private/internal IP by literal host".into(),
             });
         }
-        if host_resolves_to_internal_ip(trimmed) {
+        if host_resolves_to_internal_ip(trimmed, &*self.resolver) {
             return ToolOutcome::Failure(ToolError::AccessDenied {
                 message: "URL host resolves to a private/internal IP".into(),
             });
@@ -114,7 +158,7 @@ impl Tool for WebFetch {
         // IPs, and pin DNS to the resolved address so the TCP connect uses
         // the same IP we checked. ponytail: builds a new reqwest::Client
         // per hostname request; cache pinned clients if throughput matters.
-        let client = match resolve_and_pin_dns(trimmed) {
+        let client = match resolve_and_pin_dns(trimmed, &*self.resolver) {
             Ok(Some(c)) => c,
             Ok(None) => self.client.clone(),
             Err(()) => {
@@ -246,7 +290,10 @@ pub(crate) fn host_is_literal_internal_ip(url: &str) -> bool {
 // reqwest client (tests) rather than the system resolver. The rebinding
 // threat requires the attacker's hostname to actually resolve to an
 // internal IP, which this guard catches.
-pub(crate) fn host_resolves_to_internal_ip(url: &str) -> bool {
+//
+// WO 33.14: the resolver is injected (`DnsResolver` trait) so tests can avoid
+// real NXDOMAIN I/O. Production passes `SystemResolver`.
+pub(crate) fn host_resolves_to_internal_ip(url: &str, resolver: &dyn DnsResolver) -> bool {
     let Some(host) = extract_host(url) else {
         return true; // malformed -> fail closed
     };
@@ -257,8 +304,11 @@ pub(crate) fn host_resolves_to_internal_ip(url: &str) -> bool {
     }
     // `to_socket_addrs` needs a :port pair; use a dummy port 80 for http.
     let probe = format!("{host}:80");
-    match probe.to_socket_addrs() {
-        Ok(addrs) => addrs.map(|sa| sa.ip()).any(|addr| is_internal_addr(&addr)),
+    match resolver.resolve(&probe) {
+        Ok(addrs) => addrs
+            .iter()
+            .map(|sa| sa.ip())
+            .any(|addr| is_internal_addr(&addr)),
         Err(_) => false, // resolution error -> let the fetch fail later
     }
 }
@@ -342,7 +392,10 @@ fn extract_port_from_url(url: &str) -> u16 {
 /// - `Ok(Some(client))` for hostnames that resolve to public IPs (pinned client)
 /// - `Ok(None)` for literal-IP URLs (no rebinding risk) or resolution failures
 /// - `Err(())` if the host resolves to an internal IP (deny the request)
-fn resolve_and_pin_dns(url: &str) -> Result<Option<reqwest::Client>, ()> {
+fn resolve_and_pin_dns(
+    url: &str,
+    resolver: &dyn DnsResolver,
+) -> Result<Option<reqwest::Client>, ()> {
     let host = extract_host(url).ok_or(())?;
     // Literal IPs are already pinned in the URL; no rebinding risk.
     if host.parse::<IpAddr>().is_ok() {
@@ -350,8 +403,8 @@ fn resolve_and_pin_dns(url: &str) -> Result<Option<reqwest::Client>, ()> {
     }
     let port = extract_port_from_url(url);
     let probe = format!("{host}:{port}");
-    let addrs: Vec<SocketAddr> = match probe.to_socket_addrs() {
-        Ok(a) => a.collect(),
+    let addrs: Vec<SocketAddr> = match resolver.resolve(&probe) {
+        Ok(a) => a,
         Err(_) => return Ok(None), // resolution failure — let request fail later
     };
     if addrs.is_empty() {
@@ -582,6 +635,28 @@ mod tests {
     use crate::tools::Tool;
     use serde_json::json;
 
+    // Fake resolver that always returns NXDOMAIN (`Err`). Used by the
+    // wiremock-backed fetch tests so the SSRF guards take the "resolution
+    // failure → false/Ok(None)" fast path instead of a real ~5s OS DNS
+    // lookup of the non-resolving `test.local` host. The reqwest client is
+    // already pinned to the mock server via `.resolve("test.local", addr)`,
+    // so the actual HTTP connect never hits the OS resolver either.
+    // WO 33.14: replaced 5 `#[ignore = "real DNS NXDOMAIN I/O ~10s"]` tests.
+    struct NxdomainResolver;
+
+    impl DnsResolver for NxdomainResolver {
+        fn resolve(&self, _host_port: &str) -> std::io::Result<Vec<SocketAddr>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                "fake NXDOMAIN",
+            ))
+        }
+    }
+
+    fn nxdomain_handle() -> ResolverHandle {
+        Arc::new(NxdomainResolver)
+    }
+
     #[tokio::test]
     async fn rejects_non_http_scheme() {
         let tool = WebFetch::new(DenyList::default());
@@ -652,8 +727,11 @@ mod tests {
     #[test]
     fn host_resolves_to_internal_ip_localhost_is_true() {
         // localhost resolves to 127.0.0.1 (or ::1) on every host.
+        // Uses the real SystemResolver — localhost resolution is instant
+        // and reliable on every CI host. This is the 1 real DNS smoke test
+        // for the SSRF guard (WO 33.14: keep 1 real DNS smoke test).
         assert!(
-            host_resolves_to_internal_ip("http://localhost/"),
+            host_resolves_to_internal_ip("http://localhost/", &SystemResolver),
             "localhost should resolve to an internal IP"
         );
     }
@@ -663,9 +741,11 @@ mod tests {
         // Literal IPs are handled by `host_is_literal_internal_ip`; the
         // resolver guard must NOT re-resolve them (avoids TOCTOU on a
         // pinned literal and avoids double-denying, which would still be
-        // safe but is not this function's job).
-        assert!(!host_resolves_to_internal_ip("http://127.0.0.1/"));
-        assert!(!host_resolves_to_internal_ip("http://8.8.8.8/"));
+        // safe but is not this function's job). Short-circuits before
+        // consulting the resolver, so NxdomainResolver is fine here.
+        let r: ResolverHandle = nxdomain_handle();
+        assert!(!host_resolves_to_internal_ip("http://127.0.0.1/", &*r));
+        assert!(!host_resolves_to_internal_ip("http://8.8.8.8/", &*r));
     }
 
     #[test]
@@ -673,9 +753,12 @@ mod tests {
         // A hostname that does not resolve at all should NOT trip the
         // guard — the fetch will fail later at connect time. Failing closed
         // on every NXDOMAIN would break clients that pin DNS inside reqwest
-        // (tests) rather than the system resolver.
+        // (tests) rather than the system resolver. WO 33.14: uses the
+        // injected NxdomainResolver so this is deterministic + instant
+        // (no real NXDOMAIN I/O).
+        let r: ResolverHandle = nxdomain_handle();
         assert!(
-            !host_resolves_to_internal_ip("http://kf-code-nonexistent-host-zzz.invalid/"),
+            !host_resolves_to_internal_ip("http://kf-code-nonexistent-host-zzz.invalid/", &*r),
             "NXDOMAIN should not trip the internal-IP guard"
         );
     }
@@ -683,13 +766,18 @@ mod tests {
     #[test]
     fn host_resolves_to_internal_ip_malformed_is_true() {
         // Malformed URL -> extract_host returns None -> fail closed.
-        assert!(host_resolves_to_internal_ip(""));
+        // Short-circuits before consulting the resolver.
+        let r: ResolverHandle = nxdomain_handle();
+        assert!(host_resolves_to_internal_ip("", &*r));
     }
 
     fn test_tool_for(server: &wiremock::MockServer) -> WebFetch {
         // The fetch tool blocks literal internal IPs. Wiremock binds to
         // 127.0.0.1, so point a non-internal hostname at it via reqwest's
-        // resolver override for tests.
+        // resolver override for tests. The SSRF guards use the injected
+        // `NxdomainResolver` (instant NXDOMAIN) so they don't do a real ~5s
+        // OS DNS lookup of `test.local`; the actual HTTP connect uses the
+        // reqwest client's pinned `.resolve("test.local", addr)`.
         let addr: std::net::SocketAddr = *server.address();
         let client = reqwest::Client::builder()
             .timeout(FETCH_TIMEOUT)
@@ -697,15 +785,12 @@ mod tests {
             .resolve("test.local", addr)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-        WebFetch::with_client(DenyList::default(), client)
+        WebFetch::with_resolver(DenyList::default(), client, nxdomain_handle())
     }
 
-    // #[ignore]: the SSRF guard (`host_resolves_to_internal_ip`) does a real
-    // OS DNS lookup of the non-resolving `test.local` host, which times out
-    // after ~5s and is done twice per request → ~10s per test. Genuine DNS
-    // I/O, not unnecessary setup. Run with `cargo test -- --ignored`.
+    // WO 33.14: was `#[ignore = "real DNS NXDOMAIN I/O ~10s"]` — now uses the
+    // injected `NxdomainResolver` (instant) instead of a real OS DNS lookup.
     #[tokio::test]
-    #[ignore = "real DNS NXDOMAIN I/O ~10s"]
     async fn fetches_json_successfully() {
         let body = r#"{"hello": "world"}"#;
         let server = wiremock::MockServer::start().await;
@@ -729,9 +814,9 @@ mod tests {
         assert!(content.contains("world"));
     }
 
-    // #[ignore]: same DNS-NXDOMAIN I/O as `fetches_json_successfully` (~10s).
+    // WO 33.14: was `#[ignore = "real DNS NXDOMAIN I/O ~10s"]` — now uses
+    // `NxdomainResolver`. See `fetches_json_successfully`.
     #[tokio::test]
-    #[ignore = "real DNS NXDOMAIN I/O ~10s"]
     async fn html_is_stripped_to_text() {
         let html = r#"<!DOCTYPE html><html><head><title>Hi</title><script>alert(1)</script></head><body><h1>  Hello  </h1><p>World &amp; more.</p></body></html>"#;
         let server = wiremock::MockServer::start().await;
@@ -772,9 +857,9 @@ mod tests {
         );
     }
 
-    // #[ignore]: same DNS-NXDOMAIN I/O as `fetches_json_successfully` (~10s).
+    // WO 33.14: was `#[ignore = "real DNS NXDOMAIN I/O ~10s"]` — now uses
+    // `NxdomainResolver`. See `fetches_json_successfully`.
     #[tokio::test]
-    #[ignore = "real DNS NXDOMAIN I/O ~10s"]
     async fn non_2xx_returns_failure() {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
@@ -792,9 +877,9 @@ mod tests {
         );
     }
 
-    // #[ignore]: same DNS-NXDOMAIN I/O as `fetches_json_successfully` (~10s).
+    // WO 33.14: was `#[ignore = "real DNS NXDOMAIN I/O ~10s"]` — now uses
+    // `NxdomainResolver`. See `fetches_json_successfully`.
     #[tokio::test]
-    #[ignore = "real DNS NXDOMAIN I/O ~10s"]
     async fn oversized_response_is_rejected() {
         let big = "x".repeat(MAX_BODY_BYTES + 1);
         let server = wiremock::MockServer::start().await;
@@ -966,9 +1051,9 @@ mod tests {
         );
     }
 
-    // #[ignore]: same DNS-NXDOMAIN I/O as `fetches_json_successfully` (~10s).
+    // WO 33.14: was `#[ignore = "real DNS NXDOMAIN I/O ~10s"]` — now uses
+    // `NxdomainResolver`. See `fetches_json_successfully`.
     #[tokio::test]
-    #[ignore = "real DNS NXDOMAIN I/O ~10s"]
     async fn public_hostname_passes_initial_guards() {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))

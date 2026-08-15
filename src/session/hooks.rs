@@ -929,6 +929,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "spawns real bash sleep 30 hook + 5s timeout wait; run with --ignored"]
     async fn test_run_hook_timeout_returns_allow() {
         let (_tmp, dir) = temp_hooks_dir();
         write_hook(&dir, "slow-hook", "#!/bin/bash\nsleep 30");

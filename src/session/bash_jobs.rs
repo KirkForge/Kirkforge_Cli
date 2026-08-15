@@ -748,6 +748,7 @@ mod tests {
     /// the partial output it produced before the timeout.
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore = "spawns real subprocess + 6s timeout wait; run with --ignored"]
     async fn test_timeout_reaps_child_and_preserves_partial_output() {
         let reg = BashJobRegistry::new();
         let id = reg

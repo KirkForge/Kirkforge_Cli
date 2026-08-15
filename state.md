@@ -106,13 +106,28 @@ over-claimed.
 - **Concurrency cancellation + parallel jobs + fail-fast on PR.** PR runs
   cancel superseded runs; merge-job steps run in parallel where safe;
   PR gate fails fast on the first red job.
+- **WO 33.14 — subprocess/DNS test fakes (phase 3 minimal win).** Injected a
+  `DnsResolver` trait into `WebFetch` (production `SystemResolver` wraps
+  `ToSocketAddrs`; tests use `NxdomainResolver` for instant NXDOMAIN). Un-ignored
+  5 web_fetch tests that did real DNS NXDOMAIN (~10s each) — now ~0s each.
+  Gated 4 slow subprocess tests with `#[ignore]` + reasons: `bash_jobs`
+  timeout-reap (6s sleep), `hooks` slow-hook (`bash sleep 30`), `bash_runner`
+  kill-descendants (2s sleep + `sh`), `jobs::runner` bash-job-timeout
+  (`sleep 30` + 2s timeout). Kept 1 real DNS smoke test (`localhost`). No
+  production behavior changed. Full fake process framework DEFERRED (workorder
+  explicitly scoped it out as over-engineering).
 
 ### Pending / blocked (this session)
 
-- **WO 33.14 — subprocess test fakes.** Replace real-subprocess tests
-  (bash, git, cargo spawn) with in-process fakes where the subprocess is
-  an implementation detail, not the behavior under test. Reduces CI
-  flakiness from external-binary availability. Not started.
+- **WO 33.14 — full fake process framework.** DEFERRED. The workorder
+  explicitly said "Do NOT implement a full fake process framework." The 4
+  subprocess tests are `#[ignore]`d. Remaining: abstract `Command` execution
+  behind a trait in `bash_jobs`/`bash_runner`/`hooks` so the reap/kill-semantics
+  tests can run in-process without spawning real `sleep`/`sh`/`bash`. Tracked
+  in WO 33.14 (future phase).
+- **WO 33.14 — verifier/computer_use/bash-Docker/E2E subprocess tests.** Out
+  of scope for this phase (not in the "biggest offenders" list). The workorder
+  lists them; they remain as future WO 33.14+ items.
 - **WO 32.19 / 32.20.** Not started this session; see workorder files.
 - **Full env-mutation cleanup.** 116 sites converted this session; a
   residual set remains in integration/e2e tests that spawn real

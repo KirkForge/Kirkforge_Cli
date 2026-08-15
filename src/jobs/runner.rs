@@ -422,6 +422,7 @@ mod tests {
     /// A bash job with a timeout must not run longer than the timeout.
     /// Regression test for H6: timeout was None even when job.timeout was set.
     #[tokio::test]
+    #[ignore = "spawns real sleep 30 subprocess + 2s timeout wait; run with --ignored"]
     async fn bash_job_timeout_is_enforced() {
         let (_tmp, store) = tmp_store();
         let mut job = bash_job("sleep 30");

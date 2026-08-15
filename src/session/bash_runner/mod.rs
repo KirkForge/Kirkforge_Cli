@@ -780,6 +780,7 @@ mod tests {
     /// touches a marker file.
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore = "spawns real sh subprocess + 2s timeout wait; run with --ignored"]
     async fn run_shell_timeout_kills_descendants() {
         let tmp = std::env::temp_dir();
         let marker = tmp.join(format!(

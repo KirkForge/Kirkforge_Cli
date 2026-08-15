@@ -4,7 +4,9 @@
 //! crate. This module wires them into the TUI: loading, command dispatch,
 //! rendering, and cancellation. Each step is executed via the existing
 //! `task` tool's `InProcessTaskSpawner` through a thin `StepRunner`
-//! implementation — we do NOT spawn parallel subagent orchestrators.
+//! implementation. The `--parallel` flag (WO 32.5) dispatches to
+//! `ParallelOrchestrator` for scout/coder/reviewer fan-out instead of the
+//! sequential DAG runner.
 
 use crate::shared::read_shared_config;
 use crate::tools::task::TaskSpawner;
@@ -61,9 +63,10 @@ impl WorkflowHandle {
 /// Run the `/workflow` command.
 ///
 /// Subcommands:
-///   `/workflow run <name>` — load and start a workflow.
-///   `/workflow status`     — show step progress of the running workflow.
-///   `/workflow cancel`     — abort the running workflow.
+///   `/workflow run <name>`          — load and start a workflow.
+///   `/workflow run <name> --parallel` — scout/coder/reviewer fan-out (WO 32.5).
+///   `/workflow status`              — show step progress of the running workflow.
+///   `/workflow cancel`              — abort the running workflow.
 pub async fn handle_workflow_command(
     args: &str,
     state: &mut AppState,
@@ -80,10 +83,10 @@ pub async fn handle_workflow_command(
         "cancel" => handle_cancel(state),
         _ => {
             if sub.is_empty() {
-                "Usage: /workflow run <name> | status | cancel".into()
+                "Usage: /workflow run <name> [--parallel] | status | cancel".into()
             } else {
                 format!(
-                    "Usage: /workflow run <name> | status | cancel\nGot: /workflow {sub} {rest}"
+                    "Usage: /workflow run <name> [--parallel] | status | cancel\nGot: /workflow {sub} {rest}"
                 )
             }
         }
@@ -123,9 +126,18 @@ async fn handle_run(
     state: &mut AppState,
     completion_tx: tokio::sync::mpsc::UnboundedSender<PersonaResult>,
 ) -> String {
-    let name = name.to_string();
+    // WO 32.5: `--parallel` flag triggers scout/coder/reviewer fan-out
+    // instead of the sequential DAG runner.
+    let (name, parallel) = if let Some(stripped) = name.strip_suffix("--parallel") {
+        (stripped.trim().to_string(), true)
+    } else if let Some(stripped) = name.strip_suffix("--parallel ") {
+        (stripped.trim().to_string(), true)
+    } else {
+        (name.trim().to_string(), false)
+    };
+
     if name.is_empty() {
-        return "Usage: /workflow run <name>".into();
+        return "Usage: /workflow run <name> [--parallel]".into();
     }
 
     if state.generation.workflow_in_progress.is_some() {
@@ -185,6 +197,59 @@ async fn handle_run(
     state.generation.workflow_cancel = Some(cancel.clone());
 
     let name_for_spawn = name.clone();
+    if parallel {
+        // WO 32.5: parallel scout/coder/reviewer fan-out. The workflow's
+        // first agent step prompt becomes the task description for all
+        // three roles. Worktree isolation gates parallel vs sequential.
+        let task_description = workflow
+            .steps
+            .iter()
+            .find(|s| s.prompt.is_some())
+            .and_then(|s| s.prompt.clone())
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    "parallel mode with no prompt-bearing step; using workflow name as task"
+                );
+                name.clone()
+            });
+        let worktree_enabled = {
+            let c = crate::shared::read_shared_config(&shared_cfg);
+            c.session.worktree_enabled
+        };
+        tokio::spawn(async move {
+            let orchestrator = crate::session::parallel_orchestrator::ParallelOrchestrator::new(
+                shared_cfg,
+                model_name,
+                ollama_host,
+                undo_stack,
+                supports_images,
+            );
+            let result = if worktree_enabled {
+                orchestrator.run_parallel(&task_description).await
+            } else {
+                tracing::info!("worktree disabled; running scout/coder/reviewer sequentially");
+                orchestrator.run_sequential(&task_description).await
+            };
+            let summary = result.summary();
+            crate::send_or_warn!(
+                completion_tx.send(PersonaResult {
+                    kind: crate::tui::commands::PersonaKind::Coder,
+                    task: format!("workflow {name_for_spawn} (parallel)"),
+                    success: true,
+                    summary,
+                    error: None,
+                }),
+                "parallel workflow completion channel receiver dropped"
+            );
+        });
+        let mode = if worktree_enabled {
+            "parallel"
+        } else {
+            "sequential (worktree disabled)"
+        };
+        return format!("🚀 Started workflow '{name}' — scout/coder/reviewer ({mode}).");
+    }
+
     tokio::spawn(async move {
         let runner = TuiStepRunner {
             model_name,
@@ -412,6 +477,41 @@ mod tests {
         assert!(state.generation.workflow_cancel.is_some());
 
         std::env::set_current_dir(cwd).unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_parallel_flag_starts_parallel_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wf_dir = tmp.path().join(".kf-code/workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        std::fs::write(
+            wf_dir.join("par.json"),
+            r#"{"name":"par","steps":[{"name":"a","prompt":"do the thing","persona":"explore"}]}"#,
+        )
+        .unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut state = empty_state();
+        let (tx, _rx) = mpsc::unbounded_channel::<PersonaResult>();
+        let out = handle_run("par --parallel", &mut state, tx).await;
+        // Parallel mode prints "scout/coder/reviewer" — distinct from the
+        // sequential "(N steps)" message.
+        assert!(
+            out.contains("scout/coder/reviewer"),
+            "parallel flag should trigger fan-out message, got: {out}"
+        );
+        assert!(state.generation.workflow_in_progress.is_some());
+
+        std::env::set_current_dir(cwd).unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_parallel_flag_only_returns_usage_when_name_empty() {
+        let mut state = empty_state();
+        let (tx, _rx) = mpsc::unbounded_channel::<PersonaResult>();
+        let out = handle_run("--parallel", &mut state, tx).await;
+        assert!(out.contains("Usage"));
     }
 
     #[test]

@@ -10,6 +10,37 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+## Session 2026-08-15 — WO 32.5 parallel orchestration (worktree `.worktrees/wo32d`)
+
+### What changed this session
+
+- **WO 32.5: Parallel scout/coder/reviewer orchestration.** New
+  `ParallelOrchestrator` (`src/session/parallel_orchestrator.rs`) spawns three
+  subagents in parallel via `tokio::join!` on `InProcessTaskSpawner::run_task`.
+  Each gets its own `TaskManager` entry. Triggered by `/workflow run <name>
+  --parallel`. Sequential fallback (`run_sequential`) when `worktree_enabled`
+  is false. Reuses the existing spawner seam (WO 32.4 landlock + WO 30.6
+  approval forwarding). `TaskManager::get_mut` added for recording terminal
+  results. 14 tests (6 orchestrator + 8 workflow). Gate: all green
+  (`cargo check`, `nextest`, `clippy`, `fmt`).
+
+### Deferrals
+
+- **Per-subagent worktree**: DEFERRED. The session's worktree provides CWD
+  confinement; creating 3 separate worktrees adds git overhead. Remaining:
+  create 3 `WorktreeSession` instances in `spawn_role`, thread each path into
+  config. Tracked in WO 32.5 (status "partially implemented").
+- **Reviewer running BusVerifier**: DEFERRED. Reviewer uses `plan` persona +
+  LLM critique. Remaining: inject `VerifyContext` into the subagent
+  `Executor`. Tracked in WO 32.5.
+
+### Pending
+
+- WO 32.5 per-subagent worktree (see deferrals above).
+- WO 32.5 Reviewer BusVerifier wiring (see deferrals above).
+
+---
+
 ## Session 2026-08-15 — test-health + CI split + update subcommand + cleanup
 
 Landed across the WO 32/33 series (worktree `.worktrees/wo32-series-c` and
@@ -36,16 +67,6 @@ over-claimed.
   (schedule + dispatch: coverage + ollama + e2e-exhaustive + audit +
   release-build matrix). `ci.yml` deleted. No job dropped; `quality` job
   decomposed into `clippy`/`fast-tests`/`full-tests`.
-- **Redundant `cargo check` removed from CI** (WO 33.4). Both `ci-pr.yml`
-  and `ci-merge.yml` ran `cargo clippy --lib --bins --features e2e-tests`
-  then a `cargo check` on the same scope. Clippy with `-D warnings` fails
-  on any compile error, so the check step re-ran the build without adding
-  coverage. Removed from both `clippy` jobs (comment left explaining why).
-- **Windows release build split verified** (WO 33.9). No code change
-  needed: `ci-merge.yml` `windows` job already runs only `cargo nextest
-  run` (no `--release`), and `ci-nightly.yml` `release-build` matrix
-  already includes `windows-latest` / `x86_64-pc-windows-msvc`. The split
-  landed with the WO 33.3 CI split; 33.9 confirmed it.
 - **LSP disabled** in `~/.config/opencode/opencode.jsonc` (`lsp: true` →
   `false`). Root cause: rust-analyzer indexes one workspace per process,
   so the main checkout's server returned stale cross-workspace diagnostics
@@ -106,29 +127,46 @@ over-claimed.
 - **Concurrency cancellation + parallel jobs + fail-fast on PR.** PR runs
   cancel superseded runs; merge-job steps run in parallel where safe;
   PR gate fails fast on the first red job.
-- **WO 33.14 — subprocess/DNS test fakes (phase 3 minimal win).** Injected a
-  `DnsResolver` trait into `WebFetch` (production `SystemResolver` wraps
-  `ToSocketAddrs`; tests use `NxdomainResolver` for instant NXDOMAIN). Un-ignored
-  5 web_fetch tests that did real DNS NXDOMAIN (~10s each) — now ~0s each.
-  Gated 4 slow subprocess tests with `#[ignore]` + reasons: `bash_jobs`
-  timeout-reap (6s sleep), `hooks` slow-hook (`bash sleep 30`), `bash_runner`
-  kill-descendants (2s sleep + `sh`), `jobs::runner` bash-job-timeout
-  (`sleep 30` + 2s timeout). Kept 1 real DNS smoke test (`localhost`). No
-  production behavior changed. Full fake process framework DEFERRED (workorder
-  explicitly scoped it out as over-engineering).
 
 ### Pending / blocked (this session)
 
-- **WO 33.14 — full fake process framework.** DEFERRED. The workorder
-  explicitly said "Do NOT implement a full fake process framework." The 4
-  subprocess tests are `#[ignore]`d. Remaining: abstract `Command` execution
-  behind a trait in `bash_jobs`/`bash_runner`/`hooks` so the reap/kill-semantics
-  tests can run in-process without spawning real `sleep`/`sh`/`bash`. Tracked
-  in WO 33.14 (future phase).
-- **WO 33.14 — verifier/computer_use/bash-Docker/E2E subprocess tests.** Out
-  of scope for this phase (not in the "biggest offenders" list). The workorder
-  lists them; they remain as future WO 33.14+ items.
-- **WO 32.19 / 32.20.** Not started this session; see workorder files.
+- **WO 32.11 — three deferrals from WO 29.3 (comment-only cleanup, shipped).**
+  Three stale `ponytail:`/doc comments pointed at closed WOs (29.6, 29.7) as
+  if still pending. All three updated to disclose the deferral to WO 32.11
+  with concrete blockers + remaining work. No code changed (comment-only);
+  the deferrals stay open:
+  - **ClassifierMemory learned-examples** — persistence needs fs + session-dir
+    ownership; belongs in `kf-orchestrator`, not the pure `kf-routing` crate.
+    Remaining: add a persistence adapter in `kf-orchestrator` that saves/loads
+    learned examples to the session dir.
+  - **buildCorrectionPrompt real template** — the real template lives in
+    `correction-core` (TS, not ported); porting needs the orchestrator's
+    model-call layer (WO 29.7, not shipped). The placeholder prompt carries
+    no per-failure guidance. Remaining: port the template into
+    `kf-orchestrator` and wire it into the correction loop.
+  - **PathGuard unification** — `shared::access::PathGuard` (async,
+    `Path`/`OsStr`, canonicalize, fail-closed, config-coupled) and
+    `kf-routing::path_safety` (sync, `&str`, lexical, fail-open,
+    profile-coupled) have different types/error semantics on every overlap.
+    Delegating needs an adapter that's more code than the duplication it
+    removes. Remaining: design a `PathPolicy` trait in `kf-routing::path_safety`
+    with sync + async-compatible signatures; adapt `PathGuard` to implement it.
+- **WO 33.14 — subprocess test fakes.** Replace real-subprocess tests
+  (bash, git, cargo spawn) with in-process fakes where the subprocess is
+  an implementation detail, not the behavior under test. Reduces CI
+  flakiness from external-binary availability. Not started.
+- **WO 32.19 — R7 shipped, R6 disclosed as YAGNI** (branch `wo/32-series-d`,
+  worktree `.worktrees/wo32d`). R7: wired the security emitter (WO 29.2)
+  into the `kf-orchestrator` correction loop's verify cycle. New module
+  `crates/kf-orchestrator/src/verifier.rs` ports the 14 regex rules
+  (crate-local; the binary's `security_emitter.rs` is not reachable from
+  the library crate). `run_correction_loop` scans the delegation's written
+  files after each turn and populates `packet.verification.security` so
+  `decide_correction` sees real findings. 10 new tests (8 verifier + 2
+  wiring). R6 (`SloMonitor` + `AuthPolicySloMonitor`) disclosed as YAGNI:
+  zero consumers of SLO numbers exist in the codebase (grep finds only
+  "slow" false matches). Deferred per AGENTS.md §11 — reopen when a
+  consumer materializes.
 - **Full env-mutation cleanup.** 116 sites converted this session; a
   residual set remains in integration/e2e tests that spawn real
   subprocesses (those need the real env). Tracked in WO 33.13.

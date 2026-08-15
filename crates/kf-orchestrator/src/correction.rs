@@ -23,7 +23,11 @@ use kf_routing::cost::{estimate_simple_cost, resolve_cost_provider_key};
 
 use crate::correction_loop_helpers::task_outcome_from_validation;
 use crate::model::ModelClient;
-use crate::types::{CorrectionLoopConfig, CorrectionLoopOutcome, TaskInput, TaskValidationResult};
+use crate::types::{
+    extract_written_files, CorrectionLoopConfig, CorrectionLoopOutcome, TaskInput,
+    TaskValidationResult,
+};
+use crate::verifier::{apply_security_findings, scan_files};
 
 /// Callback shape for the loop's per-turn delegate call. Mirrors
 /// `decompose::DelegateFn` but kept separate because the loop runs in a
@@ -96,6 +100,17 @@ pub async fn run_correction_loop(
         session_cost +=
             estimate_simple_cost(cost_key, emission.prompt_tokens, emission.completion_tokens);
         last_packet = result.packet.clone();
+
+        // R7 (WO 32.19): verify cycle — scan the delegation's written
+        // files with the security emitter and populate
+        // `packet.verification.security` so `decide_correction` sees real
+        // findings. When the delegate returned no packet, build one from
+        // the security scan so the loop still has a verdict to decide on.
+        let written = extract_written_files(&result);
+        let files: Vec<std::path::PathBuf> = written.iter().map(std::path::PathBuf::from).collect();
+        let findings = scan_files(&files);
+        let packet = last_packet.get_or_insert_with(Default::default);
+        apply_security_findings(packet, &findings);
 
         // External validator hook: DEFERRED. For now, the only signal is the
         // caller's `task.task_pass` flag (set by the harness or external
@@ -451,6 +466,110 @@ mod tests {
         let out = run_correction_loop(&d, None, None, task, &cfg)
             .await
             .unwrap();
+        assert_eq!(out.final_action, "accept");
+    }
+
+    // ── R7 (WO 32.19): verify cycle wiring ──────────────────────────────
+    //
+    // The correction loop must scan the delegation's written files with
+    // the security emitter and populate `packet.verification.security`
+    // so `decide_correction` sees real findings. A delegation that
+    // "writes" a file containing `eval(...)` must escalate (critical
+    // security → Escalate per `decide_correction`).
+
+    fn make_result_with_written_file(pass: bool, file: &std::path::Path) -> DelegationResult {
+        let mut packet = kf_routing::correction::ReducedStatePacket::default();
+        packet.verification.overall = if pass {
+            kf_routing::correction::OverallVerdict::Pass
+        } else {
+            kf_routing::correction::OverallVerdict::Fail
+        };
+        let mut result = make_result(pass, 100);
+        result.packet = Some(packet);
+        result.signals.push(crate::types::Signal {
+            id: "s1".into(),
+            task_id: "t1".into(),
+            domain: "code".into(),
+            kind: "files.written".into(),
+            source: "agent".into(),
+            ts: "now".into(),
+            value: serde_json::json!({ "files": [file.to_string_lossy()] }),
+            confidence: None,
+        });
+        result
+    }
+
+    struct WritesEvilFile {
+        file: std::path::PathBuf,
+    }
+    #[async_trait]
+    impl LoopDelegate for WritesEvilFile {
+        async fn delegate_turn(&self, _task: TaskInput) -> Result<DelegationResult> {
+            Ok(make_result_with_written_file(true, &self.file))
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_cycle_escalates_on_security_finding_in_written_file() {
+        // R7: the loop scans the delegation's written files. A file with
+        // `eval(...)` produces a critical security finding → the loop
+        // escalates instead of accepting.
+        let dir = tempfile::tempdir().unwrap();
+        let evil = dir.path().join("evil.py");
+        std::fs::write(&evil, "eval('evil')\n").unwrap();
+        std::mem::forget(dir);
+
+        let cfg = CorrectionLoopConfig {
+            max_corrections: 2,
+            ..Default::default()
+        };
+        let d = WritesEvilFile { file: evil.clone() };
+        let out = run_correction_loop(
+            &d,
+            None,
+            None,
+            TaskInput {
+                description: "fix the typescript lint errors".into(),
+                ..Default::default()
+            },
+            &cfg,
+        )
+        .await
+        .unwrap();
+        // critical security finding → escalate (no policy → backward-compat
+        // escalate, see kf-routing::correction::decide_correction).
+        assert_eq!(
+            out.final_action, "escalate",
+            "security finding in written file must cause escalate, not accept"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_cycle_accepts_when_written_file_is_clean() {
+        // R7: a delegation that writes a clean file (no security findings)
+        // still accepts — the verify cycle doesn't false-positive.
+        let dir = tempfile::tempdir().unwrap();
+        let clean = dir.path().join("clean.py");
+        std::fs::write(&clean, "print('hello')\n").unwrap();
+        std::mem::forget(dir);
+
+        let cfg = CorrectionLoopConfig {
+            max_corrections: 2,
+            ..Default::default()
+        };
+        let d = WritesEvilFile { file: clean };
+        let out = run_correction_loop(
+            &d,
+            None,
+            None,
+            TaskInput {
+                description: "fix the typescript lint errors".into(),
+                ..Default::default()
+            },
+            &cfg,
+        )
+        .await
+        .unwrap();
         assert_eq!(out.final_action, "accept");
     }
 }

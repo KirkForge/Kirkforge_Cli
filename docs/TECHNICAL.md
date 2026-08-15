@@ -463,6 +463,15 @@ Rust `VerifierBus` is authoritative: built-in verifiers register directly,
 plugin verifiers register via `register_plugin_verifiers_into_bus`, and the
 security scan registers via the `TsOrchestratorBridgeVerifier` wrapper.
 
+The `kf-orchestrator` crate (library, cannot depend on the binary) has its
+own crate-local verify cycle (WO 32.19 R7): `run_correction_loop` scans the
+delegation's written files via `kf_orchestrator::verifier::scan_files` (a
+port of the same 14 regex rules) and populates
+`packet.verification.security` before `decide_correction` runs. The two
+copies (binary `security_emitter.rs` + crate `verifier.rs`) are
+deliberate: unifying them requires extracting a `kf-security` crate, which
+is out of scope for R7 (wiring, not restructuring).
+
 ### Correction loop
 
 After a tool execution event, the correction loop (up to 3 iterations):
@@ -745,6 +754,21 @@ Workflows reuse the `task` tool's in-process spawner, so they run as orchestrate
 subagent personas within a single session. Workflows are invoked two ways: the
 TUI `/workflow run` slash command, and the `workflow_run` tool (WO 9.1) which
 lets the agent loop and bench harness run a named template via a tool call.
+
+### Parallel orchestration (WO 32.5)
+
+`ParallelOrchestrator` (`src/session/parallel_orchestrator.rs`) spawns three
+subagents in parallel — Scout (`explore` persona, read-only), Coder (`coder`
+persona, write), Reviewer (`plan` persona, read-only critique) — via
+`tokio::join!` on `InProcessTaskSpawner::run_task`. Each subagent gets its own
+`TaskManager` entry for `/jobs` lifecycle visibility. Triggered by
+`/workflow run <name> --parallel`; the workflow's first prompt-bearing step
+becomes the task description for all three roles. Sequential fallback
+(`run_sequential`) runs the three roles one-by-one when `worktree_enabled` is
+false (without CWD confinement, parallel bash calls can interfere). The
+orchestrator reuses the existing `InProcessTaskSpawner` seam — no new executor
+construction, inheriting WO 32.4 landlock/CWD confinement and WO 30.6 approval
+forwarding.
 
 ---
 
@@ -1152,7 +1176,7 @@ document known limitations. Removing these is a regression.
 | `kf-routing` | Active | Pure orchestrator modules (classifier, routing, correction, path safety) | `build_empirical_recommendation`, `tokenize`, `vectorize`, `cosine` | `kf-memory-store`, `kf-orchestrator` |
 | `kf-rbac` | Active | RBAC + JWT/JWKS verification (port of `@kirkforge/core-rbac`) | `Rbac`, `Actor`, `ApiKeys`, `OidcVerifier` | standalone (security surface) |
 | `kf-memory-store` | Active | Routing-oriented memory store (port of `@kirkforge/memory-palace`) | `MemoryStore`, `MemoryAdapter`, `FileAdapter`, `SqliteAdapter`, `InMemoryAdapter` | `kf-orchestrator` |
-| `kf-orchestrator` | Active | Orchestrator delegation + decompose + correction pipeline (port of `@kirkforge/orchestrator`) | `Orchestrator`, `delegate`, `run_correction_loop`, `ModelClient`, `WorkspaceManager` | standalone (foundation for full executor wiring) |
+| `kf-orchestrator` | Active | Orchestrator delegation + decompose + correction pipeline (port of `@kirkforge/orchestrator`) | `Orchestrator`, `delegate`, `run_correction_loop`, `ModelClient`, `WorkspaceManager`, `verifier::scan_files` | standalone (foundation for full executor wiring) |
 | `kf-testdoctor` | Active | Test-performance diagnostics | `doctor` CLI | root binary (`kf-code doctor`) |
 
 "Excluded" crates exist on disk but are not built by default (`cargo build

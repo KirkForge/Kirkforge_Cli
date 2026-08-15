@@ -84,9 +84,39 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
-  clippy:
+  # Shared gate: classify the PR change set once and expose the affected
+  # cargo packages (or a docs-only/no-rust marker) as job outputs. Both
+  # `clippy` and `fast-tests` depend on this so they skip themselves on
+  # docs-only changes (WO 33.6). fetch-depth: 0 is required for
+  # `git diff <base>..HEAD` to resolve the base ref.
+  changes:
     runs-on: ubuntu-latest
     needs: fmt
+    timeout-minutes: 3
+    outputs:
+      packages: ${{ steps.cls.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: cls
+        name: Classify changed packages
+        # github.base_ref is the PR target branch (e.g. dev) on PR events;
+        # fall back to origin/dev for push-triggered runs.
+        run: |
+          base="origin/${{ github.base_ref || 'dev' }}"
+          pkgs="$(bash scripts/changed-packages.sh "$base" 2>/dev/null || true)"
+          echo "packages=$pkgs" >> "$GITHUB_OUTPUT"
+          if [ "$pkgs" = "__NO_RUST_CHANGES__" ] || [ -z "$pkgs" ]; then
+            echo "No Rust packages affected; clippy + fast-tests will skip."
+          else
+            echo "Affected packages: $pkgs"
+          fi
+
+  clippy:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.packages != '' && needs.changes.outputs.packages != '__NO_RUST_CHANGES__'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -102,17 +132,22 @@ jobs:
           key: pr-clippy
 
       - name: Run Clippy
+        # Clippy is the compile gate: run on the full workspace even when
+        # only a subset of packages changed tests, because a crate change
+        # can break callers that the package-level filter doesn't compile.
         # --lib --bins (NOT --all-targets) skips test-target compilation
         # for PR speed. --features e2e-tests keeps the gated e2e crate
         # under the lint gate so it cannot silently rot (WO 28.10).
         # No separate `cargo check` step: clippy with `-D warnings` fails on
         # any compile error, and same-scope `cargo check` after clippy only
         # re-runs the build without adding coverage (WO 33.4).
+        # Skipped entirely on docs-only changes (WO 33.6).
         run: cargo clippy --lib --bins --features e2e-tests --locked -- -D warnings
 
   fast-tests:
     runs-on: ubuntu-latest
-    needs: fmt
+    needs: changes
+    if: needs.changes.outputs.packages != '' && needs.changes.outputs.packages != '__NO_RUST_CHANGES__'
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -131,6 +166,17 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - name: Run fast test suite (lib only, fail-fast)
+      - name: Run fast test suite (changed packages only, lib only, fail-fast)
+        # Path-aware selection (WO 33.6): run nextest only for the packages
+        # touched by the PR (+ their reverse-dep closure), not the whole
+        # workspace. The `changes` job computes the list via
+        # scripts/changed-packages.sh and exposes it as `packages`.
         # ci-fast profile: kind(lib), fail-fast=true, 60s slow-timeout.
-        run: cargo nextest run --profile ci-fast --workspace --lib --locked
+        # Skipped entirely on docs-only changes (WO 33.6).
+        env:
+          PKGS: ${{ needs.changes.outputs.packages }}
+        run: |
+          set -euo pipefail
+          args=()
+          for p in $PKGS; do args+=("-p" "$p"); done
+          cargo nextest run --profile ci-fast --lib --locked "${args[@]}"

@@ -757,12 +757,14 @@ mod tests {
         state_with_config(cfg)
     }
 
-    fn tmp_jobs_dir() -> (tempfile::TempDir, JobStore, crate::shared::test_util::EnvGuard) {
+    fn tmp_jobs_dir() -> (
+        tempfile::TempDir,
+        JobStore,
+        crate::shared::test_util::EnvGuard,
+    ) {
         let dir = tempfile::tempdir().unwrap();
-        let env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().as_os_str(),
-        );
+        let env =
+            crate::shared::test_util::EnvGuard::set("KF_CODE_DATA_DIR", dir.path().as_os_str());
         let store = job_store().unwrap();
         (dir, store, env)
     }

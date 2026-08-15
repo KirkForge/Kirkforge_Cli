@@ -569,7 +569,10 @@ mod tests {
     fn with_empty_data_dir() -> DataDirGuard {
         let dir = tempfile::tempdir().unwrap();
         let env = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
-        DataDirGuard { _dir: dir, _env: env }
+        DataDirGuard {
+            _dir: dir,
+            _env: env,
+        }
     }
 
     #[test]

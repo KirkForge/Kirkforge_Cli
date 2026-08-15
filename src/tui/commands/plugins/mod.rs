@@ -639,7 +639,10 @@ mod tests {
         async fn new(dir: &std::path::Path) -> Self {
             let guard = crate::session::test_data_dir_lock().lock().await;
             let env = EnvGuard::set("KF_CODE_DATA_DIR", dir.as_os_str());
-            Self { _env: env, _guard: guard }
+            Self {
+                _env: env,
+                _guard: guard,
+            }
         }
     }
 

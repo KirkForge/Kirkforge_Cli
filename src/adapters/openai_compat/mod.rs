@@ -52,6 +52,7 @@ async fn send_done_once(
 pub(crate) async fn parse_openai_compat_stream<B, E, S>(
     tx: tokio::sync::mpsc::Sender<StreamEvent>,
     mut stream: S,
+    idle_timeout: std::time::Duration,
 ) where
     B: AsRef<[u8]>,
     E: std::fmt::Display,
@@ -61,7 +62,8 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
     let mut pending_tool_calls = ToolCallAccumulator::new();
     let mut done_emitted = false;
 
-    while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx).await {
+    while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx, idle_timeout).await
+    {
         match chunk_result {
             Ok(bytes) => {
                 buffer.extend_from_slice(bytes.as_ref());
@@ -345,6 +347,7 @@ pub struct OpenAiCompatAdapter {
     seed: Option<u64>,
     timeout_secs: u64,
     tool_choice: Option<crate::shared::ToolChoice>,
+    stream_idle_timeout: std::time::Duration,
 }
 
 impl OpenAiCompatAdapter {
@@ -360,6 +363,7 @@ impl OpenAiCompatAdapter {
             seed: None,
             timeout_secs,
             tool_choice: None,
+            stream_idle_timeout: super::STREAM_IDLE_TIMEOUT,
         }
     }
 
@@ -382,6 +386,7 @@ impl OpenAiCompatAdapter {
             seed: None,
             timeout_secs,
             tool_choice: None,
+            stream_idle_timeout: super::STREAM_IDLE_TIMEOUT,
         }
     }
 }
@@ -438,6 +443,10 @@ impl ModelAdapter for OpenAiCompatAdapter {
         self.seed = seed;
     }
 
+    fn set_streaming_timeout(&mut self, secs: u64) {
+        self.stream_idle_timeout = std::time::Duration::from_secs(secs);
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
@@ -482,7 +491,11 @@ impl ModelAdapter for OpenAiCompatAdapter {
         // recorded. 4096 gives ~20x headroom.
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
 
-        tokio::spawn(parse_openai_compat_stream(tx, response.bytes_stream()));
+        tokio::spawn(parse_openai_compat_stream(
+            tx,
+            response.bytes_stream(),
+            self.stream_idle_timeout,
+        ));
 
         Ok(rx)
     }
@@ -774,7 +787,7 @@ mod tests {
     async fn run_sse(chunks: Vec<Vec<u8>>) -> Vec<StreamEvent> {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let stream = tokio_stream::iter(chunks.into_iter().map(Ok::<_, std::convert::Infallible>));
-        parse_openai_compat_stream(tx, stream).await;
+        parse_openai_compat_stream(tx, stream, crate::adapters::STREAM_IDLE_TIMEOUT).await;
         drain(rx, 256).await
     }
 
@@ -1138,7 +1151,7 @@ mod tests {
         ))];
         let stream = tokio_stream::iter(items);
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        parse_openai_compat_stream(tx, stream).await;
+        parse_openai_compat_stream(tx, stream, crate::adapters::STREAM_IDLE_TIMEOUT).await;
         let events = drain(rx, 64).await;
         assert!(events
             .iter()

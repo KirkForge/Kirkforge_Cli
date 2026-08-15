@@ -413,6 +413,13 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // KF_CODE_STREAMING_TIMEOUT_SECS
+    if let Ok(val) = std::env::var("KF_CODE_STREAMING_TIMEOUT_SECS") {
+        if let Ok(n) = val.parse::<u64>() {
+            cfg.model.streaming_timeout_secs = n.max(1);
+        }
+    }
+
     // KF_CODE_CHECKPOINT_INTERVAL_MESSAGES
     if let Ok(val) = std::env::var("KF_CODE_CHECKPOINT_INTERVAL_MESSAGES") {
         if let Ok(n) = val.parse::<usize>() {
@@ -530,6 +537,7 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
     // Clamp after all layers so a config file or env override cannot set an
     // unusable zero-second timeout.
     cfg.model.request_timeout_secs = cfg.model.request_timeout_secs.max(1);
+    cfg.model.streaming_timeout_secs = cfg.model.streaming_timeout_secs.max(1);
 
     // KF_CODE_ADAPTER_ROUTING
     // Format: comma-separated prefix=Kind pairs, e.g.

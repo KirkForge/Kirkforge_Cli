@@ -277,7 +277,12 @@ async fn bedrock_signed_response_decodes_event_stream_frames() {
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
     // parse_bedrock_event_stream completes once the body stream ends.
-    parse_bedrock_event_stream(tx, response.bytes_stream()).await;
+    parse_bedrock_event_stream(
+        tx,
+        response.bytes_stream(),
+        crate::adapters::STREAM_IDLE_TIMEOUT,
+    )
+    .await;
 
     let mut text = String::new();
     let drained = tokio::time::timeout(std::time::Duration::from_secs(10), async {

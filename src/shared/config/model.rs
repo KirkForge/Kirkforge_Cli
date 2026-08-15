@@ -28,6 +28,10 @@ fn default_request_timeout_secs() -> u64 {
     120
 }
 
+fn default_streaming_timeout_secs() -> u64 {
+    180
+}
+
 fn default_true() -> bool {
     true
 }
@@ -118,6 +122,13 @@ pub struct ModelConfig {
     pub opencode_zen_endpoint: String,
     #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
+    /// Per-adapter streaming idle timeout in seconds. If no byte arrives
+    /// from the model within this window, the stream is aborted with a
+    /// `StreamEvent::Error`. Default 180 — well above any realistic
+    /// inter-token silence, but turns a wedged HTTP body into a clean
+    /// error instead of hanging the agent loop forever (WO 32.13).
+    #[serde(default = "default_streaming_timeout_secs")]
+    pub streaming_timeout_secs: u64,
     #[serde(default)]
     pub cache_enabled: bool,
     #[serde(default)]
@@ -179,6 +190,7 @@ impl Default for ModelConfig {
             kimi_api_key: None,
             opencode_zen_endpoint: default_zen_endpoint(),
             request_timeout_secs: default_request_timeout_secs(),
+            streaming_timeout_secs: default_streaming_timeout_secs(),
             cache_enabled: false,
             cache_dir: None,
             seed: None,

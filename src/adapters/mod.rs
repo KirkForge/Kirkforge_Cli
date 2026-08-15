@@ -31,7 +31,7 @@ pub(crate) const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 // realistic silence — local Ollama cold-start TTFT is <60s, cloud models
 // may pause 30-60s during thinking — but turns a true hang into a clean
 // StreamEvent::Error. Upgrade path: per-adapter configurable idle timeout
-// from config.model.request_timeout_secs.
+// from config.model.streaming_timeout_secs (WO 32.13).
 pub(crate) const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// Build `ModelInfo` for any Anthropic-family model (first-party, Bedrock,
@@ -362,6 +362,12 @@ pub trait ModelAdapter: Send + Sync {
 
     /// Set max_tokens for completions. Default no-op (wo/20.2.0).
     fn set_max_tokens(&mut self, _max_tokens: u32) {}
+
+    /// Set the per-adapter streaming idle timeout. Default no-op; adapters
+    /// that drive a streaming body override this to store the value and pass
+    /// it to `next_chunk_or_idle_timeout`. Called once at construction by
+    /// the executor with `config.model.streaming_timeout_secs` (WO 32.13).
+    fn set_streaming_timeout(&mut self, _secs: u64) {}
 
     async fn stream(
         &self,
@@ -873,6 +879,7 @@ pub(crate) fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 pub(crate) async fn next_chunk_or_idle_timeout<S, B, E>(
     stream: &mut S,
     tx: &tokio::sync::mpsc::Sender<StreamEvent>,
+    idle_timeout: std::time::Duration,
 ) -> Option<Result<B, E>>
 where
     B: AsRef<[u8]>,
@@ -880,14 +887,14 @@ where
     S: tokio_stream::Stream<Item = Result<B, E>> + Unpin,
 {
     use tokio_stream::StreamExt;
-    match tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await {
+    match tokio::time::timeout(idle_timeout, stream.next()).await {
         Ok(Some(chunk_result)) => Some(chunk_result),
         Ok(None) => None,
         Err(_) => {
             let _ = tx
                 .send(StreamEvent::Error(format!(
                     "stream idle for {}s; aborting",
-                    STREAM_IDLE_TIMEOUT.as_secs()
+                    idle_timeout.as_secs()
                 )))
                 .await;
             None

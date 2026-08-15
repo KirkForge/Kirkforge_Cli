@@ -184,6 +184,7 @@ pub async fn parse_ollama_ndjson_stream<B, E, S>(
     tx: tokio::sync::mpsc::Sender<StreamEvent>,
     config: OllamaNdjsonConfig,
     mut stream: S,
+    idle_timeout: std::time::Duration,
 ) where
     B: AsRef<[u8]>,
     E: std::fmt::Display,
@@ -192,7 +193,8 @@ pub async fn parse_ollama_ndjson_stream<B, E, S>(
     let mut buffer: Vec<u8> = Vec::new();
     let mut tool_calls_buffer: Vec<ToolInvocation> = Vec::new();
 
-    while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx).await {
+    while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx, idle_timeout).await
+    {
         match chunk_result {
             Ok(bytes) => {
                 buffer.extend_from_slice(bytes.as_ref());
@@ -544,7 +546,13 @@ mod tests {
     async fn run_config(lines: &[&str], config: OllamaNdjsonConfig) -> Vec<StreamEvent> {
         let body: Vec<u8> = lines.iter().flat_map(|l| line(l)).collect();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        parse_ollama_ndjson_stream(tx, config, chunks(vec![body])).await;
+        parse_ollama_ndjson_stream(
+            tx,
+            config,
+            chunks(vec![body]),
+            super::super::STREAM_IDLE_TIMEOUT,
+        )
+        .await;
         drain(rx, 1024).await
     }
 
@@ -590,7 +598,13 @@ mod tests {
             r#"{"message":{"thinking":"ignored","content":"hi"},"done":true,"done_reason":"stop"}"#,
         );
         let (tx, rx) = tokio::sync::mpsc::channel(16);
-        parse_ollama_ndjson_stream(tx, OllamaNdjsonConfig::GEMINI, chunks(vec![body])).await;
+        parse_ollama_ndjson_stream(
+            tx,
+            OllamaNdjsonConfig::GEMINI,
+            chunks(vec![body]),
+            super::super::STREAM_IDLE_TIMEOUT,
+        )
+        .await;
         let events = drain(rx, 16).await;
         assert!(!events.iter().any(|e| matches!(e, StreamEvent::Thinking(_))));
         assert!(events
@@ -761,7 +775,13 @@ mod tests {
     /// strings, so we can simulate arbitrary splits.
     async fn run_with_chunks(items: Vec<Vec<u8>>) -> Vec<StreamEvent> {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        parse_ollama_ndjson_stream(tx, OllamaNdjsonConfig::GLM, chunks(items)).await;
+        parse_ollama_ndjson_stream(
+            tx,
+            OllamaNdjsonConfig::GLM,
+            chunks(items),
+            super::super::STREAM_IDLE_TIMEOUT,
+        )
+        .await;
         drain(rx, 1024).await
     }
 
@@ -953,7 +973,13 @@ mod tests {
             std::io::Error::other("connection reset"),
         )]));
         let (tx, rx) = tokio::sync::mpsc::channel(16);
-        parse_ollama_ndjson_stream(tx, OllamaNdjsonConfig::GLM, stream).await;
+        parse_ollama_ndjson_stream(
+            tx,
+            OllamaNdjsonConfig::GLM,
+            stream,
+            super::super::STREAM_IDLE_TIMEOUT,
+        )
+        .await;
         let events = drain(rx, 16).await;
         assert!(events.iter().any(|e| matches!(
             e,

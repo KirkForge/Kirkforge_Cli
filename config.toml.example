@@ -19,6 +19,12 @@
 # Default: "" (empty).
 # ollama_host = ""
 
+# Per-adapter streaming idle timeout in seconds. If no byte arrives from the
+# model within this window, the stream is aborted with a StreamEvent::Error.
+# 180s is well above any realistic inter-token silence but turns a wedged HTTP
+# body into a clean error instead of hanging the agent loop. Default: 180.
+# streaming_timeout_secs = 180
+
 # ---------------------------------------------------------------------------
 # Safety / approval
 # ---------------------------------------------------------------------------

@@ -243,6 +243,10 @@ impl ModelAdapter for CachingAdapter {
         self.inner.set_budget_tokens(budget);
     }
 
+    fn set_streaming_timeout(&mut self, secs: u64) {
+        self.inner.set_streaming_timeout(secs);
+    }
+
     async fn stream(
         &self,
         messages: &[Message],

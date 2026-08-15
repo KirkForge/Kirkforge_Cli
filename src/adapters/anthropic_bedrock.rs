@@ -30,6 +30,7 @@ pub struct AnthropicBedrockAdapter {
     timeout_secs: u64,
     extended_thinking: bool,
     budget_tokens: usize,
+    stream_idle_timeout: std::time::Duration,
 }
 
 impl AnthropicBedrockAdapter {
@@ -44,6 +45,7 @@ impl AnthropicBedrockAdapter {
             timeout_secs,
             extended_thinking: true,
             budget_tokens: 10_000,
+            stream_idle_timeout: super::STREAM_IDLE_TIMEOUT,
         }
     }
 
@@ -81,6 +83,10 @@ impl ModelAdapter for AnthropicBedrockAdapter {
     fn set_budget_tokens(&mut self, budget: usize) {
         self.budget_tokens = budget;
     }
+
+    fn set_streaming_timeout(&mut self, secs: u64) {
+        self.stream_idle_timeout = std::time::Duration::from_secs(secs);
+    }
     async fn stream(
         &self,
         messages: &[Message],
@@ -114,9 +120,10 @@ impl ModelAdapter for AnthropicBedrockAdapter {
         .await?;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
+        let idle_timeout = self.stream_idle_timeout;
         tokio::spawn(async move {
             let bytes_stream = response.bytes_stream();
-            parse_bedrock_event_stream(tx, bytes_stream).await;
+            parse_bedrock_event_stream(tx, bytes_stream, idle_timeout).await;
         });
         Ok(rx)
     }
@@ -129,6 +136,7 @@ impl ModelAdapter for AnthropicBedrockAdapter {
 pub(super) async fn parse_bedrock_event_stream<B, E>(
     tx: tokio::sync::mpsc::Sender<StreamEvent>,
     mut stream: impl tokio_stream::Stream<Item = Result<B, E>> + Unpin,
+    idle_timeout: std::time::Duration,
 ) where
     B: AsRef<[u8]> + Send + 'static,
     E: std::fmt::Display + Send + 'static,
@@ -146,9 +154,12 @@ pub(super) async fn parse_bedrock_event_stream<B, E>(
     let parser_handle = tokio::spawn(anthropic::parse_anthropic_stream(
         tx,
         tokio_stream::wrappers::ReceiverStream::new(inner_rx),
+        idle_timeout,
     ));
 
-    while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx_for_timeout).await {
+    while let Some(chunk_result) =
+        next_chunk_or_idle_timeout(&mut stream, &tx_for_timeout, idle_timeout).await
+    {
         match chunk_result {
             Ok(chunk) => {
                 envelope_buffer.extend_from_slice(chunk.as_ref());
@@ -389,7 +400,7 @@ mod tests {
         let chunk: Vec<u8> = [frame1.as_slice(), frame2.as_slice()].concat();
 
         let stream = tokio_stream::iter(vec![Ok::<Vec<u8>, std::convert::Infallible>(chunk)]);
-        parse_bedrock_event_stream(tx, stream).await;
+        parse_bedrock_event_stream(tx, stream, super::super::STREAM_IDLE_TIMEOUT).await;
 
         // Collect Text events; both deltas must be forwarded, not just the first.
         let mut texts: Vec<String> = Vec::new();
@@ -422,7 +433,7 @@ mod tests {
         let stream = tokio_stream::iter(vec![Ok::<Vec<u8>, std::convert::Infallible>(big)]);
 
         // Must not hang or panic.
-        parse_bedrock_event_stream(tx, stream).await;
+        parse_bedrock_event_stream(tx, stream, super::super::STREAM_IDLE_TIMEOUT).await;
 
         let mut saw_error = false;
         while let Ok(Some(ev)) =

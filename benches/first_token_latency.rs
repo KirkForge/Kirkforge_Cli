@@ -1,5 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use kf_code::adapters::ollama_ndjson::{parse_ollama_ndjson_stream, OllamaNdjsonConfig};
+use std::time::Duration;
 
 /// Benchmark the latency from the start of NDJSON parsing to the first
 /// `StreamEvent::Text` event. This isolates the adapter parser path without
@@ -15,7 +16,12 @@ fn first_token_latency(c: &mut Criterion) {
                 let stream =
                     tokio_stream::iter(vec![Ok::<_, std::convert::Infallible>(line.clone())]);
 
-                let parser = parse_ollama_ndjson_stream(tx, OllamaNdjsonConfig::GLM, stream);
+                let parser = parse_ollama_ndjson_stream(
+                    tx,
+                    OllamaNdjsonConfig::GLM,
+                    stream,
+                    Duration::from_secs(180),
+                );
                 let receive = async {
                     let _first = rx.recv().await;
                 };

@@ -19,6 +19,7 @@ use super::usage::parse_usage;
 pub(crate) async fn parse_anthropic_stream<B, E, S>(
     tx: tokio::sync::mpsc::Sender<StreamEvent>,
     mut stream: S,
+    idle_timeout: std::time::Duration,
 ) where
     B: AsRef<[u8]>,
     E: std::fmt::Display,
@@ -29,7 +30,8 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
     let mut done_emitted = false;
     let mut pending_stop_reason: Option<String> = None;
 
-    while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx).await {
+    while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx, idle_timeout).await
+    {
         match chunk_result {
             Ok(bytes) => {
                 buffer.extend_from_slice(bytes.as_ref());

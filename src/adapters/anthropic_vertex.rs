@@ -32,6 +32,7 @@ pub struct AnthropicVertexAdapter {
     timeout_secs: u64,
     extended_thinking: bool,
     budget_tokens: usize,
+    stream_idle_timeout: std::time::Duration,
 }
 
 impl AnthropicVertexAdapter {
@@ -54,6 +55,7 @@ impl AnthropicVertexAdapter {
             timeout_secs,
             extended_thinking: true,
             budget_tokens: 10_000,
+            stream_idle_timeout: super::STREAM_IDLE_TIMEOUT,
         }
     }
 
@@ -101,6 +103,10 @@ impl ModelAdapter for AnthropicVertexAdapter {
         self.budget_tokens = budget;
     }
 
+    fn set_streaming_timeout(&mut self, secs: u64) {
+        self.stream_idle_timeout = std::time::Duration::from_secs(secs);
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
@@ -136,6 +142,7 @@ impl ModelAdapter for AnthropicVertexAdapter {
         tokio::spawn(anthropic::parse_anthropic_stream(
             tx,
             response.bytes_stream(),
+            self.stream_idle_timeout,
         ));
         Ok(rx)
     }

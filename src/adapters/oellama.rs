@@ -86,6 +86,7 @@ pub struct OellamaAdapter {
     seed: Option<u64>,
     timeout_secs: u64,
     profile: &'static OellamaProfile,
+    stream_idle_timeout: std::time::Duration,
 }
 
 impl OellamaAdapter {
@@ -104,6 +105,7 @@ impl OellamaAdapter {
             seed: None,
             timeout_secs,
             profile,
+            stream_idle_timeout: super::STREAM_IDLE_TIMEOUT,
         }
     }
 
@@ -160,6 +162,10 @@ impl ModelAdapter for OellamaAdapter {
         self.seed = seed;
     }
 
+    fn set_streaming_timeout(&mut self, secs: u64) {
+        self.stream_idle_timeout = std::time::Duration::from_secs(secs);
+    }
+
     async fn stream(
         &self,
         messages: &[Message],
@@ -195,10 +201,12 @@ impl ModelAdapter for OellamaAdapter {
         // ~20x headroom and is still small enough to bound memory.
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
         let ndjson_config = self.profile.ndjson_config.clone();
+        let idle_timeout = self.stream_idle_timeout;
 
         tokio::spawn(async move {
             let stream = response.bytes_stream();
-            ollama_ndjson::parse_ollama_ndjson_stream(tx, ndjson_config, stream).await;
+            ollama_ndjson::parse_ollama_ndjson_stream(tx, ndjson_config, stream, idle_timeout)
+                .await;
         });
 
         Ok(rx)

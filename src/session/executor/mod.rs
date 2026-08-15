@@ -218,6 +218,7 @@ impl Executor {
         adapter.set_max_tokens(cfg.model.max_tokens);
         adapter.set_extended_thinking(cfg.model.extended_thinking);
         adapter.set_budget_tokens(cfg.model.budget_tokens);
+        adapter.set_streaming_timeout(cfg.model.streaming_timeout_secs);
 
         let adapter_swap = AdapterSwap::new(
             model_name.clone(),
@@ -463,6 +464,8 @@ impl Executor {
         self.adapter
             .set_extended_thinking(fresh.model.extended_thinking);
         self.adapter.set_budget_tokens(fresh.model.budget_tokens);
+        self.adapter
+            .set_streaming_timeout(fresh.model.streaming_timeout_secs);
         config_diff_summary(&old, &fresh)
     }
 

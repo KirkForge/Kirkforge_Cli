@@ -304,3 +304,6 @@ jobs:
         with:
           name: coverage-report
           path: lcov.info
+
+      - name: Coverage regression gate
+        run: bash scripts/check-cov-regression.sh

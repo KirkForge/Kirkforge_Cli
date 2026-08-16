@@ -32,12 +32,26 @@ pub fn render_approval_dialog(
     // Full-width panel — uses the entire terminal width for maximum
     // readability of args, diffs, and side-by-side views. Up to 75%
     // of terminal height, leaving conversation visible above/below.
-    let dialog_width = area.width;
-    let dialog_height = (area.height * 3 / 4).clamp(10, area.height);
-    let x = 0;
-    let y = (area.height.saturating_sub(dialog_height)) / 2;
-
-    let dialog_area = Rect::new(x, y, dialog_width, dialog_height);
+    //
+    // Bounds guard: on a terminal too small to hold the dialog (height
+    // < 4 rows, or width < 20 — not enough to render the border + a
+    // line of args), skip the render entirely. The prior code called
+    // `.clamp(10, area.height)` which PANICS when `area.height < 10`
+    // (min > max), and a 0-width/height `Rect` passed to `Clear`
+    // corrupts the terminal state — the "yeeted on approval" symptom.
+    // Skipping is safe: the chat stays visible and the approval stays
+    // pending; the user resizes and the next frame renders the dialog.
+    let dialog_area = match approval_dialog_area(area) {
+        Some(r) => r,
+        None => {
+            tracing::warn!(
+                area_height = area.height,
+                area_width = area.width,
+                "approval dialog skipped: terminal too small to render safely"
+            );
+            return;
+        }
+    };
 
     // Clear ONLY the dialog rect, not the whole screen. A full-area
     // `Clear` wipes the chat behind the popup, leaving a small red box
@@ -45,6 +59,7 @@ pub fn render_approval_dialog(
     // approval prompt. Clearing just the dialog keeps the conversation
     // visible around it, so the prompt appears in context.
     f.render_widget(Clear, dialog_area);
+    let dialog_width = dialog_area.width;
 
     let block = Block::default()
         .title(" ⚠️  Approval Required ")
@@ -296,6 +311,42 @@ pub fn render_approval_dialog(
     f.render_widget(block, dialog_area);
 }
 
+/// Compute the dialog `Rect` for a given terminal area.
+///
+/// Pure function — no I/O, no frame, no state. Returns `None` when the
+/// terminal is too small to render the dialog safely (height < 4 or
+/// width < 20). The returned `Rect` is always valid: width and height
+/// are >= 1, and the rect fits inside `area` (x+width <= area.width,
+/// y+height <= area.height). This is the bounds guard that prevents
+/// the "yeeted on approval" crash — the prior code called
+/// `.clamp(10, area.height)` which panicked when `area.height < 10`
+/// (min > max), and a 0-dimension `Rect` passed to `Clear` corrupted
+/// the terminal.
+///
+/// Dialog height is 75% of the terminal (rounded down), clamped to at
+/// least 4 rows (border + 1 headline + 1 args line + border) and at
+/// most the full terminal height. The dialog is centered vertically.
+pub fn approval_dialog_area(area: Rect) -> Option<Rect> {
+    if area.height < 4 || area.width < 20 {
+        return None;
+    }
+    let dialog_width = area.width;
+    // Safe clamp: area.height >= 4 here (guarded above), so max(4) is
+    // always <= area.height. Never let min exceed max.
+    let dialog_height = (area.height * 3 / 4).min(area.height).max(4);
+    let x = 0;
+    let y = (area.height.saturating_sub(dialog_height)) / 2;
+    let rect = Rect::new(x, y, dialog_width, dialog_height);
+    // Defensive: the math above guarantees fit, but assert the
+    // invariant explicitly so a future edit can't silently break it.
+    debug_assert!(
+        rect.x + rect.width <= area.x + area.width && rect.y + rect.height <= area.y + area.height,
+        "approval_dialog_area produced a rect outside the area: \
+         rect={rect:?} area={area:?}"
+    );
+    Some(rect)
+}
+
 /// Build the args preview as a flat list of wrapped display lines.
 ///
 /// Pure function — no I/O, no ratatui types in the output. Unit-testable
@@ -502,6 +553,7 @@ pub fn action_headline(
 mod tests {
     use super::*;
     use crate::tui::app::PendingApproval;
+    use ratatui::layout::Rect;
     use serde_json::json;
 
     fn make_approval(tool: &str, args: serde_json::Value) -> PendingApproval {
@@ -509,6 +561,102 @@ mod tests {
             tool_name: tool.into(),
             args,
             responder: None,
+        }
+    }
+
+    // ── Bug 2: approval dialog bounds guard ────────────────────────
+    //
+    // The prior `render_approval_dialog` called
+    // `(area.height * 3 / 4).clamp(10, area.height)` which PANICS when
+    // `area.height < 10` (min > max in clamp). A 0-dimension Rect
+    // passed to `Clear` also corrupts the terminal. The fix is a pure
+    // `approval_dialog_area` helper that returns `None` for tiny
+    // terminals and a valid, in-bounds Rect otherwise. These tests
+    // pin the contract.
+
+    /// A normal terminal (120x40) produces a 120-wide, 30-tall dialog
+    /// (75% of 40), centered vertically (y = 5).
+    #[test]
+    fn approval_dialog_area_normal_terminal() {
+        let area = Rect::new(0, 0, 120, 40);
+        let dialog = approval_dialog_area(area).expect("normal terminal should produce a rect");
+        assert_eq!(dialog.width, 120, "dialog should be full width");
+        assert_eq!(dialog.height, 30, "dialog should be 75% of terminal height");
+        assert_eq!(dialog.x, 0);
+        assert_eq!(dialog.y, 5, "dialog should be vertically centered");
+        // The rect must fit inside the area.
+        assert!(dialog.x + dialog.width <= area.x + area.width);
+        assert!(dialog.y + dialog.height <= area.y + area.height);
+    }
+
+    /// A small terminal (80x24) still produces a valid dialog.
+    #[test]
+    fn approval_dialog_area_small_terminal() {
+        let area = Rect::new(0, 0, 80, 24);
+        let dialog = approval_dialog_area(area).expect("80x24 should produce a rect");
+        assert_eq!(dialog.width, 80);
+        assert_eq!(dialog.height, 18); // 24 * 3 / 4 = 18
+        assert!(dialog.y + dialog.height <= area.height);
+    }
+
+    /// A tiny terminal (height < 4) returns None — no crash, no
+    /// corruption. The prior code panicked here.
+    #[test]
+    fn approval_dialog_area_tiny_height_returns_none() {
+        assert!(approval_dialog_area(Rect::new(0, 0, 80, 3)).is_none());
+        assert!(approval_dialog_area(Rect::new(0, 0, 80, 0)).is_none());
+        assert!(approval_dialog_area(Rect::new(0, 0, 80, 1)).is_none());
+    }
+
+    /// A tiny terminal (width < 20) returns None.
+    #[test]
+    fn approval_dialog_area_tiny_width_returns_none() {
+        assert!(approval_dialog_area(Rect::new(0, 0, 19, 40)).is_none());
+        assert!(approval_dialog_area(Rect::new(0, 0, 0, 40)).is_none());
+    }
+
+    /// height == 4 (the minimum) produces a 4-tall dialog (max(4)
+    /// floor), not a panic. This is the exact case that crashed
+    /// before — `clamp(10, 4)` panics because 10 > 4.
+    #[test]
+    fn approval_dialog_area_min_height_4_does_not_panic() {
+        let area = Rect::new(0, 0, 80, 4);
+        let dialog = approval_dialog_area(area).expect("height=4 should produce a rect");
+        assert_eq!(dialog.height, 4, "height=4 should clamp to 4 (the floor)");
+        assert_eq!(dialog.width, 80);
+        assert!(dialog.y + dialog.height <= area.height);
+    }
+
+    /// height == 9 (just under the old clamp min of 10) must not
+    /// panic. The old code: `(9 * 3 / 4).clamp(10, 9)` = `6.clamp(10, 9)`
+    /// → panic (min > max). The new code: `6.min(9).max(4)` = `6`.
+    #[test]
+    fn approval_dialog_area_height_9_does_not_panic() {
+        let area = Rect::new(0, 0, 80, 9);
+        let dialog = approval_dialog_area(area).expect("height=9 should produce a rect");
+        assert_eq!(dialog.height, 6, "9*3/4=6, clamped to [4,9]");
+    }
+
+    /// The returned rect NEVER exceeds the area, for any height in
+    /// the valid range. Fuzz-style guard against off-by-one.
+    #[test]
+    fn approval_dialog_area_rect_always_fits_inside_area() {
+        for h in 4..=200u16 {
+            for w in 20..=200u16 {
+                let area = Rect::new(0, 0, w, h);
+                if let Some(dialog) = approval_dialog_area(area) {
+                    assert!(
+                        dialog.x + dialog.width <= area.x + area.width,
+                        "w={w} h={h}: dialog width overflow"
+                    );
+                    assert!(
+                        dialog.y + dialog.height <= area.y + area.height,
+                        "w={w} h={h}: dialog height overflow"
+                    );
+                    assert!(dialog.width >= 1, "w={w} h={h}: zero width");
+                    assert!(dialog.height >= 1, "w={w} h={h}: zero height");
+                }
+            }
         }
     }
 

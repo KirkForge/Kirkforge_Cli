@@ -179,23 +179,67 @@ async fn init_app_state(
 }
 
 fn spawn_kb_reader(kb_tx: mpsc::UnboundedSender<Event>, shutdown: Arc<Notify>) {
-    std::thread::spawn(move || loop {
-        match event::read() {
-            Ok(ev) => {
-                if kb_tx.send(ev).is_err() {
-                    break;
+    std::thread::spawn(move || {
+        // crossterm's `event::read()` can return transient errors
+        // (resize race, EAGAIN on some platforms, a write to stdout
+        // that briefly holds the terminal lock). The prior code shut
+        // down the TUI on the FIRST error — so a single transient
+        // read failure mid-tool-execution (right after an approval
+        // response, when the render path was writing heavily to
+        // stdout) yeeted the user out of the session. Retry up to
+        // `MAX_CONSECUTIVE_READ_ERRORS` times before giving up; a
+        // real EOF (the pty closed) returns Err repeatedly, so we
+        // still exit promptly on a genuine terminal teardown.
+        const MAX_CONSECUTIVE_READ_ERRORS: u32 = 3;
+        let mut consecutive_errors = 0u32;
+        loop {
+            match event::read() {
+                Ok(ev) => {
+                    consecutive_errors = 0;
+                    if kb_tx.send(ev).is_err() {
+                        break;
+                    }
                 }
-            }
-            Err(e) => {
-                tracing::info!(
-                    error = ?e,
-                    "keyboard reader thread exiting; signalling TUI shutdown"
-                );
-                shutdown.notify_one();
-                break;
+                Err(e) => {
+                    consecutive_errors += 1;
+                    tracing::info!(
+                        error = ?e,
+                        consecutive_errors,
+                        "keyboard reader thread got a read error; retrying"
+                    );
+                    if should_shutdown_after_errors(consecutive_errors, MAX_CONSECUTIVE_READ_ERRORS)
+                    {
+                        tracing::info!(
+                            error = ?e,
+                            "keyboard reader thread exiting after {consecutive_errors} \
+                             consecutive errors; signalling TUI shutdown"
+                        );
+                        shutdown.notify_one();
+                        break;
+                    }
+                    // Brief backoff so a tight error loop doesn't spin
+                    // the CPU. 10ms is short enough that the user does
+                    // not notice a hiccup, long enough to let a
+                    // transient condition clear.
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
             }
         }
     });
+}
+
+/// Decide whether the kb-reader thread should shut down after a run of
+/// consecutive `event::read()` errors.
+///
+/// Pure function (no I/O) so the retry contract is unit-testable without
+/// a real terminal / pty. Returns `true` once `consecutive` reaches
+/// `max` — i.e. the threshold is the shutdown trigger. A successful read
+/// resets the counter (handled by the caller). This is the root-cause
+/// fix for the "yeeted on approval" bug: the prior code shut down on
+/// the FIRST error, so a single transient crossterm read failure
+/// mid-tool-execution killed the session.
+fn should_shutdown_after_errors(consecutive: u32, max: u32) -> bool {
+    consecutive >= max
 }
 
 #[cfg(unix)]
@@ -1283,6 +1327,63 @@ mod tests {
 
     fn test_state_with_log(log_path: PathBuf) -> AppState {
         app_state_with_log(log_path)
+    }
+
+    // ── Bug 2: kb-reader retry contract ────────────────────────────
+    //
+    // The prior `spawn_kb_reader` shut down the TUI on the FIRST
+    // `event::read()` error. crossterm can return transient errors
+    // (resize race, EAGAIN, a stdout write holding the terminal lock),
+    // so a single hiccup mid-tool-execution yeeted the user out of
+    // the session. The fix retries up to `MAX_CONSECUTIVE_READ_ERRORS`
+    // (3) consecutive errors before shutting down. These tests pin
+    // the retry-decision contract via the pure
+    // `should_shutdown_after_errors` helper.
+
+    /// A single transient error (1 of 3) does NOT shut down — the
+    /// whole point of the fix. The prior code shut down here.
+    #[test]
+    fn kb_reader_single_error_does_not_shut_down() {
+        assert!(
+            !should_shutdown_after_errors(1, 3),
+            "a single transient read error must not shut down the TUI"
+        );
+    }
+
+    /// Two consecutive errors still retry — under the threshold.
+    #[test]
+    fn kb_reader_two_errors_still_retries() {
+        assert!(
+            !should_shutdown_after_errors(2, 3),
+            "two consecutive errors must still retry (threshold is 3)"
+        );
+    }
+
+    /// Three consecutive errors shut down — a genuine EOF (pty
+    /// closed) returns Err repeatedly, so we exit promptly.
+    #[test]
+    fn kb_reader_three_errors_shut_down() {
+        assert!(
+            should_shutdown_after_errors(3, 3),
+            "three consecutive errors must shut down (genuine terminal teardown)"
+        );
+    }
+
+    /// The threshold is inclusive: `consecutive >= max` triggers
+    /// shutdown. Guards against an off-by-one (e.g. `> max` would
+    /// require 4 errors, letting one more transient through than
+    /// intended).
+    #[test]
+    fn kb_reader_threshold_is_inclusive() {
+        assert!(!should_shutdown_after_errors(2, 3));
+        assert!(should_shutdown_after_errors(3, 3));
+        assert!(should_shutdown_after_errors(4, 3));
+    }
+
+    /// Zero errors never shuts down (the happy path).
+    #[test]
+    fn kb_reader_zero_errors_never_shuts_down() {
+        assert!(!should_shutdown_after_errors(0, 3));
     }
 
     // ── Shutdown-signal regression test ────────────────────────

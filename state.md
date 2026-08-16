@@ -10,6 +10,34 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+## Session 2026-08-16 — WO 34.5 Models chooser (worktree `.worktrees/wo34-c`, branch `wo/34-c`)
+
+### What changed this session
+- **WO 34.5: Models tab (F2) rewritten from diagnostic dump to a
+  chooser list + details section.** `render_models` (tabs.rs) now
+  shows a radio list (● current / ○ available) with provider + context
+  per model, then a Details section below with routing, cache, tokens,
+  and cost for the selected row. ↑↓ navigates, Enter switches model
+  via the existing `/model <name>` path. Available models come from the
+  connected model + the configured default (the two the user can act
+  on). Full Ollama tag-list discovery is deferred — the chooser covers
+  the common "am I on the right model?" question with in-memory state
+  only (ponytail: comment names the ceiling + upgrade path). The
+  Enter-handler's Models branch (keys/mod.rs) was rewritten to map the
+  selected visual row to a model name via a parallel
+  `model_chooser_rows_lookup` list that mirrors the renderer's
+  `model_chooser_rows`, replacing the old "show model info" no-op.
+
+### Gate (HEAD on `wo/34-c`, WO 34.5 commit)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 518 passed, 2816 skipped
+
+### Pending
+- WO 34.6 (Jobs structured monitor) — next in the same worktree.
+
+---
+
 ## Session 2026-08-16 — WO 34.4 Settings semantic controls (worktree `.worktrees/wo34-c`, branch `wo/34-c`)
 
 ### What changed this session

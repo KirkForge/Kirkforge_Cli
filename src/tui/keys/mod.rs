@@ -453,6 +453,60 @@ fn handle_search_nav_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
     Some(Ok(()))
 }
 
+/// Number of rendered lines before the chooser rows in `render_models`.
+/// MUST match `CHOOSER_HEADER_ROWS` in `tabs.rs`.
+const MODELS_CHOOSER_HEADER_ROWS: usize = 7;
+
+/// A single row in the model chooser list. Mirrors `ModelChoiceRow` in
+/// `tabs.rs`; kept local to avoid a cross-module dependency.
+struct ModelChoiceRow {
+    name: String,
+    #[allow(dead_code)]
+    provider: String,
+    #[allow(dead_code)]
+    context: String,
+    #[allow(dead_code)]
+    is_current: bool,
+}
+
+/// Build the chooser rows from in-memory state. Mirrors
+/// `model_chooser_rows` in `tabs.rs` — the two MUST stay in sync.
+fn model_chooser_rows_lookup(state: &AppState, config: &Config) -> Vec<ModelChoiceRow> {
+    let mut rows = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    if let crate::tui::app::ConnectionState::Connected { model, .. } = &state.provider.connection {
+        if seen.insert(model.clone()) {
+            let provider = crate::tui::commands::adapter_kind_for_model(model).to_string();
+            let context = state
+                .provider
+                .model_info
+                .as_ref()
+                .map(|m| crate::tui::rendering::format_token_count(m.max_context_tokens))
+                .unwrap_or_else(|| "—".to_string());
+            rows.push(ModelChoiceRow {
+                name: model.clone(),
+                provider,
+                context,
+                is_current: true,
+            });
+        }
+    }
+
+    let default = &config.model.default_model;
+    if !default.is_empty() && seen.insert(default.clone()) {
+        let provider = crate::tui::commands::adapter_kind_for_model(default).to_string();
+        rows.push(ModelChoiceRow {
+            name: default.clone(),
+            provider,
+            context: "—".to_string(),
+            is_current: false,
+        });
+    }
+
+    rows
+}
+
 /// Handle Enter on a non-Chat tab. Each tab gets a minimal action:
 /// - Models (F2): show model details in a status message
 /// - Plugins (F3): toggle the selected plugin on/off
@@ -476,21 +530,49 @@ async fn handle_tab_enter(
 
     match state.ui.active_tab {
         ActiveTab::Models => {
-            if let Some(ref info) = state.provider.model_info {
-                let msg = format!(
-                    "Model: {} (context: {} tokens)",
-                    info.name,
-                    crate::tui::rendering::format_token_count(info.max_context_tokens)
-                );
-                state
-                    .conversation
-                    .messages
-                    .push_back(ConversationEntry::new("system", msg));
-            } else {
-                state
-                    .conversation
-                    .messages
-                    .push_back(ConversationEntry::new("system", "No model connected."));
+            // Map the selected row to a model name using the same
+            // chooser rows `render_models` emits. The chooser header
+            // eats the first CHOOSER_HEADER_ROWS rows.
+            let name = {
+                let config = crate::shared::read_shared_config(&state.services.config);
+                let rows = model_chooser_rows_lookup(state, &config);
+                let idx = sel.saturating_sub(MODELS_CHOOSER_HEADER_ROWS);
+                rows.get(idx).map(|r| r.name.clone())
+            };
+            match name {
+                Some(n) => {
+                    let msg = crate::tui::commands::handle_model_command(
+                        &n,
+                        ctx.model_tx,
+                        ctx.event_tx,
+                        state,
+                    )
+                    .await;
+                    state
+                        .conversation
+                        .messages
+                        .push_back(ConversationEntry::new("system", msg));
+                }
+                None => {
+                    // No model row at this selection — fall back to a
+                    // diagnostic so Enter isn't a silent no-op.
+                    if let Some(ref info) = state.provider.model_info {
+                        let msg = format!(
+                            "Model: {} (context: {} tokens)",
+                            info.name,
+                            crate::tui::rendering::format_token_count(info.max_context_tokens)
+                        );
+                        state
+                            .conversation
+                            .messages
+                            .push_back(ConversationEntry::new("system", msg));
+                    } else {
+                        state
+                            .conversation
+                            .messages
+                            .push_back(ConversationEntry::new("system", "No model at this row."));
+                    }
+                }
             }
             state.mark_dirty();
         }

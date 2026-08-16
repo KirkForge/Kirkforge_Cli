@@ -55,11 +55,24 @@ fn render_interactive(f: &mut Frame, area: Rect, lines: Vec<Line<'_>>, state: &A
     f.render_stateful_widget(list, area, &mut list_state);
 }
 
-/// Render the Models tab (F2).
+/// Render the Models tab (F2) as a chooser list + details section.
 ///
-/// Shows the current model name, provider, context window, and
-/// adapter routing configuration. Interactive when the tab has focus:
-/// ↑/↓ moves selection, Enter/Space on a model row runs `/model <name>`.
+/// The chooser is the primary view: a radio list of available models
+/// with ●/○ indicators. The current model is marked with ● and a
+/// "Current" label. Provider + context window are shown per model.
+/// Below the chooser, a details section surfaces adapter routing,
+/// cache, token usage, and cost for the currently-selected model.
+///
+/// Available models come from what's already in memory: the connected
+/// model (from `ConnectionState`) and the configured default model.
+/// Runtime discovery of the full Ollama tag list is async and deferred
+/// (see the `ponytail:` comment on `model_chooser_rows`) — the chooser
+/// covers the common "am I on the right model?" question with the two
+/// models the user can actually act on.
+///
+/// Interactive: ↑/↓ navigates, Enter switches model (runs
+/// `/model <name>` via the existing `handle_tab_enter` Models branch),
+/// Esc returns to Chat.
 pub fn render_models(f: &mut Frame, area: Rect, state: &AppState) {
     let mut lines = Vec::new();
 
@@ -72,7 +85,7 @@ pub fn render_models(f: &mut Frame, area: Rect, state: &AppState) {
     )));
     lines.push(Line::from(""));
 
-    // Connection info
+    // Connection banner (kept — it's the at-a-glance status)
     match &state.provider.connection {
         crate::tui::app::ConnectionState::Connected { model, since } => {
             lines.push(Line::from(Span::styled(
@@ -100,66 +113,177 @@ pub fn render_models(f: &mut Frame, area: Rect, state: &AppState) {
     }
     lines.push(Line::from(""));
 
-    // Model info
-    if let Some(ref info) = state.provider.model_info {
-        lines.push(Line::from(Span::styled(
-            " Model Info",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(format!("   Name:            {}", info.name)));
-        lines.push(Line::from(format!(
-            "   Context window:  {} tokens",
-            crate::tui::rendering::format_token_count(info.max_context_tokens)
-        )));
-        lines.push(Line::from(""));
-    }
+    // ── Chooser ────────────────────────────────────────────────────
+    lines.push(Line::from(Span::styled(
+        " Choose model  (↑↓ navigate, Enter switches)",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )));
 
-    // Adapter routing
     let config = crate::shared::read_shared_config(&state.services.config);
-    let routing = &config.model.adapter_routing;
-    if routing.is_empty() {
+    let rows = model_chooser_rows(state, &config);
+    if rows.is_empty() {
         lines.push(Line::from(Span::styled(
-            " Adapter Routing: (none — using defaults)",
+            "  No models available. Set default_model in config or connect to Ollama.",
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        lines.push(Line::from(Span::styled(
-            " Adapter Routing",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )));
-        for (prefix, kind) in routing {
-            lines.push(Line::from(format!("   {prefix} → {kind}")));
+        for row in &rows {
+            let marker = if row.is_current {
+                Span::styled(" ●", Style::default().fg(Color::Green))
+            } else {
+                Span::styled(" ○", Style::default().fg(Color::DarkGray))
+            };
+            let label = if row.is_current {
+                Span::styled(" Current", Style::default().fg(Color::Green))
+            } else {
+                Span::raw("")
+            };
+            let name = Span::raw(format!(" {:<28}", row.name));
+            let meta = Span::styled(
+                format!("  {} · {}", row.provider, row.context),
+                Style::default().fg(Color::DarkGray),
+            );
+            lines.push(Line::from(vec![marker, name, meta, label]));
         }
-        lines.push(Line::from(""));
     }
+    lines.push(Line::from(""));
 
-    // Token usage
+    // ── Details (for the selected row, or the current model) ──────
     lines.push(Line::from(Span::styled(
-        " Token Usage",
+        " Details",
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
     )));
+    // The selected row index from tab_list_state; fall back to the
+    // current model row so details always show something useful.
+    let sel_idx = state.ui.tab_list_state.unwrap_or(0);
+    // The chooser header + blank + connection banner eat the first few
+    // rows; clamp the selection to the chooser rows so we don't index
+    // past them.
+    let detail_row = rows
+        .get(sel_idx.saturating_sub(CHOOSER_HEADER_ROWS))
+        .or_else(|| rows.iter().find(|r| r.is_current))
+        .or_else(|| rows.first());
+
+    if let Some(row) = detail_row {
+        lines.push(Line::from(format!("   Model:    {}", row.name)));
+        lines.push(Line::from(format!("   Provider: {}", row.provider)));
+        lines.push(Line::from(format!("   Context:  {}", row.context)));
+    } else if let Some(info) = &state.provider.model_info {
+        lines.push(Line::from(format!("   Model:    {}", info.name)));
+        lines.push(Line::from(format!(
+            "   Context:  {} tokens",
+            crate::tui::rendering::format_token_count(info.max_context_tokens)
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "   No model connected.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    // Adapter routing
+    let routing = &config.model.adapter_routing;
+    if routing.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "   Routing:  (none — using defaults)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        lines.push(Line::from("   Routing:"));
+        for (prefix, kind) in routing {
+            lines.push(Line::from(format!("     {prefix} → {kind}")));
+        }
+    }
+
+    // Cache + tokens + cost
     lines.push(Line::from(format!(
-        "   Sent:     {}",
-        crate::tui::rendering::format_token_count(state.budget.tokens_sent)
+        "   Cache:   {} ({} cached tokens, {:.0}% hit)",
+        if config.model.cache_enabled {
+            "On"
+        } else {
+            "Off"
+        },
+        crate::tui::rendering::format_token_count(state.budget.cached_tokens),
+        state.budget.cache_hit_ratio * 100.0
     )));
     lines.push(Line::from(format!(
-        "   Received: {}",
+        "   Tokens:  ↑{} ↓{}",
+        crate::tui::rendering::format_token_count(state.budget.tokens_sent),
         crate::tui::rendering::format_token_count(state.budget.tokens_received)
     )));
     if state.budget.cumulative_cost > 0.001 {
         lines.push(Line::from(format!(
-            "   Cost:     ${:.4}",
+            "   Cost:    ${:.4}",
             state.budget.cumulative_cost
         )));
     }
 
     render_interactive(f, area, lines, state);
+}
+
+/// Number of rendered lines before the chooser rows in `render_models`.
+/// Used to map `tab_list_state` to a chooser row index. If
+/// `render_models` changes its header layout, update this constant.
+const CHOOSER_HEADER_ROWS: usize = 7;
+
+/// A single row in the model chooser list.
+struct ModelChoiceRow {
+    name: String,
+    provider: String,
+    context: String,
+    is_current: bool,
+}
+
+/// Build the chooser rows from in-memory state. The connected model and
+/// the configured default model are the two models the user can act on.
+// ponytail: only lists connected + default model. The full Ollama tag
+// list is available via `fetch_model_list` (async, lives in
+// commands/model.rs) but is not cached on AppState. Adding a cached
+// tag-list field + an async refresh on tab-switch is the upgrade path
+// when the user needs to pick from more than two models. Ceiling: the
+// chooser shows at most 2 rows today; the Enter handler's
+// `handle_tab_enter` Models branch already runs `/model <name>` so a
+// larger list just needs the rows — no new key handling.
+fn model_chooser_rows(state: &AppState, config: &crate::shared::Config) -> Vec<ModelChoiceRow> {
+    let mut rows = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Connected model first (it's the current one)
+    if let crate::tui::app::ConnectionState::Connected { model, .. } = &state.provider.connection {
+        if seen.insert(model.clone()) {
+            let provider = crate::tui::commands::adapter_kind_for_model(model).to_string();
+            let context = state
+                .provider
+                .model_info
+                .as_ref()
+                .map(|m| crate::tui::rendering::format_token_count(m.max_context_tokens))
+                .unwrap_or_else(|| "—".to_string());
+            rows.push(ModelChoiceRow {
+                name: model.clone(),
+                provider,
+                context,
+                is_current: true,
+            });
+        }
+    }
+
+    // Configured default model (if different from connected)
+    let default = &config.model.default_model;
+    if !default.is_empty() && seen.insert(default.clone()) {
+        let provider = crate::tui::commands::adapter_kind_for_model(default).to_string();
+        rows.push(ModelChoiceRow {
+            name: default.clone(),
+            provider,
+            context: "—".to_string(),
+            is_current: false,
+        });
+    }
+
+    rows
 }
 
 /// Render the Plugins tab (F3).

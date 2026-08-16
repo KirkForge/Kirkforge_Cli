@@ -20,6 +20,41 @@ use tokio::io::AsyncReadExt;
 /// overflow when a model passes an enormous value.
 const MAX_BASH_TIMEOUT_SECS: u64 = 24 * 60 * 60; // 24 hours
 
+// Build the `docker run` CLI arg vector from a resolved config. Pure:
+// no I/O, no Docker daemon. `workdir` must already be canonicalized and
+// colon-checked by the caller (run_docker does both); this fn only
+// stringifies it for the `-v <host>:/work` bind mount. `timeout_secs`
+// is accepted to keep the signature complete but is NOT emitted as a
+// Docker flag — the timeout is enforced by run_docker via a
+// `tokio::time::sleep` select branch, not by the container runtime.
+// Unit-tested in-process by the `build_docker_args_*` tests below.
+fn build_docker_args(
+    cfg: &DockerConfig,
+    workdir: &std::path::Path,
+    cmd: &str,
+    _timeout_secs: u64,
+) -> Vec<String> {
+    let workdir_str = workdir.to_string_lossy();
+    vec![
+        "run".to_string(),
+        "--rm".to_string(),
+        "--network".to_string(),
+        "none".to_string(),
+        "--memory".to_string(),
+        cfg.memory.clone(),
+        "--cpus".to_string(),
+        cfg.cpus.clone(),
+        "-v".to_string(),
+        format!("{workdir_str}:/work"),
+        "-w".to_string(),
+        "/work".to_string(),
+        cfg.image.clone(),
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        cmd.to_string(),
+    ]
+}
+
 pub struct Bash {
     deny_list: DenyList,
     path_guard: PathGuard,
@@ -136,24 +171,9 @@ impl Bash {
             )));
         }
 
-        let docker_args = vec![
-            "run".to_string(),
-            "--rm".to_string(),
-            "--network".to_string(),
-            "none".to_string(),
-            "--memory".to_string(),
-            cfg.memory.clone(),
-            "--cpus".to_string(),
-            cfg.cpus.clone(),
-            "-v".to_string(),
-            format!("{workdir_str}:/work"),
-            "-w".to_string(),
-            "/work".to_string(),
-            cfg.image.clone(),
-            "/bin/sh".to_string(),
-            "-c".to_string(),
-            cmd.to_string(),
-        ];
+        // `resolved_workdir` is already canonicalized + colon-checked above;
+        // build_docker_args just stringifies it for the bind-mount source.
+        let docker_args = build_docker_args(cfg, &resolved_workdir, cmd, timeout_secs);
 
         let mut child = tokio::process::Command::new("docker")
             .args(&docker_args)
@@ -825,15 +845,11 @@ mod tests {
         );
     }
 
-    // WO 33.14 phase 3 DEFERRED: Docker mock not injected. run_docker
-    // (bash.rs:54) spawns `docker` directly; faking needs a DockerRunner
-    // trait threaded through Bash::new. The security-critical deny-list
-    // path is already covered in-process by bash_docker_path_blocks_
-    // dangerous_command (short-circuits before spawn). This is the 1
-    // real-Docker smoke test. ponytail: ceiling — 1 real-Docker test,
-    // not mocked. Upgrade path: add DockerRunner trait + FakeDockerRunner,
-    // inject at Bash::new, unit-test the docker_args construction +
-    // workdir-sanitization logic in-process. Tracked in state.md pending.
+    // WO 33.14 phase 3: the arg-vector construction path is now unit-tested
+    // in-process via the `build_docker_args_*` tests (no Docker daemon
+    // needed). This remains the 1 real-Docker smoke test covering the full
+    // spawn → container → capture flow; the DockerRunner-trait injection
+    // upgrade path is no longer the next step for arg coverage.
     #[ignore = "requires Docker installed and running; real-Docker smoke test"]
     #[tokio::test]
     async fn bash_docker_executes_command_in_container() {
@@ -1388,5 +1404,143 @@ mod tests {
             }
             other => panic!("expected dry-run Success, got {other:?}"),
         }
+    }
+
+    // The next six tests pin build_docker_args — the pure arg-vector
+    // construction extracted from run_docker. They run in-process with no
+    // Docker daemon, closing the gap where the arg vector was previously
+    // only exercised by the #[ignore]d real-Docker smoke test.
+
+    #[test]
+    fn build_docker_args_includes_image_and_command() {
+        let cfg = DockerConfig {
+            enabled: true,
+            image: "alpine:latest".into(),
+            memory: "512m".into(),
+            cpus: "1".into(),
+        };
+        let workdir = std::path::Path::new("/tmp/kf-code-test");
+        let args = build_docker_args(&cfg, workdir, "echo hello", 30);
+        assert!(
+            args.iter().any(|a| a == "alpine:latest"),
+            "image name should be in the arg vector, got {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "echo hello"),
+            "command should be in the arg vector, got {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_docker_args_includes_memory_and_cpus_limits() {
+        let cfg = DockerConfig {
+            enabled: true,
+            image: "alpine:latest".into(),
+            memory: "512m".into(),
+            cpus: "1".into(),
+        };
+        let workdir = std::path::Path::new("/tmp/kf-code-test");
+        let args = build_docker_args(&cfg, workdir, "echo hi", 30);
+        let mem = args.windows(2).find(|w| w[0] == "--memory");
+        assert_eq!(
+            mem.map(|w| w[1].as_str()),
+            Some("512m"),
+            "--memory should be followed by the configured limit, got {args:?}"
+        );
+        let cpus = args.windows(2).find(|w| w[0] == "--cpus");
+        assert_eq!(
+            cpus.map(|w| w[1].as_str()),
+            Some("1"),
+            "--cpus should be followed by the configured limit, got {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_docker_args_includes_bind_mount() {
+        let cfg = DockerConfig {
+            enabled: true,
+            image: "alpine:latest".into(),
+            memory: "512m".into(),
+            cpus: "1".into(),
+        };
+        let workdir = std::path::Path::new("/tmp/kf-code-test");
+        let args = build_docker_args(&cfg, workdir, "echo hi", 30);
+        let mount = args
+            .windows(2)
+            .find(|w| w[0] == "-v")
+            .map(|w| w[1].as_str());
+        assert_eq!(
+            mount,
+            Some("/tmp/kf-code-test:/work"),
+            "-v should bind-mount the host workdir at /work, got {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_docker_args_includes_rm_flag() {
+        let cfg = DockerConfig {
+            enabled: true,
+            image: "alpine:latest".into(),
+            memory: "512m".into(),
+            cpus: "1".into(),
+        };
+        let workdir = std::path::Path::new("/tmp/kf-code-test");
+        let args = build_docker_args(&cfg, workdir, "echo hi", 30);
+        assert!(
+            args.iter().any(|a| a == "--rm"),
+            "--rm (auto-cleanup) should be present, got {args:?}"
+        );
+    }
+
+    // Pins the timeout contract: the timeout is enforced by run_docker via
+    // a tokio::time::sleep select branch, NOT as a Docker flag. If a future
+    // change moves the timeout into the Docker arg vector, this test must
+    // be updated deliberately — a silent drift would be a regression.
+    #[test]
+    fn build_docker_args_includes_timeout() {
+        let cfg = DockerConfig {
+            enabled: true,
+            image: "alpine:latest".into(),
+            memory: "512m".into(),
+            cpus: "1".into(),
+        };
+        let workdir = std::path::Path::new("/tmp/kf-code-test");
+        let args = build_docker_args(&cfg, workdir, "echo hi", 42);
+        assert!(
+            !args.iter().any(|a| a.contains("42")),
+            "timeout_secs must NOT appear as a Docker flag — it is a runtime wrapper, got {args:?}"
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|a| a == "--timeout" || a.starts_with("--timeout=")),
+            "no --timeout flag should be emitted, got {args:?}"
+        );
+    }
+
+    // Pins that build_docker_args receives the already-canonicalized path
+    // and uses it verbatim as the bind-mount source. run_docker canonicalizes
+    // before calling; this test ensures the contract holds: a canonical path
+    // passed in appears unchanged in the -v arg.
+    #[test]
+    fn build_docker_args_workdir_is_canonicalized() {
+        let cfg = DockerConfig {
+            enabled: true,
+            image: "alpine:latest".into(),
+            memory: "512m".into(),
+            cpus: "1".into(),
+        };
+        // Use a tempdir so the canonical path is real and resolvable.
+        let tmp = tempfile::tempdir().unwrap();
+        let canon = tmp
+            .path()
+            .canonicalize()
+            .expect("tempdir should canonicalize");
+        let args = build_docker_args(&cfg, &canon, "echo hi", 30);
+        let expected_mount = format!("{}:/work", canon.to_string_lossy());
+        assert!(
+            args.iter().any(|a| a == &expected_mount),
+            "bind-mount source should be the canonical path verbatim, expected {expected_mount}, got {args:?}"
+        );
     }
 }

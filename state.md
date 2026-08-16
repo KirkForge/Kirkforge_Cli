@@ -10,6 +10,44 @@
 
 **Current: `0.3.9`** (Cargo.toml + Cargo.lock; bumped from `3.8.0` in commit `1f1cea9`). The `3.8.0` jump (commit `6e2e0d4`) was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for subsequent minors (only the last digit moves). Next target after `0.3.9`: `0.3.10` (do not bump `Cargo.toml` until the release cut).
 
+## Session 2026-08-16 — Windows stdin detach (P0 CI hang fix) (worktree `.worktrees/wo-stdin-fix`, branch `wo/fix-stdin-detach`)
+
+### What changed this session
+
+- **Detached the Windows approval-reader thread on shutdown.**
+  `src/main/line_mode.rs::spawn_line_mode_approval_handler` previously joined
+  the reader thread unconditionally (line 602 `reader_handle.join()`). On
+  Windows the reader's stdin `read_line` (run via `spawn_blocking`) is an
+  uninterruptible blocking syscall; when the timeout/shutdown path fired
+  while the read was blocked, `abort()` cancelled the tokio task future but
+  did NOT unblock the OS thread, so `join()` (and the runtime shutdown)
+  hung. This was a P0 Windows CI timeout source.
+- The fix splits the join by cfg: `#[cfg(unix)]` keeps `reader_handle.join()`
+  (Unix `/dev/tty` poll loop checks `shutdown` every 200 ms, so join is
+  bounded); `#[cfg(not(unix))]` drops the handle (detach). The detached
+  Windows thread is reaped when the process exits or stdin closes. The
+  function's own doc comment (lines 536-548) already said the Windows path
+  "remains detached" — the implementation now matches the doc.
+- **ADR-025** (`docs/adr/025-windows-parity.md`) "Approval reader" section
+  updated: Windows path now documented as detached-on-shutdown (was
+  overclaiming "joinable without blocking forever"). Status unchanged
+  ("Accepted (fully implemented)" — the detach IS the implementation).
+
+### Gate output
+
+- `cargo clippy -p kf-code --lib --tests -- -D warnings` — clean (0 warnings).
+- `cargo fmt --check` — clean.
+- `cargo nextest run -p kf-code --lib` — 1042/1043 pass; the 1 failure
+  (`test_parallel_tool_batch_runs_concurrently`) is a pre-existing flaky
+  timing test (two 200ms sleeps < 5s) that passes in isolation (2.66s); it
+  touches the executor parallel-dispatch path, not line_mode/approval, and
+  is unrelated to this change.
+- `cargo nextest run -p kf-code --bin kf-code` — 30/30 pass, including
+  `approval_reader_thread_joins_on_shutdown` (the Unix join-behavior guard).
+- `cargo nextest run -p kf-code --test integration_test --test smoke_test
+  --test mock_ollama` — 5/5 pass. (`e2e` target needs the `e2e-tests` feature
+  + live Ollama; excluded from the default gate per AGENTS.md.)
+
 ## Session 2026-08-16 — WO 34.1: kill tab bar + command palette (worktree `.worktrees/wo34-a`, branch `wo/34-a`)
 
 ### What changed this session

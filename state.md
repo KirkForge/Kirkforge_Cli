@@ -10,6 +10,23 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+## Session 2026-08-16 — WO 34.2 /help overlay + WO 34.3 status bar simplify (worktree `.worktrees/wo34-b`, branch `wo/34-b`)
+
+### What changed this session
+
+- **WO 34.2 — /help overlay (commit 1):** `/help` (and `/h`, `/?`) now opens a centered bordered overlay rendering `help_text()` output on top of the chat, instead of pushing ~80 lines of help docs into `state.conversation.messages`. Esc closes; ↑/↓ scrolls. New `src/tui/widgets/help_overlay.rs` (centered 80%×80% box, Clear + Block + Paragraph + footer hint). `UiState` gained `help_overlay_visible: bool` + `help_overlay_scroll: usize`. `/help` dispatch (`slash_commands.rs`) sets the flag + resets scroll instead of pushing a system message. `render_app` (`mod.rs`) draws the overlay after the approval dialog, before the doom banner. New `handle_help_overlay_keys` in `keys/mod.rs` intercepts Esc/↑/↓ while the overlay is visible and consumes all other keys so typing does not leak into the input box. `help_text()` is unchanged — the overlay renders its output. Impact: LOW (gitnexus impact on `dispatch_slash_command`: 2 direct callers, LOW risk; `render_status` not touched in this commit). The conversation + session log are no longer polluted with help docs.
+- **WO 34.3 — status bar simplify (commit 2):** see below.
+
+### Gate (HEAD on `wo/34-b`)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 521 passed, 2816 skipped (includes 3 new `help_overlay` tests)
+
+### Pending
+- WO 34.3 (status bar rewrite) — next commit.
+
+---
+
 ## Session 2026-08-16 — Extract `build_docker_args` pure fn (worktree `.worktrees/wo-docker-args`, branch `wo/docker-args-pure`)
 
 ### What changed this session

@@ -1103,6 +1103,13 @@ pub(crate) fn render_app(f: &mut Frame, state: &mut AppState) {
     }
     state.approval.pending_approval = pending_taken;
 
+    // ── /help overlay (WO 34.2) ────────────────────────────────
+    // Drawn after the approval dialog (approvals take precedence) and
+    // before the doom-loop banner (doom stays on top of everything).
+    if state.ui.help_overlay_visible {
+        crate::tui::widgets::help_overlay::render_help_overlay(f, size, state);
+    }
+
     // Doom-loop warning banner. Renders last so it sits on top
     // of any other overlay. Skipped when acknowledged or when
     // the underlying state hasn't crossed the threshold.

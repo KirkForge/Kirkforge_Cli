@@ -598,6 +598,35 @@ fn settings_keys_and_values(config: &Config) -> Vec<String> {
     lines
 }
 
+/// Help-overlay key handler (WO 34.2). Esc closes; ↑/↓ scroll; any
+/// other key is consumed and ignored so the underlying chat is not
+/// disturbed while the overlay is up. Scroll is clamped to the help
+/// text line count (computed lazily here from `help_text()`).
+fn handle_help_overlay_keys(key: KeyEvent, state: &mut AppState) {
+    let total_lines = crate::tui::keys::slash_commands::help_text(&state.services.skill_registry)
+        .lines()
+        .count();
+    match key.code {
+        KeyCode::Esc => {
+            state.ui.help_overlay_visible = false;
+            state.ui.help_overlay_scroll = 0;
+            state.mark_dirty();
+        }
+        KeyCode::Up => {
+            state.ui.help_overlay_scroll = state.ui.help_overlay_scroll.saturating_sub(1);
+            state.mark_dirty();
+        }
+        KeyCode::Down => {
+            state.ui.help_overlay_scroll = (state.ui.help_overlay_scroll + 1).min(total_lines);
+            state.mark_dirty();
+        }
+        _ => {
+            // Consume all other keys while the overlay is visible so
+            // typing does not leak into the input box.
+        }
+    }
+}
+
 pub(crate) async fn handle_input_key(
     key: KeyEvent,
     state: &mut AppState,
@@ -605,6 +634,14 @@ pub(crate) async fn handle_input_key(
 ) -> anyhow::Result<()> {
     if let Some(result) = handle_doom_loop_keys(key, state, ctx).await {
         return result;
+    }
+    // WO 34.2: help overlay takes over Esc/↑/↓ when visible. Runs above
+    // the slash-menu / file-completer / search handlers so it has
+    // exclusive focus — nothing else should react to a key while the
+    // help overlay is up.
+    if state.ui.help_overlay_visible {
+        handle_help_overlay_keys(key, state);
+        return Ok(());
     }
     if let Some(result) = handle_slash_menu_keys(key, state) {
         return result;

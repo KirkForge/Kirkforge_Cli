@@ -525,6 +525,14 @@ pub struct UiState {
     /// mouse handler can hit-test clicks against the input area (WO 32.12).
     /// `None` until the first render completes.
     pub last_input_rect: Option<ratatui::layout::Rect>,
+    /// `/help` overlay visibility (WO 34.2). When true, `render_app` draws
+    /// `help_overlay` on top of the chat. The `/help` slash command sets
+    /// this instead of pushing help text into the conversation; Esc clears
+    /// it. Keeps the conversation + session log free of help text.
+    pub help_overlay_visible: bool,
+    /// Scroll offset (in lines) of the help overlay. ↑/↓ adjust; Esc
+    /// resets to 0 when the overlay closes.
+    pub help_overlay_scroll: usize,
 }
 
 impl Default for UiState {
@@ -539,6 +547,8 @@ impl Default for UiState {
             mouse_drag_row: None,
             paste_flash: 0,
             last_input_rect: None,
+            help_overlay_visible: false,
+            help_overlay_scroll: 0,
         }
     }
 }

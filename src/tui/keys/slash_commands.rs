@@ -362,13 +362,13 @@ pub(crate) async fn dispatch_slash_command(
             Ok(true)
         }
         "/help" | "/h" | "/?" => {
-            state
-                .conversation
-                .messages
-                .push_back(ConversationEntry::new(
-                    "system",
-                    help_text(&state.services.skill_registry),
-                ));
+            // WO 34.2: open the help overlay instead of pushing help text
+            // into the conversation. The overlay renders `help_text()`
+            // output on top of the chat; Esc closes, ↑/↓ scrolls. This
+            // keeps the conversation + session log free of help docs.
+            state.ui.help_overlay_visible = true;
+            state.ui.help_overlay_scroll = 0;
+            state.mark_dirty();
             Ok(true)
         }
         "/fork" => {

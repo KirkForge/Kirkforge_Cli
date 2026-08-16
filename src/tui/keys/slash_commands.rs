@@ -32,251 +32,299 @@ pub(crate) struct SlashCommand {
 // HashMap) so the section order is deterministic. Every `SlashCommand`
 // row must tag itself with one of these strings — the
 // `help_text_groups_cover_all_commands` test enforces it.
-pub(crate) const GROUPS: &[&str] = &[
-    "Session",
-    "Model",
-    "Safety",
-    "Workflow",
-    "Plugins",
-    "Diagnostics",
-];
+//
+// WO 34.9: collapsed to 3 tiers (Everyday / Advanced / Developer) so
+// `/help` surfaces the commands a new user actually needs first. The
+// completion popup (`complete_command`) also ranks by tier.
+pub(crate) const GROUPS: &[&str] = &["Everyday", "Advanced", "Developer"];
+
+/// Numeric rank for a group name. Lower sorts first in the completion
+/// popup and in `/help`. Everyday=0, Advanced=1, Developer=2. Used by
+/// `complete_command` so the popup surfaces everyday commands first.
+pub(crate) fn group_rank(group: &str) -> u8 {
+    match group {
+        "Everyday" => 0,
+        "Advanced" => 1,
+        "Developer" => 2,
+        _ => 3,
+    }
+}
 
 pub(crate) const COMMANDS: &[SlashCommand] = &[
+    // ── Everyday (8 commands) ───────────────────────────────────────
     SlashCommand {
         triggers: &["/clear"],
         description: "Clear conversation",
         usage: "",
-        group: "Session",
+        group: "Everyday",
     },
     SlashCommand {
         triggers: &["/exit", "/quit"],
         description: "Quit",
         usage: "",
-        group: "Session",
+        group: "Everyday",
     },
     SlashCommand {
         triggers: &["/help", "/h", "/?"],
         description: "Show available commands",
         usage: "",
-        group: "Diagnostics",
-    },
-    SlashCommand {
-        triggers: &["/fork"],
-        description: "Fork session",
-        usage: "/fork list | <label> [count]",
-        group: "Session",
-    },
-    SlashCommand {
-        triggers: &["/resume"],
-        description: "Resume a fork",
-        usage: "/resume <fork-id>",
-        group: "Session",
-    },
-    SlashCommand {
-        triggers: &["/jobs"],
-        description: "Background bash jobs",
-        usage: "/jobs | <id> | clean\n\
-                Scheduled jobs: /jobs schedule <spec> bash <cmd>, /jobs scheduled list, /jobs run-now <id>, /jobs logs <id>",
-        group: "Workflow",
-    },
-    SlashCommand {
-        triggers: &["/status"],
-        description: "Show model, cost, tokens, and context pressure (one-shot)",
-        usage: "",
-        group: "Model",
+        group: "Everyday",
     },
     SlashCommand {
         triggers: &["/model"],
         description: "Hot-swap the active model (bypasses smart routing)",
         usage: "/model <name>",
-        group: "Model",
-    },
-    SlashCommand {
-        triggers: &["/route"],
-        description: "Switch to the model configured for a tier",
-        usage: "/route simple|medium|complex",
-        group: "Model",
+        group: "Everyday",
     },
     SlashCommand {
         triggers: &["/compact"],
         description: "Compact conversation history (destructive — see TUI for stats)",
         usage: "",
-        group: "Diagnostics",
-    },
-    SlashCommand {
-        triggers: &["/save"],
-        description: "Save conversation transcript to markdown",
-        usage: "/save [path]. Default: next to session log.",
-        group: "Session",
-    },
-    SlashCommand {
-        triggers: &["/explore"],
-        description: "Fork-isolated research: read-only tools, returns a summary",
-        usage: "",
-        group: "Workflow",
-    },
-    SlashCommand {
-        triggers: &["/plan"],
-        description: "Fork-isolated plan mode: no shell, returns a step-by-step plan",
-        usage: "",
-        group: "Workflow",
-    },
-    SlashCommand {
-        triggers: &["/coder"],
-        description: "Fork-isolated implementation: full toolset, returns a summary of changes",
-        usage: "",
-        group: "Workflow",
-    },
-    SlashCommand {
-        triggers: &["/implement"],
-        description: "Exit plan mode and allow the model to implement the approved plan",
-        usage: "",
-        group: "Workflow",
-    },
-    SlashCommand {
-        triggers: &["/commit"],
-        description: "Commit changes safely",
-        usage: "/commit shows status + suggested message; /commit \"message\" stages all and commits after sanitation checks; /commit --push \"message\" also pushes.",
-        group: "Safety",
-    },
-    SlashCommand {
-        triggers: &["/undo"],
-        description: "Undo the most recent edit_file or write_file",
-        usage: "/undo list shows the stack; /undo count prints the depth.",
-        group: "Safety",
-    },
-    SlashCommand {
-        triggers: &["/permissions"],
-        description: "List, revoke, or clear [A]lways permission rules",
-        usage: "/permissions list | revoke <i> | clear",
-        group: "Safety",
-    },
-    SlashCommand {
-        triggers: &["/thinking"],
-        description: "Toggle display of reasoning/thinking blocks",
-        usage: "/thinking shows or hides thinking content; Esc also toggles.",
-        group: "Model",
-    },
-    SlashCommand {
-        triggers: &["/reload"],
-        description: "Reload config.toml and environment overrides",
-        usage: "/reload plugins  Re-scan plugin directory.\n\
-                /reload skills   Re-scan project SKILL.md files.",
-        group: "Plugins",
+        group: "Everyday",
     },
     SlashCommand {
         triggers: &["/sessions"],
         description: "List/search saved sessions, prune old ones, or delete one by id",
         usage: "/sessions list | search <q> | tree | prune [N] [keep K] | delete <id>",
-        group: "Session",
+        group: "Everyday",
     },
     SlashCommand {
-        triggers: &["/carryover"],
-        description: "Show or clear cross-session carryover profile",
-        usage: "/carryover show | clear",
-        group: "Session",
+        triggers: &["/commit"],
+        description: "Commit changes safely",
+        usage: "/commit shows status + suggested message; /commit \"message\" stages all and commits after sanitation checks; /commit --push \"message\" also pushes.",
+        group: "Everyday",
     },
     SlashCommand {
-        triggers: &["/test"],
-        description: "Run cargo test --no-fail-fast; surface a parsed pass/fail summary",
-        usage: "/test <timeout-secs>",
-        group: "Diagnostics",
+        triggers: &["/undo"],
+        description: "Undo the most recent edit_file or write_file",
+        usage: "/undo list shows the stack; /undo count prints the depth.",
+        group: "Everyday",
     },
     SlashCommand {
-        triggers: &["/memory"],
-        description: "Memory commands",
-        usage: "/memory add <fact> | list | search <query> | rm <name>",
-        group: "Diagnostics",
+        triggers: &["/status"],
+        description: "Show model, cost, tokens, and context pressure (one-shot)",
+        usage: "",
+        group: "Everyday",
+    },
+    // ── Advanced (15 commands) ──────────────────────────────────────
+    SlashCommand {
+        triggers: &["/fork"],
+        description: "Fork session",
+        usage: "/fork list | <label> [count]",
+        group: "Advanced",
     },
     SlashCommand {
-        triggers: &["/metrics"],
-        description: "Show metrics",
-        usage: "/metrics shows tool-call/verifier/turn/approval counts",
-        group: "Diagnostics",
+        triggers: &["/resume"],
+        description: "Resume a fork",
+        usage: "/resume <fork-id>",
+        group: "Advanced",
     },
     SlashCommand {
-        triggers: &["/verify"],
-        description: "Show recent verifier verdicts",
-        usage: "/verify shows recent verifier verdicts",
-        group: "Diagnostics",
+        triggers: &["/save"],
+        description: "Save conversation transcript to markdown",
+        usage: "/save [path]. Default: next to session log.",
+        group: "Advanced",
     },
     SlashCommand {
-        triggers: &["/gh"],
-        description: "GitHub integration commands",
-        usage: "/gh issue | pr | search | run | file  (run with no args for full usage)",
-        group: "Diagnostics",
+        triggers: &["/route"],
+        description: "Switch to the model configured for a tier",
+        usage: "/route simple|medium|complex",
+        group: "Advanced",
     },
     SlashCommand {
-        triggers: &["/init"],
-        description: "Initialize project configuration",
-        usage: "/init [--force] — creates .kf-code/config.toml + CLAUDE.md skeleton",
-        group: "Diagnostics",
-    },
-    SlashCommand {
-        triggers: &["/plugins"],
-        description: "Plugin management",
-        usage: "/plugins list | enable <n> | disable <n> | toggle <n> | reload | trust <n> <tier> | setup | sources | add <n> <path> | remove <n>",
-        group: "Plugins",
-    },
-    SlashCommand {
-        triggers: &["/workflow"],
-        description: "Run a programmable JSON workflow",
-        usage: "/workflow run <name> [--parallel], /workflow status, /workflow cancel",
-        group: "Workflow",
-    },
-    SlashCommand {
-        triggers: &["/mcp"],
-        description: "Show connected MCP server status and warnings",
-        usage: "/mcp shows configured servers, tool counts, and resource/prompt warnings",
-        group: "Diagnostics",
+        triggers: &["/thinking"],
+        description: "Toggle display of reasoning/thinking blocks",
+        usage: "/thinking shows or hides thinking content; Esc also toggles.",
+        group: "Advanced",
     },
     SlashCommand {
         triggers: &["/theme"],
         description: "Switch TUI color theme",
         usage: "/theme [default | dark | light | monokai]\n\
                 /theme with no arg cycles through the four built-ins.",
-        group: "Diagnostics",
+        group: "Advanced",
+    },
+    SlashCommand {
+        triggers: &["/carryover"],
+        description: "Show or clear cross-session carryover profile",
+        usage: "/carryover show | clear",
+        group: "Advanced",
+    },
+    SlashCommand {
+        triggers: &["/reload"],
+        description: "Reload config.toml and environment overrides",
+        usage: "/reload plugins  Re-scan plugin directory.\n\
+                /reload skills   Re-scan project SKILL.md files.",
+        group: "Advanced",
+    },
+    SlashCommand {
+        triggers: &["/plugins"],
+        description: "Plugin management",
+        usage: "/plugins list | enable <n> | disable <n> | toggle <n> | reload | trust <n> <tier> | setup | sources | add <n> <path> | remove <n>",
+        group: "Advanced",
+    },
+    SlashCommand {
+        triggers: &["/workflow"],
+        description: "Run a programmable JSON workflow",
+        usage: "/workflow run <name> [--parallel], /workflow status, /workflow cancel",
+        group: "Advanced",
+    },
+    SlashCommand {
+        triggers: &["/mcp"],
+        description: "Show connected MCP server status and warnings",
+        usage: "/mcp shows configured servers, tool counts, and resource/prompt warnings",
+        group: "Advanced",
+    },
+    SlashCommand {
+        triggers: &["/metrics"],
+        description: "Show metrics",
+        usage: "/metrics shows tool-call/verifier/turn/approval counts",
+        group: "Advanced",
+    },
+    SlashCommand {
+        triggers: &["/verify"],
+        description: "Show recent verifier verdicts",
+        usage: "/verify shows recent verifier verdicts",
+        group: "Advanced",
+    },
+    SlashCommand {
+        triggers: &["/memory"],
+        description: "Memory commands",
+        usage: "/memory add <fact> | list | search <query> | rm <name>",
+        group: "Advanced",
+    },
+    SlashCommand {
+        triggers: &["/permissions"],
+        description: "List, revoke, or clear [A]lways permission rules",
+        usage: "/permissions list | revoke <i> | clear",
+        group: "Advanced",
+    },
+    // ── Developer (8 commands) ──────────────────────────────────────
+    SlashCommand {
+        triggers: &["/jobs"],
+        description: "Background bash jobs",
+        usage: "/jobs | <id> | clean\n\
+                Scheduled jobs: /jobs schedule <spec> bash <cmd>, /jobs scheduled list, /jobs run-now <id>, /jobs logs <id>",
+        group: "Developer",
+    },
+    SlashCommand {
+        triggers: &["/explore"],
+        description: "Fork-isolated research: read-only tools, returns a summary",
+        usage: "",
+        group: "Developer",
+    },
+    SlashCommand {
+        triggers: &["/plan"],
+        description: "Fork-isolated plan mode: no shell, returns a step-by-step plan",
+        usage: "",
+        group: "Developer",
+    },
+    SlashCommand {
+        triggers: &["/coder"],
+        description: "Fork-isolated implementation: full toolset, returns a summary of changes",
+        usage: "",
+        group: "Developer",
+    },
+    SlashCommand {
+        triggers: &["/implement"],
+        description: "Exit plan mode and allow the model to implement the approved plan",
+        usage: "",
+        group: "Developer",
+    },
+    SlashCommand {
+        triggers: &["/test"],
+        description: "Run cargo test --no-fail-fast; surface a parsed pass/fail summary",
+        usage: "/test <timeout-secs>",
+        group: "Developer",
+    },
+    SlashCommand {
+        triggers: &["/gh"],
+        description: "GitHub integration commands",
+        usage: "/gh issue | pr | search | run | file  (run with no args for full usage)",
+        group: "Developer",
+    },
+    SlashCommand {
+        triggers: &["/init"],
+        description: "Initialize project configuration",
+        usage: "/init [--force] — creates .kf-code/config.toml + CLAUDE.md skeleton",
+        group: "Developer",
     },
 ];
 
 /// Return every command trigger (including aliases) whose text starts
-/// with `/<prefix>`. The `prefix` argument is the text the user typed
-/// AFTER the `/` (e.g. `"he"` for `/he`); the returned triggers include
-/// the leading `/` (e.g. `"/help"`). Pure, deterministic, no I/O. Used
-/// by the Tab-completion handler and the slash-menu popup.
+/// with `/<prefix>`, ranked by tier (Everyday first, then Advanced,
+/// then Developer) and alphabetical within each tier. The `prefix`
+/// argument is the text the user typed AFTER the `/` (e.g. `"he"` for
+/// `/he`); the returned triggers include the leading `/` (e.g.
+/// `"/help"`). Pure, deterministic, no I/O. Used by the Tab-completion
+/// handler and the slash-menu popup.
 ///
 /// Aliases are included so `/quit` (an alias of `/exit`) is reachable
 /// by typing `/q` — only filtering the primary trigger hid every
 /// non-first alias from completion.
+///
+/// WO 34.9: ranking is tier-first so the popup surfaces everyday
+/// commands above advanced/developer ones. Within a tier, alphabetical
+/// by trigger (stable secondary sort).
 pub(crate) fn complete_command(prefix: &str) -> Vec<&'static str> {
-    COMMANDS
+    // Collect (trigger, group_rank) pairs so we can sort by tier then
+    // by trigger. flat_map over commands × triggers preserves the
+    // group lookup; the rank is the SAME for every alias of a command.
+    let mut hits: Vec<(&'static str, u8)> = COMMANDS
         .iter()
-        .flat_map(|c| c.triggers.iter())
-        .filter(|t| {
+        .flat_map(|c| {
+            let rank = group_rank(c.group);
+            c.triggers.iter().map(move |t| (*t, rank))
+        })
+        .filter(|(t, _)| {
             t.strip_prefix('/')
                 .is_some_and(|rest| rest.starts_with(prefix))
         })
-        .copied()
-        .collect()
+        .collect();
+    // Sort by (tier_rank, trigger). `sort_by_key` is stable, so
+    // alphabetical order within a tier is preserved from the flat_map
+    // emission order — but we make it explicit with a tuple key so a
+    // future re-order of COMMANDS can't silently change popup order.
+    hits.sort_by_key(|&(t, rank)| (rank, t));
+    hits.into_iter().map(|(t, _)| t).collect()
 }
 
 /// Generate the `/help` text from the `COMMANDS` table plus static keybinding
 /// and mention documentation. Keeping the command listing in the table means
 /// we only need to add a row to `COMMANDS` — the help text stays in sync.
+///
+/// WO 34.9: the 3 tiers are shown with **Everyday** expanded (one row per
+/// command with description/usage) and **Advanced** + **Developer** as
+/// collapsed one-line summaries (triggers listed inline so every trigger
+/// still appears in the text — `help_text_includes_every_command_trigger`
+/// stays green). This surfaces the commands a new user needs first without
+/// burying the advanced/developer ones.
 pub(crate) fn help_text(skill_registry: &SkillRegistry) -> String {
     let mut out = String::from("Built-in commands:\n");
     for group in GROUPS {
         let mut rows: Vec<&SlashCommand> = COMMANDS.iter().filter(|c| c.group == *group).collect();
         rows.sort_by_key(|c| c.triggers[0]);
         out.push_str(&format!("\n{group}:\n"));
-        for cmd in rows {
-            let triggers = cmd.triggers.join(" | ");
-            let body = if cmd.usage.is_empty() {
-                cmd.description
-            } else {
-                cmd.usage
-            };
-            out.push_str(&format!("  {triggers:10} {body}\n"));
+        if *group == "Everyday" {
+            // Expanded: one row per command with description/usage.
+            for cmd in rows {
+                let triggers = cmd.triggers.join(" | ");
+                let body = if cmd.usage.is_empty() {
+                    cmd.description
+                } else {
+                    cmd.usage
+                };
+                out.push_str(&format!("  {triggers:10} {body}\n"));
+            }
+        } else {
+            // Collapsed: one line with all triggers, comma-separated.
+            // Every trigger still appears in the text so the
+            // help_text_includes_every_command_trigger test stays green.
+            let triggers: Vec<&str> = rows
+                .iter()
+                .flat_map(|c| c.triggers.iter().copied())
+                .collect();
+            out.push_str(&format!("  {}\n", triggers.join(", ")));
         }
     }
     out.push_str(
@@ -998,5 +1046,103 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(sorted.len(), all.len(), "duplicate triggers in {all:?}");
+    }
+
+    // ── WO 34.9: tier-ranked completion ordering ────────────────────
+
+    /// Helper: look up the group of a command by its primary trigger.
+    fn group_of(trigger: &str) -> &'static str {
+        COMMANDS
+            .iter()
+            .find(|c| c.triggers.contains(&trigger))
+            .map(|c| c.group)
+            .expect("trigger not found in COMMANDS")
+    }
+
+    /// Empty-prefix completion must return Everyday commands BEFORE
+    /// Advanced, and Advanced BEFORE Developer. Within a tier the
+    /// order is alphabetical by trigger. This is the WO 34.9 ranking
+    /// contract — the popup surfaces everyday commands first.
+    #[test]
+    fn complete_command_ranks_by_tier_everyday_first() {
+        let all = complete_command("");
+        // Find the index of the first Advanced and first Developer trigger.
+        let first_advanced = all
+            .iter()
+            .position(|t| group_of(t) == "Advanced")
+            .expect("no Advanced trigger in completion");
+        let first_developer = all
+            .iter()
+            .position(|t| group_of(t) == "Developer")
+            .expect("no Developer trigger in completion");
+        // Every Everyday trigger must come before the first Advanced one.
+        for t in &all[..first_advanced] {
+            assert_eq!(
+                group_of(t),
+                "Everyday",
+                "Everyday tier leaked an Advanced/Developer trigger: {t}"
+            );
+        }
+        // Every Advanced trigger must come before the first Developer one.
+        for t in &all[first_advanced..first_developer] {
+            assert_eq!(
+                group_of(t),
+                "Advanced",
+                "Advanced tier leaked a Developer/Everyday trigger: {t}"
+            );
+        }
+        // Developer tier is last.
+        for t in &all[first_developer..] {
+            assert_eq!(
+                group_of(t),
+                "Developer",
+                "Developer tier leaked an Everyday/Advanced trigger: {t}"
+            );
+        }
+    }
+
+    /// `/help` must show Everyday expanded (one row per command) and
+    /// Advanced + Developer collapsed (one line each, triggers listed
+    /// inline). Catches the regression where a tier gets blanked or
+    /// the expansion logic flips.
+    #[test]
+    fn help_text_everyday_expanded_advanced_developer_collapsed() {
+        let registry = SkillRegistry::new();
+        let text = help_text(&registry);
+        // Everyday: /clear's description must appear (expanded form).
+        assert!(
+            text.contains("Clear conversation"),
+            "Everyday tier should be expanded with descriptions"
+        );
+        // Advanced: triggers appear inline on one line (collapsed form).
+        // The /workflow trigger is Advanced — it should appear in the
+        // collapsed listing.
+        assert!(
+            text.contains("/workflow"),
+            "Advanced tier should list /workflow inline"
+        );
+        // Developer: /plan trigger is Developer — collapsed inline.
+        assert!(
+            text.contains("/plan"),
+            "Developer tier should list /plan inline"
+        );
+        // The Everyday expansion puts /clear on its own row with the
+        // description; the collapsed Advanced/Developer lines do NOT
+        // include descriptions. So "Run cargo test" (a Developer
+        // description) must NOT appear in the help text.
+        assert!(
+            !text.contains("Run cargo test --no-fail-fast"),
+            "Developer tier should be collapsed (no descriptions)"
+        );
+    }
+
+    /// `group_rank` is the ordering primitive for `complete_command`.
+    /// Pin the 3-tier mapping so a future rename can't silently break
+    /// the ranking.
+    #[test]
+    fn group_rank_orders_everyday_before_advanced_before_developer() {
+        assert!(group_rank("Everyday") < group_rank("Advanced"));
+        assert!(group_rank("Advanced") < group_rank("Developer"));
+        assert_eq!(group_rank("unknown"), 3, "unknown groups sort last");
     }
 }

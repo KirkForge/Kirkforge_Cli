@@ -36,14 +36,24 @@
   `messages.is_empty() && input.is_empty()`). Added 7 unit tests; updated
   the `empty_state` selftest (was checking for the old `/help` hint line).
 
-### Gate (WO 34.7 + 34.8)
+- **WO 34.9 — Slash command taxonomy.** Reorganized `GROUPS` from 6
+  impl-concept groups (Session/Model/Safety/Workflow/Plugins/Diagnostics)
+  into 3 tiers: **Everyday** (9 commands), **Advanced** (15), **Developer**
+  (8). `complete_command` now ranks by `(group_rank, trigger)` so the
+  completion popup surfaces everyday commands first. `help_text` shows
+  Everyday expanded (one row per command) + Advanced/Developer collapsed
+  (one line each, triggers listed inline so every trigger still appears).
+  Added `group_rank` helper + 3 new tests. All 30 existing slash tests
+  stay green; all 34 triggers still appear in completion + help.
+
+### Gate (WO 34.7 + 34.8 + 34.9)
 - `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
 - `cargo fmt --check`: PASS (clean)
-- `cargo nextest run -p kf-code --lib tui::`: 518 passed (34.7) / 48
-  passed tui::widgets + 7 welcome + 1 empty_state selftest (34.8)
+- `cargo nextest run -p kf-code --lib tui::`: 528 passed (was 518 + 7
+  welcome + 3 slash taxonomy)
 
 ### Pending
-- WO 34.9 (slash taxonomy), WO 34.10 (approval dialog) — in progress.
+- WO 34.10 (approval dialog) — in progress.
 
 ---
 

@@ -199,6 +199,12 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
         usage: "/permissions list | revoke <i> | clear",
         group: "Advanced",
     },
+    SlashCommand {
+        triggers: &["/auto-approve"],
+        description: "Toggle blanket command approval for the current session",
+        usage: "/auto-approve [on | off | status]. No arg toggles. Persists to config.toml.",
+        group: "Advanced",
+    },
     // ── Developer (8 commands) ──────────────────────────────────────
     SlashCommand {
         triggers: &["/jobs"],
@@ -544,6 +550,14 @@ pub(crate) async fn dispatch_slash_command(
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
         }
+        "/auto-approve" => {
+            let msg = handle_auto_approve_command(args, state);
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new("system", msg));
+            Ok(true)
+        }
         "/thinking" => {
             state.generation.thinking_panel_visible = !state.generation.thinking_panel_visible;
             let status = if state.generation.thinking_panel_visible {
@@ -793,6 +807,57 @@ fn persist_shared(cfg: &crate::shared::SharedConfig) -> anyhow::Result<()> {
     crate::session::config::save_config(&snapshot)
 }
 
+/// Handle `/auto-approve [on | off | status]`. No arg toggles. Persists
+/// to config.toml so the change survives across sessions. This is the
+/// mid-session escape hatch from the per-command approval dialog — the
+/// user who forgot `--auto-approve` at launch can flip it on without
+/// restarting, run their bughunt, then flip it back off.
+fn handle_auto_approve_command(args: &str, state: &mut AppState) -> String {
+    let trimmed = args.trim();
+    let want = match trimmed {
+        "on" | "true" | "yes" => Some(true),
+        "off" | "false" | "no" => Some(false),
+        "status" => None,
+        "" => {
+            // No arg — toggle.
+            let current = crate::shared::read_shared_config(&state.services.config)
+                .security
+                .auto_approve;
+            Some(!current)
+        }
+        other => {
+            return format!("Usage: /auto-approve [on | off | status]\nUnknown argument '{other}'");
+        }
+    };
+
+    if want.is_none() {
+        // status — report only, no mutation.
+        let current = crate::shared::read_shared_config(&state.services.config)
+            .security
+            .auto_approve;
+        let label = if current { "ON" } else { "OFF" };
+        return format!(
+            "Auto-approve is {label}. Use /auto-approve on or /auto-approve off to change."
+        );
+    }
+
+    let new_val = want.unwrap();
+    {
+        let mut cfg = state
+            .services
+            .config
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        cfg.security.auto_approve = new_val;
+    }
+    let label = if new_val { "ON" } else { "OFF" };
+    let persist_note = match persist_shared(&state.services.config) {
+        Ok(()) => " (persisted to config.toml)".to_string(),
+        Err(e) => format!(" (⚠️ failed to persist: {e})"),
+    };
+    format!("Auto-approve is now {label}.{persist_note}")
+}
+
 /// Handle `/theme [name]` (WO 27.6).
 ///
 /// No-arg cycles default→dark→light→monokai→default. With-arg sets the
@@ -873,6 +938,7 @@ mod tests {
             "/commit",
             "/undo",
             "/permissions",
+            "/auto-approve",
             "/thinking",
             "/reload",
             "/sessions",
@@ -1144,5 +1210,80 @@ mod tests {
         assert!(group_rank("Everyday") < group_rank("Advanced"));
         assert!(group_rank("Advanced") < group_rank("Developer"));
         assert_eq!(group_rank("unknown"), 3, "unknown groups sort last");
+    }
+
+    // ── /auto-approve tests ───────────────────────────────────────
+
+    fn cfg_mut(s: &mut AppState) -> std::sync::RwLockWriteGuard<'_, Config> {
+        s.services.config.write().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// `/auto-approve on` sets `auto_approve = true` in the shared config.
+    /// Does NOT call `save_config` (that writes to the real config path —
+    /// exercised in integration tests, not unit tests).
+    #[test]
+    fn auto_approve_on_sets_flag() {
+        let mut state = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            Config::default(),
+        )));
+        cfg_mut(&mut state).security.auto_approve = false;
+        let msg = handle_auto_approve_command("on", &mut state);
+        assert!(cfg_mut(&mut state).security.auto_approve);
+        assert!(msg.contains("ON"), "message should say ON, got: {msg}");
+    }
+
+    /// `/auto-approve off` clears `auto_approve`.
+    #[test]
+    fn auto_approve_off_clears_flag() {
+        let mut state = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            Config::default(),
+        )));
+        cfg_mut(&mut state).security.auto_approve = true;
+        let msg = handle_auto_approve_command("off", &mut state);
+        assert!(!cfg_mut(&mut state).security.auto_approve);
+        assert!(msg.contains("OFF"), "message should say OFF, got: {msg}");
+    }
+
+    /// `/auto-approve` with no arg toggles: false → true, true → false.
+    #[test]
+    fn auto_approve_no_arg_toggles() {
+        let mut state = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            Config::default(),
+        )));
+        cfg_mut(&mut state).security.auto_approve = false;
+        let _ = handle_auto_approve_command("", &mut state);
+        assert!(cfg_mut(&mut state).security.auto_approve, "toggle off->on");
+        let _ = handle_auto_approve_command("", &mut state);
+        assert!(!cfg_mut(&mut state).security.auto_approve, "toggle on->off");
+    }
+
+    /// `/auto-approve status` reports the current state without mutating.
+    #[test]
+    fn auto_approve_status_reports_without_mutating() {
+        let mut state = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            Config::default(),
+        )));
+        cfg_mut(&mut state).security.auto_approve = true;
+        let msg = handle_auto_approve_command("status", &mut state);
+        assert!(msg.contains("ON"), "status should report ON, got: {msg}");
+        assert!(
+            cfg_mut(&mut state).security.auto_approve,
+            "status must not mutate"
+        );
+    }
+
+    /// `/auto-approve garbage` returns a usage error without mutating.
+    #[test]
+    fn auto_approve_unknown_arg_returns_usage() {
+        let mut state = AppState::new(std::sync::Arc::new(std::sync::RwLock::new(
+            Config::default(),
+        )));
+        cfg_mut(&mut state).security.auto_approve = false;
+        let msg = handle_auto_approve_command("banana", &mut state);
+        assert!(msg.contains("Usage"), "should return usage, got: {msg}");
+        assert!(
+            !cfg_mut(&mut state).security.auto_approve,
+            "must not mutate on bad arg"
+        );
     }
 }

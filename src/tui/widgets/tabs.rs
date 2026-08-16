@@ -1,8 +1,9 @@
 //! Overlay panel renderers for the former F1–F6 views + the top header.
 //!
 //! WO 34.1 killed the persistent tab bar. The top of the screen is now
-//! a one-line header (`render_header`): app name + current model + a
-//! ready/busy indicator. The former tab content renderers below are
+//! a one-line header (`render_header`): app name + a ready/busy
+//! indicator. The model name lives in the status bar (bottom) only, so
+//! it is not shown twice. The former tab content renderers below are
 //! unchanged — they render as overlays on top of the chat surface when
 //! `ActiveTab != None`, summoned via the command palette (Ctrl+K) or
 //! direct Ctrl-shortcuts.
@@ -16,8 +17,12 @@ use ratatui::{
     Frame,
 };
 
-/// Render the top header — a one-line strip: app name + current model +
-/// ready/busy indicator. Replaces the former F1–F6 tab bar (WO 34.1).
+/// Render the top header — a one-line strip: app name + ready/busy
+/// indicator. Replaces the former F1–F6 tab bar (WO 34.1). The model
+/// name is NOT shown here (it lives in the status bar at the bottom —
+/// showing it twice was reported as noise). The connection state is
+/// still surfaced: `● ready` (connected), `⟳ busy <spinner>` (working),
+/// `⚡ Disconnected` (no model), `✗ <error>` (connection error).
 pub fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
     let mut spans: Vec<Span> = Vec::new();
     // App name
@@ -28,10 +33,18 @@ pub fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
             .add_modifier(Modifier::BOLD),
     ));
     spans.push(Span::raw(" │ "));
-    // Model + connection state
-    let model_span = match &state.provider.connection {
-        ConnectionState::Connected { model, .. } => {
-            Span::styled(format!("◆ {model}"), Style::default().fg(Color::Green))
+    // Ready / busy / disconnected indicator. The model name is in the
+    // status bar; the header shows only the connection + activity state.
+    let busy = state.generation.is_generating
+        || state.generation.persona_in_progress.is_some()
+        || state.generation.workflow_in_progress.is_some();
+    let indicator = match &state.provider.connection {
+        ConnectionState::Connected { .. } if busy => Span::styled(
+            format!("⟳ busy {}", state.spinner_char()),
+            Style::default().fg(Color::Yellow),
+        ),
+        ConnectionState::Connected { .. } => {
+            Span::styled("● ready", Style::default().fg(Color::Green))
         }
         ConnectionState::Disconnected | ConnectionState::Connecting => {
             Span::styled("⚡ Disconnected", Style::default().fg(Color::Red))
@@ -40,20 +53,7 @@ pub fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
             Span::styled(format!("✗ {e}"), Style::default().fg(Color::Red))
         }
     };
-    spans.push(model_span);
-    spans.push(Span::raw(" │ "));
-    // Ready / busy indicator
-    let busy = state.generation.is_generating
-        || state.generation.persona_in_progress.is_some()
-        || state.generation.workflow_in_progress.is_some();
-    if busy {
-        spans.push(Span::styled(
-            format!("⟳ busy {}", state.spinner_char()),
-            Style::default().fg(Color::Yellow),
-        ));
-    } else {
-        spans.push(Span::styled("● ready", Style::default().fg(Color::Green)));
-    }
+    spans.push(indicator);
     let paragraph = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Black));
     f.render_widget(paragraph, area);
 }
@@ -1059,5 +1059,98 @@ Scheduled jobs:
         let result = truncate("abcdefghijklmnopqrstuvwxyz", 10);
         assert_eq!(result.chars().count(), 10);
         assert!(result.ends_with('…'));
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+    use crate::shared::test_util::app_state;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use std::time::{Duration, Instant};
+
+    fn header_row(state: &mut AppState, width: u16) -> String {
+        let backend = TestBackend::new(width, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render_header(f, f.area(), state))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut s = String::new();
+        for x in 0..buffer.area.width {
+            if let Some(cell) = buffer.cell((x, 0)) {
+                s.push_str(cell.symbol());
+            }
+        }
+        s
+    }
+
+    fn connected_state(model: &str) -> AppState {
+        let mut state = app_state();
+        state.provider.connection = ConnectionState::Connected {
+            model: model.into(),
+            since: Instant::now(),
+        };
+        state.session.session_started = Instant::now() - Duration::from_secs(1);
+        state
+    }
+
+    /// The header shows the app name + ready indicator, NOT the model
+    /// name. The model lives in the status bar; showing it twice was
+    /// reported as noise. Regression guard for the "model name shown
+    /// twice (top + bottom)" bug.
+    #[test]
+    fn header_shows_app_name_not_model() {
+        let mut state = connected_state("glm-5.2:cloud");
+        let row = header_row(&mut state, 60);
+        assert!(
+            row.contains("kf-code"),
+            "header should show app name, got: {row:?}"
+        );
+        assert!(
+            row.contains("ready"),
+            "header should show ready indicator, got: {row:?}"
+        );
+        assert!(
+            !row.contains("glm-5.2:cloud"),
+            "header should NOT show the model name (lives in status bar), got: {row:?}"
+        );
+        assert!(
+            !row.contains("◆"),
+            "header should NOT show the model diamond, got: {row:?}"
+        );
+    }
+
+    /// When generating, the header shows the busy spinner, not "ready".
+    #[test]
+    fn header_shows_busy_when_generating() {
+        let mut state = connected_state("claude-4");
+        state.generation.is_generating = true;
+        let row = header_row(&mut state, 60);
+        assert!(
+            row.contains("busy"),
+            "header should show busy when generating, got: {row:?}"
+        );
+        assert!(
+            !row.contains("ready"),
+            "header should NOT show ready when busy, got: {row:?}"
+        );
+    }
+
+    /// Disconnected state shows the disconnect indicator (no model).
+    #[test]
+    fn header_shows_disconnected_when_no_model() {
+        let mut state = app_state();
+        state.provider.connection = ConnectionState::Disconnected;
+        let row = header_row(&mut state, 60);
+        assert!(
+            row.contains("Disconnected"),
+            "header should show Disconnected, got: {row:?}"
+        );
+        assert!(
+            !row.contains("ready"),
+            "header should NOT show ready when disconnected, got: {row:?}"
+        );
     }
 }

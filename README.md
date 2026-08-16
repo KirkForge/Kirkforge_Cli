@@ -1,69 +1,45 @@
 # KirkForge
 
-A provider-agnostic, verification-first coding agent in Rust.
+![Rust](https://img.shields.io/badge/rust-1.88%2B-orange)
+![CI](https://img.shields.io/github/actions/workflow/status/KirkForge/Kirkforge_Cli/.github/workflows/ci-merge.yml?branch=dev)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Version](https://img.shields.io/badge/version-0.3.9-green)
 
-It routes to any model provider (Ollama, OpenAI-compatible, Anthropic
-direct/Bedrock/Vertex, OpenCode-Zen), edits files, runs commands, and
-verifies its own work — build, test, lint, git, and security checks run
-after every file-modifying tool call. A tree-sitter context index gives
-it graph-grounded code understanding. Token-budget management and context
-compression keep costs bounded on long sessions.
+AI coding assistant that runs in your terminal. Open source, local-first, works with any LLM.
+
+## Quick install
+
+**Linux / macOS:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/KirkForge/Kirkforge_Cli/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/KirkForge/Kirkforge_Cli/main/scripts/install.ps1 | iex
+```
 
 ## Quick start
 
-First run? Pass `-m <model>` or edit `~/.local/share/kf-code/config.toml`.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/KirkForge/Kirkforge_Cli/main/scripts/install.sh | sh
-kf-code run -m qwen2.5:0.5b
+```
+kf-code run       # start the TUI
+/model claude     # pick a model
+Type a message    # start coding
 ```
 
-Or build from source:
+## What it does
 
-```bash
-cargo install --git https://github.com/KirkForge/Kirkforge_Cli
-```
+- Reads, writes, and edits your code
+- Runs tests, commits, and manages git
+- Works with Claude, GPT, Ollama, and any OpenAI-compatible model
 
-Requires a running Ollama server (or set provider config for cloud models).
+Benchmarked on 30 coding tasks — see [docs/TECHNICAL.md](docs/TECHNICAL.md#benchmarks).
 
-## Why KirkForge
+## Links
 
-- **Verification-first** — a correction loop catches build/test/lint errors
-  and feeds them back to the model before you see them.
-- **Provider-agnostic** — six providers behind one trait. No vendor lock-in.
-- **Semantic code understanding** — tree-sitter symbol/import/call-graph index
-  for Rust, TypeScript, Python, and Go.
-- **Cost-aware** — kf-compress-core compresses bloated inputs; kf-budget-core
-  guards token spend on outputs.
-- **Plugin system** — kf-compress-core and kf-budget-core are compiled-in
-  behind feature flags (or shell fallbacks). External plugins via
-  `kf-code.toml` manifests with trust tiers and signature verification.
-- **Benchmarked** — <!-- regenerate: ls benches/tasks/*.toml | wc -l -->
-  30 coding tasks organized against the
-  [Benchmarks](docs/TECHNICAL.md#benchmarks) spec, including the
-  signature Token Budget Challenge that showcases the tree-sitter + compress
-  + budget architecture.
-
-## Documentation
-
-- [docs/TECHNICAL.md](docs/TECHNICAL.md) — full technical manual
+- [docs/TECHNICAL.md](docs/TECHNICAL.md) — architecture and internals
 - [docs/adr/](docs/adr/) — architecture decision records
-- [docs/workorders/](docs/workorders/) — planned and in-progress work
-- [config.toml.example](config.toml.example) — fully documented config sample
-- [AGENTS.md](AGENTS.md) — worker contract for AI agents in this repo
-- [state.md](state.md) — current production-readiness state
-
-## Development
-
-```bash
-cargo test --workspace
-cargo clippy --all-targets -- -D warnings
-./scripts/run-integration-tests.sh  # needs Ollama + qwen2.5:0.5b
-cargo build --release               # ~5.4 MB binary
-```
-
-## Releases
-
-Two-week minor cadence in the `v0.x` series. Binaries built automatically on
-tag push for Linux (gnu/musl), macOS, and Windows. See the
-[releases page](https://github.com/KirkForge/Kirkforge_Cli/releases).
+- [CHANGELOG.md](CHANGELOG.md) — what changed
+- [Releases](https://github.com/KirkForge/Kirkforge_Cli/releases)

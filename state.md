@@ -10,6 +10,57 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+## Session 2026-08-16 — Extract `build_docker_args` pure fn (worktree `.worktrees/wo-docker-args`, branch `wo/docker-args-pure`)
+
+### What changed this session
+
+- **Extracted the Docker CLI arg-vector construction out of `run_docker`
+  (`src/tools/bash.rs`) into a pure free function `build_docker_args(cfg,
+  workdir, cmd, timeout_secs) -> Vec<String>`.** The arg vector was pure
+  logic (no Docker daemon, no I/O) but was only exercised by the
+  `#[ignore]d` real-Docker smoke test
+  `bash_docker_executes_command_in_container`. The security-critical paths
+  (deny-list short-circuit, workdir colon rejection, config-None guard)
+  were already unit-tested in-process; the arg vector itself was the gap.
+  Added 6 in-process unit tests (`build_docker_args_*`) pinning: image +
+  command presence, `--memory`/`--cpus` limits, `-v <host>:/work` bind
+  mount with correct host path, `--rm` auto-cleanup, the timeout contract
+  (timeout is a `tokio::time::sleep` wrapper in `run_docker`, NOT a Docker
+  flag — the test pins this so a future drift is deliberate), and that the
+  bind-mount source uses the already-canonicalized path verbatim.
+- **No production behavior changed** — pure extraction + test addition.
+  `run_docker` now calls `build_docker_args(cfg, &resolved_workdir, cmd,
+  timeout_secs)` instead of building the vec inline. The `timeout_secs`
+  param is accepted but unused in the fn (prefixed `_timeout_secs`) because
+  the timeout is enforced outside the arg vector; the param keeps the
+  signature complete so a future move to a Docker-flag timeout is a
+  one-line change, not a signature break.
+- **Replaced the `ponytail: ceiling` comment** on the smoke test (which
+  named "add DockerRunner trait" as the upgrade path) with a comment noting
+  the arg construction is now unit-tested via `build_docker_args`; the
+  DockerRunner-trait injection is no longer the next step for arg coverage
+  (only the real-Docker spawn remains smoke-tested). No `ponytail:` spec
+  literals were touched.
+- **The real-Docker smoke test is unchanged and still `#[ignore]d`.**
+- **Impact:** LOW. gitnexus impact on `run_docker` (upstream): 2 direct
+  callers (`Bash::run` + the `bash_run_docker_returns_spawn_err_when_
+  docker_config_none` test), 0 processes affected, 1 module (Tools).
+- **Files:** `src/tools/bash.rs` (extraction + 6 tests + comment swap),
+  `state.md`, `CHANGELOG.md`.
+
+### Gate (HEAD on `wo/docker-args-pure`, before commit)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tools::bash`: 57 passed, 3273
+  skipped (includes the 6 new `build_docker_args_*` tests + all existing
+  in-process Docker tests; the `#[ignore]d` smoke test is among skipped,
+  unchanged).
+
+### Pending
+- None from this task.
+
+---
+
 ## Session 2026-08-16 — kf-rbac JWT test speedup (worktree `.worktrees/wo-jwks`, branch `wo/fake-jwks`)
 
 ### What changed this session

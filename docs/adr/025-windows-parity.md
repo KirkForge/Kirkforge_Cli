@@ -22,12 +22,17 @@ limitation with a clear workaround or flag.
 ### Approval reader (`src/main/mod.rs`)
 
 - Unix: polls `/dev/tty` with `poll(2)` so the reader thread joins promptly on
-  shutdown.
+  shutdown — the poll loop re-checks the shutdown flag every 200 ms, so `join()`
+  returns within one interval on both the answer and timeout paths.
 - Windows: races a `tokio::task::spawn_blocking` stdin reader against a
   `tokio::time::interval` poll of a shutdown flag. If shutdown fires before the
-  user answers, the blocking task is aborted and the function returns `None`
-  (interrupted). This keeps the outer approval handler joinable without
-  blocking forever on a Windows console read.
+  user answers, the blocking task is aborted (its future is dropped) and the
+  function returns `None` (interrupted). The underlying OS thread blocked in
+  the console `read_line` is NOT interruptible, so the outer reader thread is
+  **detached on shutdown** rather than joined — joining would hang on the
+  uninterruptible syscall. The detached thread is reaped when the process
+  exits or when stdin is closed. This is a deliberate, documented Windows
+  limitation rather than a silent hang.
 - Other platforms: return `Some(false)` with a warning.
 
 ### Process groups (`src/session/process_group.rs`)

@@ -574,9 +574,11 @@ fn spawn_line_mode_approval_handler(
             // flag interrupts it; the JoinHandle is joined below (on timeout via
             // shutdown, on answer because the thread already exited) so no
             // reader thread is left detached at the end of the iteration.
-            // On Windows the same pollable abstraction races a blocking stdin
-            // reader against the shutdown flag and returns `None` when
-            // interrupted, so the same timeout/gate logic applies.
+            // On Windows the read is blocking and uninterruptible, so the same
+            // pollable abstraction races a blocking stdin reader against the
+            // shutdown flag and returns `None` when interrupted — but the
+            // reader thread is NOT joined on Windows; it is dropped (detached)
+            // to avoid hanging on the uninterruptible syscall.
             let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let shutdown_reader = shutdown.clone();
             let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
@@ -592,14 +594,29 @@ fn spawn_line_mode_approval_handler(
 
             let result = tokio::time::timeout(std::time::Duration::from_secs(120), answer_rx).await;
             if result.is_err() {
-                // Signal the poll loop to exit, then join so the thread is
-                // reclaimed rather than lingering until the next input.
+                // Signal the poll loop to exit so a joinable reader can unwind.
                 shutdown.store(true, std::sync::atomic::Ordering::Release);
                 eprintln!("\nApproval prompt timed out after 120 s; denying.");
             }
-            // Always join: on the answer path the thread has already exited
-            // (instant); on the timeout path it exits within one poll interval.
-            let _ = reader_handle.join();
+            // Reclaim the reader thread only where the read is interruptible.
+            //
+            // On Unix, `read_approval_answer_pollable` polls `/dev/tty` with a
+            // 200 ms `poll(2)` interval and checks `shutdown` between polls, so
+            // the thread exits within one interval and `join()` returns
+            // promptly on both the answer and timeout paths.
+            //
+            // Windows stdin read is uninterruptible. We detach the reader
+            // thread on shutdown rather than joining — joining would hang if
+            // the read is still blocked. The thread is reaped when the process
+            // exits or when stdin is closed.
+            #[cfg(unix)]
+            {
+                let _ = reader_handle.join();
+            }
+            #[cfg(not(unix))]
+            {
+                drop(reader_handle);
+            }
 
             let approved = result.map(|r| r.unwrap_or(false)).unwrap_or(false);
 

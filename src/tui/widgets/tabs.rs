@@ -1,10 +1,13 @@
-//! Tab panel renderers for F1–F6 views and the top tab bar.
+//! Overlay panel renderers for the former F1–F6 views + the top header.
 //!
-//! Each tab renders its content into the main content area (the top
-//! chunk of the vertical layout). A persistent tab bar at the very top
-//! shows F1–F6 labels with the active one highlighted.
+//! WO 34.1 killed the persistent tab bar. The top of the screen is now
+//! a one-line header (`render_header`): app name + current model + a
+//! ready/busy indicator. The former tab content renderers below are
+//! unchanged — they render as overlays on top of the chat surface when
+//! `ActiveTab != None`, summoned via the command palette (Ctrl+K) or
+//! direct Ctrl-shortcuts.
 
-use crate::tui::app::{ActiveTab, AppState};
+use crate::tui::app::{AppState, ConnectionState};
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -13,24 +16,43 @@ use ratatui::{
     Frame,
 };
 
-/// Render the top tab bar — a one-line strip showing F1–F6 labels.
-/// The active tab is highlighted; inactive tabs are dim.
-pub fn render_tab_bar(f: &mut Frame, area: Rect, state: &AppState) {
+/// Render the top header — a one-line strip: app name + current model +
+/// ready/busy indicator. Replaces the former F1–F6 tab bar (WO 34.1).
+pub fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
     let mut spans: Vec<Span> = Vec::new();
-    for (i, tab) in ActiveTab::ALL.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+    // App name
+    spans.push(Span::styled(
+        " kf-code",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw(" │ "));
+    // Model + connection state
+    let model_span = match &state.provider.connection {
+        ConnectionState::Connected { model, .. } => {
+            Span::styled(format!("◆ {model}"), Style::default().fg(Color::Green))
         }
-        let label = tab.label();
-        let is_active = tab == &state.ui.active_tab;
-        let style = if is_active {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        spans.push(Span::styled(format!(" {label} "), style));
+        ConnectionState::Disconnected | ConnectionState::Connecting => {
+            Span::styled("⚡ Disconnected", Style::default().fg(Color::Red))
+        }
+        ConnectionState::Error(e) => {
+            Span::styled(format!("✗ {e}"), Style::default().fg(Color::Red))
+        }
+    };
+    spans.push(model_span);
+    spans.push(Span::raw(" │ "));
+    // Ready / busy indicator
+    let busy = state.generation.is_generating
+        || state.generation.persona_in_progress.is_some()
+        || state.generation.workflow_in_progress.is_some();
+    if busy {
+        spans.push(Span::styled(
+            format!("⟳ busy {}", state.spinner_char()),
+            Style::default().fg(Color::Yellow),
+        ));
+    } else {
+        spans.push(Span::styled("● ready", Style::default().fg(Color::Green)));
     }
     let paragraph = Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Black));
     f.render_widget(paragraph, area);

@@ -10,6 +10,67 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+## Session 2026-08-16 — WO 34.1: kill tab bar + command palette (worktree `.worktrees/wo34-a`, branch `wo/34-a`)
+
+### What changed this session
+
+- **Killed the persistent F1–F6 tab bar** (`src/tui/widgets/tabs.rs`). Replaced
+  `render_tab_bar` with `render_header`: a one-line strip showing app name +
+  current model + a ready/busy indicator (green "● ready" / yellow "⟳ busy
+  <spinner>"). The top-of-screen is no longer an admin panel.
+- **Added `ActiveTab::None`** (`src/tui/app.rs`) as the new `#[default]` —
+  chat-only mode, no overlay. `Chat` is now just the F1 overlay. All
+  `active_tab != ActiveTab::Chat` comparisons in keys/events became
+  `!= None && != Chat` (Esc clears to `None`; arrow/Enter guards check both).
+  `ActiveTab::ALL` renamed to `OVERLAYS` (excludes `None`); `label()` dropped
+  the "F1:" prefixes and returns "" for `None`.
+- **Command palette (Ctrl+K)** — new `src/tui/widgets/command_palette.rs`.
+  Centered overlay: search input + filtered action list (case-insensitive
+  substring fuzzy match). 12 actions: Change model / Open sessions / View
+  jobs / Open settings / Open plugins (→ overlays) + Search conversation
+  (→ Ctrl+F search mode) + Compact / Help / Test / Commit / Undo / Clear
+  (→ slash commands). ↑↓ navigates, Enter activates, Esc closes.
+- **`UiState` gained 3 fields**: `command_palette_visible: bool`,
+  `command_palette_query: String`, `command_palette_selected: usize`.
+- **Direct Ctrl-shortcuts**: Ctrl+M→Models, Ctrl+S→Sessions(Threads),
+  Ctrl+J→Jobs, Ctrl+,→Settings, Ctrl+P→Plugins (`src/tui/keys/mod.rs`,
+  `open_overlay` helper). F-keys retained as invisible muscle-memory fallback.
+- **Mouse handler** (`src/tui/events.rs`): removed `tab_at_column` +
+  `apply_tab_switch` — row 0 is the header now, so a click there is a
+  drag-grab (not a tab switch). Updated 2 tab-bar-click tests to
+  header-click-grab tests; removed the `tab_at_column_maps_each_label` test.
+- **Render layout** (`src/tui/mod.rs:render_app`): header replaces tab bar
+  (row 0); chat is always the primary content; overlays render in the main
+  content area when `active_tab != None`; command palette renders on top of
+  everything (under the doom banner).
+- **Docs**: `docs/TECHNICAL.md` Mouse-support paragraph updated (row 0 =
+  header) + new Command-palette paragraph. Workorder 34.1 status flipped to
+  `Partially done` with deferral disclosure.
+
+### Deferred (DEFERRED per AGENTS.md §11)
+
+- **Overlay-on-top-of-chat rendering (step 5):** overlays currently render in
+  the main content area (replacing the chat view, matching pre-34.1 behavior)
+  instead of as centered/right-docked popups over a visible chat surface.
+  *Why:* centered-popup composition over a live chat surface needs a
+  `Clear`+popup layout pass that interacts with the approval-dialog /
+  doom-banner z-ordering. *Remaining:* render each overlay into a centered
+  `Rect` via `Layout` inside `chunks[1]`, preceded by `Clear` so the chat
+  shows through; reconcile with approval-dialog + doom-banner z-order.
+  *Tracked:* `ponytail:` comment in `src/tui/mod.rs:render_app`, WO 34.1
+  step 5, this `state.md` "Pending" below.
+
+### Gate (HEAD on `wo/34-a`, before commit)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (EXIT=0, 0
+  warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 526 passed, 2816 skipped (15.5s)
+
+### Pending
+- WO 34.1 step 5: overlay-on-top-of-chat rendering (see Deferred above).
+
+---
+
 ## Session 2026-08-16 — Extract `build_docker_args` pure fn (worktree `.worktrees/wo-docker-args`, branch `wo/docker-args-pure`)
 
 ### What changed this session

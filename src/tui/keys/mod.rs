@@ -552,7 +552,7 @@ async fn handle_tab_enter(
                 .push_back(ConversationEntry::new("system", line));
             state.mark_dirty();
         }
-        ActiveTab::Threads | ActiveTab::Chat => {}
+        ActiveTab::Threads | ActiveTab::Chat | ActiveTab::None => {}
     }
     Ok(())
 }
@@ -598,6 +598,146 @@ fn settings_keys_and_values(config: &Config) -> Vec<String> {
     lines
 }
 
+/// Summon an overlay tab (WO 34.1 direct shortcut helper). Mirrors the
+/// F-key handler: reset list-state highlight, seed it for non-Chat
+/// overlays, and trip the jobs-refresh flag when entering Jobs cold.
+fn open_overlay(state: &mut AppState, tab: ActiveTab) {
+    if tab != state.ui.active_tab {
+        state.ui.tab_list_state = if tab == ActiveTab::Chat {
+            None
+        } else {
+            Some(0)
+        };
+    }
+    state.ui.active_tab = tab;
+    if tab == ActiveTab::Jobs && state.session.cached_jobs_output.is_none() {
+        state.session.jobs_dirty = true;
+    }
+    state.mark_dirty();
+}
+
+/// Command palette key handler (Ctrl+K). When the palette is visible,
+/// intercepts all keys: ↑↓ navigate, Enter activates, Esc closes,
+/// Backspace deletes, Char appends to the query (fuzzy filter).
+/// When the palette is not visible, this returns `None` so the main
+/// handler proceeds — except Ctrl+K itself, which opens it.
+///
+/// Activation dispatches based on `PaletteKind`:
+/// - `Overlay(tab)` → set `active_tab`, seed `tab_list_state`, close palette
+/// - `Slash("/cmd")` → run the slash command via `dispatch_slash_command`,
+///   close palette
+/// - `SearchMode` → enter conversation search mode, close palette
+async fn handle_command_palette_keys(
+    key: KeyEvent,
+    state: &mut AppState,
+    ctx: &HandleInputContext<'_>,
+) -> Option<anyhow::Result<()>> {
+    use crate::tui::widgets::command_palette::{filtered_indices, PaletteKind, ACTIONS};
+
+    // Ctrl+K toggles the palette open/closed from anywhere.
+    if key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        state.ui.command_palette_visible = !state.ui.command_palette_visible;
+        if state.ui.command_palette_visible {
+            state.ui.command_palette_query.clear();
+            state.ui.command_palette_selected = 0;
+        }
+        state.mark_dirty();
+        return Some(Ok(()));
+    }
+
+    if !state.ui.command_palette_visible {
+        return None;
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            state.ui.command_palette_visible = false;
+            state.ui.command_palette_query.clear();
+            state.ui.command_palette_selected = 0;
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Up => {
+            if state.ui.command_palette_selected > 0 {
+                state.ui.command_palette_selected -= 1;
+            }
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Down => {
+            let count = filtered_indices(&state.ui.command_palette_query).len();
+            if count > 0 {
+                state.ui.command_palette_selected =
+                    (state.ui.command_palette_selected + 1).min(count - 1);
+            }
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Backspace => {
+            state.ui.command_palette_query.pop();
+            state.ui.command_palette_selected = 0;
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        KeyCode::Enter => {
+            let indices = filtered_indices(&state.ui.command_palette_query);
+            let kind = indices
+                .get(state.ui.command_palette_selected)
+                .map(|&i| ACTIONS[i].kind);
+            // Close the palette first so the overlay/command renders cleanly.
+            state.ui.command_palette_visible = false;
+            state.ui.command_palette_query.clear();
+            state.ui.command_palette_selected = 0;
+            match kind {
+                Some(PaletteKind::Overlay(tab)) => {
+                    state.ui.active_tab = tab;
+                    state.ui.tab_list_state = if tab == ActiveTab::Chat {
+                        None
+                    } else {
+                        Some(0)
+                    };
+                    if tab == ActiveTab::Jobs && state.session.cached_jobs_output.is_none() {
+                        state.session.jobs_dirty = true;
+                    }
+                    state.mark_dirty();
+                }
+                Some(PaletteKind::Slash(cmd)) => {
+                    let slash_ctx = SlashContext {
+                        cancel_tx: ctx.cancel_tx,
+                        resume_tx: ctx.resume_tx,
+                        compact_tx: ctx.compact_tx,
+                        model_tx: ctx.model_tx,
+                        undo_tx: ctx.undo_tx,
+                        config_tx: ctx.config_tx,
+                        plan_tx: ctx.plan_tx,
+                        persona_tx: ctx.persona_tx,
+                        event_tx: ctx.event_tx,
+                        plugin_reload_tx: ctx.plugin_reload_tx,
+                    };
+                    let _ = dispatch_slash_command(cmd, "", state, &slash_ctx).await;
+                    state.mark_dirty();
+                }
+                Some(PaletteKind::SearchMode) => {
+                    state.search.mode = true;
+                    state.search.query.clear();
+                    state.search.matches.clear();
+                    state.search.match_idx = 0;
+                    state.mark_dirty();
+                }
+                None => {}
+            }
+            Some(Ok(()))
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.ui.command_palette_query.push(c);
+            state.ui.command_palette_selected = 0;
+            state.mark_dirty();
+            Some(Ok(()))
+        }
+        _ => Some(Ok(())),
+    }
+}
+
 pub(crate) async fn handle_input_key(
     key: KeyEvent,
     state: &mut AppState,
@@ -621,17 +761,21 @@ pub(crate) async fn handle_input_key(
     if let Some(result) = handle_search_nav_keys(key, state) {
         return result;
     }
+    if let Some(result) = handle_command_palette_keys(key, state, ctx).await {
+        return result;
+    }
     if key.code != KeyCode::Tab {
         state.conversation.completion_suggestions.clear();
     }
     match key.code {
-        // ── F-key tab switching ───────────────────────────────────
-        // F1–F6 switch between Chat, Models, Plugins, Jobs, Settings, Threads.
-        // Esc returns to Chat from any non-Chat tab.
+        // ── F-key overlay switching (invisible muscle-memory fallback) ──
+        // F1–F6 summon overlays on top of the chat surface. The tab bar is
+        // gone (WO 34.1); F-keys still work but are not shown in the UI.
+        // Esc clears the overlay back to ActiveTab::None (chat-only).
         k if ActiveTab::from_key_code(k).is_some() => {
             let new_tab = ActiveTab::from_key_code(k).unwrap();
-            // Reset list state when switching tabs so the highlight
-            // doesn't carry over from a previous tab.
+            // Reset list state when switching overlays so the highlight
+            // doesn't carry over from a previous overlay.
             if new_tab != state.ui.active_tab {
                 state.ui.tab_list_state = if new_tab == ActiveTab::Chat {
                     None
@@ -862,6 +1006,16 @@ pub(crate) async fn handle_input_key(
                             pick_directory: true,
                         });
                     }
+                    // ── Direct overlay shortcuts (WO 34.1) ──────────────
+                    // Ctrl+M → Models, Ctrl+S → Sessions, Ctrl+J → Jobs,
+                    // Ctrl+, → Settings, Ctrl+P → Plugins. These are the
+                    // visible discoverability layer alongside Ctrl+K. F-keys
+                    // still work as invisible muscle-memory fallback.
+                    'm' => open_overlay(state, ActiveTab::Models),
+                    's' => open_overlay(state, ActiveTab::Threads),
+                    'j' => open_overlay(state, ActiveTab::Jobs),
+                    ',' => open_overlay(state, ActiveTab::Settings),
+                    'p' => open_overlay(state, ActiveTab::Plugins),
                     _ => {}
                 }
             } else {
@@ -1002,8 +1156,9 @@ pub(crate) async fn handle_input_key(
                 char_index_for_line_col(&state.conversation.input, line, line_len);
         }
         KeyCode::Enter => {
-            // On non-Chat tabs, Enter invokes a tab-specific action.
-            if state.ui.active_tab != ActiveTab::Chat {
+            // On an active overlay (not chat-only), Enter invokes an
+            // overlay-specific action.
+            if state.ui.active_tab != ActiveTab::None && state.ui.active_tab != ActiveTab::Chat {
                 handle_tab_enter(state, ctx).await?;
                 return Ok(());
             }
@@ -1206,10 +1361,11 @@ pub(crate) async fn handle_input_key(
             }
         }
         KeyCode::Esc => {
-            // On non-Chat tabs, Esc returns to Chat. Otherwise toggle
-            // the thinking panel (the original behavior).
-            if state.ui.active_tab != ActiveTab::Chat {
-                state.ui.active_tab = ActiveTab::Chat;
+            // Esc clears any active overlay back to chat-only (None).
+            // When already in chat-only mode, toggle the thinking panel
+            // (the original behavior).
+            if state.ui.active_tab != ActiveTab::None {
+                state.ui.active_tab = ActiveTab::None;
                 state.ui.tab_list_state = None;
             } else if !state.generation.thinking_buffer.is_empty() {
                 state.generation.thinking_panel_visible = !state.generation.thinking_panel_visible;
@@ -1223,8 +1379,8 @@ pub(crate) async fn handle_input_key(
             }
         }
         KeyCode::Up => {
-            // On non-Chat tabs with list state, move selection up.
-            if state.ui.active_tab != ActiveTab::Chat {
+            // On an active overlay with list state, move selection up.
+            if state.ui.active_tab != ActiveTab::None && state.ui.active_tab != ActiveTab::Chat {
                 if let Some(idx) = state.ui.tab_list_state {
                     state.ui.tab_list_state = Some(idx.saturating_sub(1));
                     state.mark_dirty();
@@ -1245,8 +1401,8 @@ pub(crate) async fn handle_input_key(
             }
         }
         KeyCode::Down => {
-            // On non-Chat tabs with list state, move selection down.
-            if state.ui.active_tab != ActiveTab::Chat {
+            // On an active overlay with list state, move selection down.
+            if state.ui.active_tab != ActiveTab::None && state.ui.active_tab != ActiveTab::Chat {
                 if let Some(idx) = state.ui.tab_list_state {
                     state.ui.tab_list_state = Some(idx + 1);
                     state.mark_dirty();

@@ -558,27 +558,39 @@ fn slash_menu_shows_alias_quit() {
     h.assert_not_contains("/exit");
 }
 
-/// Every F1–F6 tab must render through the full pipeline without panic.
-/// Catches a tab-panel widget that derefs empty state (e.g. the Threads
-/// daemon picker) and crashes the whole render. Also verifies the active
-/// tab's bar label is highlighted so switching is visibly confirmed.
+/// Every overlay panel must render through the full pipeline without
+/// panic. Catches an overlay widget that derefs empty state (e.g. the
+/// Threads daemon picker) and crashes the whole render. WO 34.1 removed
+/// the tab bar, so we assert the overlay's own header text is present
+/// instead of a tab-bar label.
 #[test]
 fn tab_panels_render_without_panic() {
-    for tab in ActiveTab::ALL {
+    for tab in ActiveTab::OVERLAYS {
         let mut h = TuiTestHarness::new().connected("qwen2.5");
         h.state.ui.active_tab = tab;
         // Must not panic — that's the contract under test.
         let rendered = h.render();
-        assert!(
-            rendered.contains(tab.label()),
-            "tab bar should show its label {:?}",
-            tab.label()
-        );
+        // Chat overlay (F1) shows the welcome screen or chat; the other
+        // overlays show their own header. Chat's label is "Chat" and the
+        // header line always contains "kf-code", so check for either the
+        // overlay label or the app name.
+        if tab == ActiveTab::Chat {
+            assert!(
+                rendered.contains("kf-code"),
+                "chat overlay should show the app header"
+            );
+        } else {
+            assert!(
+                rendered.contains(tab.label()),
+                "overlay should show its label {}",
+                tab.label()
+            );
+        }
     }
 }
 
-/// Switching away from Chat and back preserves the chat scroll offset
-/// (it lives on AppState, not a per-tab local). Seeds a tall
+/// Switching away from chat-only and back preserves the chat scroll offset
+/// (it lives on AppState, not a per-overlay local). Seeds a tall
 /// conversation, scrolls up off the bottom, flips to Jobs and back,
 /// and checks the offset survived.
 #[test]
@@ -596,15 +608,15 @@ fn tab_switch_preserves_chat_scroll() {
     h.state.conversation.auto_scroll = false;
     h.state.conversation.scroll_offset = 0;
 
-    // Flip to Jobs and back to Chat.
+    // Flip to Jobs and back to chat-only.
     h.state.ui.active_tab = ActiveTab::Jobs;
     h.render();
-    h.state.ui.active_tab = ActiveTab::Chat;
+    h.state.ui.active_tab = ActiveTab::None;
     h.render();
 
     assert_eq!(
         h.state.conversation.scroll_offset, 0,
-        "scroll offset must survive a tab round-trip"
+        "scroll offset must survive an overlay round-trip"
     );
 }
 

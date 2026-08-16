@@ -250,10 +250,60 @@ pub fn render_jobs(f: &mut Frame, area: Rect, state: &AppState) {
     render_interactive(f, area, lines, state);
 }
 
+// ── Settings: semantic-label helpers (WO 34.4) ─────────────────────────
+//
+// Pure functions mapping config-struct values to human-readable labels.
+// Kept module-private: only `render_settings` and the Enter-handler's
+// `settings_keys_and_values` (keys/mod.rs) consume them. The two call
+// sites must agree on the row order, so the helpers are the single
+// source of truth for the wording.
+
+/// Human label for the command-approval posture. `auto_approve` is the
+/// primary gate; `bang_requires_approval` narrows it for `!` commands.
+fn approval_label(auto_approve: bool, bang_requires_approval: bool) -> &'static str {
+    match (auto_approve, bang_requires_approval) {
+        (true, false) => "Auto-approve safe commands",
+        (true, true) => "Auto-approve (bang still asks)",
+        (false, _) => "Always ask",
+    }
+}
+
+/// Human label for the sandbox posture. `Some(path)` → "Project root";
+/// `None` → "None".
+fn sandbox_label(sandbox_dir: Option<&str>) -> &'static str {
+    if sandbox_dir.is_some() {
+        "Project root"
+    } else {
+        "None"
+    }
+}
+
+/// Human label for hidden-file access. `block_dotfiles` is the config
+/// field; `true` means dotfiles are blocked.
+fn dotfiles_label(block_dotfiles: bool) -> &'static str {
+    if block_dotfiles {
+        "Blocked"
+    } else {
+        "Allowed"
+    }
+}
+
+/// Human label for a boolean tool flag. Reused for dry_run and
+/// follow_symlinks so the wording stays consistent.
+fn bool_label(on: bool) -> &'static str {
+    if on {
+        "On"
+    } else {
+        "Off"
+    }
+}
+
 /// Render the Settings tab (F5).
 ///
-/// Shows key configuration values from the loaded config. Interactive:
-/// ↑/↓ selects rows, Enter/Space on the /reload hint invokes it.
+/// Groups settings semantically (MODEL / SAFETY / TOOLS) with
+/// human-readable values, then a collapsed "Raw config" section at the
+/// bottom for developers. Display only — no edit capability (WO 34.4).
+/// Interactive: ↑/↓ selects rows, Enter reports the selected value.
 pub fn render_settings(f: &mut Frame, area: Rect, state: &AppState) {
     let mut lines = Vec::new();
 
@@ -267,92 +317,88 @@ pub fn render_settings(f: &mut Frame, area: Rect, state: &AppState) {
 
     let config = crate::shared::read_shared_config(&state.services.config);
 
-    // Model settings
+    // ── MODEL ──────────────────────────────────────────────────────
     lines.push(Line::from(Span::styled(
-        " Model",
+        " MODEL",
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(format!(
-        "   default_model:       {}",
+        "   Default model:     {}",
         config.model.default_model
     )));
     lines.push(Line::from(format!(
-        "   ollama_host:         {}",
-        config.model.ollama_host
-    )));
-    lines.push(Line::from(format!(
-        "   anthropic_provider:  {}",
+        "   Provider:          {}",
         config.model.anthropic_provider
     )));
-    lines.push(Line::from(format!(
-        "   cache_enabled:       {}",
-        config.model.cache_enabled
-    )));
+    // Context window comes from the connected model_info, not the config
+    // (the config has no per-model context field). Fall back to "—".
+    let context = state
+        .provider
+        .model_info
+        .as_ref()
+        .map(|m| crate::tui::rendering::format_token_count(m.max_context_tokens))
+        .unwrap_or_else(|| "—".to_string());
+    lines.push(Line::from(format!("   Context window:    {context}")));
     lines.push(Line::from(""));
 
-    // Security settings
+    // ── SAFETY ─────────────────────────────────────────────────────
     lines.push(Line::from(Span::styled(
-        " Security",
+        " SAFETY",
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(format!(
-        "   auto_approve:         {}",
-        config.security.auto_approve
+        "   Command approval:  {}",
+        approval_label(
+            config.security.auto_approve,
+            config.security.bang_requires_approval,
+        )
     )));
     lines.push(Line::from(format!(
-        "   sandbox_dir:          {}",
-        config.security.sandbox_dir.as_deref().unwrap_or("(none)")
+        "   Sandbox:           {}",
+        sandbox_label(config.security.sandbox_dir.as_deref())
     )));
     lines.push(Line::from(format!(
-        "   block_dotfiles:       {}",
-        config.security.block_dotfiles
-    )));
-    lines.push(Line::from(format!(
-        "   bang_requires_approval: {}",
-        config.security.bang_requires_approval
+        "   Hidden files:      {}",
+        dotfiles_label(config.security.block_dotfiles)
     )));
     lines.push(Line::from(""));
 
-    // Tool settings
+    // ── TOOLS ──────────────────────────────────────────────────────
     lines.push(Line::from(Span::styled(
-        " Tools",
+        " TOOLS",
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(format!(
-        "   dry_run:              {}",
-        config.tools.dry_run
+        "   Dry run:           {}",
+        bool_label(config.tools.dry_run)
     )));
     lines.push(Line::from(format!(
-        "   follow_symlinks:      {}",
-        config.tools.follow_symlinks
-    )));
-    lines.push(Line::from(format!(
-        "   max_tool_calls_per_turn: {}",
-        config.tools.max_tool_calls_per_turn
+        "   Follow symlinks:   {}",
+        bool_label(config.tools.follow_symlinks)
     )));
     lines.push(Line::from(""));
 
-    // Session settings
+    // ── Raw config (collapsed, for developers) ─────────────────────
+    // The original field-name: value pairs, dimmed. Kept in the same
+    // order as the old dump so anyone grepping a render dump still finds
+    // the field they expect.
     lines.push(Line::from(Span::styled(
-        " Session",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
+        " Raw config",
+        Style::default().fg(Color::DarkGray),
     )));
-    lines.push(Line::from(format!(
-        "   carryover_enabled:    {}",
-        config.session.carryover_enabled
-    )));
-    lines.push(Line::from(format!(
-        "   worktree_enabled:     {}",
-        config.session.worktree_enabled
-    )));
+    let raw = raw_config_lines(&config);
+    for l in &raw {
+        lines.push(Line::from(Span::styled(
+            format!("   {l}"),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -361,6 +407,38 @@ pub fn render_settings(f: &mut Frame, area: Rect, state: &AppState) {
     )));
 
     render_interactive(f, area, lines, state);
+}
+
+/// Build the raw `field: value` lines for the collapsed Settings section
+/// and for the Enter-handler's `settings_keys_and_values` lookup. The
+/// order MUST match `render_settings`'s interactive rows so Enter maps
+/// the selected visual row to the right underlying value.
+fn raw_config_lines(config: &crate::shared::Config) -> Vec<String> {
+    let mut lines = Vec::new();
+    // MODEL group (3 semantic rows above)
+    lines.push(format!("default_model: {}", config.model.default_model));
+    lines.push(format!(
+        "anthropic_provider: {}",
+        config.model.anthropic_provider
+    ));
+    lines.push(format!("cache_enabled: {}", config.model.cache_enabled));
+    // SAFETY group (3 semantic rows above)
+    lines.push(format!(
+        "auto_approve: {} (bang: {})",
+        config.security.auto_approve, config.security.bang_requires_approval
+    ));
+    lines.push(format!(
+        "sandbox_dir: {}",
+        config.security.sandbox_dir.as_deref().unwrap_or("(none)")
+    ));
+    lines.push(format!(
+        "block_dotfiles: {}",
+        config.security.block_dotfiles
+    ));
+    // TOOLS group (2 semantic rows above)
+    lines.push(format!("dry_run: {}", config.tools.dry_run));
+    lines.push(format!("follow_symlinks: {}", config.tools.follow_symlinks));
+    lines
 }
 
 /// Render the Threads tab (F6).

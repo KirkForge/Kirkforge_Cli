@@ -10,6 +10,36 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+## Session 2026-08-16 — WO 34.4 Settings semantic controls (worktree `.worktrees/wo34-c`, branch `wo/34-c`)
+
+### What changed this session
+- **WO 34.4: Settings tab (F5) rewritten from config-struct dump to
+  semantic controls.** `render_settings` (`src/tui/widgets/tabs.rs`)
+  now groups settings into MODEL (Default model, Provider, Context
+  window), SAFETY (Command approval, Sandbox, Hidden files), and TOOLS
+  (Dry run, Follow symlinks) with human-readable values. A collapsed
+  "Raw config" section at the bottom keeps the original
+  `field: value` lines for developers. Display only — no edit capability
+  (the WO explicitly defers edit). The Enter-handler's row lookup
+  (`settings_row_values` in `keys/mod.rs`) was rewritten to map the
+  selected visual row directly via a parallel list mirroring the render
+  order, replacing the old `saturating_sub(2)` offset math that assumed
+  a fixed 2-line header. Pure label helpers (`approval_label`,
+  `sandbox_label`, `dotfiles_label`, `bool_label`) are the single
+  source of truth for the wording; the keys handler keeps local copies
+  to avoid a cross-module dependency.
+
+### Gate (HEAD on `wo/34-c`, WO 34.4 commit)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 518 passed, 2816 skipped
+
+### Pending
+- WO 34.5 (Models chooser) + WO 34.6 (Jobs structured monitor) — next
+  in the same worktree.
+
+---
+
 ## Session 2026-08-16 — Extract `build_docker_args` pure fn (worktree `.worktrees/wo-docker-args`, branch `wo/docker-args-pure`)
 
 ### What changed this session

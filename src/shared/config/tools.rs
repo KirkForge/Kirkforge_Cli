@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::shared::{LspServerEntry, McpServerConfig};
 
 fn default_max_tool_calls_per_turn() -> usize {
-    100
+    200
 }
 
 fn default_max_persona_turns() -> usize {
@@ -13,7 +13,7 @@ fn default_max_persona_turns() -> usize {
 }
 
 fn default_max_continuation_rounds() -> usize {
-    5
+    20
 }
 
 fn default_tool_timeout_secs() -> Option<u64> {
@@ -240,8 +240,8 @@ mod tests {
             cfg.plugin_signature_validation,
             "R7: signature validation default-on"
         );
-        assert_eq!(cfg.max_continuation_rounds, 5);
-        assert_eq!(cfg.max_tool_calls_per_turn, 100);
+        assert_eq!(cfg.max_continuation_rounds, 20);
+        assert_eq!(cfg.max_tool_calls_per_turn, 200);
         assert_eq!(cfg.doom_loop_max_hits, 1);
         assert_eq!(cfg.doom_loop_action, "auto_plan");
         assert!(

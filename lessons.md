@@ -1,186 +1,71 @@
-# WO 32 lessons
+# Lessons — WO 34.2 + 34.3 session (2026-08-16)
+
+Worktree `.worktrees/wo34-b`, branch `wo/34-b`.
 
 ## What I learned about this codebase
-- `std::fs::FileTimes::set_modified` (stable since Rust 1.75) is the clean way
-  to force a distinct mtime in tests without `filetime` dep or wall-clock
-  sleeps. The toolchain is 1.88, so it's available.
-- The hooks test module had 3 near-identical marker-poll loops (300×50ms).
-  Extracting `poll_for_marker` DRY'd them and made the bounded-budget intent
-  explicit (15s cap with panic-on-timeout instead of silent assertion flake).
-- `BlockingSpawner` in task.rs had a `finish: Arc<AtomicBool>` flag that NO
-  test ever sets — the `while !finish { sleep(10ms) }` was a busy-wait for
-  nothing. `std::future::pending()` parks cheaply; the flag is kept for
-  struct-construction parity.
-- The daemon `wait_for_socket` polls were already bounded (50×20ms=1s); I
-  tightened to 5ms interval with the same 1s cap. Marginal but consistent.
-- The caching forwarder tests needed care: the 50ms sleeps were "prove a
-  negative" (cache stays empty). Replaced with `yield_now()` loops (8×) to
-  let the forwarder task observe the closed receiver and abort. The forwarder
-  only caches complete streams (Done event present), so a truncated stream
-  never writes to cache regardless.
-- `caching_adapter_aborts_forwarder_on_consumer_drop` uses a `CountingAdapter`
-  with 5ms pacing sleeps inside the mock — those are emission rhythm, NOT
-  test-sync sleeps. Left them; they're what makes the abort observable.
 
-## What I tried that didn't work / pitfalls
-- Initially tried to replace the hooks `test_run_hook_timeout_kills_descendants`
-  2s sleep with a 6s bounded poll (to properly prove the descendant never
-  touches the marker past the 5s hook timeout). Realized this ADDS wall-clock
-  (6s > 2s) and the original test was already weak (2s < 5s timeout). Reverted
-  to keeping the 2s sleep as a genuine production-timeout wait — documented
-  why. The task says "keep genuine timeout tests as-is."
-- `rustfmt <file>` standalone fails without `--edition` — use `cargo fmt` or
-  edit manually.
-- The worktree had pre-existing uncommitted changes from prior WO 32 work
-  (jwt.rs, executor/mod.rs, turn.rs, task_spawner.rs) and a pre-existing
-  fmt issue in config/mod.rs:160 (committed in 15dd08a). None are mine.
+- **`ModelInfo` has a `supports_cache: bool` field** (added for the
+  prompt-cache work). Test helpers that build a `ModelInfo` literal must
+  include it or the struct literal won't compile. The existing
+  `selftest.rs` helper had it; my first `status.rs` test helper missed it.
+  Always grep for an existing `ModelInfo { ... }` literal before writing a
+  new one.
+- **`UiState` is the right home for overlay visibility flags.** The WO
+  suggested `state.ui.help_overlay_visible` and that's where the existing
+  `slash_menu`, `file_completer`, `theme`, `paste_flash`, `last_input_rect`
+  fields live. Adding two bool/usize fields there is the smallest diff —
+  no new sub-struct needed.
+- **The key-handler stack order matters.** `handle_input_key` already had
+  a "top of stack" pattern: `handle_doom_loop_keys` runs first and returns
+  `Some(result)` if it consumed the key. The help-overlay handler follows
+  the same shape — runs before slash-menu/file-completer/search handlers
+  so the overlay has exclusive focus. Placing it after doom (doom stays
+  top priority) and before everything else is the right order.
+- **`help_text()` is `pub(crate)`** in `src/tui/keys/slash_commands.rs`.
+  The overlay widget (`src/tui/widgets/help_overlay.rs`) reaches it via
+  `crate::tui::keys::slash_commands::help_text`. No visibility change
+  needed — same crate.
+- **`budget_pct` (in `rendering/format.rs`) is the shared pure helper**
+  for context-pressure percentage. It returns `Option<u8>` (None when
+  max==0). The new status bar reuses it instead of re-computing. The
+  threshold colours (green/yellow/red) live in the `Theme`, but the WO
+  spec's thresholds (<50/50-80/>80) match `pressure_color` exactly — I
+  used plain `Color::Green/Yellow/Red` to keep the status bar
+  theme-independent for the pressure indicator (the WO named the colours
+  literally, not the theme fields).
+- **`format_budget_indicator` is now only used by its own tests** (the
+  status bar no longer calls it). It's still public + tested, so no dead
+  code. If a future WO removes those tests, the helper should be deleted
+  too.
+- **selftest.rs `budget_indicator_update` asserts on the rendered status
+  bar output.** Any change to the status bar format must update that test.
+  The assertion was `(32%)` (old `↑used/max (P%)` format); now it's
+  `42.0K tokens` (new `tokens` display below 50%).
 
-## What I'd do differently
-- The `tui/commands` `#[ignore]`d cancel-running-job test (100ms sleep) was
-  left as-is — it's a known-flaky subprocess test, not in the default gate,
-  and modifying it risks the flake the ignore was added to prevent. Noted as
-  deferred.
-- The SSE mock helper sleep (http.rs:1054) was shortened 100ms→20ms but not
-  fully eliminated — it's a cross-library read race (Windows), not a test-
-  sync sleep. A oneshot wired through the mock would be fully deterministic
-  but doubles helper surface for a Windows-only race.
+## What I tried that didn't work
 
-## Sleeps removed (count)
-- edge_cases.rs: 1s thread::sleep → FileTimes::set_modified (−1s)
-- turn.rs: 50ms×40 poll → bounded 10ms poll (−~2s worst case, −~80ms typical)
-- hooks.rs: 2× 50ms×300 poll → poll_for_marker helper (same budget, faster
-  common case, panic-on-timeout); 100ms sleep → yield_now (−100ms)
-- task.rs: 10ms busy-wait loop → pending() (−all); 50ms sleep → Notify
-  (−50ms); 3× 20ms×50 poll → poll_until helper (−~1s worst case each)
-- tui/commands: 3× 50ms×40 poll → wait_for_job_done helper (−~2s each)
-- daemon client/server: 20ms×50 → 5ms×200 (same 1s cap, finer granularity)
-- caching: 2× 50ms sleep → 8× yield_now (−100ms); 60ms sleep → stability
-  poll (−60ms typical)
-- mcp_client mod.rs: 50ms sleep → yield_now (−50ms)
-- mcp_client http.rs: 100ms → 20ms (−80ms, Windows race, kept)
+- **First `help_overlay_renders_title_and_body` test asserted on row 0.**
+  The overlay is centered at 80%×80%, so on a 24-row terminal the title
+  border is at row 2, not row 0. Fixed by scanning all rows.
+- **First attempt checked `row.contains("Help")`.** The title text
+  (`Help — Esc to close, ↑/↓ to scroll`) is long; on an 80-col terminal
+  with an 80%-width box (64 cols) the title may be truncated or the
+  `↑/↓` glyphs render as multiple cells. Relaxed to also accept the
+  border glyph `─` as proof the box rendered. Both the title and the
+  help text body (`Built-in commands` / `/help`) are checked, so the
+  test still proves the overlay rendered with content.
 
-## Deferred (disclosed)
-- `tui/commands/mod.rs:376` (handle_jobs_command_cancel_running_job_succeeds):
-  100ms sleep left as-is. Test is `#[ignore]`d as "timing-sensitive job-cancel
-  race" — a known-flaky subprocess cancel test, not in the default gate.
-  Replacing the sleep with a poll-for-Running risks the flake the ignore was
-  added to prevent. Remaining: replace with `wait_for_job_done`-style poll
-  for JobStatus::Running; tracked in this workplan.
-- `session/hooks.rs:966` (test_run_hook_timeout_kills_descendants): 2s sleep
-  kept. This is a genuine production-timeout wait (the test waits for the
-  hook's 5s execution timeout to fire and kill the pgrp). Replacing with a
-  6s bounded poll would ADD wall-clock. The task scope says "keep genuine
-  timeout tests as-is." Remaining: could shorten by making the hook timeout
-  configurable via env var (scope creep, not done); tracked in this workplan.
-- `session/mcp_client/http.rs:1054`: 20ms sleep kept (shortened from 100ms).
-  Cross-library read race on Windows — not a test-sync sleep. A oneshot
-  wired through the mock would be fully deterministic but doubles helper
-  surface. Remaining: wire oneshot; tracked in this workplan.
-## WO 33.14 phase 3 — verifier CommandRunner (session 2026-08-15, worktree wo-fakes)
+## What I'd do differently next time
 
-### What I learned
-- **`tokio::task::spawn_blocking` requires `'static`** on captured `&dyn Trait`.
-  I first wrapped the `CommandRunner::run` call in `spawn_blocking` to keep
-  the sync `SystemCommandRunner` off the async worker pool; the borrow
-  checker rejected it (`runner` escapes the closure, `'1` must outlive
-  `'static`). Fix: call `runner.run` directly in the async fn. The prior
-  code blocked the worker on `tokio::process::Command::output().await` too,
-  so this is no worse. A `spawn_blocking` wrap would need an
-  `Arc<dyn CommandRunner + Send + Sync>` — not worth the indirection for a
-  post-edit verifier that runs outside the hot path. Documented as a
-  `ponytail:` ceiling with the upgrade path.
-- **The verifier subsystem was already half-faked.** The pure parse helpers
-  (`parse_build_json`, `parse_clippy_json`, `module_path_prefix`) were
-  already unit-tested in-process; only the orchestration path
-  (event → cargo_root → spawn → parse → Verdict) was `#[ignore]`d. The
-  `CommandRunner` trait closes that gap — the orchestration is now
-  unit-testable with a fake. Lesson: read the existing test coverage before
-  assuming a full fake framework is needed.
-- **WO 33.14's prior `#[ignore]` approach for items 4/5 was the pragmatic
-  minimal.** The `BashJobRegistry::spawn` blast radius is CRITICAL (96
-  callers, 18 modules). Faking it = the "full fake process framework" the
-  workorder explicitly scoped out. The cap bookkeeping is pure HashMap
-  logic already tested without subprocess. The 64-process test is a stress
-  test, not a correctness test — `#[ignore]` is the right call there.
-- **`rustfmt.rs` was in the grep hit list for `Command::new` but out of
-  scope.** It spawns `rustfmt` (not `cargo`), has no `#[ignore]`d happy-path
-  test, and its tests all skip before reaching the subprocess. The task
-  scope is Cargo/Clippy. Leaving it untouched is correct, not lazy.
-
-### What I'd do differently
-- Considered making `CommandRunner::run` `async` for object-safety with the
-  spawn_blocking wrap. Rejected: `async fn` in traits needs `async-trait`
-  (a dep the repo avoids) and the sync `run` + direct call is simpler and
-  matches the prior blocking behavior. The trait is object-safe as written.
-
-## WO 32.5 — parallel orchestration (session 2026-08-15, worktree wo32d)
-
-### What I learned
-- `TaskHandle` has private fields (`started`, `cancel_requested`,
-  `cancel_signal`) — can't construct it with a struct literal from outside
-  `tools::task`. Use `TaskHandle::default()` + `TaskManager::get_mut` to set
-  metadata after insert. Added `get_mut` for this (LOW risk, 0 impacted).
-- `InProcessTaskSpawner::run_task` is a trait method (`TaskSpawner`), not an
-  inherent method — must `use crate::tools::task::TaskSpawner;` to call it.
-  LSP didn't flag this; cargo check did.
-- `build_task_prompt` in `task_spawner.rs` was private; made it `pub(crate)`
-  so the orchestrator's fallback role-prompt builder can delegate to it.
-- The worktree's `target/debug/.cargo-lock` got held by orphaned `cargo`
-  processes from timed-out build commands. `fuser` identified the PIDs; `kill`
-  + `rm -f .cargo-lock` unblocked. Watch for this when builds time out.
-- LSP diagnostics from other worktrees (wo32, wo32b, wo32c) bled into this
-  worktree — exactly the AGENTS.md warning. Only trusted `cargo check`.
-- An edit to `src/session/mod.rs` (adding `pub mod parallel_orchestrator;`)
-  was silently reverted — likely the stale rust-analyzer LSP revert issue.
-  Re-applied and verified with `grep`. Always verify edits took.
-
-### What I'd do differently
-- The `--parallel` flag parsing uses `strip_suffix("--parallel")` which is
-  fragile (requires the flag at the very end, no spaces between name and
-  flag if the name itself ends with "parallel"). A proper arg parser would
-  be cleaner, but the workorder asked for minimal — this works for the
-  documented `/workflow run <name> --parallel` form.
-
-## Phase 1 sleep elimination (session 2026-08-15, worktree wo-sleeps)
-
-### What I learned
-- A prior WO 32 session already eliminated most Phase 1 targets
-  (edge_cases, caching, turn, hooks, task, tui/commands, daemon,
-  mcp_client, loop_ yield_now). The `lessons.md` "Sleeps removed" section
-  + the `poll_for_marker`/`poll_until`/`yield_now` helpers already in the
-  code were the evidence. ALWAYS check `lessons.md` + grep for existing
-  helpers before re-doing work a prior session shipped.
-- `BashJobRegistry` has no completion-notification channel — the watcher
-  updates job status in-place. The deterministic wait pattern is a status
-  poll (`get(id).status` until terminal), not a channel. The
-  `wait_for_job_done` helper I added follows the existing `poll_until`
-  pattern from task.rs.
-- `tokio::process::Child::wait()` is idempotent — once reaped, calling
-  `wait()` again returns the cached `ExitStatus`. So `reap_child` on an
-  already-exited child is a no-op, not an error. This means
-  `reap_child` can *be* the wait (no need to sleep-then-reap).
-- `run_shell_with_token`'s `select!` arms the cancellation token branch
-  immediately on spawn. A `yield_now()` before `token.cancel()` is enough
-  to let the spawned task reach the `select!` — no wall-clock sleep needed.
-  The token works whether or not the child process has started exec.
-- The e2e tests are feature-gated (`#[cfg_attr(not(feature = "e2e-tests"),
-  ignore)]`) and NOT in the default gate, but the task explicitly listed
-  them. Fixed them anyway (readiness probes, 25ms poll). They only run
-  with `--features e2e-tests` + tmux + display.
-- Machine was heavily contended (load avg 21-28) from parallel worktree
-  builds (wo-envmut, wo-profs, wo-fakes) + a nextest run. `cargo check`
-  took 8min, clippy 9min. Killed a stale cargo process holding the
-  package-cache lock to unblock. Budget time for contention.
-
-### What I tried that didn't work
-- Initially replaced the process_group 50ms sleep with
-  `child.wait().await` *before* `reap_child` — shifted the test semantics
-  (testing reap_child on already-reaped child, not live child). Reverted
-  to letting `reap_child` do the wait directly — that's its job, and the
-  1s timeout is the ceiling for `true` which exits in <1ms.
-
-### What I'd do differently
-- Should have checked `lessons.md` FIRST before reading the target files —
-  spent 10 min reading edge_cases/caching/bash_jobs before realizing WO 32
-  had already done most of the work. The lessons file would have told me
-  immediately which sleeps were already killed.
+- **Run `cargo fmt` before the first test run**, not after. The first
+  `cargo fmt --check` after WO 34.2 flagged a trailing-newline diff in
+  `help_overlay.rs` that I then had to fold into the WO 34.3 commit.
+  Trivial, but it muddied the per-WO commit boundary.
+- **Check `selftest.rs` for status-bar-format assertions before starting
+  a status-bar rewrite.** I found `budget_indicator_update` only after
+  the compile failed on the test. A grep for `render_status` / `(32%)` /
+  `↑` across `src/tui/` before editing would have surfaced it up front.
+- **The `supports_cache` field on `ModelInfo`** bit me once. There's a
+  lesson in AGENTS.md about updating all `Config` literal sites when
+  adding a field; the same applies to `ModelInfo`. Could fold into
+  AGENTS.md §7 if it recurs.

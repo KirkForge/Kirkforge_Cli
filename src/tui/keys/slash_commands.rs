@@ -301,7 +301,7 @@ pub(crate) fn help_text(skill_registry: &SkillRegistry) -> String {
          \n  Ctrl+U   Clear input line\n\
          \n  Esc      Toggle thinking panel (or cancel search if Ctrl+F is active; same as /thinking)\n\
          \nStatus bar:\n\
-         \n  The bottom bar shows session model, time, cumulative cost, and a colour-coded budget indicator. Green (< 50%) = comfortable, yellow (50–80%) = consider /compact, red (> 80%) = compact now. The same data is available on demand via /status.\n",
+          \n  The bottom bar shows the model, context pressure (colour-coded: green < 50% = comfortable, yellow 50–80% = consider /compact, red > 80% = compact now), cumulative cost, and the current state (Ready / Generating…). The full breakdown (tokens sent/received, elapsed, skill count, plugin tiers) is available on demand via /status.\n",
     );
     let skills = skill_registry.all();
     if !skills.is_empty() {
@@ -362,13 +362,13 @@ pub(crate) async fn dispatch_slash_command(
             Ok(true)
         }
         "/help" | "/h" | "/?" => {
-            state
-                .conversation
-                .messages
-                .push_back(ConversationEntry::new(
-                    "system",
-                    help_text(&state.services.skill_registry),
-                ));
+            // WO 34.2: open the help overlay instead of pushing help text
+            // into the conversation. The overlay renders `help_text()`
+            // output on top of the chat; Esc closes, ↑/↓ scrolls. This
+            // keeps the conversation + session log free of help docs.
+            state.ui.help_overlay_visible = true;
+            state.ui.help_overlay_scroll = 0;
+            state.mark_dirty();
             Ok(true)
         }
         "/fork" => {

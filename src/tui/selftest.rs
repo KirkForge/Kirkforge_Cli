@@ -374,9 +374,13 @@ fn approval_prompt_display() {
 
 /// Budget indicator update: a `CostStats` event sets
 /// `last_turn_prompt_tokens`; with a connected model_info carrying a
-/// non-zero `max_context_tokens`, the status bar renders the
-/// `↑used/max (P%)` pressure indicator. Catches the regression where
-/// CostStats accumulated into the wrong field.
+/// non-zero `max_context_tokens`, the status bar renders the context
+/// indicator. Catches the regression where CostStats accumulated into
+/// the wrong field.
+///
+/// WO 34.3: the status bar now shows `NN% context` only when pressure
+/// is >= 50%; below 50% it shows the token count. 42k/128k = 32%, so
+/// the bar shows `42.0K tokens`.
 #[test]
 fn budget_indicator_update() {
     use crate::shared::{ModelInfo, ToolCallStyle};
@@ -398,11 +402,10 @@ fn budget_indicator_update() {
     });
 
     let rendered = h.render();
-    // format_budget_indicator(42000, 128000) → "42.0K/128.0K (32%)".
-    // Status bar wraps it as "↑42.0K/128.0K (32%)".
+    // WO 34.3: 42k/128k = 32% (comfortable, <50%) → shows token count.
     assert!(
-        rendered.contains("(32%)"),
-        "budget percentage missing from status bar (got no '(32%)' in render)"
+        rendered.contains("42.0K tokens"),
+        "token count missing from status bar (got no '42.0K tokens' in render): {rendered}"
     );
     assert_eq!(h.state.budget.last_turn_prompt_tokens, 42_000);
 }

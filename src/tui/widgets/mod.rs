@@ -2,6 +2,7 @@ pub mod chat;
 pub mod command_palette;
 pub mod doom_banner;
 pub mod file_completer;
+pub mod help_overlay;
 pub mod input;
 pub mod slash_menu;
 pub mod status;

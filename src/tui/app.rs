@@ -541,6 +541,14 @@ pub struct UiState {
     pub command_palette_query: String,
     /// Highlighted row in the command palette's filtered list.
     pub command_palette_selected: usize,
+    /// `/help` overlay visibility (WO 34.2). When true, `render_app` draws
+    /// `help_overlay` on top of the chat. The `/help` slash command sets
+    /// this instead of pushing help text into the conversation; Esc clears
+    /// it. Keeps the conversation + session log free of help text.
+    pub help_overlay_visible: bool,
+    /// Scroll offset (in lines) of the help overlay. ↑/↓ adjust; Esc
+    /// resets to 0 when the overlay closes.
+    pub help_overlay_scroll: usize,
 }
 
 impl Default for UiState {
@@ -558,6 +566,8 @@ impl Default for UiState {
             command_palette_visible: false,
             command_palette_query: String::new(),
             command_palette_selected: 0,
+            help_overlay_visible: false,
+            help_overlay_scroll: 0,
         }
     }
 }

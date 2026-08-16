@@ -10,6 +10,49 @@
 
 **Current: `0.3.9`** (Cargo.toml + Cargo.lock; bumped from `3.8.0` in commit `1f1cea9`). The `3.8.0` jump (commit `6e2e0d4`) was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for subsequent minors (only the last digit moves). Next target after `0.3.9`: `0.3.10` (do not bump `Cargo.toml` until the release cut).
 
+## Session 2026-08-16 — WO 32.16: Windows daemon stub test (worktree `.worktrees/wo-daemon-stub`, branch `wo/fix-daemon-stub`)
+
+### What changed this session
+
+- **WO 32.16 closed as already-done.** The workorder asked for a
+  `#[cfg(not(unix))]` test locking down the Windows stub fallbacks
+  (`try_touch`, `try_list_recent`) in `src/daemon/client.rs`. The test
+  already exists: the `windows_stub_tests` module at the foot of
+  `src/daemon/client.rs` (commit `5bba9f4`, "test(32c): pin Windows
+  daemon-client stub contract") asserts `try_touch` is a no-op and
+  `try_list_recent` / `try_resolve_recent` / `try_resolve_id` return
+  `Ok(None)`. The test shipped under the "32c" label before the 32.16
+  workorder was written to track the coverage gap — code landed, WO
+  status line was the only stale piece. AGENTS.md §7 (stale-item
+  grep-first) caught this before any duplicate test was written.
+- **No code changed.** Only docs: flipped `docs/workorders/32.16-windows-stub-test.md`
+  to `Status: Done` with a verification note, and added a CHANGELOG line.
+
+### Verification (gates run in the worktree)
+
+- `cargo check -p kf-code --lib --tests --target x86_64-pc-windows-gnu`
+  → `Finished dev profile [unoptimized + debuginfo] target(s) in 9m 11s`
+  (the `#[cfg(not(unix))]` test module compiles for the Windows target).
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`
+  → `Finished dev profile [unoptimized + debuginfo] target(s) in 8m 10s`
+  (clean on Linux; the `not(unix)` tests are excluded, which is correct).
+- `cargo fmt --check` → clean.
+- `cargo nextest run -p kf-code --lib daemon::`
+  → run ID `347ad2a6-ac49-41a5-bb2d-66b7f4e003a1`, `20 tests run: 20
+  passed, 3352 skipped` (the `windows_stub_tests` module is among the
+  skipped on Linux — it is exercised by the Windows CI job).
+
+### Notes
+
+- The `server.rs` Windows stubs (`#[cfg(not(unix))]` `DaemonState::new`
+  and `daemonize`) are not exercised by a Windows test, but they were
+  not in WO 32.16's scope (the WO names only `client.rs`'s
+  `try_touch` / `try_list_recent`). `daemonize` bails with a clear
+  "only supported on Unix" message; `DaemonState::new` shares the auth
+  path with the unix impl and is covered by the unix `tests::check_auth_*`
+  tests in `src/daemon/mod.rs`. Adding Windows `server.rs` stub tests
+  would be a separate WO.
+
 ## Session 2026-08-16 — WO 34.1: kill tab bar + command palette (worktree `.worktrees/wo34-a`, branch `wo/34-a`)
 
 ### What changed this session

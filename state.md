@@ -4,11 +4,11 @@
 
 ## Branch
 
-**`dev`** at latest merge. WO 21 + WO 22 + WO 23 + WO 24 + WO 25 + WO 26 + WO 27 + WO 28 + WO 29 series merged. `main` lags at `d848b37` (pending ff). See commit log for details.
+**`dev`** at latest merge. WO 21 + 22 + 23 + 24 + 25 + 26 + 27 + 28 + 29 + 30 + 31 + 32 + 33 series merged. WO 34 (TUI IA reset) planned — 11 workorders created, no implementation shipped yet. `main` lags at `d848b37` (pending ff). See commit log for details.
 
 ## Version
 
-**Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
+**Current: `0.3.9`** (Cargo.toml + Cargo.lock; bumped from `3.8.0` in commit `1f1cea9`). The `3.8.0` jump (commit `6e2e0d4`) was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for subsequent minors (only the last digit moves). Next target after `0.3.9`: `0.3.10` (do not bump `Cargo.toml` until the release cut).
 
 ## Session 2026-08-16 — Extract `build_docker_args` pure fn (worktree `.worktrees/wo-docker-args`, branch `wo/docker-args-pure`)
 
@@ -937,22 +937,23 @@ Knocked down the MEDIUM findings from the deep review (worktree `.worktrees/wo28
 | 26.9 | DONE (partial) | R1: top-10 slowest tests fixed/skipped; R3+R4: testdoctor parallel scan + caching |
 | 26.10 | NOT STARTED | provider hardening (mocks, Plugin3 shim, landlock default, memory dedup) |
 
-## Current state (refreshed 2026-08-13, HEAD `2bfc2fa`, branch `docs-sweep`)
+## Current state (refreshed 2026-08-16, HEAD on `dev`, post-WO 33 + WO 34 planning)
 
-*Source of truth: [`docs/workorders/30.0.0-wo30-overview.md`](docs/workorders/30.0.0-wo30-overview.md) — the living master index of unfinished work — reality-checked against HEAD.*
+*Source of truth: the WO 32/33/34 series in `docs/workorders/` — reality-checked against HEAD.*
 
-- **WO 27 / 28 / 29 / 30 shipped.** WO 27 (landlock default-on + plugin-trust + test-health + themes + mouse); WO 28.x (cycle cuts, `turn.rs` split 2087→1191 LOC, coverage gate, bedrock/tripwire/computer_use-beta items); WO 29.x (the `kf-routing` / `kf-rbac` / `kf-memory-store` / `kf-orchestrator` ports — 4 new crates, 13 total — Rust security emitter, EventBus + AuditLogger, **delete of the `npm/kf-plugin/` TS tree** in WO 29.9); WO 30 (subagent worktree isolation + approval forwarding 30.1/30.6, TaskManager lifecycle 30.2, seccomp filter 30.4).
+- **WO 27 / 28 / 29 / 30 / 31 / 32 / 33 shipped.** WO 27 (landlock default-on + plugin-trust + test-health + themes + mouse); WO 28.x (cycle cuts, `turn.rs` split 2087→1191 LOC, coverage gate, bedrock/tripwire/computer_use-beta items); WO 29.x (the `kf-routing` / `kf-rbac` / `kf-memory-store` / `kf-orchestrator` ports — 4 new crates, 13 total — Rust security emitter, EventBus + AuditLogger, **delete of the `npm/kf-plugin/` TS tree** in WO 29.9); WO 30 (subagent worktree isolation + approval forwarding 30.1/30.6, TaskManager lifecycle 30.2, seccomp filter 30.4); WO 31 (Python verifiers + TUI selftest harness); WO 32 (parallel orchestration 32.5, Node/Go/Generic verifiers 32.20, hosted computer_use 32.17, security emitter in orchestrator 32.19, cross-tool benchmark 32.6, e2e feature-gate 32.9, bash require_allowlist 32.18, click-in-prompt 32.12, streaming timeout 32.13, 11 missing WO 28.9 tests 32.7, port-trait residuals 32.8, stale deferral disclosure 32.11); WO 33 (CI split 33.3, nextest profiles 33.5, changed-package selection 33.6, CI architecture reset 33.x + ADR-074, sleep elimination phase 1, env-mutation elimination phase 2 via EnvGuard, CommandRunner trait phase 3, kf-rbac JWT speedup via JwksResolver, kf-code update subcommand 33.17).
+- **WO 34 (TUI IA reset) — planned, 11 workorders created (commit `d94c575`).** No WO 34 implementation shipped yet; this is the planning series.
 - **OS isolation shipped.** Landlock FS confinement is default-on for Linux (WO 27.1, fail-closed, `--i-accept-unsandboxed` escape). Seccomp syscall-filter is opt-in behind the `seccomp` Cargo feature (WO 30.4, applied last in the bash `pre_exec` hook; default-OFF pending real-workload tuning).
 - **Subagent isolation shipped.** `coder` subagents get their own git worktree (WO 30.1) and destructive-tool approvals forward to the parent session's approval channel (WO 30.6).
-- **CI is green** (the 5th-ed CI-red debt is closed). The e2e stdin-piping hang that kept the `windows` job red is RESOLVED (`260e7d8`: 90s `STREAM_IDLE_TIMEOUT` + `[adapter_routing] "e2e-" = "Ollama"`). This docs-sweep run is gated on `scripts/check-artifact-consistency.sh` + `adr_xref_drift`.
-- **`main` fast-forward: still pending.** `origin/main` sits at `d848b37`; HEAD `2bfc2fa` is several WO merges ahead.
-- **Version: `3.8.0`** (`Cargo.toml` + `Cargo.lock` both bumped from `0.3.6` in commit `6e2e0d4`). The earlier "still 0.3.6" note was stale.
+- **CI architecture reset shipped (ADR-074).** Three trigger-scoped workflows: `ci-pr.yml` (PR gate: `static` + `clippy --lib --bins` + `fast-tests` nextest `ci-fast` + `dead-refs` + `adr-xref`), `ci-merge.yml` (push to main/dev: `static` → parallel `{clippy --all-targets, full-tests nextest ci-full, windows, e2e}` — no Ollama, no coverage, both nightly-only per ADR-074), `ci-nightly.yml` (coverage + ollama + e2e-exhaustive + audit + release-build matrix). The e2e stdin-piping hang that kept the `windows` job red is RESOLVED (`260e7d8`: 90s `STREAM_IDLE_TIMEOUT` + `[adapter_routing] "e2e-" = "Ollama"`).
+- **`main` fast-forward: still pending.** `origin/main` sits at `d848b37`; HEAD is several WO merges ahead.
+- **Version: `0.3.9`** (`Cargo.toml` + `Cargo.lock` bumped from `3.8.0` in commit `1f1cea9`). The `3.8.0` jump was a one-off; the line returns to `0.3.x` for subsequent minors.
 - **Local install at `/home/henrik/own-code/kf-code`: not done** (carryover; not code debt).
-- **Where the remaining work lives:** `docs/workorders/30.0.0-wo30-overview.md`. Headline open items: WO 28.6 (7 binary-spawn e2e), WO 28.13 (Vertex mock + full Bedrock turn), WO 28.16 R4 (computer_use vision loop), WO 29.7 residuals (`ModelClient` prod impl + `ValidatorConfig` execution), WO 30.3 (parallel orchestration), WO 30.5 (context-index target/ filter), WO 30.7 (cross-tool benchmark).
+- **Where the remaining work lives:** `docs/workorders/30.0.0-wo30-overview.md` (now partially superseded by WO 32/33/34 closures) + the WO 34 series (`docs/workorders/34.0-wo34-overview.md`). Headline open items: WO 28.13 (Vertex mock + full Bedrock turn), WO 29.7 residuals (`ModelClient` prod impl + `ValidatorConfig` execution), WO 33.14 items 4/5/6 (bash Docker mock, bash_jobs 64-process fake, E2E collapse), WO 34.1-34.10 (TUI IA reset implementation).
 
 ### Pending / blocked
-- **PENDING:** fast-forward `main` to current HEAD; pick + bump the next version; push.
-- **Deferred items** are tracked in the "Deferred items" ledger below and in the WO 30 overview capabilities/security tables — not in this current-state block.
+- **PENDING:** fast-forward `main` to current HEAD; push.
+- **Deferred items** are tracked in the "Deferred items" ledger below — not in this current-state block.
 
 ## Review-fix session (2026-08-11) — 7 commits on dev
 
@@ -1093,12 +1094,12 @@ A "completed" deps subagent left a detached `cargo run -p kf-context-index --exa
 ### Low priority
 
 8. **25.2-R2**: Top-10 slowest individual test fix. DONE (WO 26.9-R1) — 3 proptest tests fixed (256→32 cases, ~210s saved), 8 genuinely slow/flaky tests `#[ignore]`-gated with documented reasons. Total test time reduced ~25% (169s→127s).
-9. **25.2-R4**: Split slow integration tests behind a feature flag or `tests/` directory separation. NOT DONE — still open. The e2e tests in `tests/e2e/` run in the `windows` CI job's `--workspace` and are currently broken (see "Current state" above). Remaining: gate e2e behind a feature flag or exclude from the Windows job, and fix the stdin-piping hang.
+9. **25.2-R4**: Split slow integration tests behind a feature flag or `tests/` directory separation. DONE (WO 32.9) — e2e tests in `tests/e2e/` are now behind the `e2e-tests` Cargo feature (`required-features = ["e2e-tests"]` in `Cargo.toml`), absent from the default gate. Runnable with `--features e2e-tests`. The old stdin-piping hang that kept the `windows` job red was resolved earlier (`STREAM_IDLE_TIMEOUT` + `[adapter_routing] "e2e-" = "Ollama"`).
 10. **25.3-R3**: testdoctor parallel directory scanning. DONE (WO 26.9-R3) — `rayon::par_iter` for file analysis.
 11. **25.3-R4**: testdoctor result caching. DONE (WO 26.9-R4) — `target/testdoctor-cache.json` keyed by content hash + version; second run 65% faster.
-12. **25.4-R3**: Coverage regression gate. NOT DONE — still open. Baseline placeholder exists but no enforcement. Remaining: `scripts/check-cov-regression.sh`, CI step comparing per-crate coverage against baseline - 1% tolerance.
+12. **25.4-R3**: Coverage regression gate. DONE (WO 28.7) — `scripts/check-cov-regression.sh` parses `cargo llvm-cov --workspace --lcov` per-crate and fails if any crate drops >1% below its floor in `docs/coverage-baseline.md`. Wired into `ci-nightly.yml` (was in ci-merge.yml pre-ADR-074 reset; now nightly-only per the tier architecture) + `scripts/ci-local.sh full`. Floors: kf-code 78.4%, kf-budget-core 86.5%, kf-testdoctor 71.2%, kf-compress-core 95.2%, kf-plugin-host 88.8%, kf-bench 88.3%.
 13. **25.7-R3**: Benchmark manifest validation. NOT DONE — still open. Remaining: generate count from source in CI.
-14. **25.8-R4 / 25.10-R4**: CI enforcement gate for dead crate/binary refs. NOT DONE — still open. `scripts/check-artifact-consistency.sh` covers this partially. Remaining: extend to also grep active source (src/, crates/) for `plugin3`, `kfd`, `kf-code-video` as identifiers (not historical prose), fail CI on hit.
+14. **25.8-R4 / 25.10-R4**: CI enforcement gate for dead crate/binary refs. DONE (WO 28.12) — `scripts/check-artifact-consistency.sh` runs 10 checks (release.yml packages, install.sh retired binaries, benchmark count, retired binary refs in scripts/CI, RELEASE.md, Cargo.toml description, installer targets, TECHNICAL.md bench row count, retired-identifier refs in src/crates, repo path refs). Wired into `ci-pr.yml` + `ci-merge.yml` `static` job. Current run: 10 passed, 0 failed.
 15. **22.9-R4 / 25.18-R4**: Bedrock/Vertex test hardening. NOT DONE — still open (WO 26.10-R1, not started). Remaining: mock provider adapters for CI.
 16. **Plugin3 env var backward compat**: PLUGIN3_* env vars renamed to KF_BUDGET_* in kf-budget-core (WO review-fix). DONE (WO 28.14) — one-release backward-compat shim in `crates/kf-budget-core/src/paths.rs` reads `PLUGIN3_*_DIR` when `KF_BUDGET_*_DIR` is unset, emits a one-shot stderr deprecation warning per var per process (three `OnceLock<()>` statics; canonical name wins silently when both set). Doc lineage added to ADR-0015 + ADR-0016. Alias window is one release — remove after.
 

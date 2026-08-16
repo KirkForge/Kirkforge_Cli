@@ -10,6 +10,35 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+## Session 2026-08-16 — WO 34.6 Jobs structured monitor (worktree `.worktrees/wo34-c`, branch `wo/34-c`)
+
+### What changed this session
+- **WO 34.6: Jobs tab (F4) rewritten from raw text dump to a structured
+  job monitor.** `render_jobs` (tabs.rs) now parses
+  `cached_jobs_output` into structured rows with status icons (●
+  running, ✓ done, ✗ failed, ⊘ cancelled) and splits the output into
+  Background + Scheduled sections. A conservative parser
+  (`parse_job_rows` + `parse_bg_row` + `parse_sched_row`) handles the
+  two section formats; unknown lines are skipped so a format drift in
+  `format_job_status`/`handle_scheduled_list` shows fewer rows, not a
+  broken tab (ponytail: comment names the coupling + upgrade path).
+  11 unit tests pin the parser. The Enter-handler's Jobs branch
+  (keys/mod.rs) now maps the selected visual row to a job ID via a
+  parallel `parse_job_ids_lookup` and runs `/jobs <id>` for details
+  (was: ran `/jobs` list unconditionally). The hint line documents C
+  (cancel) and L (logs) as available slash commands.
+
+### Gate (HEAD on `wo/34-c`, WO 34.6 commit)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 529 passed, 2816 skipped
+  (includes 11 new `jobs_parser_tests`)
+
+### Pending
+- None from this WO series. All three (34.4 + 34.5 + 34.6) shipped.
+
+---
+
 ## Session 2026-08-16 — WO 34.5 Models chooser (worktree `.worktrees/wo34-c`, branch `wo/34-c`)
 
 ### What changed this session

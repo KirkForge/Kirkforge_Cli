@@ -337,12 +337,13 @@ pub fn render_plugins(f: &mut Frame, area: Rect, state: &AppState) {
     render_interactive(f, area, lines, state);
 }
 
-/// Render the Jobs tab (F4).
+/// Render the Jobs tab (F4) as a structured job monitor.
 ///
-/// Shows background and scheduled job status. Interactive: ↑/↓ selects
-/// rows, Enter/Space on a hint row runs the corresponding `/jobs` command.
-/// When `cached_jobs_output` is `Some`, its content is rendered directly;
-/// otherwise a placeholder is shown.
+/// Parses `cached_jobs_output` into structured rows with status icons
+/// (● running, ✓ done, ✗ failed, ⊘ cancelled). Interactive: ↑↓
+/// selects, Enter shows details (`/jobs <id>`), C cancels, L shows
+/// logs. When `cached_jobs_output` is `None`, a placeholder prompts the
+/// user to load.
 pub fn render_jobs(f: &mut Frame, area: Rect, state: &AppState) {
     let mut lines = Vec::new();
 
@@ -355,8 +356,59 @@ pub fn render_jobs(f: &mut Frame, area: Rect, state: &AppState) {
     lines.push(Line::from(""));
 
     if let Some(ref cached) = state.session.cached_jobs_output {
-        for line in cached.lines() {
-            lines.push(Line::from(Span::raw(format!(" {line}"))));
+        let parsed = parse_job_rows(cached);
+        if parsed.bg_rows.is_empty() && parsed.sched_rows.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  No jobs running.",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            // ── Background jobs ──────────────────────────────────
+            if !parsed.bg_rows.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    " Background",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for row in &parsed.bg_rows {
+                    lines.push(Line::from(vec![
+                        row.icon_span(),
+                        Span::raw(format!(" #{}", row.id)),
+                        Span::styled(
+                            format!("  {}", row.status_text()),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::raw(format!("  {}", truncate(&row.command, 40))),
+                    ]));
+                }
+                lines.push(Line::from(""));
+            }
+
+            // ── Scheduled jobs ──────────────────────────────────
+            if !parsed.sched_rows.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    " Scheduled",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for row in &parsed.sched_rows {
+                    let icon = if row.enabled {
+                        Span::styled(" ●", Style::default().fg(Color::Green))
+                    } else {
+                        Span::styled(" ⊘", Style::default().fg(Color::DarkGray))
+                    };
+                    lines.push(Line::from(vec![
+                        icon,
+                        Span::raw(format!(" {}", row.id)),
+                        Span::styled(
+                            format!("  {} | next: {}", row.schedule, row.next),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+            }
         }
     } else {
         lines.push(Line::from(Span::styled(
@@ -367,11 +419,230 @@ pub fn render_jobs(f: &mut Frame, area: Rect, state: &AppState) {
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        " /jobs <id> for detail  |  /jobs <id> cancel  |  /jobs clean",
+        " Enter: details  |  C: cancel  |  L: logs  |  /jobs clean",
         Style::default().fg(Color::DarkGray),
     )));
 
     render_interactive(f, area, lines, state);
+}
+
+// ── Jobs: structured-row parser (WO 34.6) ──────────────────────────────
+//
+// Parses `cached_jobs_output` (the text from `refresh_jobs_output`) into
+// structured rows. The parser is deliberately conservative: lines that
+// don't match the expected prefixes are skipped, so a format change in
+// `format_job_status` / `handle_scheduled_list` doesn't blank the tab.
+// ponytail: the parser is coupled to the output format of
+// `format_job_status` (jobs.rs) and `handle_scheduled_list` (jobs.rs).
+// If either changes its line format, this parser needs updating. The
+// text fallback (lines that don't match are dropped, not shown) is the
+// safety net — a format drift shows fewer rows, not a broken tab.
+// Upgrade path: expose a structured `Vec<JobRow>` from the jobs module
+// directly so the renderer doesn't parse text at all.
+
+/// Parsed jobs output — split into background and scheduled sections.
+struct ParsedJobs {
+    bg_rows: Vec<BgJobRow>,
+    sched_rows: Vec<SchedJobRow>,
+}
+
+/// A parsed background-job row.
+struct BgJobRow {
+    id: String,
+    status: JobStatusIcon,
+    command: String,
+}
+
+/// A parsed scheduled-job row.
+struct SchedJobRow {
+    id: String,
+    enabled: bool,
+    schedule: String,
+    next: String,
+}
+
+/// Status icon for a background job. Mirrors the emoji in
+/// `format_job_status` but uses ASCII-ish symbols the WO spec names.
+#[derive(Clone, Copy)]
+enum JobStatusIcon {
+    Running,
+    Done,
+    Failed,
+    Cancelled,
+}
+
+impl JobStatusIcon {
+    fn as_str(self) -> &'static str {
+        match self {
+            JobStatusIcon::Running => "●",
+            JobStatusIcon::Done => "✓",
+            JobStatusIcon::Failed => "✗",
+            JobStatusIcon::Cancelled => "⊘",
+        }
+    }
+
+    fn color(self) -> Color {
+        match self {
+            JobStatusIcon::Running => Color::Yellow,
+            JobStatusIcon::Done => Color::Green,
+            JobStatusIcon::Failed => Color::Red,
+            JobStatusIcon::Cancelled => Color::DarkGray,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            JobStatusIcon::Running => "running",
+            JobStatusIcon::Done => "done",
+            JobStatusIcon::Failed => "failed",
+            JobStatusIcon::Cancelled => "cancelled",
+        }
+    }
+}
+
+impl BgJobRow {
+    fn icon_span(&self) -> Span<'static> {
+        Span::styled(
+            format!(" {} ", self.status.as_str()),
+            Style::default().fg(self.status.color()),
+        )
+    }
+
+    fn status_text(&self) -> String {
+        self.status.label().to_string()
+    }
+}
+
+/// Truncate a command string to `max` chars, appending "…" if truncated.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{head}…")
+    }
+}
+
+/// Parse `cached_jobs_output` into structured rows.
+fn parse_job_rows(cached: &str) -> ParsedJobs {
+    let mut bg_rows = Vec::new();
+    let mut sched_rows = Vec::new();
+    let mut in_sched = false;
+
+    for line in cached.lines() {
+        let trimmed = line.trim_start();
+        // Section headers
+        if trimmed.starts_with("Background jobs:") {
+            in_sched = false;
+            continue;
+        }
+        if trimmed.starts_with("Scheduled jobs:") {
+            in_sched = true;
+            continue;
+        }
+        if trimmed.starts_with("No background jobs.")
+            || trimmed.starts_with("No scheduled jobs.")
+            || trimmed.starts_with("Tip:")
+            || trimmed.is_empty()
+        {
+            continue;
+        }
+
+        if in_sched {
+            // Scheduled row: "  <id> [enabled] <cron> | <kind> | next: <t> | last: <s>"
+            if let Some(row) = parse_sched_row(trimmed) {
+                sched_rows.push(row);
+            }
+        } else {
+            // Background row: "  ⏳ running #5 — <cmd>" etc.
+            if let Some(row) = parse_bg_row(trimmed) {
+                bg_rows.push(row);
+            }
+        }
+    }
+
+    ParsedJobs {
+        bg_rows,
+        sched_rows,
+    }
+}
+
+/// Parse a background-job line. The format from `format_job_status` is:
+///   `⏳ running #5`, `✅ completed #5 (exit 0)`, `❌ failed #5: <err>`,
+///   `🚫 cancelled #5`
+/// followed by ` — <command>` (appended in `handle_background_jobs_command`).
+fn parse_bg_row(line: &str) -> Option<BgJobRow> {
+    // Detect the status emoji/symbol prefix.
+    let (status, rest) = if let Some(r) = line.strip_prefix("⏳ running #") {
+        (JobStatusIcon::Running, r)
+    } else if let Some(r) = line.strip_prefix("✅ completed #") {
+        (JobStatusIcon::Done, r)
+    } else if let Some(r) = line.strip_prefix("❌ failed #") {
+        (JobStatusIcon::Failed, r)
+    } else if let Some(r) = line.strip_prefix("🚫 cancelled #") {
+        (JobStatusIcon::Cancelled, r)
+    } else {
+        return None;
+    };
+
+    // `rest` is now "5 (exit 0) — cargo test" or "5: <err> — cargo test"
+    // or "5 — cargo test". Split on " — " to get the id + status suffix
+    // and the command.
+    let (id_part, command) = match rest.split_once(" — ") {
+        Some((a, b)) => (a, b.to_string()),
+        None => (rest, String::new()),
+    };
+
+    // The id is the leading number; the rest is the status suffix
+    // ("(exit 0)" / ": <err>" / "").
+    let id = id_part
+        .split(|c: char| !c.is_ascii_digit())
+        .next()
+        .unwrap_or("")
+        .to_string();
+
+    Some(BgJobRow {
+        id,
+        status,
+        command,
+    })
+}
+
+/// Parse a scheduled-job line. The format from `handle_scheduled_list` is:
+///   `<id> [enabled|disabled] <cron> | <kind> | next: <time> | last: <status>`
+fn parse_sched_row(line: &str) -> Option<SchedJobRow> {
+    // The line starts with the id, then "[enabled]" or "[disabled]".
+    let parts: Vec<&str> = line.splitn(2, ' ').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let id = parts[0].to_string();
+    let rest = parts[1];
+
+    let enabled = rest.starts_with("[enabled]");
+    // Strip the [enabled]/[disabled] tag
+    let after_tag = match rest.find(']').map(|i| &rest[i + 1..]) {
+        Some(s) => s.trim_start(),
+        None => rest,
+    };
+
+    // Split on " | " to get schedule, kind, next, last
+    let segments: Vec<&str> = after_tag.split(" | ").collect();
+    let schedule = segments
+        .first()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let next = segments
+        .iter()
+        .find_map(|s| s.strip_prefix("next: ").map(|t| t.to_string()))
+        .unwrap_or_else(|| "—".to_string());
+
+    Some(SchedJobRow {
+        id,
+        enabled,
+        schedule,
+        next,
+    })
 }
 
 // ── Settings: semantic-label helpers (WO 34.4) ─────────────────────────
@@ -618,4 +889,113 @@ pub fn render_threads(f: &mut Frame, area: Rect, state: &AppState) {
     )));
 
     render_interactive(f, area, lines, state);
+}
+
+#[cfg(test)]
+mod jobs_parser_tests {
+    use super::*;
+
+    #[test]
+    fn parse_empty_output() {
+        let parsed = parse_job_rows("No background jobs.\nNo scheduled jobs.\n");
+        assert!(parsed.bg_rows.is_empty());
+        assert!(parsed.sched_rows.is_empty());
+    }
+
+    #[test]
+    fn parse_background_running_job() {
+        let cached = "Background jobs:\n  ⏳ running #5 — cargo test\n\nTip: ...\n";
+        let parsed = parse_job_rows(cached);
+        assert_eq!(parsed.bg_rows.len(), 1);
+        assert_eq!(parsed.bg_rows[0].id, "5");
+        assert!(matches!(parsed.bg_rows[0].status, JobStatusIcon::Running));
+        assert_eq!(parsed.bg_rows[0].command, "cargo test");
+    }
+
+    #[test]
+    fn parse_background_completed_job() {
+        let cached = "Background jobs:\n  ✅ completed #4 (exit 0) — echo hi\n";
+        let parsed = parse_job_rows(cached);
+        assert_eq!(parsed.bg_rows.len(), 1);
+        assert_eq!(parsed.bg_rows[0].id, "4");
+        assert!(matches!(parsed.bg_rows[0].status, JobStatusIcon::Done));
+        assert_eq!(parsed.bg_rows[0].command, "echo hi");
+    }
+
+    #[test]
+    fn parse_background_failed_job() {
+        let cached = "Background jobs:\n  ❌ failed #3: oops — bad cmd\n";
+        let parsed = parse_job_rows(cached);
+        assert_eq!(parsed.bg_rows.len(), 1);
+        assert_eq!(parsed.bg_rows[0].id, "3");
+        assert!(matches!(parsed.bg_rows[0].status, JobStatusIcon::Failed));
+        assert_eq!(parsed.bg_rows[0].command, "bad cmd");
+    }
+
+    #[test]
+    fn parse_background_cancelled_job() {
+        let cached = "Background jobs:\n  🚫 cancelled #2 — sleep 30\n";
+        let parsed = parse_job_rows(cached);
+        assert_eq!(parsed.bg_rows.len(), 1);
+        assert_eq!(parsed.bg_rows[0].id, "2");
+        assert!(matches!(parsed.bg_rows[0].status, JobStatusIcon::Cancelled));
+    }
+
+    #[test]
+    fn parse_scheduled_job() {
+        let cached = "Scheduled jobs:\n  abc123 [enabled] @hourly | bash: echo hi | next: 2026-08-16T05:00:00Z | last: ok (done)\n";
+        let parsed = parse_job_rows(cached);
+        assert_eq!(parsed.sched_rows.len(), 1);
+        assert_eq!(parsed.sched_rows[0].id, "abc123");
+        assert!(parsed.sched_rows[0].enabled);
+        assert_eq!(parsed.sched_rows[0].schedule, "@hourly");
+        assert_eq!(parsed.sched_rows[0].next, "2026-08-16T05:00:00Z");
+    }
+
+    #[test]
+    fn parse_scheduled_disabled_job() {
+        let cached =
+            "Scheduled jobs:\n  xyz [disabled] @daily | bash: echo hi | next: — | last: —\n";
+        let parsed = parse_job_rows(cached);
+        assert_eq!(parsed.sched_rows.len(), 1);
+        assert!(!parsed.sched_rows[0].enabled);
+    }
+
+    #[test]
+    fn parse_mixed_sections() {
+        let cached = "\
+Background jobs:
+  ⏳ running #5 — cargo test
+  ✅ completed #4 (exit 0) — echo hi
+
+Scheduled jobs:
+  abc [enabled] @hourly | bash: echo | next: 2026-08-16T05:00:00Z | last: ok (done)
+";
+        let parsed = parse_job_rows(cached);
+        assert_eq!(parsed.bg_rows.len(), 2);
+        assert_eq!(parsed.sched_rows.len(), 1);
+        assert_eq!(parsed.bg_rows[0].id, "5");
+        assert_eq!(parsed.bg_rows[1].id, "4");
+        assert_eq!(parsed.sched_rows[0].id, "abc");
+    }
+
+    #[test]
+    fn parse_unknown_line_is_skipped() {
+        let cached = "Background jobs:\n  some random line\n  ⏳ running #1 — cmd\n";
+        let parsed = parse_job_rows(cached);
+        assert_eq!(parsed.bg_rows.len(), 1);
+        assert_eq!(parsed.bg_rows[0].id, "1");
+    }
+
+    #[test]
+    fn truncate_short_string_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_long_string_gets_ellipsis() {
+        let result = truncate("abcdefghijklmnopqrstuvwxyz", 10);
+        assert_eq!(result.chars().count(), 10);
+        assert!(result.ends_with('…'));
+    }
 }

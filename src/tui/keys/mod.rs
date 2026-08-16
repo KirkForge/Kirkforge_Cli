@@ -507,6 +507,64 @@ fn model_chooser_rows_lookup(state: &AppState, config: &Config) -> Vec<ModelChoi
     rows
 }
 
+/// Number of rendered lines before the job data rows in `render_jobs`.
+/// MUST match the header layout in `render_jobs`. If the renderer
+/// changes its header, update this constant.
+const JOBS_HEADER_ROWS: usize = 3;
+
+/// Parse `cached_jobs_output` into a flat list of job IDs (background
+/// first, then scheduled) in the same order `render_jobs` emits rows.
+/// Used by the Enter handler to map the selected visual row to a job
+/// ID. Mirrors `parse_job_rows` in `tabs.rs` — the two MUST stay in
+/// sync.
+fn parse_job_ids_lookup(cached: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut in_sched = false;
+    for line in cached.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("Background jobs:") {
+            in_sched = false;
+            continue;
+        }
+        if trimmed.starts_with("Scheduled jobs:") {
+            in_sched = true;
+            continue;
+        }
+        if trimmed.starts_with("No background jobs.")
+            || trimmed.starts_with("No scheduled jobs.")
+            || trimmed.starts_with("Tip:")
+            || trimmed.is_empty()
+        {
+            continue;
+        }
+
+        if in_sched {
+            // Scheduled row: "  <id> [enabled] ..."
+            let id = trimmed.split_whitespace().next().unwrap_or("");
+            if !id.is_empty() {
+                ids.push(id.to_string());
+            }
+        } else {
+            // Background row: "  ⏳ running #5 — cmd" etc.
+            if let Some(rest) = trimmed
+                .strip_prefix("⏳ running #")
+                .or_else(|| trimmed.strip_prefix("✅ completed #"))
+                .or_else(|| trimmed.strip_prefix("❌ failed #"))
+                .or_else(|| trimmed.strip_prefix("🚫 cancelled #"))
+            {
+                let id = rest
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("");
+                if !id.is_empty() {
+                    ids.push(id.to_string());
+                }
+            }
+        }
+    }
+    ids
+}
+
 /// Handle Enter on a non-Chat tab. Each tab gets a minimal action:
 /// - Models (F2): show model details in a status message
 /// - Plugins (F3): toggle the selected plugin on/off
@@ -610,7 +668,20 @@ async fn handle_tab_enter(
             state.mark_dirty();
         }
         ActiveTab::Jobs => {
-            let msg = crate::tui::commands::handle_jobs_command("", state).await;
+            // Map the selected row to a job ID by parsing the same
+            // cached_jobs_output the renderer parses. The header eats
+            // the first JOBS_HEADER_ROWS rows.
+            let job_id = state
+                .session
+                .cached_jobs_output
+                .as_ref()
+                .and_then(|cached| {
+                    let ids = parse_job_ids_lookup(cached);
+                    let idx = sel.saturating_sub(JOBS_HEADER_ROWS);
+                    ids.get(idx).cloned()
+                });
+            let args = job_id.as_deref().unwrap_or("");
+            let msg = crate::tui::commands::handle_jobs_command(args, state).await;
             state
                 .conversation
                 .messages

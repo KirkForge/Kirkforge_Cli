@@ -5,6 +5,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-08-16
+
+Release prep — version bump only. The detailed entries for the WO 33-34 series live in `[Unreleased]` above and will be folded into this section at the release cut. Highlights:
+
+### Fixed
+- Windows stdin detach (P0 CI hang): `line_mode.rs` no longer joins the reader thread on Windows; `#[cfg(not(unix))]` drops the handle so the runtime can shut down mid-`read_line`. ADR-025 updated. Fixes the P0 Windows CI timeout.
+- kf-budget-core env-guard race: `env_guard_restores_prior_value_on_panic` now asserts the captured `prior()` instead of reading the live env after Drop, eliminating the last Windows-racy post-Drop env read. No production code changed.
+
+### Changed
+- TUI IA reset (WO 34.1-34.10): command palette (Ctrl+K), `/help` overlay, welcome screen rewrite, Sessions tab (F6) rename, Models tab (F2) chooser, Jobs tab (F4) rewrite, Settings tab (F5) regroup, slash-command tiering, action-first approval dialog with SAFE/REVIEW/DANGEROUS risk tiers, status bar simplified to 4 essentials. Killed the persistent F1-F6 tab bar; chat is the permanent primary surface; former tabs are overlays.
+- CI architecture reset (ADR-074): monolithic `ci.yml` split into `ci-pr.yml` / `ci-merge.yml` / `ci-nightly.yml`. Merge jobs parallel, scoped clippy (`--lib --bins` on PR, `--all-targets` on merge), declarative nextest profiles, integration job moved to nightly.
+- Test optimization (WO 33.14 phase 3, WO 33.16, Phase 1 sleeps): `CommandRunner` trait lets verifier tests inject a fake cargo/clippy runner; EnvGuard RAII replaced every raw `std::env::set_var` in test code; remaining blind wall-clock sleeps replaced with event-driven synchronization. JWT verifier tests dropped 690.8s → <0.5s via precomputed keys + fake JWKS resolver.
+- Path-aware changed-package test selection (WO 33.6): `scripts/changed-packages.sh` maps git diff to affected cargo packages; PR CI skips Rust entirely on docs-only changes.
+
+### Added
+- GitHub Discussions enabled (Announcements / General / Ideas / Q&A / Show and tell / Polls). Welcome discussion pinned in Announcements.
+- WO 32.16: Windows daemon-client stub fallback tests marked Done (shipped in `5bba9f4`, only the WO status line was outstanding).
+- WO 32.17: Anthropic hosted `computer_use` beta (coordinate-vision model) behind `KF_CODE_COMPUTER_USE_HOSTED`.
+- WO 32.19 R7: security emitter wired into the `kf-orchestrator` correction loop.
+- WO 32.20: Node/Go/Generic multi-language verifiers (node_test, node_lint, go_test, go_vet, generic_test).
+- WO 32.5: parallel scout/coder/reviewer orchestration (`/workflow run <name> --parallel`).
+- `kf-code update`: self-update subcommand (download, SHA256 verify, atomic rename).
+
 ### Fixed
 - kf-budget-core: eliminated the last Windows-racy EnvGuard post-Drop live-env read. `env_guard_restores_prior_value_on_panic` (`crates/kf-budget-core/src/paths.rs`) read `std::env::var("KF_BUDGET_CONFIG_DIR")` after the inner guard's Drop (during panic unwind) and asserted the live value. On Windows this races other test threads. Replaced the post-Drop live-env read with an assertion on the captured `prior()` (the value Drop used to restore), captured out of the unwind closure via `AssertUnwindSafe`. Same fix pattern the two `env_guard_restores_prior_value_some_branch` tests already use (WO 10.0 / B8). No production code changed.
 - Windows stdin detach (P0 CI hang): `src/main/line_mode.rs::spawn_line_mode_approval_handler` no longer joins the reader thread on Windows. The blocking Windows console `read_line` is uninterruptible, so `reader_handle.join()` after `abort()` hung the runtime when shutdown fired mid-read. Split the join by cfg — `#[cfg(unix)]` joins (Unix `/dev/tty` poll loop is interruptible, join is bounded to ~200 ms); `#[cfg(not(unix))]` drops the handle (detach; the thread is reaped at process exit or when stdin closes). Unix behaviour unchanged. ADR-025 "Approval reader" updated to document the detach. Fixes the P0 Windows CI timeout source.

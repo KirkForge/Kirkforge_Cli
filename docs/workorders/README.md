@@ -616,28 +616,97 @@ items get individual WO 32 sub-workorders for tracking. See
 |----|-------|--------|-----|----------|
 | 32.0 | [Series overview + full deferral inventory](32.0-wo32-overview.md) | In Progress | — | — |
 | 32.1 | [Fix stale WO 30 overview statuses](32.1-fix-wo30-overview-statuses.md) | Done | S | — |
-| 32.2 | [Fix stale plugin_verify deferral message](32.2-fix-plugin-verify-message.md) | Pending | S | — |
+| 32.2 | [Fix stale plugin_verify deferral message](32.2-fix-plugin-verify-message.md) | Done (`f2c33d4`) | S | — |
 | 32.3 | [Clean up untracked npm/ build artifacts](32.3-clean-npm-artifacts.md) | Pending | S | — |
 | 32.4 | [Subagent CWD confinement](32.4-subagent-cwd-confinement.md) | Pending | M | High |
-| 32.5 | [Parallel orchestration (scout/coder/reviewer)](32.5-parallel-orchestration.md) | Pending (dep: 32.4) | L | Medium |
-| 32.6 | [Cross-tool benchmark vs Codex/Claude Code](32.6-cross-tool-benchmark.md) | Pending | M | High |
-| 32.7 | [WO 28.9 missing 11 tests (R3/R4/R5 — silent deferral)](32.7-missing-28.9-tests.md) | Pending | M | High |
-| 32.8 | [WO 28.1 port-trait residuals (3 imports)](32.8-port-trait-residuals.md) | Pending | M | Medium |
-| 32.9 | [WO 28.6 e2e tests still `#[ignore]`'d](32.9-e2e-tests-unignore.md) | Pending | S | Medium |
-| 32.10 | [WO 29.5 ES512 verifier gap](32.10-es512-verifier-gap.md) | Pending | S | Low |
-| 32.11 | [WO 29.3 ClassifierMemory + PathGuard unification](32.11-classifier-memory-pathguard.md) | Pending | M | Low |
-| 32.12 | [WO 27.7 R2 click-in-prompt cursor positioning](32.12-click-in-prompt-cursor.md) | Pending | S | Low |
-| 32.13 | [Streaming timeout per-adapter configurability](32.13-streaming-timeout-configurable.md) | Pending | S | Low |
-| 32.14 | [WO 28.7 R4 ci.yml coverage step](32.14-ci-yml-coverage-step.md) | Pending | S | Medium |
+| 32.5 | [Parallel orchestration (scout/coder/reviewer)](32.5-parallel-orchestration.md) | Done (`9965478`; partially implemented — per-subagent worktree + Reviewer BusVerifier deferred) | L | Medium |
+| 32.6 | [Cross-tool benchmark vs Codex/Claude Code](32.6-cross-tool-benchmark.md) | Done (`d769d4b`; framework + runner shipped; live run pending) | M | High |
+| 32.7 | [WO 28.9 missing 11 tests (R3/R4/R5 — silent deferral)](32.7-missing-28.9-tests.md) | Done (`b294295`) | M | High |
+| 32.8 | [WO 28.1 port-trait residuals (3 imports)](32.8-port-trait-residuals.md) | Done (`d828a89`) | M | Medium |
+| 32.9 | [WO 28.6 e2e tests still `#[ignore]`'d](32.9-e2e-tests-unignore.md) | Done (`78586f9`; e2e now behind `e2e-tests` Cargo feature) | S | Medium |
+| 32.10 | [WO 29.5 ES512 verifier gap](32.10-es512-verifier-gap.md) | Done (`c20c832`; documented with pinned test) | S | Low |
+| 32.11 | [WO 29.3 ClassifierMemory + PathGuard unification](32.11-classifier-memory-pathguard.md) | Done (`1e7f523`; comment-only cleanup; all three deferrals disclosed, not implemented) | M | Low |
+| 32.12 | [WO 27.7 R2 click-in-prompt cursor positioning](32.12-click-in-prompt-cursor.md) | Done (`fced991`) | S | Low |
+| 32.13 | [Streaming timeout per-adapter configurability](32.13-streaming-timeout-configurable.md) | Done (`d6e507e`; default 180s) | S | Low |
+| 32.14 | [WO 28.7 R4 ci.yml coverage step](32.14-ci-yml-coverage-step.md) | Done (`b31f4a4`; now in ci-nightly.yml per ADR-074) | S | Medium |
 | 32.15 | [WO 28.5 R3 landlock FS confinement test](32.15-landlock-fs-confinement-test.md) | Pending | S | Low |
 | 32.16 | [WO 28.8 R6 Windows stub test](32.16-windows-stub-test.md) | Pending | S | Low |
-| 32.17 | [WO 28.16 R4 computer_use vision loop (re-deferred 3×)](32.17-computer-use-vision-loop.md) | Pending | L | Medium |
-| 32.18 | [WO 28.17 R2 bash require_allowlist mode](32.18-bash-require-allowlist.md) | Pending | S | Low |
-| 32.19 | [WO 29.7 R6 SLO monitor + R7 security-emitter integration](32.19-slo-monitor-security-emitter.md) | Pending | M | Low |
-| 32.20 | [WO 31.2/31.3/31.5 Node + Go + generic verifiers](32.20-node-go-generic-verifiers.md) | Pending | M | Medium |
+| 32.17 | [WO 28.16 R4 computer_use vision loop (re-deferred 3×)](32.17-computer-use-vision-loop.md) | Done (`55aa9f0`; WO 32.17 shipped the hosted computer_use beta) | L | Medium |
+| 32.18 | [WO 28.17 R2 bash require_allowlist mode](32.18-bash-require-allowlist.md) | Done (`ef2d765`; default-off) | S | Low |
+| 32.19 | [WO 29.7 R6 SLO monitor + R7 security-emitter integration](32.19-slo-monitor-security-emitter.md) | Done (`41014b7`; R7 shipped; R6 disclosed as YAGNI) | M | Low |
+| 32.20 | [WO 31.2/31.3/31.5 Node + Go + generic verifiers](32.20-node-go-generic-verifiers.md) | Done (`598841d`) | M | Medium |
 
-**21 items.** 32.1 done (docs-only). 32.2-32.3 are small audit corrections. 32.4-32.20
-are the full deferral inventory from WO 27-31 — every stubbed/deferred/skipped item
-now has its own tracking workorder. High priority: 32.4 (CWD confinement — security),
-32.6 (benchmark — validates thesis), 32.7 (11 silently deferred tests — §11 violation).
-Most persistent: 32.17 (computer_use vision loop — re-deferred 3× since WO 25.18).
+**21 items.** 32.1-32.2, 32.5-32.14, 32.17-32.20 done (13 shipped). 32.3, 32.4,
+32.15, 32.16 pending (4 open). 32.0 overview in progress. High priority
+remaining: 32.4 (CWD confinement — security). Most persistent was 32.17
+(computer_use vision loop — re-deferred 3× since WO 25.18, finally shipped in
+WO 32.17). Note: several WO 32 file `## Status` headers still say "Pending"
+despite the work shipping — the sessions that shipped them did not update the
+WO file status (AGENTS.md §9 violation); the README index is corrected here
+to reflect actual status per `git log` + `state.md` + `CHANGELOG.md`.
+
+### Series 33 — CI Architecture Reset + Test Debt Elimination
+
+Series 33 is driven by the `gpt-test_and_ci.md` external review. It resets
+the CI architecture (ADR-074: PR / merge / nightly tiers, no Ollama or
+coverage on PR/merge, parallel sibling jobs, scoped clippy, `fmt` →
+`static` rename) and eliminates test debt in three phases: kill wall-clock
+sleeps (phase 1), kill global env mutation via `EnvGuard` (phase 2), and
+replace real subprocess tests with fakes (phase 3 — `CommandRunner` trait
+for Cargo/Clippy, `JwksResolver` for kf-rbac JWT). See
+[WO 33.0](33.0-wo33-overview.md) for the full plan.
+
+| WO | Title | Status | Priority |
+|----|-------|--------|----------|
+| 33.0 | [Series overview](33.0-wo33-overview.md) | In Progress | — |
+| 33.1 | [Concurrency cancellation](33.1-concurrency-cancellation.md) | Done (`839d39d`) | P0 |
+| 33.2 | [Remove artificial needs: dependencies](33.2-remove-artificial-needs.md) | Done (`839d39d`) | P0 |
+| 33.3 | [Split CI into PR / post-merge / nightly workflows](33.3-split-ci-workflows.md) | Done (`cd79462`) | P0 |
+| 33.5 | [Nextest profiles (ci-fast, ci-full, integration, e2e)](33.5-nextest-profiles.md) | Done (`7e82ea2`) | P1 |
+| 33.6 | [Path-aware / changed-package test selection](33.6-changed-package-selection.md) | Done (`95c9588`) | P1 |
+| 33.11 | [Profile: measure top-20 slowest tests](33.11-slowest-tests.md) | Done (measurement) (`7820522`) | P1 |
+| 33.12 | [Kill wall-clock sleeps in tests (phase 1)](33.12-kill-sleeps.md) | Done (`b010aa4` + `ac8df2b`) | P1 |
+| 33.13 | [Kill global env mutation in tests (phase 2)](33.13-kill-env-mutation.md) | Done (EnvGuard mechanism shipped; rollout complete per WO 33.16 session) (`35d1a21` + `d89689d`-`a2a2f80`) | P1 |
+| 33.14 | [Replace real subprocess tests with fakes (phase 3)](33.14-replace-subprocess-tests.md) | Done (phase 3 — minimal win; items 4/5/6 deferred) (`e6b7ccb` + `f2d53ab`) | P2 |
+| 33.15 | [Reduce #[serial] usage via dependency injection](33.15-reduce-serial-usage.md) | Done (no-op: zero #[serial] in repo) (`71e31cb`) | P2 |
+| 33.16 | [Config-overwrite-on-install bug fix](33.16-config-overwrite-bug.md) | Done (config migration from legacy kirkforge path shipped) (`15dd08a`) | P0 |
+| 33.17 | [Update module (auto-pull latest from main)](33.17-update-module.md) | Done (`8ab0098`; self-update subcommand with SHA256 verification) | P1 |
+
+**13 sub-workorders.** The CI architecture reset is pinned in ADR-074. The
+test-tier phases (sleep elimination, env-mutation elimination, subprocess
+fakes) are complete; the `EnvGuard` RAII helper (`src/shared/test_util.rs`)
+is the canonical pattern for test env mutation. Phase 3 items 4/5/6 (bash
+Docker mock, bash_jobs 64-process fake, E2E collapse) are deferred per
+AGENTS.md §11 — tracked in `state.md` pending. Note: the env-mutation work
+is tracked as WO 33.13 in the workorder file but referenced as "WO 33.16"
+in some `state.md`/`CHANGELOG.md` session blocks (a numbering inconsistency
+from the session that shipped it); the actual WO 33.16 workorder file is
+the config-overwrite-on-install bug.
+
+### Series 34 — TUI Information Architecture Reset
+
+Series 34 is driven by an external UX analysis of the TUI. 70% of the
+analysis recommendations were validated against the codebase; the series
+resets the TUI information architecture across 10 implementation
+workorders + 1 doc-audit workorder. See
+[WO 34.0](34.0-wo34-overview.md) for the full plan.
+
+| WO | Title | Status | Priority |
+|----|-------|--------|----------|
+| 34.0 | [Series overview](34.0-wo34-overview.md) | In Progress | — |
+| 34.1 | [Kill F1-F6 tab bar + command palette (Ctrl+K)](34.1-kill-tab-bar-command-palette.md) | Pending | — |
+| 34.2 | [/help overlay (stop polluting conversation)](34.2-help-overlay.md) | Pending | — |
+| 34.3 | [Simplify status bar to 4 items](34.3-simplify-status-bar.md) | Pending | — |
+| 34.4 | [Settings → semantic controls](34.4-settings-semantic-controls.md) | Pending | — |
+| 34.5 | [Models → chooser](34.5-model-chooser.md) | Pending | — |
+| 34.6 | [Jobs → structured monitor](34.6-jobs-monitor.md) | Pending | — |
+| 34.7 | [Unify sessions/threads/forks naming](34.7-unify-sessions-naming.md) | Pending | — |
+| 34.8 | [Welcome screen quick actions](34.8-welcome-screen.md) | Pending | — |
+| 34.9 | [Slash command taxonomy (everyday/advanced/developer)](34.9-slash-command-taxonomy.md) | Pending | — |
+| 34.10 | [Approval dialog action-first](34.10-approval-dialog.md) | Pending | — |
+| 34.11 | [Doc audit (CHANGELOG, state.md, TECHNICAL.md)](34.11-doc-audit.md) | In Progress | — |
+
+**12 sub-workorders.** All 11 implementation workorders (34.1-34.11) are
+pending; only the planning commit (`d94c575`) has landed. WO 34.11 (this
+doc audit) is in progress. The series is the TUI IA reset — no Rust
+architecture changes, no new ADRs expected.

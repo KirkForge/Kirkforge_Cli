@@ -2,6 +2,98 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-16 — WO win-audit: 4 Windows CI test failures (worktree `.worktrees/wo-win-audit`, branch `wo/win-audit`)
+
+### What changed this session
+
+- **Fixed 4 Windows CI test failures** by addressing the root cause in
+  each (no test-rewrite-to-pass, no `#[ignore]`, no `|| true`). Two were
+  production bugs (Windows-specific path/mtime behavior); two were
+  tests that pinned Unix path-separator literals.
+
+- **F1 — `tui::selftest::approval_prompt_display` (production bug,
+  WO 34.10).** The approval dialog's `is_outside_cwd` check
+  (`src/tui/components/approval.rs:89-117`) canonicalized the target
+  path but compared against the raw `std::env::current_dir()` base. On
+  Windows, `Path::canonicalize` returns an extended-length `\\?\C:\...`
+  path while `current_dir()` returns `C:\...` (no prefix) —
+  `canon.starts_with(base)` was therefore always **false**
+  (prefix mismatch) → `is_outside_cwd = true` → `RiskTier::Dangerous`
+  → the dialog rendered "DANGEROUS" instead of "REVIEW" for every
+  in-CWD edit. The same `\\?\` mismatch broke the diff-reader closure
+  (line 90-102), suppressing the diff preview for in-CWD files on
+  Windows. Fix: canonicalize the base `cwd` too (`current_dir().ok()
+  .and_then(|d| d.canonicalize().ok())`), so both sides of
+  `starts_with` carry the same prefix on Windows. On Unix this is a
+  no-op (canonicalize of an already-absolute path returns the same
+  path). The test assertion (`rendered.contains("REVIEW")`) was
+  correct — the production code was wrong. Impact: LOW (1 direct
+  caller, `render_frame`; gitnexus confirmed).
+
+- **F2 — `kf-context-index::edge_cases::mtime_rebuild_single_file_change`
+  (test bug).** The test opened the file with `File::open` (read-only)
+  then called `file.set_modified(later)`. On Windows, `set_modified`
+  calls `SetFileTime`, which requires the handle to have
+  `GENERIC_WRITE` access — a read-only handle yields
+  `ERROR_ACCESS_DENIED` and the `.unwrap()` panicked. On Linux,
+  `futimens` does not require write access for the owner, so the test
+  passed. Fix: open with `OpenOptions::new().write(true).open(&a_path)`
+  before `set_modified` (`crates/kf-context-index/tests/edge_cases.rs`).
+  One-line change, cross-platform (write access is harmless on Unix).
+
+- **F3+F4 — `kf-routing::path_safety::tests` (test bug).** Two tests
+  (`safe_relative_allows_dotfiles_when_enabled` at line 725,
+  `safe_relative_allows_simple_relative_path` at line 739) asserted
+  exact `Some("...")` strings with forward slashes:
+  `Some(".vscode/settings.json")` and `Some("src/main.rs")`. On
+  Windows, `PathBuf::to_string_lossy()` uses the platform separator
+  (`\`), so the function returned `Some(".vscode\\settings.json")` /
+  `Some("src\\main.rs")` and the assertion failed. The function itself
+  is path-agnostic (uses `std::path`); the tests pinned Unix
+  path-separator literals. Fix: gate the two tests behind
+  `#[cfg(unix)]` and add `#[cfg(not(unix))]` equivalents asserting the
+  backslash form. No production code changed. The adjacent
+  `safe_relative_rejects_*` and `is_inside_cwd` tests assert `None` /
+  booleans (separator-independent) so they pass on both platforms
+  without gating.
+
+### Gate (HEAD on `wo/win-audit`, before commit)
+
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0
+  warnings, 8m20s)
+- `cargo clippy -p kf-routing -- -D warnings`: PASS (0 warnings, 24.86s)
+- `cargo nextest run -p kf-context-index`: 68/68 passed (0.258s)
+- `cargo nextest run -p kf-routing`: 100/100 passed (0.849s)
+- `cargo nextest run -p kf-code --lib tui::selftest::approval_prompt_display`:
+  1/1 passed (run ID `17f8a4ec-53eb-44e3-8768-c0bb598c921d`)
+- `cargo nextest run -p kf-code --lib tui::selftest`: 22/22 passed
+  (0.338s — no adjacent test broken)
+- `cargo fmt --check`: clean
+
+### Pending
+
+- None. All 4 failures fixed; no deferrals.
+
+### Notes
+
+- The Windows tests could not be run locally (no Windows runner).
+  Fixes are correct by analysis of the documented Windows-specific
+  behaviors: (a) `Path::canonicalize` returns `\\?\`-prefixed paths
+  on Windows while `current_dir()` does not; (b) `SetFileTime` requires
+  `GENERIC_WRITE` handle access; (c) `PathBuf::to_string_lossy()` uses
+  the platform separator. A `cargo check --target x86_64-pc-windows-gnu`
+  cross-build (started by another process during this session) compiled
+  `kf_code` for the Windows target, confirming the F1 production change
+  compiles for Windows.
+- A stray `crates/kf-compress-core/src/config.rs` change
+  (`Box<toml::de::Error>` to fix `clippy::result_large_err` on Windows)
+  was found in the worktree, left by the Windows cross-build process
+  (PID 804534, started 07:35 before this session). It is out of scope
+  for this task — restored it with `git checkout` so it is not
+  accidentally committed here. It belongs to whoever started that build.
+
+---
+
 ## Session 2026-08-16 — WO env-race: kill Windows EnvGuard post-Drop live-env read (worktree `.worktrees/wo-envrace`, branch `wo/fix-env-race`)
 
 ### What changed this session

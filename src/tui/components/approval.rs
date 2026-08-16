@@ -86,7 +86,18 @@ pub fn render_approval_dialog(
     // Only read files inside the working directory; a malicious model could
     // submit edit_file("../../../../etc/passwd") expecting the diff preview to
     // leak the file contents even if PathGuard blocks the write.
-    let cwd = std::env::current_dir().ok();
+    //
+    // The base cwd is canonicalized so the `starts_with` comparison against a
+    // canonicalized target path is prefix-consistent on Windows. On Windows,
+    // `Path::canonicalize` returns an extended-length `\\?\C:\...` path while
+    // `std::env::current_dir()` returns `C:\...` (no prefix) — comparing the
+    // two directly always reports "outside CWD", which would mis-classify
+    // every in-CWD edit as DANGEROUS and suppress the diff preview.
+    // Canonicalizing the base gives both sides the same prefix on Windows;
+    // on Unix it is a no-op for an already-absolute path.
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|d| d.canonicalize().ok());
     let reader = |p: &str| {
         let permitted = cwd.as_ref().is_some_and(|base| {
             std::path::Path::new(p)

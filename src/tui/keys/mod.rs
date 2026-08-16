@@ -453,6 +453,118 @@ fn handle_search_nav_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
     Some(Ok(()))
 }
 
+/// Number of rendered lines before the chooser rows in `render_models`.
+/// MUST match `CHOOSER_HEADER_ROWS` in `tabs.rs`.
+const MODELS_CHOOSER_HEADER_ROWS: usize = 7;
+
+/// A single row in the model chooser list. Mirrors `ModelChoiceRow` in
+/// `tabs.rs`; kept local to avoid a cross-module dependency.
+struct ModelChoiceRow {
+    name: String,
+    #[allow(dead_code)]
+    provider: String,
+    #[allow(dead_code)]
+    context: String,
+    #[allow(dead_code)]
+    is_current: bool,
+}
+
+/// Build the chooser rows from in-memory state. Mirrors
+/// `model_chooser_rows` in `tabs.rs` — the two MUST stay in sync.
+fn model_chooser_rows_lookup(state: &AppState, config: &Config) -> Vec<ModelChoiceRow> {
+    let mut rows = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    if let crate::tui::app::ConnectionState::Connected { model, .. } = &state.provider.connection {
+        if seen.insert(model.clone()) {
+            let provider = crate::tui::commands::adapter_kind_for_model(model).to_string();
+            let context = state
+                .provider
+                .model_info
+                .as_ref()
+                .map(|m| crate::tui::rendering::format_token_count(m.max_context_tokens))
+                .unwrap_or_else(|| "—".to_string());
+            rows.push(ModelChoiceRow {
+                name: model.clone(),
+                provider,
+                context,
+                is_current: true,
+            });
+        }
+    }
+
+    let default = &config.model.default_model;
+    if !default.is_empty() && seen.insert(default.clone()) {
+        let provider = crate::tui::commands::adapter_kind_for_model(default).to_string();
+        rows.push(ModelChoiceRow {
+            name: default.clone(),
+            provider,
+            context: "—".to_string(),
+            is_current: false,
+        });
+    }
+
+    rows
+}
+
+/// Number of rendered lines before the job data rows in `render_jobs`.
+/// MUST match the header layout in `render_jobs`. If the renderer
+/// changes its header, update this constant.
+const JOBS_HEADER_ROWS: usize = 3;
+
+/// Parse `cached_jobs_output` into a flat list of job IDs (background
+/// first, then scheduled) in the same order `render_jobs` emits rows.
+/// Used by the Enter handler to map the selected visual row to a job
+/// ID. Mirrors `parse_job_rows` in `tabs.rs` — the two MUST stay in
+/// sync.
+fn parse_job_ids_lookup(cached: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut in_sched = false;
+    for line in cached.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("Background jobs:") {
+            in_sched = false;
+            continue;
+        }
+        if trimmed.starts_with("Scheduled jobs:") {
+            in_sched = true;
+            continue;
+        }
+        if trimmed.starts_with("No background jobs.")
+            || trimmed.starts_with("No scheduled jobs.")
+            || trimmed.starts_with("Tip:")
+            || trimmed.is_empty()
+        {
+            continue;
+        }
+
+        if in_sched {
+            // Scheduled row: "  <id> [enabled] ..."
+            let id = trimmed.split_whitespace().next().unwrap_or("");
+            if !id.is_empty() {
+                ids.push(id.to_string());
+            }
+        } else {
+            // Background row: "  ⏳ running #5 — cmd" etc.
+            if let Some(rest) = trimmed
+                .strip_prefix("⏳ running #")
+                .or_else(|| trimmed.strip_prefix("✅ completed #"))
+                .or_else(|| trimmed.strip_prefix("❌ failed #"))
+                .or_else(|| trimmed.strip_prefix("🚫 cancelled #"))
+            {
+                let id = rest
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("");
+                if !id.is_empty() {
+                    ids.push(id.to_string());
+                }
+            }
+        }
+    }
+    ids
+}
+
 /// Handle Enter on a non-Chat tab. Each tab gets a minimal action:
 /// - Models (F2): show model details in a status message
 /// - Plugins (F3): toggle the selected plugin on/off
@@ -476,21 +588,49 @@ async fn handle_tab_enter(
 
     match state.ui.active_tab {
         ActiveTab::Models => {
-            if let Some(ref info) = state.provider.model_info {
-                let msg = format!(
-                    "Model: {} (context: {} tokens)",
-                    info.name,
-                    crate::tui::rendering::format_token_count(info.max_context_tokens)
-                );
-                state
-                    .conversation
-                    .messages
-                    .push_back(ConversationEntry::new("system", msg));
-            } else {
-                state
-                    .conversation
-                    .messages
-                    .push_back(ConversationEntry::new("system", "No model connected."));
+            // Map the selected row to a model name using the same
+            // chooser rows `render_models` emits. The chooser header
+            // eats the first CHOOSER_HEADER_ROWS rows.
+            let name = {
+                let config = crate::shared::read_shared_config(&state.services.config);
+                let rows = model_chooser_rows_lookup(state, &config);
+                let idx = sel.saturating_sub(MODELS_CHOOSER_HEADER_ROWS);
+                rows.get(idx).map(|r| r.name.clone())
+            };
+            match name {
+                Some(n) => {
+                    let msg = crate::tui::commands::handle_model_command(
+                        &n,
+                        ctx.model_tx,
+                        ctx.event_tx,
+                        state,
+                    )
+                    .await;
+                    state
+                        .conversation
+                        .messages
+                        .push_back(ConversationEntry::new("system", msg));
+                }
+                None => {
+                    // No model row at this selection — fall back to a
+                    // diagnostic so Enter isn't a silent no-op.
+                    if let Some(ref info) = state.provider.model_info {
+                        let msg = format!(
+                            "Model: {} (context: {} tokens)",
+                            info.name,
+                            crate::tui::rendering::format_token_count(info.max_context_tokens)
+                        );
+                        state
+                            .conversation
+                            .messages
+                            .push_back(ConversationEntry::new("system", msg));
+                    } else {
+                        state
+                            .conversation
+                            .messages
+                            .push_back(ConversationEntry::new("system", "No model at this row."));
+                    }
+                }
             }
             state.mark_dirty();
         }
@@ -528,7 +668,20 @@ async fn handle_tab_enter(
             state.mark_dirty();
         }
         ActiveTab::Jobs => {
-            let msg = crate::tui::commands::handle_jobs_command("", state).await;
+            // Map the selected row to a job ID by parsing the same
+            // cached_jobs_output the renderer parses. The header eats
+            // the first JOBS_HEADER_ROWS rows.
+            let job_id = state
+                .session
+                .cached_jobs_output
+                .as_ref()
+                .and_then(|cached| {
+                    let ids = parse_job_ids_lookup(cached);
+                    let idx = sel.saturating_sub(JOBS_HEADER_ROWS);
+                    ids.get(idx).cloned()
+                });
+            let args = job_id.as_deref().unwrap_or("");
+            let msg = crate::tui::commands::handle_jobs_command(args, state).await;
             state
                 .conversation
                 .messages
@@ -538,12 +691,13 @@ async fn handle_tab_enter(
         ActiveTab::Settings => {
             let line = {
                 let config = crate::shared::read_shared_config(&state.services.config);
-                let lines = settings_keys_and_values(&config);
-                // render_settings has 2 header lines before data rows.
-                let idx = sel.saturating_sub(2);
-                match lines.get(idx) {
-                    Some(l) => l.clone(),
-                    None => "No setting at this row.".to_string(),
+                // `settings_row_values` returns one entry per rendered
+                // row (including headers/blanks as empty strings) so the
+                // selected index maps directly — no offset math.
+                let rows = settings_row_values(&config, state);
+                match rows.get(sel) {
+                    Some(l) if !l.is_empty() => l.clone(),
+                    _ => "No setting at this row.".to_string(),
                 }
             };
             state
@@ -557,18 +711,112 @@ async fn handle_tab_enter(
     Ok(())
 }
 
-/// Collect Settings tab key=value lines in the same order as
-/// `render_settings`, so the Enter handler can look up the selected row.
-fn settings_keys_and_values(config: &Config) -> Vec<String> {
+/// Build one value-string per rendered Settings row, in the EXACT order
+/// `render_settings` emits lines. Non-data rows (headers, blanks, the
+/// /reload hint) are empty strings so the Enter handler can skip them.
+/// The data rows carry the human-readable label the user sees plus the
+/// underlying raw value, so Enter reports something useful.
+///
+/// This mirrors `render_settings` row-for-row. If the renderer changes
+/// row order, this function MUST change with it — the two are a pair.
+fn settings_row_values(config: &Config, state: &AppState) -> Vec<String> {
+    let mut rows = Vec::new();
+    // " Settings" header
+    rows.push(String::new());
+    // blank
+    rows.push(String::new());
+    // " MODEL" header
+    rows.push(String::new());
+    rows.push(format!("Default model: {}", config.model.default_model));
+    rows.push(format!("Provider: {}", config.model.anthropic_provider));
+    let context = state
+        .provider
+        .model_info
+        .as_ref()
+        .map(|m| crate::tui::rendering::format_token_count(m.max_context_tokens))
+        .unwrap_or_else(|| "—".to_string());
+    rows.push(format!("Context window: {context}"));
+    // blank
+    rows.push(String::new());
+    // " SAFETY" header
+    rows.push(String::new());
+    rows.push(format!(
+        "Command approval: {} (auto_approve={}, bang_requires_approval={})",
+        approval_label_str(
+            config.security.auto_approve,
+            config.security.bang_requires_approval,
+        ),
+        config.security.auto_approve,
+        config.security.bang_requires_approval
+    ));
+    rows.push(format!(
+        "Sandbox: {} (sandbox_dir={})",
+        sandbox_label_str(config.security.sandbox_dir.as_deref()),
+        config.security.sandbox_dir.as_deref().unwrap_or("(none)")
+    ));
+    rows.push(format!(
+        "Hidden files: {} (block_dotfiles={})",
+        dotfiles_label_str(config.security.block_dotfiles),
+        config.security.block_dotfiles
+    ));
+    // blank
+    rows.push(String::new());
+    // " TOOLS" header
+    rows.push(String::new());
+    rows.push(format!("Dry run: {}", config.tools.dry_run));
+    rows.push(format!("Follow symlinks: {}", config.tools.follow_symlinks));
+    // blank
+    rows.push(String::new());
+    // " Raw config" header + raw lines + blank + /reload hint
+    rows.push(String::new());
+    let raw = raw_config_lines_keys(config);
+    for l in raw {
+        rows.push(l);
+    }
+    rows.push(String::new());
+    rows.push(String::new());
+    rows
+}
+
+/// Local copies of the semantic-label helpers in `tabs.rs` (kept here to
+/// avoid a cross-module dependency from the key handler into the widget
+/// renderer; the labels are tiny and must stay in sync manually).
+fn approval_label_str(auto_approve: bool, bang_requires_approval: bool) -> &'static str {
+    match (auto_approve, bang_requires_approval) {
+        (true, false) => "Auto-approve safe commands",
+        (true, true) => "Auto-approve (bang still asks)",
+        (false, _) => "Always ask",
+    }
+}
+
+fn sandbox_label_str(sandbox_dir: Option<&str>) -> &'static str {
+    if sandbox_dir.is_some() {
+        "Project root"
+    } else {
+        "None"
+    }
+}
+
+fn dotfiles_label_str(block_dotfiles: bool) -> &'static str {
+    if block_dotfiles {
+        "Blocked"
+    } else {
+        "Allowed"
+    }
+}
+
+fn raw_config_lines_keys(config: &Config) -> Vec<String> {
     let mut lines = Vec::new();
     lines.push(format!("default_model: {}", config.model.default_model));
-    lines.push(format!("ollama_host: {}", config.model.ollama_host));
     lines.push(format!(
         "anthropic_provider: {}",
         config.model.anthropic_provider
     ));
     lines.push(format!("cache_enabled: {}", config.model.cache_enabled));
-    lines.push(format!("auto_approve: {}", config.security.auto_approve));
+    lines.push(format!(
+        "auto_approve: {} (bang: {})",
+        config.security.auto_approve, config.security.bang_requires_approval
+    ));
     lines.push(format!(
         "sandbox_dir: {}",
         config.security.sandbox_dir.as_deref().unwrap_or("(none)")
@@ -577,24 +825,8 @@ fn settings_keys_and_values(config: &Config) -> Vec<String> {
         "block_dotfiles: {}",
         config.security.block_dotfiles
     ));
-    lines.push(format!(
-        "bang_requires_approval: {}",
-        config.security.bang_requires_approval
-    ));
     lines.push(format!("dry_run: {}", config.tools.dry_run));
     lines.push(format!("follow_symlinks: {}", config.tools.follow_symlinks));
-    lines.push(format!(
-        "max_tool_calls_per_turn: {}",
-        config.tools.max_tool_calls_per_turn
-    ));
-    lines.push(format!(
-        "carryover_enabled: {}",
-        config.session.carryover_enabled
-    ));
-    lines.push(format!(
-        "worktree_enabled: {}",
-        config.session.worktree_enabled
-    ));
     lines
 }
 

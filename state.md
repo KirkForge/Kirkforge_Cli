@@ -81,7 +81,89 @@
 ### Gate (HEAD on `wo/34-b`)
 - `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
 - `cargo fmt --check`: PASS (clean)
-- `cargo nextest run -p kf-code --lib tui::`: 521 passed, 2816 skipped
+## Session 2026-08-16 — WO 34.6 Jobs structured monitor (worktree `.worktrees/wo34-c`, branch `wo/34-c`)
+
+### What changed this session
+- **WO 34.6: Jobs tab (F4) rewritten from raw text dump to a structured
+  job monitor.** `render_jobs` (tabs.rs) now parses
+  `cached_jobs_output` into structured rows with status icons (●
+  running, ✓ done, ✗ failed, ⊘ cancelled) and splits the output into
+  Background + Scheduled sections. A conservative parser
+  (`parse_job_rows` + `parse_bg_row` + `parse_sched_row`) handles the
+  two section formats; unknown lines are skipped so a format drift in
+  `format_job_status`/`handle_scheduled_list` shows fewer rows, not a
+  broken tab (ponytail: comment names the coupling + upgrade path).
+  11 unit tests pin the parser. The Enter-handler's Jobs branch
+  (keys/mod.rs) now maps the selected visual row to a job ID via a
+  parallel `parse_job_ids_lookup` and runs `/jobs <id>` for details
+  (was: ran `/jobs` list unconditionally). The hint line documents C
+  (cancel) and L (logs) as available slash commands.
+
+### Gate (HEAD on `wo/34-c`, WO 34.6 commit)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 529 passed, 2816 skipped
+  (includes 11 new `jobs_parser_tests`)
+
+### Pending
+- None from this WO series. All three (34.4 + 34.5 + 34.6) shipped.
+
+---
+
+## Session 2026-08-16 — WO 34.5 Models chooser (worktree `.worktrees/wo34-c`, branch `wo/34-c`)
+
+### What changed this session
+- **WO 34.5: Models tab (F2) rewritten from diagnostic dump to a
+  chooser list + details section.** `render_models` (tabs.rs) now
+  shows a radio list (● current / ○ available) with provider + context
+  per model, then a Details section below with routing, cache, tokens,
+  and cost for the selected row. ↑↓ navigates, Enter switches model
+  via the existing `/model <name>` path. Available models come from the
+  connected model + the configured default (the two the user can act
+  on). Full Ollama tag-list discovery is deferred — the chooser covers
+  the common "am I on the right model?" question with in-memory state
+  only (ponytail: comment names the ceiling + upgrade path). The
+  Enter-handler's Models branch (keys/mod.rs) was rewritten to map the
+  selected visual row to a model name via a parallel
+  `model_chooser_rows_lookup` list that mirrors the renderer's
+  `model_chooser_rows`, replacing the old "show model info" no-op.
+
+### Gate (HEAD on `wo/34-c`, WO 34.5 commit)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 518 passed, 2816 skipped
+
+### Pending
+- WO 34.6 (Jobs structured monitor) — next in the same worktree.
+
+---
+
+## Session 2026-08-16 — WO 34.4 Settings semantic controls (worktree `.worktrees/wo34-c`, branch `wo/34-c`)
+
+### What changed this session
+- **WO 34.4: Settings tab (F5) rewritten from config-struct dump to
+  semantic controls.** `render_settings` (`src/tui/widgets/tabs.rs`)
+  now groups settings into MODEL (Default model, Provider, Context
+  window), SAFETY (Command approval, Sandbox, Hidden files), and TOOLS
+  (Dry run, Follow symlinks) with human-readable values. A collapsed
+  "Raw config" section at the bottom keeps the original
+  `field: value` lines for developers. Display only — no edit capability
+  (the WO explicitly defers edit). The Enter-handler's row lookup
+  (`settings_row_values` in `keys/mod.rs`) was rewritten to map the
+  selected visual row directly via a parallel list mirroring the render
+  order, replacing the old `saturating_sub(2)` offset math that assumed
+  a fixed 2-line header. Pure label helpers (`approval_label`,
+  `sandbox_label`, `dotfiles_label`, `bool_label`) are the single
+  source of truth for the wording; the keys handler keeps local copies
+  to avoid a cross-module dependency.
+
+### Gate (HEAD on `wo/34-c`, WO 34.4 commit)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 518 passed, 2816 skipped
+
+### Pending
+- WO 34.5 (Models chooser) + WO 34.6 (Jobs structured monitor) — next
 
 ---
 

@@ -134,6 +134,20 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // fragments — all text from one turn stays in ONE message.
             // Tool entries appear between the message and the next one
             // in the data model, but the text content is unified.
+            //
+            // "Current turn" detection: the assistant entry must still be
+            // `streaming` (set when the first token of the turn arrived,
+            // cleared by `TurnComplete` at turn end). This is the
+            // within-turn marker — it stays true across ToolStart/
+            // ToolResult (which don't clear it), so a "text → tool →
+            // more text" turn keeps appending to the same entry. After
+            // `TurnComplete` clears `streaming`, a new turn's first
+            // Token correctly opens a fresh entry instead of bleeding
+            // into the prior turn's assistant message. The old heuristic
+            // (all entries after the assistant are tool/system) caused
+            // cross-turn bleed: a new turn's text was appended to the
+            // prior turn's assistant because the tool entries from the
+            // prior turn were still the last entries.
             const ASSISTANT: &str = "assistant";
             let last_assistant_idx = state
                 .conversation
@@ -141,33 +155,20 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 .iter()
                 .rposition(|m| m.role == ASSISTANT);
             if let Some(idx) = last_assistant_idx {
-                // Only append if this assistant entry was created in the
-                // CURRENT turn (not a previous turn's message). We detect
-                // this by checking if there are tool entries after it
-                // (meaning tools fired during this turn) or if it's the
-                // last entry (no tools yet).
-                let is_current_turn = idx == state.conversation.messages.len() - 1
-                    || state
-                        .conversation
-                        .messages
-                        .iter()
-                        .skip(idx + 1)
-                        .all(|m| m.role == "tool" || m.role == "system");
+                let is_current_turn = state.conversation.messages[idx].streaming;
                 if is_current_turn {
                     state.conversation.messages[idx].content.push_str(&t);
                     state.conversation.messages[idx].streaming = true;
                     state.conversation.messages[idx].bump_version();
                 } else {
-                    state
-                        .conversation
-                        .messages
-                        .push_back(ConversationEntry::new(ASSISTANT, t));
+                    let mut entry = ConversationEntry::new(ASSISTANT, t);
+                    entry.streaming = true;
+                    state.conversation.messages.push_back(entry);
                 }
             } else {
-                state
-                    .conversation
-                    .messages
-                    .push_back(ConversationEntry::new(ASSISTANT, t));
+                let mut entry = ConversationEntry::new(ASSISTANT, t);
+                entry.streaming = true;
+                state.conversation.messages.push_back(entry);
             }
         }
         TurnEvent::Thinking(t) => {
@@ -675,6 +676,96 @@ mod tests {
         dispatch_turn_event(&mut s, TurnEvent::Token("bar".into()));
         assert_eq!(s.conversation.messages.len(), 1);
         assert_eq!(s.conversation.messages[0].content, "foobar");
+    }
+
+    /// Within-turn streaming: "text → tool → more text" keeps appending
+    /// to the SAME assistant entry. The `streaming` flag (set by the
+    /// first Token, NOT cleared by ToolStart/ToolResult) is the
+    /// within-turn marker. This is the case the `is_current_turn` check
+    /// must preserve — the model emits text, calls a tool, then emits
+    /// more text, and all of it belongs to one assistant message.
+    #[test]
+    fn token_appends_across_tool_calls_within_turn() {
+        let mut s = app_state();
+        // Turn 1: text, then a tool call, then more text.
+        dispatch_turn_event(&mut s, TurnEvent::Token("Let me check ".into()));
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({"command": "ls"}),
+            },
+        );
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: "file.txt".into(),
+                success: true,
+            },
+        );
+        // The model emits more text after the tool result — this must
+        // append to the SAME assistant entry, not open a new one.
+        dispatch_turn_event(&mut s, TurnEvent::Token("found it".into()));
+        assert_eq!(
+            s.conversation.messages.len(),
+            2,
+            "should be assistant + tool, not a second assistant entry"
+        );
+        assert_eq!(s.conversation.messages[0].role, "assistant");
+        assert_eq!(
+            s.conversation.messages[0].content, "Let me check found it",
+            "post-tool text should append to the pre-tool assistant entry"
+        );
+    }
+
+    /// Cross-turn isolation: after `TurnComplete` clears `streaming`, a
+    /// new turn's first Token opens a NEW assistant entry instead of
+    /// appending to the prior turn's assistant. This is the regression
+    /// guard for the "slaps all text into the same initial text response"
+    /// bug — the old heuristic (all entries after the assistant are
+    /// tool/system) caused turn 2's text to bleed into turn 1's
+    /// assistant entry because the tool entries from turn 1 were still
+    /// the last entries.
+    #[test]
+    fn token_opens_new_entry_after_turn_complete() {
+        let mut s = app_state();
+        // Turn 1: text + tool call.
+        dispatch_turn_event(&mut s, TurnEvent::Token("turn one".into()));
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({"command": "ls"}),
+            },
+        );
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: "ok".into(),
+                success: true,
+            },
+        );
+        // Turn 1 ends — TurnComplete clears streaming on all assistant entries.
+        dispatch_turn_event(&mut s, TurnEvent::TurnComplete);
+        assert!(
+            !s.conversation.messages[0].streaming,
+            "TurnComplete must clear streaming on the assistant entry"
+        );
+        // Turn 2: first token. Must NOT append to turn 1's assistant.
+        dispatch_turn_event(&mut s, TurnEvent::Token("turn two".into()));
+        assert_eq!(
+            s.conversation.messages.len(),
+            3,
+            "turn 2 should open a new assistant entry (assistant + tool + assistant)"
+        );
+        assert_eq!(s.conversation.messages[0].content, "turn one");
+        assert_eq!(s.conversation.messages[2].role, "assistant");
+        assert_eq!(
+            s.conversation.messages[2].content, "turn two",
+            "turn 2 text must NOT bleed into turn 1's assistant entry"
+        );
     }
 
     /// `Thinking` accumulates into the thinking buffer. The TUI

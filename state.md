@@ -38,14 +38,39 @@
   `key_scenarios`) sets `active_tab = ActiveTab::Models`, types `/exit`,
   presses Enter, asserts `session.should_exit == true`.
 
-### Gate (HEAD on `wo/tui-bugs`, commit 2)
+- **Bug 3 — input bar cursor + title (commit 3).** Two fixes in
+  `src/tui/widgets/input.rs`:
+  (A) `render_cursor_line` rendered `{before}{first}█{rest}` — the char
+  at the cursor PLUS a trailing block. Mid-text this doubled the char
+  visually (the block covered the NEXT cell, so the char appeared to
+  repeat). Fixed: the cursor is now a block that REPLACES the char at
+  the cursor position — reverse video (`bg=White, fg=Black`) on the char
+  under the cursor, or a solid `█` at end-of-line. No trailing block.
+  (B) The input box title showed `Input (N lines)` always and
+  `Input  📋 pasted` after a bracketed paste — noise in normal mode (the
+  wrapped lines are visible in the box; the paste shows up as text).
+  Simplified the normal-mode title to just ` Input `. The search-mode
+  match counter `(N / M matches)` is retained and is now gated on
+  `search.mode` (was gated on `!matches.is_empty()`, which let stale
+  matches from a prior search leak into the normal-mode title). The
+  `paste_flash` field + its slow-tick decrement are left in place
+  (removing the field would ripple through `mod.rs` + `dispatch_one`;
+  the decrement is harmless once the title no longer reads it).
+  Tests added (5, in `input.rs` `tests` module):
+  `cursor_line_renders_block_at_end_of_empty_line`,
+  `cursor_line_renders_block_at_end_of_nonempty_line`,
+  `cursor_line_renders_reverse_video_on_char_under_cursor`,
+  `cursor_line_at_start_renders_first_char_reverse`,
+  `cursor_line_preserves_all_text_characters`.
+
+### Gate (HEAD on `wo/tui-bugs`, commit 3 — final)
 - `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
 - `cargo fmt --check`: PASS (clean)
-- `cargo nextest run -p kf-code --lib tui::`: 558 passed, 2816 skipped
-  (was 557 + 1 new `exit_command_dispatched_when_overlay_active`)
+- `cargo nextest run -p kf-code --lib tui::`: 563 passed, 2816 skipped
+  (was 558 + 5 new `cursor_line_*` tests in `input.rs`)
 
 ### Pending
-- Bug 3 (input bar cursor + title) — next commit in this session.
+- None. All 3 bugs fixed; no deferrals.
 
 ---
 

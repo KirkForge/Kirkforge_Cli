@@ -24,30 +24,24 @@ pub fn render_input(f: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
-    // Content width = area width minus the two border columns. Used for the
-    // VISUAL (wrapped) line count so the "(N lines)" title reflects rows the
-    // text actually occupies, not just explicit newlines (WO 30.0.12).
-    let content_width = area.width.saturating_sub(2) as usize;
-
+    // Title: just "Input" in normal mode. The search-mode match counter
+    // "(N / M matches)" is the only decoration that carries information
+    // the user can't already see in the bar itself; the normal-mode line
+    // count and paste-flash were noise (the wrapped lines are visible in
+    // the box, and the paste already shows up as text). Gate the counter
+    // on search.mode (not just matches being non-empty) so stale matches
+    // from a prior search don't leak into the normal-mode title.
     let block = Block::default()
-        .title(if !state.search.matches.is_empty() {
+        .title(if state.search.mode {
             let total = state.search.matches.len();
-            let cur = state.search.match_idx + 1;
+            let cur = if total == 0 {
+                0
+            } else {
+                state.search.match_idx + 1
+            };
             format!(" Input  ({cur} / {total} matches) ")
         } else {
-            let vlines = state.input_visual_line_count(content_width);
-            let lines_part = if vlines > 1 {
-                format!("  ({vlines} lines)")
-            } else {
-                String::new()
-            };
-            // Brief "📋 pasted" marker after a bracketed paste (WO 30.0.11).
-            let paste_part = if state.ui.paste_flash > 0 {
-                "  📋 pasted"
-            } else {
-                ""
-            };
-            format!(" Input{lines_part}{paste_part} ")
+            " Input ".to_string()
         })
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -117,30 +111,34 @@ fn render_suggestions(suggestions: &[String]) -> Line<'static> {
     ))
 }
 
-/// Render the line that currently holds the cursor, with a block cursor.
+/// Render the line that currently holds the cursor. The cursor is a
+/// block that REPLACES the character at the cursor position (reverse
+/// video on the char under the cursor, or a solid block at end-of-line)
+/// — NOT a trailing block appended after the char, which doubled the
+/// char visually and made mid-text editing look corrupted.
 fn render_cursor_line(line: &str, col: usize) -> Line<'static> {
-    let mut spans = Vec::new();
     let before: String = line.chars().take(col).collect();
     let after: String = line.chars().skip(col).collect();
+    let reverse = Style::default().bg(Color::White).fg(Color::Black);
 
-    spans.push(Span::raw(before));
-    // Always show a cursor, even if the line is empty.
-    spans.push(Span::styled(
-        if after.is_empty() {
-            " █".to_string()
-        } else {
-            // Highlight the first char after the cursor and append the
-            // block cursor marker so the insertion point is unambiguous.
-            let first = after.chars().next().unwrap_or(' ');
-            format!("{first}█")
-        },
-        Style::default(),
-    ));
-    if !after.is_empty() {
-        let char_len = after.chars().next().map(|c| c.len_utf8()).unwrap_or(0);
-        spans.push(Span::raw(after[char_len..].to_string()));
+    let mut spans = Vec::new();
+    if !before.is_empty() {
+        spans.push(Span::raw(before));
     }
-
+    if after.is_empty() {
+        // Cursor at end of line: solid block, no leading space.
+        spans.push(Span::styled("█", reverse));
+    } else {
+        // Cursor on a char: render that char in reverse video (it
+        // replaces the char visually, like a real terminal cursor), then
+        // the rest of the line normally. No trailing block.
+        let first = after.chars().next().unwrap();
+        let rest: String = after.chars().skip(1).collect();
+        spans.push(Span::styled(first.to_string(), reverse));
+        if !rest.is_empty() {
+            spans.push(Span::raw(rest));
+        }
+    }
     Line::from(spans)
 }
 
@@ -192,4 +190,153 @@ fn render_search_bar(f: &mut Frame, area: Rect, state: &AppState) {
 
     let paragraph = Paragraph::new(Line::from(spans)).block(block);
     f.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Cursor at end of an empty line: a single block span, no leading
+    /// space, no extra spans. The prior code emitted `" █"` (block with
+    /// a leading space) which shifted the cursor one cell right of the
+    /// true insertion point on an empty line.
+    #[test]
+    fn cursor_line_renders_block_at_end_of_empty_line() {
+        let line = render_cursor_line("", 0);
+        assert_eq!(line.spans.len(), 1, "empty line should be one span");
+        assert_eq!(line.spans[0].content, "█");
+        assert!(
+            matches!(line.spans[0].style.bg, Some(Color::White)),
+            "block cursor should be reverse-video (white bg)"
+        );
+        assert!(
+            matches!(line.spans[0].style.fg, Some(Color::Black)),
+            "block cursor should be reverse-video (black fg)"
+        );
+    }
+
+    /// Cursor at end of a non-empty line ("abc|"): the text before the
+    /// cursor renders as one raw span, then a single block span — no
+    /// trailing char+block. The prior code rendered `"abc"` then a
+    /// redundant block, which was fine here, but this pins that the
+    /// block is its own span (not concatenated onto the text span).
+    #[test]
+    fn cursor_line_renders_block_at_end_of_nonempty_line() {
+        let line = render_cursor_line("abc", 3);
+        assert_eq!(line.spans.len(), 2, "should be [before, block]");
+        assert_eq!(line.spans[0].content, "abc");
+        assert_eq!(line.spans[1].content, "█");
+        assert!(
+            matches!(line.spans[1].style.bg, Some(Color::White)),
+            "block cursor should be reverse-video"
+        );
+    }
+
+    /// Cursor on a char mid-line ("a|bc"): the char under the cursor
+    /// renders in reverse video (it REPLACES the char visually, like a
+    /// real terminal cursor), the rest renders normally. The prior code
+    /// emitted `"a"` + `"b█"` + `"c"` — the char under the cursor AND a
+    /// trailing block, which doubled the char visually and made mid-text
+    /// editing look corrupted. This pins the fix: one reverse-video
+    /// span for the char under the cursor, no trailing block.
+    #[test]
+    fn cursor_line_renders_reverse_video_on_char_under_cursor() {
+        let line = render_cursor_line("abc", 1);
+        // [before="a"], [char-under-cursor="b" reverse], [rest="c"]
+        assert_eq!(
+            line.spans.len(),
+            3,
+            "should be [before, reverse-char, rest]"
+        );
+        assert_eq!(line.spans[0].content, "a");
+        assert_eq!(line.spans[1].content, "b");
+        assert!(
+            matches!(line.spans[1].style.bg, Some(Color::White)),
+            "char under cursor should be reverse-video (white bg)"
+        );
+        assert!(
+            matches!(line.spans[1].style.fg, Some(Color::Black)),
+            "char under cursor should be reverse-video (black fg)"
+        );
+        assert_eq!(line.spans[2].content, "c");
+        // The rest span must NOT carry the reverse-video style.
+        assert!(
+            line.spans[2].style.bg.is_none(),
+            "rest of line should not be reverse-video"
+        );
+    }
+
+    /// Cursor at start of line ("|abc"): no `before` span, the first
+    /// char is reverse-video, the rest is raw. Guards the col==0 edge.
+    #[test]
+    fn cursor_line_at_start_renders_first_char_reverse() {
+        let line = render_cursor_line("abc", 0);
+        assert_eq!(line.spans.len(), 2, "should be [reverse-char, rest]");
+        assert_eq!(line.spans[0].content, "a");
+        assert!(
+            matches!(line.spans[0].style.bg, Some(Color::White)),
+            "first char under cursor should be reverse-video"
+        );
+        assert_eq!(line.spans[1].content, "bc");
+    }
+
+    /// The non-cursor spans must reconstruct the original line — the
+    /// cursor render must not drop or duplicate any text character. The
+    /// block cursor span at end-of-line represents the cursor itself,
+    /// not text, so it is excluded from the reconstruction. This catches
+    /// the prior bug where the char under the cursor was emitted twice
+    /// (once as text, once in the block): at col 1 on "abc" the prior
+    /// code joined to "ab█c" — the 'b' appeared once but a spurious
+    /// block was inserted, and the join length was wrong. Here the
+    /// reverse-video span carries the char under the cursor (so it is
+    /// part of the reconstruction), and any trailing block at EOL is
+    /// the cursor-only span.
+    #[test]
+    fn cursor_line_preserves_all_text_characters() {
+        // At end-of-line: spans are [before, block]. The block is the
+        // cursor — join the non-block spans to get the text.
+        let line = render_cursor_line("abc", 3);
+        let joined: String = line
+            .spans
+            .iter()
+            .filter(|s| s.content != "█")
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(joined, "abc", "EOL cursor: text must be preserved");
+
+        // Mid-line: spans are [before, reverse-char, rest]. The
+        // reverse-char span carries a real text char, so it IS part of
+        // the reconstruction. No block is emitted mid-line.
+        let line = render_cursor_line("abc", 1);
+        let joined: String = line
+            .spans
+            .iter()
+            .filter(|s| s.content != "█")
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(
+            joined, "abc",
+            "mid-line cursor: text must be preserved, no duplicated char"
+        );
+
+        // At start: spans are [reverse-char, rest].
+        let line = render_cursor_line("abc", 0);
+        let joined: String = line
+            .spans
+            .iter()
+            .filter(|s| s.content != "█")
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(joined, "abc", "start cursor: text must be preserved");
+
+        // Empty line: just the block.
+        let line = render_cursor_line("", 0);
+        let joined: String = line
+            .spans
+            .iter()
+            .filter(|s| s.content != "█")
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(joined, "", "empty line: no text spans");
+    }
 }

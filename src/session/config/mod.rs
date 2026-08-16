@@ -1144,10 +1144,10 @@ mod tests {
 
         assert_eq!(cfg.model.default_model, "custom-model");
         assert_eq!(cfg.security.max_file_read_size, 512);
-        // Unset fields keep defaults (now empty placeholders)
-        assert!(
-            cfg.model.ollama_host.is_empty(),
-            "ollama_host is empty by default; configure it explicitly"
+        // Unset fields keep defaults (ollama_host defaults to localhost:11434)
+        assert_eq!(
+            cfg.model.ollama_host, "http://localhost:11434",
+            "ollama_host defaults to localhost:11434"
         );
         assert!(!cfg.security.auto_approve);
     }

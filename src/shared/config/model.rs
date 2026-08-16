@@ -170,7 +170,7 @@ impl Default for ModelConfig {
     fn default() -> Self {
         Self {
             default_model: String::new(),
-            ollama_host: String::new(),
+            ollama_host: "http://localhost:11434".to_string(),
             summarize_model: String::new(),
             summarize_enabled: false,
             routing_enabled: false,

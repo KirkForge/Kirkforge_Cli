@@ -2,6 +2,56 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-16 — WO tmux-fix: 3 approval dialog bugs found in tmux testing (worktree `.worktrees/wo-tmux-fix`, branch `wo/tmux-fix`)
+
+Three approval-dialog rendering bugs found during real tmux (PTY) testing.
+All three root causes found and fixed; the approval dialog now renders
+cleanly as an overlay with no chat bleed or stale state.
+
+### What changed this session
+
+- **Bug 1 — approval dialog title corruption (`⚠️r` instead of `⚠️`).**
+  Root cause: ratatui 0.30 `Block::title` miscounts the display width of
+  `⚠️` (U+26A0 + U+FE0F variation selector). The variation selector is
+  width-0 but the title positioning off-by-one leaves a 1-cell gap on the
+  top border where the chat text behind the dialog bleeds through (e.g.
+  the `r` from `USER`). Fix: replaced the emoji title `⚠️  Approval
+  Required` with ASCII `!!  Approval Required` — no width ambiguity. The
+  `⚠` glyph is retained in the body action headline (rendered by
+  `Paragraph`, which handles width correctly via `Line`/`Span`).
+  File: `src/tui/components/approval.rs`.
+- **Bug 2 — chat text bleeds through the approval dialog border.** Root
+  cause: the `Block`'s `border_style` set only `fg` + `add_modifier` but
+  NOT `bg`. Ratatui's `Block::render` fills the inner area with
+  `self.style.bg` but the border cells get their background from
+  `border_style` — with no `bg` set, the border cells inherit no explicit
+  background, so chat text from the prior frame shows through the border
+  rows. Fix: added `.bg(Color::Black)` to `border_style` so the border
+  cells get an explicit black background, fully obscuring the chat behind.
+  File: `src/tui/components/approval.rs`.
+- **Bug 3 — stale content between approvals (side-by-side diff mode
+  persists).** Root cause: `install_approval` in `src/tui/events.rs`
+  resets `approval_scroll` and `approval_max_scroll` on each new approval
+  but did NOT reset `approval_diff_side_by_side`. If the user pressed Tab
+  to toggle side-by-side on approval #1, approval #2 inherited that stale
+  view mode. Fix: reset `approval_diff_side_by_side = false` in
+  `install_approval` alongside the scroll resets.
+
+### Gate
+- `cargo clippy -p kf-code --lib --tests -- -D warnings` — clean.
+- `cargo fmt --check` — clean.
+- `cargo nextest run -p kf-code --lib tui::` — 111/111 approval + TUI
+  tests pass (1 pre-existing flaky failure in `tui::commands::route` —
+  `valid_tier_sends_resolved_model` — unrelated, fails on base commit
+  too; channel `try_recv` race in an async test).
+- tmux test: approval dialog title renders as `!!  Approval Required`
+  (no `⚠️r` corruption), Y approval works without crash across 3
+  sequential approvals, file created correctly, no stale content between
+  approvals.
+
+### Pending
+- (none)
+
 ## Session 2026-08-16 — WO chat-fix: 3 critical TUI bugs (worktree `.worktrees/wo-chat-fix`, branch `wo/chat-fix`)
 
 The user had been unable to use kf-code's TUI for months — three critical

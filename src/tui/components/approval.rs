@@ -61,11 +61,28 @@ pub fn render_approval_dialog(
     f.render_widget(Clear, dialog_area);
     let dialog_width = dialog_area.width;
 
+    // ASCII title — ratatui 0.30 miscounts the display width of `⚠️`
+    // (U+26A0 + U+FE0F variation selector), leaving a 1-cell gap on the
+    // top border where the chat behind the dialog bleeds through
+    // (`⚠️r` instead of `⚠️`). The variation selector is width-0 but the
+    // title positioning off-by-one corrupts the border. `!!` is unambiguous
+    // and has no width ambiguity. The `⚠` glyph still appears in the body
+    // headline (rendered by Paragraph, which handles width correctly).
     let block = Block::default()
-        .title(" ⚠️  Approval Required ")
+        .title(" !!  Approval Required ")
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+        // border_style MUST set bg — without it the border cells inherit
+        // no explicit background, so chat text from the prior frame shows
+        // through the border rows (the dialog is an overlay, not a fresh
+        // screen). bg(Black) matches the block's inner style and fully
+        // obscures the chat behind the border.
+        .border_style(
+            Style::default()
+                .fg(Color::Red)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
         .style(Style::default().bg(Color::Black));
 
     let inner = block.inner(dialog_area);

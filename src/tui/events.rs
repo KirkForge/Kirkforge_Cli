@@ -624,6 +624,10 @@ fn install_approval(state: &mut AppState, req: ApprovalRequest) {
     // starts at the top, regardless of where the previous one was.
     state.approval.approval_scroll = 0;
     state.approval.approval_max_scroll = 0;
+    // Reset the side-by-side diff toggle too — otherwise a Tab toggle
+    // on approval #1 persists into approval #2, showing a stale view
+    // mode the user didn't ask for on the new approval.
+    state.approval.approval_diff_side_by_side = false;
 }
 
 #[cfg(test)]

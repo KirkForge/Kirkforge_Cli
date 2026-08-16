@@ -64,6 +64,23 @@ pub fn global_registry() -> BashJobRegistry {
 /// Maximum number of concurrent background jobs.
 const MAX_JOBS: usize = 64;
 
+/// Returns `Ok(())` if a new job can be spawned, or `Err` with the
+/// cap-exceeded message if `running_count` is at or above `MAX_JOBS`.
+///
+/// Pure extraction of the re-check rejection in `spawn()` so the cap logic
+/// is unit-testable without spawning real subprocesses. The evict-oldest
+/// pass that runs *before* this check mutates the map and is not pure, so
+/// it stays inline.
+fn check_job_cap(running_count: usize) -> Result<(), String> {
+    if running_count >= MAX_JOBS {
+        Err(format!(
+            "Background job limit ({MAX_JOBS}) reached; wait for jobs to finish or cancel them."
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Registry of background bash jobs.
 #[derive(Clone, Default)]
 pub struct BashJobRegistry {
@@ -160,11 +177,7 @@ impl BashJobRegistry {
             let mut jobs = self.jobs.lock().await;
             // Re-check under the same lock before inserting; if another task
             // grabbed the last slot while we cleaned up child handles, reject.
-            if jobs.len() >= MAX_JOBS {
-                return Err(anyhow::anyhow!(
-                    "Background job limit ({MAX_JOBS}) reached; wait for jobs to finish or cancel them."
-                ));
-            }
+            check_job_cap(jobs.len()).map_err(anyhow::Error::msg)?;
             jobs.insert(id, job);
         }
 
@@ -504,6 +517,48 @@ mod tests {
         }
     }
 
+    // ── check_job_cap: pure cap-rejection logic, no subprocess ──
+    // These cover the rejection branch that test_job_cap_enforced_when_all_running
+    // exercises only by spawning 64 real sleep 30 children. The cap check itself
+    // is a pure HashMap length comparison, so it is unit-testable directly.
+
+    #[test]
+    fn check_job_cap_allows_below_max() {
+        for n in 0..MAX_JOBS {
+            assert!(
+                check_job_cap(n).is_ok(),
+                "check_job_cap({n}) should allow below MAX_JOBS ({MAX_JOBS})"
+            );
+        }
+    }
+
+    #[test]
+    fn check_job_cap_rejects_at_max() {
+        let err = check_job_cap(MAX_JOBS).expect_err("check_job_cap(MAX_JOBS) should reject");
+        assert!(
+            err.contains("Background job limit"),
+            "expected cap error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn check_job_cap_rejects_above_max() {
+        let err = check_job_cap(100).expect_err("check_job_cap(100) should reject");
+        assert!(
+            err.contains("Background job limit"),
+            "expected cap error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn check_job_cap_error_message_includes_limit() {
+        let err = check_job_cap(MAX_JOBS).expect_err("check_job_cap(MAX_JOBS) should reject");
+        assert!(
+            err.contains(&MAX_JOBS.to_string()),
+            "error message should include the limit ({MAX_JOBS}), got: {err}"
+        );
+    }
+
     #[tokio::test]
     async fn test_spawn_and_complete() {
         let reg = BashJobRegistry::new();
@@ -720,17 +775,19 @@ mod tests {
     ///
     /// WO 33.14 phase 3 DEFERRED: not replaced with a fake process. The cap
     /// bookkeeping (jobs.len() >= MAX_JOBS, evict-oldest, re-check-under-lock)
-    /// is pure HashMap logic already exercised by mark_failed_if_running and
-    /// the clean/evict tests without subprocess. A fake would need a
-    /// ProcessSpawner trait abstracting tokio::process::Child lifecycle across
-    /// the 96 direct callers of BashJobRegistry::spawn (CRITICAL blast radius,
-    /// 18 modules) — that is the "full fake process framework" WO 33.14
-    /// explicitly scoped out as over-engineering. ponytail: ceiling — the
-    /// correctness of the cap is provable without subprocess; this test is a
-    /// stress test of the real process-management path. Upgrade path: add a
-    /// ProcessSpawner trait + FakeSpawner if a correctness regression surfaces
-    /// that the bookkeeping tests miss; keep the stress test gated nightly.
-    /// Tracked in state.md pending.
+    /// is pure HashMap logic. The cap *rejection* check itself is now
+    /// unit-tested by `check_job_cap_*` (no subprocess); this stress test
+    /// validates the real process lifecycle (spawn 64, cancel 64, reap 64),
+    /// NOT the cap check. A fake would need a ProcessSpawner trait abstracting
+    /// tokio::process::Child lifecycle across the 96 direct callers of
+    /// BashJobRegistry::spawn (CRITICAL blast radius, 18 modules) — that is
+    /// the "full fake process framework" WO 33.14 explicitly scoped out as
+    /// over-engineering. ponytail: ceiling — the correctness of the cap
+    /// rejection is provable without subprocess via `check_job_cap`; this test
+    /// guards the real process-management path (spawn/cancel/reap at scale).
+    /// Upgrade path: add a ProcessSpawner trait + FakeSpawner if a correctness
+    /// regression surfaces that the bookkeeping tests miss; keep the stress
+    /// test gated nightly. Tracked in state.md pending.
     #[tokio::test]
     #[ignore = "spawns MAX_JOBS subprocesses; stress test, run with --ignored"]
     async fn test_job_cap_enforced_when_all_running() {

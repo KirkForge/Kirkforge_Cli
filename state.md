@@ -61,6 +61,60 @@
 
 ---
 
+## Session 2026-08-16 — bash_jobs cap-check pure fn (worktree `.worktrees/wo-cap-fn`, branch `wo/cap-pure-fn`)
+
+### What changed this session
+
+- **Extracted the job-cap rejection check into a pure free function.**
+  `BashJobRegistry::spawn` had an inline `jobs.len() >= MAX_JOBS` re-check
+  (bash_jobs.rs) that returned the cap-exceeded error. Extracted it into
+  `fn check_job_cap(running_count: usize) -> Result<(), String>` — a free
+  function in the same module, returning the exact same error string
+  (`"Background job limit ({MAX_JOBS}) reached; wait for jobs to finish or
+  cancel them."`). `spawn()` now calls `check_job_cap(jobs.len()).map_err
+  (anyhow::Error::msg)?` at the re-check site. No production behaviour change.
+- **Added 4 unit tests for the cap-rejection logic (no subprocess):**
+  `check_job_cap_allows_below_max` (0..63 → Ok), `check_job_cap_rejects_at_max`
+  (64 → Err "Background job limit"), `check_job_cap_rejects_above_max`
+  (100 → Err same message), `check_job_cap_error_message_includes_limit`
+  (error contains "64"). These cover the rejection branch that
+  `test_job_cap_enforced_when_all_running` only reaches by spawning 64 real
+  `sleep 30` subprocesses.
+- **64-process stress test stays `#[ignore]`d and unchanged in behaviour.**
+  Only its `ponytail:` ceiling doc-comment was updated to note that the cap
+  *rejection* is now unit-tested via `check_job_cap_*` (no subprocess) and
+  the stress test's job is to validate the real process lifecycle (spawn 64,
+  cancel 64, reap 64), NOT the cap check. It remains a nightly stress test.
+- **No `ProcessSpawner` trait introduced.** The task explicitly forbade it;
+  WO 33.14 scoped the full fake-process framework out as over-engineering
+  (CRITICAL blast radius: 96 direct `spawn` callers across 18 modules).
+
+### Gate (HEAD on `wo/cap-pure-fn`)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib session::bash_jobs`: 14 passed, 3314
+  skipped (the 4 new `check_job_cap_*` + 10 existing bookkeeping tests; the
+  2 `#[ignore]`d stress tests `test_job_cap_enforced_when_all_running` and
+  `test_timeout_reaps_child_and_preserves_partial_output` stay skipped).
+
+### Impact
+- `gitnexus impact` on `BashJobRegistry::spawn` → CRITICAL (96 direct
+  callers, 18 modules, 19 processes). This is a behaviour-preserving
+  extraction: same error string, same return type, same control flow. No
+  caller is affected. `detect_changes` flagged 34 affected processes, all
+  reflecting line-number shifts from the extraction, not semantic changes.
+- Files: `src/session/bash_jobs.rs` only (+`check_job_cap` free fn, spawn
+  re-check swapped to call it, +4 unit tests, stress-test doc-comment
+  updated).
+
+### Pending
+- None from this task. The `ProcessSpawner` trait + `FakeSpawner` upgrade
+  path remains documented in the stress test's `ponytail:` ceiling comment
+  and tracked here as a WO 33.14 deferral (only build if a correctness
+  regression surfaces that the bookkeeping + `check_job_cap` tests miss).
+
+---
+
 ## Session 2026-08-16 — kf-rbac JWT test speedup (worktree `.worktrees/wo-jwks`, branch `wo/fake-jwks`)
 
 ### What changed this session

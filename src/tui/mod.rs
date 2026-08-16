@@ -98,7 +98,55 @@ impl Drop for TerminalGuard {
         if let Err(e) = execute!(stdout, LeaveAlternateScreen) {
             tracing::warn!(error = %e, "failed to leave alternate screen in terminal guard");
         }
+        // Best-effort raw ANSI reset. The crossterm commands above may
+        // fail when the terminal is already in a corrupted state (the
+        // "failed to disable raw mode / bracketed paste / mouse / alt
+        // screen" log spam). Writing raw escape sequences directly to
+        // stdout does not depend on crossterm tracking mode state, so
+        // it works even when the crossterm-layer is confused. This is
+        // the symptom-side fix for the "terminal in a corrupted state"
+        // reports: the root cause (kb-reader panic, approval dialog
+        // crash) is fixed in bugs 1+2, but this ensures the user's
+        // terminal is usable even if something else corrupts it later.
+        force_terminal_reset(&mut io::stdout());
     }
+}
+
+/// Best-effort terminal reset via raw ANSI escape sequences.
+///
+/// Writes directly to the writer (no crossterm command layer), so it
+/// works even when the terminal is in a corrupted state and the
+/// crossterm `disable_raw_mode` / `LeaveAlternateScreen` / etc.
+/// commands fail. The sequences:
+///   - `\x1b[?2004l` — disable bracketed paste
+///   - `\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l` — disable mouse
+///   - `\x1b[?1049l` — leave alternate screen (xterm)
+///   - `\x1b[?47l`   — leave alternate screen (vt100 fallback)
+///   - `\x1b[?1l`    — disable cursor-key application mode
+///   - `\x1b[0m`     — reset all text attributes (color, bold, etc.)
+///   - `\x1b[?25h`   — show cursor
+///   - `\x1b[2J\x1b[H` — clear screen + home cursor (visible screen)
+///
+/// Each sequence is written independently so a partial write still
+/// resets what it can. Errors are swallowed (best-effort — there is
+/// nothing useful to do with a write error at this point).
+fn force_terminal_reset<W: io::Write>(w: &mut W) {
+    // Disable bracketed paste.
+    let _ = w.write_all(b"\x1b[?2004l");
+    // Disable mouse capture (all the modes crossterm might have enabled).
+    let _ = w.write_all(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l");
+    // Leave alternate screen (xterm + vt100 fallback).
+    let _ = w.write_all(b"\x1b[?1049l\x1b[?47l");
+    // Disable cursor-key application mode.
+    let _ = w.write_all(b"\x1b[?1l");
+    // Reset all text attributes.
+    let _ = w.write_all(b"\x1b[0m");
+    // Show cursor.
+    let _ = w.write_all(b"\x1b[?25h");
+    // Clear the visible screen and home the cursor so the user is not
+    // left looking at the last render's artifacts.
+    let _ = w.write_all(b"\x1b[2J\x1b[H");
+    let _ = w.flush();
 }
 
 /// Show a standalone recent-session picker before the main TUI starts.
@@ -363,6 +411,16 @@ async fn teardown(
     if let Err(e) = execute!(terminal.backend_mut(), LeaveAlternateScreen) {
         tracing::warn!(error = %e, "failed to leave alternate screen during TUI shutdown");
     }
+    // Best-effort raw ANSI reset as a fallback. The crossterm commands
+    // above may fail when the terminal is already corrupted (the
+    // "failed to disable..." log spam). Raw escape sequences write
+    // directly to the backend, bypassing crossterm's state tracking,
+    // so they work even when the crossterm-layer is confused. This is
+    // the symptom-side fix for "terminal in a corrupted state" — the
+    // root cause (kb-reader panic, approval crash) is fixed in bugs
+    // 1+2, but this guarantees the user's terminal is usable on exit
+    // regardless of how the corruption happened.
+    force_terminal_reset(terminal.backend_mut());
 }
 
 fn spawn_plugin_watcher(
@@ -1384,6 +1442,83 @@ mod tests {
     #[test]
     fn kb_reader_zero_errors_never_shuts_down() {
         assert!(!should_shutdown_after_errors(0, 3));
+    }
+
+    // ── Bug 3: best-effort terminal reset ──────────────────────────
+    //
+    // When the terminal is already corrupted, the crossterm cleanup
+    // commands (disable_raw_mode, LeaveAlternateScreen, etc.) can
+    // fail. `force_terminal_reset` writes raw ANSI escape sequences
+    // directly to the writer, bypassing crossterm's state tracking,
+    // so it works even when crossterm is confused. These tests pin
+    // the contract: it writes the reset sequences, and it is
+    // best-effort (does not panic on a closed writer).
+
+    /// `force_terminal_reset` writes the key reset sequences to the
+    /// output. We capture them and assert each is present. This pins
+    /// the contract: disable bracketed paste, disable mouse, leave
+    /// alt screen, reset attributes, show cursor, clear screen.
+    #[test]
+    fn force_terminal_reset_writes_ansi_escape_sequences() {
+        let mut buf = Vec::new();
+        force_terminal_reset(&mut buf);
+        let written = String::from_utf8(buf).expect("reset writes valid UTF-8 (ANSI is ASCII)");
+        // Disable bracketed paste.
+        assert!(
+            written.contains("\x1b[?2004l"),
+            "missing disable-bracketed-paste; got: {written:?}"
+        );
+        // Disable mouse capture (at least one of the mouse modes).
+        assert!(
+            written.contains("\x1b[?1000l"),
+            "missing disable-mouse; got: {written:?}"
+        );
+        // Leave alternate screen (xterm).
+        assert!(
+            written.contains("\x1b[?1049l"),
+            "missing leave-alt-screen; got: {written:?}"
+        );
+        // Reset all text attributes.
+        assert!(
+            written.contains("\x1b[0m"),
+            "missing reset-attributes; got: {written:?}"
+        );
+        // Show cursor.
+        assert!(
+            written.contains("\x1b[?25h"),
+            "missing show-cursor; got: {written:?}"
+        );
+        // Clear screen + home cursor.
+        assert!(
+            written.contains("\x1b[2J"),
+            "missing clear-screen; got: {written:?}"
+        );
+        assert!(
+            written.contains("\x1b[H"),
+            "missing home-cursor; got: {written:?}"
+        );
+    }
+
+    /// `force_terminal_reset` is best-effort: a closed/broken writer
+    /// does NOT cause a panic. This is the whole point — the function
+    /// is called during shutdown when the terminal may already be in
+    /// a bad state, so it must never propagate an error.
+    #[test]
+    fn force_terminal_reset_does_not_panic_on_closed_writer() {
+        // A writer that always errors (simulates a closed pty / broken
+        // terminal). The function must swallow the error and return.
+        struct BrokenWriter;
+        impl io::Write for BrokenWriter {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken"))
+            }
+        }
+        let mut w = BrokenWriter;
+        // Must not panic.
+        force_terminal_reset(&mut w);
     }
 
     // ── Shutdown-signal regression test ────────────────────────

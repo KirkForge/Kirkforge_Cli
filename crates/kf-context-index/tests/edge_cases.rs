@@ -293,8 +293,17 @@ fn mtime_rebuild_single_file_change() {
 
     // Force a distinct mtime deterministically without a wall-clock sleep.
     // Filesystems may round mtimes to whole seconds, so bump by 2s to be safe.
+    //
+    // The file is opened with write access because Windows `SetFileTime`
+    // (backing `set_modified`) requires a handle with GENERIC_WRITE — a
+    // read-only `File::open` handle yields `ERROR_ACCESS_DENIED`. On Unix
+    // `futimens` does not require write access for the owner, so the write
+    // access is harmless there.
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
-    let file = std::fs::File::open(&a_path).unwrap();
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&a_path)
+        .unwrap();
     file.set_modified(later).unwrap();
     drop(file);
 

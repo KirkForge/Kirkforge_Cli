@@ -440,6 +440,13 @@ impl DaemonState {
 }
 
 #[cfg(not(unix))]
+impl Default for DaemonState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(not(unix))]
 impl DaemonState {
     pub fn new() -> Self {
         let expected_token = std::env::var("KF_CODE_DAEMON_TOKEN_FILE")

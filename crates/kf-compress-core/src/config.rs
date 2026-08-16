@@ -212,7 +212,7 @@ impl PipelineConfig {
         let partial: PartialPipelineConfig =
             toml::from_str(&text).map_err(|e| ConfigError::Parse {
                 path: p.to_path_buf(),
-                source: e,
+                source: Box::new(e),
             })?;
         let mut cfg = Self::default();
         cfg.apply_partial(&partial);
@@ -252,10 +252,14 @@ pub enum ConfigError {
         source: std::io::Error,
     },
     /// Could not parse the config file as TOML.
+    // ponytail: Box<toml::de::Error> — the unboxed variant is >128 bytes on
+    // Windows (toml::de::Error is larger there), which trips
+    // clippy::result_large_err under -D warnings in the Windows CI job.
+    // Box keeps the public accessor returning &toml::de::Error unchanged.
     #[error("cannot parse config file {}: {source}", path.display())]
     Parse {
         path: std::path::PathBuf,
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
     /// A config value failed semantic validation.
     #[error("invalid value for config field `{field}`: {message}")]
@@ -290,7 +294,7 @@ impl ConfigError {
     #[must_use]
     pub const fn parse_source(&self) -> Option<&toml::de::Error> {
         match self {
-            Self::Parse { source, .. } => Some(source),
+            Self::Parse { source, .. } => Some(&**source),
             _ => None,
         }
     }

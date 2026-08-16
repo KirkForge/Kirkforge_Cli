@@ -721,11 +721,28 @@ mod tests {
         );
     }
 
+    // The `Some(string)` assertions below pin the exact returned path string.
+    // `PathBuf::to_string_lossy()` uses the platform separator (`/` on Unix,
+    // `\` on Windows), so the expected literal is platform-specific. The Unix
+    // tests assert the forward-slash form; the Windows equivalents assert the
+    // backslash form produced by joining a drive-root-relative cwd.
+    #[cfg(unix)]
     #[test]
     fn safe_relative_allows_dotfiles_when_enabled() {
         assert_eq!(
             safe_relative_path("/tmp", ".vscode/settings.json", true),
             Some(".vscode/settings.json".to_string())
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn safe_relative_allows_dotfiles_when_enabled() {
+        // On Windows `/tmp` is drive-root-relative (`\tmp`); the joined path
+        // uses the platform separator, so the returned string uses `\`.
+        assert_eq!(
+            safe_relative_path("/tmp", ".vscode/settings.json", true),
+            Some(".vscode\\settings.json".to_string())
         );
     }
 
@@ -735,11 +752,23 @@ mod tests {
         assert_eq!(safe_relative_path("/tmp", "foo/../../bar", false), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn safe_relative_allows_simple_relative_path() {
         assert_eq!(
             safe_relative_path("/tmp", "src/main.rs", false),
             Some("src/main.rs".to_string())
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn safe_relative_allows_simple_relative_path() {
+        // See `safe_relative_allows_dotfiles_when_enabled` for the separator
+        // rationale. The joined relative path uses `\` on Windows.
+        assert_eq!(
+            safe_relative_path("/tmp", "src/main.rs", false),
+            Some("src\\main.rs".to_string())
         );
     }
 

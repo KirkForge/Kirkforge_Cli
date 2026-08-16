@@ -388,14 +388,14 @@ impl Executor {
 
     /// Build a per-tool-call context linked to the turn's cancellation
     /// state. The deadline is derived from the config's per-tool timeout
-    /// (default 30 s) unless the tool itself specifies a longer timeout
+    /// (default 120 s) unless the tool itself specifies a longer timeout
     /// (e.g. bash) — the executor layer caps the outer wait, and the tool
     /// is responsible for honouring its own internal deadline.
     /// Per-tool-call hard timeout from the shared config. Clamped to
     /// [1, 3600] seconds.
     fn tool_call_timeout(&self) -> std::time::Duration {
         let cfg = read_shared_config(&self.config);
-        let secs = cfg.tools.tool_timeout_secs.unwrap_or(30).clamp(1, 3600);
+        let secs = cfg.tools.tool_timeout_secs.unwrap_or(120).clamp(1, 3600);
         std::time::Duration::from_secs(secs)
     }
 

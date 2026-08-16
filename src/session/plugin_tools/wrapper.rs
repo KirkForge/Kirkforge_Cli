@@ -237,7 +237,7 @@ impl Tool for PluginToolWrapper {
         let cfg = read_shared_config(&self.shared_config).clone();
         let cmd_path = self.plugin_root.join(&self.command);
         let cwd = self.sandbox_dir(&cfg);
-        let timeout_secs = cfg.tools.tool_timeout_secs.unwrap_or(30).clamp(1, 3600);
+        let timeout_secs = cfg.tools.tool_timeout_secs.unwrap_or(120).clamp(1, 3600);
         let timeout_at = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
 
         let mut command = tokio::process::Command::new(&cmd_path);

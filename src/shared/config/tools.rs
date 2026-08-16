@@ -17,7 +17,7 @@ fn default_max_continuation_rounds() -> usize {
 }
 
 fn default_tool_timeout_secs() -> Option<u64> {
-    Some(30)
+    Some(120)
 }
 
 fn default_max_tool_result_chars() -> usize {
@@ -242,6 +242,7 @@ mod tests {
         );
         assert_eq!(cfg.max_continuation_rounds, 20);
         assert_eq!(cfg.max_tool_calls_per_turn, 200);
+        assert_eq!(cfg.tool_timeout_secs, Some(120));
         assert_eq!(cfg.doom_loop_max_hits, 1);
         assert_eq!(cfg.doom_loop_action, "auto_plan");
         assert!(

@@ -458,7 +458,7 @@ fn handle_search_nav_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
 /// - Plugins (F3): toggle the selected plugin on/off
 /// - Jobs (F4): list all jobs
 /// - Settings (F5): show the value of the selected config key
-/// - Threads (F6): no-op (session picker handles its own Enter)
+/// - Sessions (F6): no-op (session picker handles its own Enter)
 async fn handle_tab_enter(
     state: &mut AppState,
     ctx: &HandleInputContext<'_>,
@@ -552,7 +552,7 @@ async fn handle_tab_enter(
                 .push_back(ConversationEntry::new("system", line));
             state.mark_dirty();
         }
-        ActiveTab::Threads | ActiveTab::Chat => {}
+        ActiveTab::Sessions | ActiveTab::Chat => {}
     }
     Ok(())
 }
@@ -626,7 +626,7 @@ pub(crate) async fn handle_input_key(
     }
     match key.code {
         // ── F-key tab switching ───────────────────────────────────
-        // F1–F6 switch between Chat, Models, Plugins, Jobs, Settings, Threads.
+        // F1–F6 switch between Chat, Models, Plugins, Jobs, Settings, Sessions.
         // Esc returns to Chat from any non-Chat tab.
         k if ActiveTab::from_key_code(k).is_some() => {
             let new_tab = ActiveTab::from_key_code(k).unwrap();

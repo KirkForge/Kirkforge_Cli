@@ -559,7 +559,7 @@ fn slash_menu_shows_alias_quit() {
 }
 
 /// Every F1–F6 tab must render through the full pipeline without panic.
-/// Catches a tab-panel widget that derefs empty state (e.g. the Threads
+/// Catches a tab-panel widget that derefs empty state (e.g. the Sessions
 /// daemon picker) and crashes the whole render. Also verifies the active
 /// tab's bar label is highlighted so switching is visibly confirmed.
 #[test]

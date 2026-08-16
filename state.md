@@ -10,6 +10,33 @@
 
 **Current: `3.8.0`** (Cargo.toml + Cargo.lock; bumped from `0.3.6` in commit `6e2e0d4`). The user wants the next release tagged `0.3.9` — **not yet bumped in `Cargo.toml`** (per instructions: note here, don't change the manifest). When ready: `0.3.6 → 3.8.0` was the last bump; `0.3.9` is the next target (the `3.8.0` jump was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for the next minor).
 
+## Session 2026-08-16 — WO 34.7/34.8/34.9/34.10 TUI information architecture (worktree `.worktrees/wo34-d`, branch `wo/34-d`)
+
+### What changed this session
+
+- **WO 34.7 — Unify Sessions/Threads naming.** Renamed `ActiveTab::Threads`
+  → `ActiveTab::Sessions` in `src/tui/app.rs` (enum + `ALL` array + `label()`
+  + `from_key_code`). Renamed `render_threads` → `render_sessions` in
+  `src/tui/widgets/tabs.rs` and restructured the view into two subsections:
+  **RECENT** (recent sessions with `· N msgs` counts, from the session
+  picker) + **FORKS** (forks of the current session from `ForkManager`).
+  Updated render routing (`src/tui/mod.rs`), key dispatch
+  (`src/tui/keys/mod.rs`), and two stale doc comments. "Threads" is gone
+  from user-visible UI; only the `ThreadsChanged` daemon wire-event name
+  remains (not user-facing). Full rename was feasible (5 references, all in
+  `src/tui/`) — no need to keep the enum variant name.
+
+### Gate (WO 34.7)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 518 passed, 2816 skipped
+
+### Pending
+- WO 34.8 (welcome screen), WO 34.9 (slash taxonomy), WO 34.10 (approval
+  dialog) — in progress this session.
+
+---
+
 ## Session 2026-08-16 — Extract `build_docker_args` pure fn (worktree `.worktrees/wo-docker-args`, branch `wo/docker-args-pure`)
 
 ### What changed this session

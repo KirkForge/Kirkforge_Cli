@@ -87,7 +87,7 @@ impl ChatRenderCache {
 
 /// Active tab for the TUI panel system.
 ///
-/// F1–F5 switch between panels. F6 opens the Threads view.
+/// F1–F5 switch between panels. F6 opens the Sessions view.
 /// The Chat tab is the default and reproduces the existing
 /// single-panel layout. Other tabs replace the main content area
 /// with a dedicated panel.
@@ -104,8 +104,8 @@ pub enum ActiveTab {
     Jobs,
     /// F5 — Config display and live reload
     Settings,
-    /// F6 — Threads overview (forks + sessions)
-    Threads,
+    /// F6 — Sessions overview (recent sessions + forks)
+    Sessions,
 }
 
 impl ActiveTab {
@@ -116,7 +116,7 @@ impl ActiveTab {
         ActiveTab::Plugins,
         ActiveTab::Jobs,
         ActiveTab::Settings,
-        ActiveTab::Threads,
+        ActiveTab::Sessions,
     ];
 
     /// F-key label for the tab bar (e.g. "F1:Chat").
@@ -127,7 +127,7 @@ impl ActiveTab {
             ActiveTab::Plugins => "F3:Plugins",
             ActiveTab::Jobs => "F4:Jobs",
             ActiveTab::Settings => "F5:Settings",
-            ActiveTab::Threads => "F6:Sessions",
+            ActiveTab::Sessions => "F6:Sessions",
         }
     }
 
@@ -139,7 +139,7 @@ impl ActiveTab {
             KeyCode::F(3) => Some(ActiveTab::Plugins),
             KeyCode::F(4) => Some(ActiveTab::Jobs),
             KeyCode::F(5) => Some(ActiveTab::Settings),
-            KeyCode::F(6) => Some(ActiveTab::Threads),
+            KeyCode::F(6) => Some(ActiveTab::Sessions),
             _ => None,
         }
     }
@@ -502,7 +502,7 @@ pub struct UiState {
     /// Tab panel system. Currently active tab. F1–F6 switch tabs.
     pub active_tab: ActiveTab,
     /// Row selection state for the active tab panel (Models, Plugins, Jobs,
-    /// Settings, Threads). `None` for Chat (no selectable rows).
+    /// Settings, Sessions). `None` for Chat (no selectable rows).
     pub tab_list_state: Option<usize>,
     /// Current working directory. Updated by Ctrl+O directory picker.
     pub cwd: std::path::PathBuf,

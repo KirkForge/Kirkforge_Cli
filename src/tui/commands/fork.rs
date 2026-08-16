@@ -218,7 +218,7 @@ async fn load_recent_sessions_for_picker(
     }
 }
 
-/// Refresh the Threads tab's session picker from the daemon's current
+/// Refresh the Sessions tab's session picker from the daemon's current
 /// recent-session list. Mirrors `refresh_jobs_output`: called when
 /// `sessions_dirty` is set so the tab re-reads session metadata on the
 /// next draw tick instead of showing stale state.

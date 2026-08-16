@@ -363,33 +363,39 @@ pub fn render_settings(f: &mut Frame, area: Rect, state: &AppState) {
     render_interactive(f, area, lines, state);
 }
 
-/// Render the Threads tab (F6).
+/// Render the Sessions tab (F6).
 ///
-/// Shows active forks/sessions with status columns. Fed by the
-/// daemon's `ThreadsChanged` push events (WO 17.2/17.9).
-pub fn render_threads(f: &mut Frame, area: Rect, state: &AppState) {
+/// Shows two subsections:
+///   - **RECENT**: recent sessions with timestamp + message count, fed by
+///     the daemon's `ThreadsChanged` push events (WO 17.2/17.9) via the
+///     session picker.
+///   - **FORKS**: forks of the current session (from `ForkManager`).
+pub fn render_sessions(f: &mut Frame, area: Rect, state: &AppState) {
     let mut lines = Vec::new();
 
     lines.push(Line::from(Span::styled(
-        " Threads",
+        " Sessions",
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 
-    // Session list from the session picker data
-    if let Some(ref picker) = state.session.session_picker {
-        let count = picker.len();
-        if count == 0 {
-            lines.push(Line::from(Span::styled(
-                " No active sessions",
-                Style::default().fg(Color::DarkGray),
-            )));
-        } else {
-            lines.push(Line::from(Span::raw(format!(" {count} session(s)"))));
-            lines.push(Line::from(""));
-            // Show up to 20 sessions with status indicators
+    // ── RECENT subsection ──────────────────────────────────────────
+    let recent_count = state
+        .session
+        .session_picker
+        .as_ref()
+        .map(|p| p.len())
+        .unwrap_or(0);
+    if recent_count > 0 {
+        lines.push(Line::from(Span::styled(
+            " RECENT",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
+        if let Some(ref picker) = state.session.session_picker {
             for entry in picker.entries().iter().take(20) {
                 let status = if entry.path.exists() {
                     Span::styled("●", Style::default().fg(Color::Green))
@@ -399,19 +405,53 @@ pub fn render_threads(f: &mut Frame, area: Rect, state: &AppState) {
                 lines.push(Line::from(vec![
                     status,
                     Span::raw(format!(" {}", entry.id)),
+                    Span::styled(
+                        format!("  · {} msgs", entry.message_count),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ]));
             }
         }
+        lines.push(Line::from(""));
     } else {
         lines.push(Line::from(Span::styled(
-            " No session data loaded",
+            " No recent sessions",
             Style::default().fg(Color::DarkGray),
         )));
+        lines.push(Line::from(""));
     }
 
-    lines.push(Line::from(""));
+    // ── FORKS subsection ───────────────────────────────────────────
+    let fork_count = state
+        .session
+        .fork_manager
+        .as_ref()
+        .map(|fm| fm.list().len())
+        .unwrap_or(0);
+    if fork_count > 0 {
+        lines.push(Line::from(Span::styled(
+            " FORKS",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
+        if let Some(ref fm) = state.session.fork_manager {
+            for fork in fm.list().iter().take(20) {
+                lines.push(Line::from(vec![
+                    Span::styled("↳ ", Style::default().fg(Color::Cyan)),
+                    Span::raw(fork.id.as_str()),
+                    Span::styled(
+                        format!("  — {}", fork.label),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            }
+        }
+        lines.push(Line::from(""));
+    }
+
     lines.push(Line::from(Span::styled(
-        " /resume <id> to switch to a session",
+        " /resume <id> to switch  ·  /fork to branch  ·  /sessions to manage",
         Style::default().fg(Color::DarkGray),
     )));
 

@@ -1021,8 +1021,8 @@ pub(crate) fn render_app(f: &mut Frame, state: &mut AppState) {
         ActiveTab::Settings => {
             crate::tui::widgets::tabs::render_settings(f, chunks[1], state);
         }
-        ActiveTab::Threads => {
-            crate::tui::widgets::tabs::render_threads(f, chunks[1], state);
+        ActiveTab::Sessions => {
+            crate::tui::widgets::tabs::render_sessions(f, chunks[1], state);
         }
     }
 

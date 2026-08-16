@@ -112,29 +112,37 @@ fn render_suggestions(suggestions: &[String]) -> Line<'static> {
 }
 
 /// Render the line that currently holds the cursor. The cursor is a
-/// block that REPLACES the character at the cursor position (reverse
-/// video on the char under the cursor, or a solid block at end-of-line)
-/// — NOT a trailing block appended after the char, which doubled the
+/// green block that REPLACES the character at the cursor position (a
+/// solid `█` at end-of-line, or the char under the cursor in green) —
+/// NOT a trailing block appended after the char, which doubled the
 /// char visually and made mid-text editing look corrupted.
+///
+/// The cursor uses `Color::Green` foreground (matching the input box
+/// border) rather than reverse video (`bg=White, fg=Black`). Reverse
+/// video relies on the terminal supporting background colors; on
+/// terminals that don't (or that render bg as the default), the
+/// cursor was invisible — the same root-cause class as the invisible
+/// textbox. A green `█` on the default background is universally
+/// supported on xterm-256color and every common terminal.
 fn render_cursor_line(line: &str, col: usize) -> Line<'static> {
     let before: String = line.chars().take(col).collect();
     let after: String = line.chars().skip(col).collect();
-    let reverse = Style::default().bg(Color::White).fg(Color::Black);
+    let cursor = Style::default().fg(Color::Green);
 
     let mut spans = Vec::new();
     if !before.is_empty() {
         spans.push(Span::raw(before));
     }
     if after.is_empty() {
-        // Cursor at end of line: solid block, no leading space.
-        spans.push(Span::styled("█", reverse));
+        // Cursor at end of line: solid green block, no leading space.
+        spans.push(Span::styled("█", cursor));
     } else {
-        // Cursor on a char: render that char in reverse video (it
-        // replaces the char visually, like a real terminal cursor), then
-        // the rest of the line normally. No trailing block.
+        // Cursor on a char: render that char in green (it replaces
+        // the char visually, like a real terminal cursor), then the
+        // rest of the line normally. No trailing block.
         let first = after.chars().next().unwrap();
         let rest: String = after.chars().skip(1).collect();
-        spans.push(Span::styled(first.to_string(), reverse));
+        spans.push(Span::styled(first.to_string(), cursor));
         if !rest.is_empty() {
             spans.push(Span::raw(rest));
         }
@@ -206,12 +214,12 @@ mod tests {
         assert_eq!(line.spans.len(), 1, "empty line should be one span");
         assert_eq!(line.spans[0].content, "█");
         assert!(
-            matches!(line.spans[0].style.bg, Some(Color::White)),
-            "block cursor should be reverse-video (white bg)"
+            matches!(line.spans[0].style.fg, Some(Color::Green)),
+            "block cursor should be green fg (universally supported, not reverse video)"
         );
         assert!(
-            matches!(line.spans[0].style.fg, Some(Color::Black)),
-            "block cursor should be reverse-video (black fg)"
+            line.spans[0].style.bg.is_none(),
+            "block cursor should not set a background (reverse video is not portable)"
         );
     }
 
@@ -227,55 +235,51 @@ mod tests {
         assert_eq!(line.spans[0].content, "abc");
         assert_eq!(line.spans[1].content, "█");
         assert!(
-            matches!(line.spans[1].style.bg, Some(Color::White)),
-            "block cursor should be reverse-video"
+            matches!(line.spans[1].style.fg, Some(Color::Green)),
+            "block cursor should be green fg"
         );
     }
 
     /// Cursor on a char mid-line ("a|bc"): the char under the cursor
-    /// renders in reverse video (it REPLACES the char visually, like a
-    /// real terminal cursor), the rest renders normally. The prior code
+    /// renders in green (it REPLACES the char visually, like a real
+    /// terminal cursor), the rest renders normally. The prior code
     /// emitted `"a"` + `"b█"` + `"c"` — the char under the cursor AND a
     /// trailing block, which doubled the char visually and made mid-text
-    /// editing look corrupted. This pins the fix: one reverse-video
-    /// span for the char under the cursor, no trailing block.
+    /// editing look corrupted. This pins the fix: one green span for
+    /// the char under the cursor, no trailing block.
     #[test]
-    fn cursor_line_renders_reverse_video_on_char_under_cursor() {
+    fn cursor_line_renders_green_char_under_cursor() {
         let line = render_cursor_line("abc", 1);
-        // [before="a"], [char-under-cursor="b" reverse], [rest="c"]
-        assert_eq!(
-            line.spans.len(),
-            3,
-            "should be [before, reverse-char, rest]"
-        );
+        // [before="a"], [char-under-cursor="b" green], [rest="c"]
+        assert_eq!(line.spans.len(), 3, "should be [before, green-char, rest]");
         assert_eq!(line.spans[0].content, "a");
         assert_eq!(line.spans[1].content, "b");
         assert!(
-            matches!(line.spans[1].style.bg, Some(Color::White)),
-            "char under cursor should be reverse-video (white bg)"
+            matches!(line.spans[1].style.fg, Some(Color::Green)),
+            "char under cursor should be green fg (portable cursor render)"
         );
         assert!(
-            matches!(line.spans[1].style.fg, Some(Color::Black)),
-            "char under cursor should be reverse-video (black fg)"
+            line.spans[1].style.bg.is_none(),
+            "char under cursor should not set a background (reverse video is not portable)"
         );
         assert_eq!(line.spans[2].content, "c");
-        // The rest span must NOT carry the reverse-video style.
+        // The rest span must NOT carry the green style.
         assert!(
-            line.spans[2].style.bg.is_none(),
-            "rest of line should not be reverse-video"
+            line.spans[2].style.fg.is_none(),
+            "rest of line should not be green"
         );
     }
 
     /// Cursor at start of line ("|abc"): no `before` span, the first
-    /// char is reverse-video, the rest is raw. Guards the col==0 edge.
+    /// char is green, the rest is raw. Guards the col==0 edge.
     #[test]
-    fn cursor_line_at_start_renders_first_char_reverse() {
+    fn cursor_line_at_start_renders_first_char_green() {
         let line = render_cursor_line("abc", 0);
-        assert_eq!(line.spans.len(), 2, "should be [reverse-char, rest]");
+        assert_eq!(line.spans.len(), 2, "should be [green-char, rest]");
         assert_eq!(line.spans[0].content, "a");
         assert!(
-            matches!(line.spans[0].style.bg, Some(Color::White)),
-            "first char under cursor should be reverse-video"
+            matches!(line.spans[0].style.fg, Some(Color::Green)),
+            "first char under cursor should be green fg"
         );
         assert_eq!(line.spans[1].content, "bc");
     }

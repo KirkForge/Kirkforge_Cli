@@ -1718,6 +1718,19 @@ pub(crate) async fn handle_input_key(
         _ => {}
     }
 
+    // The render-on-state-change loop (tui/mod.rs) skips the draw when
+    // `state.dirty` is false. The plain-text edit arms above (Char
+    // insert, Backspace, Delete, arrows, Home/End, PageUp/Down, and
+    // the Enter message-send path) all mutate `state.conversation.input`
+    // but never call `mark_dirty()`, so the typed text was invisible
+    // until something ELSE tripped dirty (the 125ms slow-tick spinner
+    // path, which only fires while generating). This is the root cause
+    // of the "invisible textbox" bug: the buffer held the text but the
+    // render was skipped every frame. Mark dirty here so the next frame
+    // paints the input box. The early-return arms (F-keys, slash menu,
+    // file completer, Ctrl+* combos) already mark dirty themselves.
+    state.mark_dirty();
+
     Ok(())
 }
 

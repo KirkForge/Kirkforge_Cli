@@ -939,6 +939,139 @@ mod key_scenarios {
         h.press_char('c', KeyModifiers::CONTROL).await;
         assert!(h.state.session.should_exit, "second Ctrl+C must quit");
     }
+
+    // ── Bug 1+3: invisible textbox ──────────────────────────────────
+    //
+    // The render-on-state-change loop (tui/mod.rs `run_event_loop`)
+    // skips `terminal.draw` when `state.dirty` is false. The plain
+    // text-edit arms of `handle_input_key` (Char insert, Backspace,
+    // Delete, arrows, Home/End, PageUp/Down, and the Enter message-send
+    // path) all mutate `state.conversation.input` but never marked the
+    // state dirty, so the typed text was invisible until something else
+    // tripped dirty (the 125ms slow-tick spinner path, only firing while
+    // generating). "Text appears on Enter" was the symptom: Enter sets
+    // `is_generating = true`, the next slow-tick marks dirty, and the
+    // text shows up as a chat message.
+    //
+    // The fix is one line — `state.mark_dirty()` before the final
+    // `Ok(())` in `handle_input_key`. These tests pin the contract:
+    // after any text-editing keystroke, `state.dirty` must be true so
+    // the next frame paints the input box.
+
+    /// Typing a plain char marks the state dirty so the next frame
+    /// paints the input box. This is the root-cause regression guard
+    /// for the "invisible textbox" bug.
+    #[tokio::test]
+    async fn typing_char_marks_state_dirty() {
+        let mut h = KeyHarness::new();
+        h.state.dirty = false; // simulate a quiet, already-rendered frame
+        h.press_char('h', KeyModifiers::NONE).await;
+        assert!(
+            h.state.dirty,
+            "typing a char must mark state dirty so the next frame paints the input"
+        );
+        assert_eq!(h.state.conversation.input, "h");
+    }
+
+    /// Typing a second char keeps the state dirty (idempotent mark).
+    #[tokio::test]
+    async fn typing_second_char_keeps_state_dirty() {
+        let mut h = KeyHarness::new();
+        h.state.conversation.input = "hi".into();
+        h.state.conversation.cursor_position = 2;
+        h.state.dirty = false;
+        h.press_char('!', KeyModifiers::NONE).await;
+        assert!(h.state.dirty, "second char must keep state dirty");
+        assert_eq!(h.state.conversation.input, "hi!");
+    }
+
+    /// Backspace marks the state dirty so a deletion is painted.
+    #[tokio::test]
+    async fn backspace_marks_state_dirty() {
+        let mut h = KeyHarness::new();
+        h.state.conversation.input = "abc".into();
+        h.state.conversation.cursor_position = 3;
+        h.state.dirty = false;
+        h.press(KeyCode::Backspace).await;
+        assert!(
+            h.state.dirty,
+            "Backspace must mark state dirty so the deletion paints"
+        );
+        assert_eq!(h.state.conversation.input, "ab");
+    }
+
+    /// Arrow keys mark the state dirty so the cursor movement paints.
+    /// The cursor is rendered in `render_cursor_line`; without a
+    /// dirty mark the cursor would lag behind the keystroke.
+    #[tokio::test]
+    async fn arrow_key_marks_state_dirty() {
+        let mut h = KeyHarness::new();
+        h.state.conversation.input = "ab".into();
+        h.state.conversation.cursor_position = 2;
+        h.state.dirty = false;
+        h.press(KeyCode::Left).await;
+        assert!(
+            h.state.dirty,
+            "Left arrow must mark state dirty so the cursor movement paints"
+        );
+        assert_eq!(h.state.conversation.cursor_position, 1);
+    }
+
+    /// End-to-end: type a char, render the full TUI pipeline, and
+    /// assert the typed text is VISIBLE in the rendered output. This
+    /// is the user-facing contract — "I type, I see what I typed".
+    /// Before the fix, the input box rendered the placeholder text
+    /// ("Type a message or /help...") instead of the typed char
+    /// because the render was skipped entirely.
+    #[tokio::test]
+    async fn typed_char_is_visible_in_rendered_output() {
+        let mut h = KeyHarness::new();
+        // Simulate the user typing "hello" one char at a time, exactly
+        // as the event loop does (one handle_input_key call per char).
+        for c in "hello".chars() {
+            h.press_char(c, KeyModifiers::NONE).await;
+        }
+        // The full input must be in the buffer.
+        assert_eq!(h.state.conversation.input, "hello");
+        // Render the full TUI pipeline (the same render_app the event
+        // loop calls) and assert the typed text is visible.
+        let rendered = render_to_string(&mut h.state, 120, 40);
+        assert!(
+            rendered.contains("hello"),
+            "typed text must be visible in the rendered TUI; got:\n{rendered}"
+        );
+        // The placeholder must NOT show once there is input.
+        assert!(
+            !rendered.contains("Type a message or /help"),
+            "placeholder must not render when input is non-empty; got:\n{rendered}"
+        );
+    }
+
+    /// Typing then deleting must repaint (the box returns to empty /
+    /// placeholder). Guards the Backspace dirty path end-to-end.
+    #[tokio::test]
+    async fn type_then_delete_repaints_to_placeholder() {
+        let mut h = KeyHarness::new();
+        for c in "abc".chars() {
+            h.press_char(c, KeyModifiers::NONE).await;
+        }
+        // Delete all three chars.
+        for _ in 0..3 {
+            h.press(KeyCode::Backspace).await;
+        }
+        assert_eq!(h.state.conversation.input, "");
+        let rendered = render_to_string(&mut h.state, 120, 40);
+        // After clearing, the placeholder reappears and the typed
+        // text is gone.
+        assert!(
+            rendered.contains("Type a message or /help"),
+            "placeholder must reappear after clearing input; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("abc"),
+            "deleted text must not linger in the render; got:\n{rendered}"
+        );
+    }
 }
 
 #[cfg(test)]

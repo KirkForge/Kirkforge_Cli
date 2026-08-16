@@ -2,6 +2,48 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-16 — WO env-race: kill Windows EnvGuard post-Drop live-env read (worktree `.worktrees/wo-envrace`, branch `wo/fix-env-race`)
+
+### What changed this session
+
+- **Eliminated the last Windows-racy EnvGuard post-Drop live-env read in
+  kf-budget-core.** `env_guard_restores_prior_value_on_panic`
+  (`crates/kf-budget-core/src/paths.rs`) read
+  `std::env::var("KF_BUDGET_CONFIG_DIR")` after the inner guard's Drop
+  (during `catch_unwind`) and asserted the live env value. On Windows,
+  the post-Drop live-env read races other test threads that mutate the
+  same var under their own EnvGuard — the race the task brief names. The
+  two `env_guard_restores_prior_value_some_branch` tests (paths.rs:368 +
+  cost.rs:521) were already fixed in a prior session (commit ae0e37d
+  era) to use `prior()` for post-Drop contract assertions; the panic
+  test was missed.
+- **Fix:** replaced the post-Drop live-env read with (1) capturing the
+  inner guard's `prior()` into a mutable `Option<String>` before the
+  forced panic, via `AssertUnwindSafe` so the capture survives the
+  unwind; (2) asserting the captured prior is `Some(outer_prior)` (the
+  value Drop used to restore); (3) asserting the outer guard's `prior()`
+  is `None` (its Drop will `remove_var`). This pins the Drop contract via
+  the captured prior — what Drop will use — instead of a racy re-read of
+  the live env. The live-env read *inside* the closure (before the panic)
+  is kept because it is race-free (the outer guard holds the env mutex).
+- **No production code changed.** Only one `#[test]` fn + docs.
+- **Impact:** LOW. gitnexus impact on `env_guard_restores_prior_value_on_panic`
+  (upstream): 0 direct callers, 0 processes affected (test fn).
+
+### Gate (HEAD on `wo/fix-env-race`, before commit)
+- `cargo clippy -p kf-budget-core -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-budget-core` ×3: 253/253 passed each run
+  (4.5s / 4.1s / 4.2s). The 3 env-guard tests passed 20/20 under a
+  targeted stress loop.
+
+### Pending
+- None. The race is eliminated — no EnvGuard test in kf-budget-core
+  reads the live env after a guard Drops; all post-Drop contract
+  assertions use `prior()`.
+
+---
+
 ## Branch
 
 **`dev`** at latest merge. WO 21 + 22 + 23 + 24 + 25 + 26 + 27 + 28 + 29 + 30 + 31 + 32 + 33 series merged. WO 34 (TUI IA reset) planned — 11 workorders created, no implementation shipped yet. `main` lags at `d848b37` (pending ff). See commit log for details.

@@ -309,41 +309,63 @@ mod tests {
     //
     // The use of `std::panic::catch_unwind` is the explicit "recover
     // from a panic" hook — a test author would only reach for it
-    // when the test is *about* panic behaviour. Asserting the prior
-    // value is restored after the catch is the regression check.
+    // when the test is *about* panic behaviour. The Drop contract is
+    // pinned via the captured `prior()` (the value Drop used to
+    // restore), NOT a re-read of the live env var after the inner
+    // guard drops. Re-reading after Drop races other test threads on
+    // Windows (WO 10.0 / B8) — same fix applied to the two
+    // `env_guard_restores_prior_value_some_branch` tests in a prior
+    // session. The live-env read while the guard is alive (inside the
+    // closure, before the panic) is race-free because the outer guard
+    // holds the env mutex.
     #[test]
     fn env_guard_restores_prior_value_on_panic() {
         // Hold the env mutex for the whole test so a parallel test cannot
-        // mutate KF_BUDGET_CONFIG_DIR between the inner guard's Drop and the
-        // assertion. The reentrant mutex allows this outer guard and the
-        // inner guard to coexist on the same thread.
+        // mutate KF_BUDGET_CONFIG_DIR while the inner guard is alive. The
+        // reentrant mutex allows this outer guard and the inner guard to
+        // coexist on the same thread.
         let outer_prior = "/tmp/cfg-outer-panic";
         let _g_outer = EnvGuard::set("KF_BUDGET_CONFIG_DIR", outer_prior);
 
-        // Inner closure sets a nested override, then panics. The
-        // EnvGuard's Drop runs during the unwind and restores to outer_prior.
-        let result = std::panic::catch_unwind(|| {
-            let _g = EnvGuard::set("KF_BUDGET_CONFIG_DIR", "/tmp/cfg-from-guard");
-            // While the guard is live, the env var must be set.
+        // Capture the inner guard's prior out of the unwind closure so we
+        // can assert on it after catch. AssertUnwindSafe is required because
+        // `catch_unwind` requires the closure to be `UnwindSafe`, and a
+        // mutable `&Option` is not. The captured value is what Drop used to
+        // restore — pinning it pins the Drop contract without a racy
+        // post-drop live-env read.
+        let mut captured_inner_prior: Option<String> = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let g = EnvGuard::set("KF_BUDGET_CONFIG_DIR", "/tmp/cfg-from-guard");
+            // While the guard is live, the env var must be set — race-free,
+            // the outer guard holds the env mutex.
             assert_eq!(
                 std::env::var("KF_BUDGET_CONFIG_DIR").as_deref(),
                 Ok("/tmp/cfg-from-guard"),
                 "guard must set the env var while it is alive",
             );
+            // Capture the prior the inner guard's Drop will restore to.
+            captured_inner_prior = g.prior().map(str::to_string);
             panic!("forced unwind to exercise Drop");
-        });
+        }));
         assert!(result.is_err(), "inner closure must have panicked");
-        // After the unwind completes and the inner guard's Drop ran, the
-        // env var must be restored to the outer guard's value. The whole
-        // point of the guard: no leak, even across a panic.
-        let now = std::env::var("KF_BUDGET_CONFIG_DIR").ok();
+        // The inner guard's Drop ran during unwind and must have restored
+        // to the captured prior (which is the outer guard's value). Pin the
+        // contract via the captured prior — NOT a re-read of the live env
+        // var, which races other test threads on Windows after the inner
+        // guard's Drop (even though the outer guard still holds the mutex,
+        // the live env read is unnecessary when prior() pins the same
+        // contract without the race).
         assert_eq!(
-            now,
-            Some(outer_prior.to_string()),
-            "EnvGuard Drop must restore the prior value during unwind; \
-             got {now:?}, expected Some({outer_prior:?}). A leak here means a failed \
-             assertion in env_overrides_take_precedence_over_xdg would pollute the next test."
+            captured_inner_prior.as_deref(),
+            Some(outer_prior),
+            "inner guard must have captured prior=Some(outer_prior); Drop \
+             restores exactly this value. A mismatch means the guard did \
+             not snapshot the outer value before overriding it."
         );
+        // The outer guard's prior is None (the env was unset when it was
+        // created), so its Drop must remove_var — pin that contract via
+        // prior(), not a racy post-drop live-env read.
+        assert_eq!(_g_outer.prior(), None, "outer guard must have prior=None");
     }
 
     // ponytail: pin the OTHER branch of EnvGuard::Drop — when prior

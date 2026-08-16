@@ -1633,21 +1633,23 @@ pub(crate) async fn handle_input_key(
             }
         }
         KeyCode::Esc => {
-            // Esc clears any active overlay back to chat-only (None).
-            // When already in chat-only mode, toggle the thinking panel
-            // (the original behavior).
-            if state.ui.active_tab != ActiveTab::None {
-                state.ui.active_tab = ActiveTab::None;
-                state.ui.tab_list_state = None;
-            } else if !state.generation.thinking_buffer.is_empty() {
-                state.generation.thinking_panel_visible = !state.generation.thinking_panel_visible;
-            }
-            // Also dismiss any slash menu or file completer popup.
+            // Esc is cancel-only: it CLOSES things, never toggles. Order:
+            // help overlay + command palette are handled earlier in the
+            // dispatch stack (handle_help_overlay_keys /
+            // handle_command_palette_keys), so by the time we land here
+            // the remaining dismissable surfaces are: slash menu, file
+            // completer, and any active overlay tab. If none of those
+            // are open, Esc is a no-op — it must NOT toggle the thinking
+            // panel (the prior behavior surprised users who pressed Esc
+            // expecting "cancel" and got a hidden panel flipping on).
+            // The thinking panel is toggled by `/thinking` only.
             if state.ui.slash_menu.is_some() {
                 state.ui.slash_menu = None;
-            }
-            if state.ui.file_completer.is_some() {
+            } else if state.ui.file_completer.is_some() {
                 state.ui.file_completer = None;
+            } else if state.ui.active_tab != ActiveTab::None {
+                state.ui.active_tab = ActiveTab::None;
+                state.ui.tab_list_state = None;
             }
         }
         KeyCode::Up => {

@@ -2,6 +2,38 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-16 — WO tui-bugs: 3 TUI bug fixes (worktree `.worktrees/wo-tui-bugs`, branch `wo/tui-bugs`)
+
+### What changed this session
+
+- **Bug 1 — Esc toggles thinking panel (commit 1).** The Esc handler in
+  `src/tui/keys/mod.rs` had an `else if !state.generation.thinking_buffer
+  .is_empty()` arm that flipped `thinking_panel_visible` when the user was
+  in chat-only mode (`active_tab == None`). The CHANGELOG claimed this was
+  fixed in a prior session but the toggle branch was still in the code.
+  Removed the arm entirely — Esc is now cancel-only: it closes the slash
+  menu → file completer → active overlay tab (in that priority order), and
+  is a no-op when none are open. The thinking panel is toggled by
+  `/thinking` only. Updated the `/thinking` confirmation message (was
+  "Press Esc to toggle", now "Run /thinking again to toggle"), the
+  command's `usage` string, and the help-text keybinding line (was "Toggle
+  thinking panel", now "Cancel / close: dismisses slash menu, file
+  completer, or active overlay tab"). Test added:
+  `esc_does_not_toggle_thinking_panel` (selftest `key_scenarios`) pins
+  both directions (`false → false` and `true → true`).
+
+### Gate (HEAD on `wo/tui-bugs`, commit 1)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 557 passed, 2816 skipped
+  (includes the new `esc_does_not_toggle_thinking_panel`)
+
+### Pending
+- Bug 2 (/exit when overlay active) + Bug 3 (input bar cursor + title) —
+  next commits in this session.
+
+---
+
 ## Session 2026-08-16 — WO win-audit: 4 Windows CI test failures (worktree `.worktrees/wo-win-audit`, branch `wo/win-audit`)
 
 ### What changed this session

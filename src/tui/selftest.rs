@@ -816,6 +816,43 @@ mod key_scenarios {
         );
     }
 
+    /// Esc is cancel-only: it must NEVER toggle the thinking panel, even
+    /// when `thinking_buffer` is non-empty and the user is in chat-only
+    /// mode (`active_tab == None`). The prior behavior surprised users
+    /// who pressed Esc expecting "cancel" and got a hidden panel flipping
+    /// on. The thinking panel is toggled by `/thinking` only. Pins both
+    /// directions: `false → false` and `true → true`.
+    #[tokio::test]
+    async fn esc_does_not_toggle_thinking_panel() {
+        // Direction 1: panel hidden, Esc must NOT show it.
+        let mut h = KeyHarness::new();
+        h.state.ui.active_tab = ActiveTab::None;
+        h.state.generation.thinking_panel_visible = false;
+        h.state
+            .generation
+            .thinking_buffer
+            .push("some reasoning".into());
+        h.press(KeyCode::Esc).await;
+        assert!(
+            !h.state.generation.thinking_panel_visible,
+            "Esc must not toggle the thinking panel ON (cancel-only)"
+        );
+
+        // Direction 2: panel shown (via /thinking), Esc must NOT hide it.
+        let mut h = KeyHarness::new();
+        h.state.ui.active_tab = ActiveTab::None;
+        h.state.generation.thinking_panel_visible = true;
+        h.state
+            .generation
+            .thinking_buffer
+            .push("some reasoning".into());
+        h.press(KeyCode::Esc).await;
+        assert!(
+            h.state.generation.thinking_panel_visible,
+            "Esc must not toggle the thinking panel OFF (cancel-only — use /thinking)"
+        );
+    }
+
     /// Enter on empty input with no messages must be a no-op: no spurious
     /// message, no prompt sent to the executor, no quit. Guards the
     /// invariant that empty submits never reach the model.

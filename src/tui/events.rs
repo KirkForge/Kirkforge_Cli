@@ -27,7 +27,7 @@
 
 use crate::session::executor::{ApprovalRequest, ApprovalResponse, TurnEvent};
 use crate::shared::Role;
-use crate::tui::app::{ActiveTab, AppState, ConversationEntry, PendingApproval};
+use crate::tui::app::{AppState, ConversationEntry, PendingApproval};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use std::collections::VecDeque;
 use tokio::sync::mpsc;
@@ -42,12 +42,11 @@ use tokio::sync::mpsc;
 /// - `ScrollDown` / `ScrollUp` — scroll the chat view by 3 rows
 ///   (unchanged from the prior inline handler). ScrollUp also turns
 ///   auto-follow off so the view sticks where the user scrolled.
-/// - `Down(Left)` — click. Row 0 is always the tab bar (the layout
-///   pins it to the top with height 1), so a click there switches to
-///   the tab whose label span covers the column — the mouse equivalent
-///   of F1–F6. A click anywhere else "grabs" the chat for drag-scroll:
+/// - `Down(Left)` — click. WO 34.1 removed the top tab bar, so row 0
+///   is now the header (not click-to-switch-tab); a click anywhere
+///   outside the input rect "grabs" the chat for drag-scroll:
 ///   auto-follow is turned off and the row is recorded as the drag
-///   baseline.
+///   baseline. A click inside the input rect positions the text cursor.
 /// - `Drag(Left)` — drag-scroll the chat by the row delta since the
 ///   last event. Natural scrolling: drag down moves content down
 ///   (offset shrinks), drag up reveals later content.
@@ -58,7 +57,7 @@ use tokio::sync::mpsc;
 /// (WO 32.12). The handler hit-tests the click against the stored rect,
 /// maps the click column (minus the 1-char left border) to a char index
 /// on the current line, and calls `set_cursor_line_col`. Clicks outside
-/// the input rect keep the existing behavior (drag-scroll / tab switch).
+/// the input rect keep the existing behavior (drag-scroll).
 /// Ceiling: the mapping assumes the click column maps 1:1 to a char
 /// column (no horizontal scroll offset); the input box does not
 /// currently scroll horizontally, so this holds.
@@ -73,11 +72,7 @@ pub fn handle_mouse_event(state: &mut AppState, mouse: MouseEvent) {
             state.conversation.scroll_offset = state.conversation.scroll_offset.saturating_sub(3);
         }
         MouseEventKind::Down(MouseButton::Left) => {
-            if mouse.row == 0 {
-                if let Some(tab) = tab_at_column(mouse.column as usize) {
-                    apply_tab_switch(state, tab);
-                }
-            } else if let Some(rect) = state.ui.last_input_rect {
+            if let Some(rect) = state.ui.last_input_rect {
                 if mouse.row >= rect.y && mouse.row < rect.y + rect.height {
                     let line = (mouse.row - rect.y).saturating_sub(1) as usize;
                     let col = (mouse.column as usize).saturating_sub(rect.x as usize + 1);
@@ -85,12 +80,11 @@ pub fn handle_mouse_event(state: &mut AppState, mouse: MouseEvent) {
                     state.mark_dirty();
                     return;
                 }
-                state.conversation.auto_scroll = false;
-                state.ui.mouse_drag_row = Some(mouse.row);
-            } else {
-                state.conversation.auto_scroll = false;
-                state.ui.mouse_drag_row = Some(mouse.row);
             }
+            // No tab bar anymore (WO 34.1) — every non-input click grabs
+            // the chat for drag-scroll, including row 0 (the header).
+            state.conversation.auto_scroll = false;
+            state.ui.mouse_drag_row = Some(mouse.row);
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             if let Some(last) = state.ui.mouse_drag_row {
@@ -110,43 +104,6 @@ pub fn handle_mouse_event(state: &mut AppState, mouse: MouseEvent) {
         _ => {}
     }
     state.mark_dirty();
-}
-
-/// Switch to `tab`, mirroring the F-key handler in `keys::handle_input_key`:
-/// reset the list-state highlight when crossing tabs, seed it for non-Chat
-/// tabs, and trip the jobs-refresh flag when entering Jobs cold.
-fn apply_tab_switch(state: &mut AppState, tab: ActiveTab) {
-    if tab != state.ui.active_tab {
-        state.ui.tab_list_state = if tab == ActiveTab::Chat {
-            None
-        } else {
-            Some(0)
-        };
-    }
-    state.ui.active_tab = tab;
-    if tab == ActiveTab::Jobs && state.session.cached_jobs_output.is_none() {
-        state.session.jobs_dirty = true;
-    }
-}
-
-/// Map a tab-bar column to the tab whose label span contains it.
-///
-/// `widgets::tabs::render_tab_bar` renders `" {label} "` per tab joined
-/// by `" │ "`. The labels are ASCII, so byte length == display width.
-/// Returns `None` for a click in a separator gutter or past the last tab.
-fn tab_at_column(column: usize) -> Option<ActiveTab> {
-    let mut cursor: usize = 0;
-    for (i, tab) in ActiveTab::ALL.iter().enumerate() {
-        if i > 0 {
-            cursor += 3; // " │ "
-        }
-        let span_len = tab.label().len() + 2; // leading + trailing space
-        if column >= cursor && column < cursor + span_len {
-            return Some(*tab);
-        }
-        cursor += span_len;
-    }
-    None
 }
 
 /// Apply a single executor event to the TUI state.
@@ -675,6 +632,7 @@ mod tests {
     use crate::session::executor::ApprovalResponder;
     use crate::shared::test_util::app_state;
     use crate::shared::{Message, Role};
+    use crate::tui::app::ActiveTab;
     use tokio::sync::mpsc;
 
     /// Helper to build a minimal `Message` for the compaction test.
@@ -1398,35 +1356,37 @@ mod tests {
         assert_eq!(s.conversation.scroll_offset, 100);
     }
 
-    /// Clicking the tab bar (row 0) under a tab's label span switches
-    /// to that tab — the mouse equivalent of F1–F6. This is the panel
-    /// focus must-have from the workorder.
+    /// WO 34.1: the top tab bar is gone; row 0 is the header. A click
+    /// on row 0 no longer switches tabs — it grabs the chat for
+    /// drag-scroll like any other non-input row. This pins the removal
+    /// so a future regression that re-introduces a row-0 tab-bar click
+    /// handler is caught.
     #[test]
-    fn mouse_click_tab_bar_switches_tab() {
+    fn mouse_click_header_grabs_chat_not_tab() {
         let mut s = app_state();
-        assert_eq!(s.ui.active_tab, ActiveTab::Chat);
-        // "F4:Jobs" span starts at col 41: " F1:Chat "(9)+" │ "(3)+
-        // " F2:Models "(11)+" │ "(3)+" F3:Plugins "(12)+" │ "(3) = 41;
-        // Jobs span is cols 41..50. A click at column 45 is inside it.
+        assert_eq!(s.ui.active_tab, ActiveTab::None);
+        s.conversation.auto_scroll = true;
+        // Click row 0 (the header) at an arbitrary column.
         handle_mouse_event(
             &mut s,
             mouse(MouseEventKind::Down(MouseButton::Left), 0, 45),
         );
-        assert_eq!(s.ui.active_tab, ActiveTab::Jobs);
-        // Entering Jobs cold trips the jobs-refresh flag.
-        assert!(s.session.jobs_dirty);
-        // List highlight seeded for the non-Chat tab.
-        assert_eq!(s.ui.tab_list_state, Some(0));
+        // No tab switch happened — still chat-only.
+        assert_eq!(s.ui.active_tab, ActiveTab::None);
+        // The header click grabbed the chat for drag-scroll.
+        assert!(!s.conversation.auto_scroll);
+        assert_eq!(s.ui.mouse_drag_row, Some(0));
     }
 
-    /// Clicking row 0 in a separator gutter does not switch tabs.
+    /// A click on row 0 in what used to be a separator gutter is also a
+    /// drag-grab now (no tabs to switch between). Kept as the successor
+    /// to the old `mouse_click_tab_gutter_is_noop` test.
     #[test]
-    fn mouse_click_tab_gutter_is_noop() {
+    fn mouse_click_header_gutter_grabs_chat() {
         let mut s = app_state();
-        // Column 9 is the "│" between Chat and Models in the default
-        // layout — no tab owns it.
         handle_mouse_event(&mut s, mouse(MouseEventKind::Down(MouseButton::Left), 0, 9));
-        assert_eq!(s.ui.active_tab, ActiveTab::Chat);
+        assert_eq!(s.ui.active_tab, ActiveTab::None);
+        assert_eq!(s.ui.mouse_drag_row, Some(0));
     }
 
     /// Clicking the chat body (row > 0) grabs it for drag-scroll:
@@ -1511,36 +1471,6 @@ mod tests {
             mouse(MouseEventKind::Drag(MouseButton::Left), 50, 5),
         );
         assert_eq!(s.conversation.scroll_offset, before);
-    }
-
-    /// `tab_at_column` covers every tab label and the gutters between.
-    #[test]
-    fn tab_at_column_maps_each_label() {
-        // Walk every column of the rendered tab bar and confirm the
-        // tab boundaries match the renderer's layout (`" {label} "`
-        // per tab, joined by `" │ "`).
-        let mut expected: Vec<Option<ActiveTab>> = Vec::new();
-        for (i, tab) in ActiveTab::ALL.iter().enumerate() {
-            if i > 0 {
-                for _ in 0..3 {
-                    expected.push(None); // " │ " gutter
-                }
-            }
-            for _ in 0..(tab.label().len() + 2) {
-                expected.push(Some(*tab));
-            }
-        }
-        for (col, want) in expected.iter().enumerate() {
-            assert_eq!(
-                tab_at_column(col),
-                *want,
-                "column {col}: expected {:?}, got {:?}",
-                want,
-                tab_at_column(col)
-            );
-        }
-        // Past the last tab → None.
-        assert_eq!(tab_at_column(expected.len()), None);
     }
 
     // ── Click-in-prompt cursor positioning (WO 32.12) ──────────────

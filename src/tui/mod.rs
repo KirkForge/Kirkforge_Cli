@@ -968,10 +968,10 @@ fn render_frame(
     Ok(())
 }
 
-/// The full TUI render pipeline: tab bar, main content (chat / models /
-/// plugins / jobs / settings / threads), slash menu, file completer, input
-/// bar, status bar, session picker overlay, approval dialog, and doom-loop
-/// banner.
+/// The full TUI render pipeline: header, chat surface (permanent),
+/// overlay panels on top of chat, slash menu, file completer, input
+/// bar, status bar, session picker overlay, approval dialog, command
+/// palette, and doom-loop banner.
 ///
 /// Extracted from `render_frame`'s closure so the selftest harness can drive
 /// the EXACT same layout against a `TestBackend` (WO 31.6). `render_frame`
@@ -986,29 +986,41 @@ pub(crate) fn render_app(f: &mut Frame, state: &mut AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // tab bar
-            Constraint::Min(1),    // main content
+            Constraint::Length(1), // header
+            Constraint::Min(1),    // main content (chat)
             Constraint::Length(input_height),
             Constraint::Length(1), // status bar
         ])
         .split(size);
 
-    // ── Top tab bar: F1–F6 labels, active tab highlighted ──
-    crate::tui::widgets::tabs::render_tab_bar(f, chunks[0], state);
+    // ── Top header: app name + model + ready/busy (replaces tab bar, WO 34.1) ──
+    crate::tui::widgets::tabs::render_header(f, chunks[0], state);
 
-    // Render main content area based on active tab.
-    // Chat (F1) shows the conversation; other tabs show their
-    // own panel content in the same area.
+    // Render the chat surface as the permanent primary content. Overlays
+    // (Models/Plugins/Jobs/Settings/Threads) render ON TOP of the chat
+    // when active — see the overlay block below. Chat is always visible
+    // underneath so the conversation never disappears.
     use crate::tui::app::ActiveTab;
+    // Welcome screen when no messages and no input
+    if state.conversation.messages.is_empty() && state.conversation.input.is_empty() {
+        crate::tui::widgets::welcome::render_welcome(f, chunks[1], state);
+    } else {
+        render_chat(f, chunks[1], state);
+    }
+
+    // ── Overlay panels (former tabs) render on top of the chat ──
+    // ponytail: overlays currently render in the main content area
+    // (replacing the chat view), matching the pre-34.1 behavior. True
+    // overlay-on-top-of-chat (chat stays visible underneath) is the
+    // WO 34.1 step-5 goal; deferred because centered-popup layout over
+    // a live chat surface needs a Clear+popup composition pass that
+    // interacts with the approval-dialog / doom-banner z-ordering.
+    // Ceiling: overlays still hide the chat while open. Upgrade path:
+    // render overlays into a centered Rect via Layout inside chunks[1]
+    // (or a right-docked pane), preceded by Clear so the chat shows
+    // through the borders. Tracked in WO 34.1 step 5 / state.md pending.
     match state.ui.active_tab {
-        ActiveTab::Chat => {
-            // Welcome screen when no messages and no input
-            if state.conversation.messages.is_empty() && state.conversation.input.is_empty() {
-                crate::tui::widgets::welcome::render_welcome(f, chunks[1], state);
-            } else {
-                render_chat(f, chunks[1], state);
-            }
-        }
+        ActiveTab::None | ActiveTab::Chat => {}
         ActiveTab::Models => {
             crate::tui::widgets::tabs::render_models(f, chunks[1], state);
         }
@@ -1102,6 +1114,18 @@ pub(crate) fn render_app(f: &mut Frame, state: &mut AppState) {
         render_approval_dialog(f, size, &synthetic, state);
     }
     state.approval.pending_approval = pending_taken;
+
+    // Command palette (Ctrl+K). Renders as a centered overlay on top of
+    // the chat surface but under the doom banner (the banner is the
+    // topmost layer so a doom-loop warning is never hidden).
+    if state.ui.command_palette_visible {
+        crate::tui::widgets::command_palette::render_command_palette(
+            f,
+            size,
+            &state.ui.command_palette_query,
+            state.ui.command_palette_selected,
+        );
+    }
 
     // Doom-loop warning banner. Renders last so it sits on top
     // of any other overlay. Skipped when acknowledged or when

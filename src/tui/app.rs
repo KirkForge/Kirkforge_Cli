@@ -85,32 +85,35 @@ impl ChatRenderCache {
     }
 }
 
-/// Active tab for the TUI panel system.
+/// Active overlay for the TUI panel system.
 ///
-/// F1–F5 switch between panels. F6 opens the Threads view.
-/// The Chat tab is the default and reproduces the existing
-/// single-panel layout. Other tabs replace the main content area
-/// with a dedicated panel.
+/// `None` is the default — chat-only mode, no overlay. F1–F6 (and the
+/// Ctrl-shortcuts) summon an overlay on top of the chat surface; Esc
+/// clears it back to `None`. The former persistent tab bar is gone
+/// (WO 34.1); the command palette (Ctrl+K) is the discovery mechanism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ActiveTab {
-    /// F1 — Conversation view (default, existing chat panel)
+    /// Chat-only mode — no overlay (default).
     #[default]
+    None,
+    /// F1 / Ctrl+M — Model / adapter info and switching
     Chat,
-    /// F2 — Model / adapter info and switching
+    /// F2 / Ctrl+M — Model / adapter info and switching
     Models,
-    /// F3 — Plugin list, status, toggle
+    /// F3 / Ctrl+P — Plugin list, status, toggle
     Plugins,
-    /// F4 — Scheduled and background job status
+    /// F4 / Ctrl+J — Scheduled and background job status
     Jobs,
-    /// F5 — Config display and live reload
+    /// F5 / Ctrl+, — Config display and live reload
     Settings,
-    /// F6 — Threads overview (forks + sessions)
+    /// F6 / Ctrl+S — Threads overview (forks + sessions)
     Threads,
 }
 
 impl ActiveTab {
-    /// All tabs in F-key order.
-    pub const ALL: [ActiveTab; 6] = [
+    /// All overlay tabs in F-key order (excludes `None`).
+    /// Used by the mouse handler and selftest; the tab bar itself is gone.
+    pub const OVERLAYS: [ActiveTab; 6] = [
         ActiveTab::Chat,
         ActiveTab::Models,
         ActiveTab::Plugins,
@@ -119,19 +122,24 @@ impl ActiveTab {
         ActiveTab::Threads,
     ];
 
-    /// F-key label for the tab bar (e.g. "F1:Chat").
+    /// Short label for overlays (e.g. "Models"). Returns "" for `None`.
+    /// Matches the overlay panel header text, not the command-palette
+    /// action label (the palette action "Open sessions" maps to
+    /// `ActiveTab::Threads`; this label is "Threads" to match the panel).
     pub fn label(&self) -> &'static str {
         match self {
-            ActiveTab::Chat => "F1:Chat",
-            ActiveTab::Models => "F2:Models",
-            ActiveTab::Plugins => "F3:Plugins",
-            ActiveTab::Jobs => "F4:Jobs",
-            ActiveTab::Settings => "F5:Settings",
-            ActiveTab::Threads => "F6:Sessions",
+            ActiveTab::None => "",
+            ActiveTab::Chat => "Chat",
+            ActiveTab::Models => "Models",
+            ActiveTab::Plugins => "Plugins",
+            ActiveTab::Jobs => "Jobs",
+            ActiveTab::Settings => "Settings",
+            ActiveTab::Threads => "Threads",
         }
     }
 
     /// Map an F-key code to a tab, or return None for non-F keys.
+    /// F-keys are the invisible muscle-memory fallback (no tab bar shown).
     pub fn from_key_code(code: KeyCode) -> Option<ActiveTab> {
         match code {
             KeyCode::F(1) => Some(ActiveTab::Chat),
@@ -525,6 +533,14 @@ pub struct UiState {
     /// mouse handler can hit-test clicks against the input area (WO 32.12).
     /// `None` until the first render completes.
     pub last_input_rect: Option<ratatui::layout::Rect>,
+    /// Command palette (Ctrl+K). When `true`, the centered overlay is
+    /// shown with a search input + filtered action list. Typing filters
+    /// (fuzzy match), ↑↓ navigates, Enter activates, Esc closes.
+    pub command_palette_visible: bool,
+    /// Current search query in the command palette.
+    pub command_palette_query: String,
+    /// Highlighted row in the command palette's filtered list.
+    pub command_palette_selected: usize,
 }
 
 impl Default for UiState {
@@ -539,6 +555,9 @@ impl Default for UiState {
             mouse_drag_row: None,
             paste_flash: 0,
             last_input_rect: None,
+            command_palette_visible: false,
+            command_palette_query: String::new(),
+            command_palette_selected: 0,
         }
     }
 }

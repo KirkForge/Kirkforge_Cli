@@ -430,11 +430,26 @@ or `Skipped`. Built-in verifiers: `build` (cargo build on edited files),
 (git-state validation), `security` (dangerous-pattern scan), `plugin` (verifiers
 declared by plugins). WO 31.1+31.4 added Python self-gating verifiers —
 `python_test` (pytest), `python_lint` (ruff/flake8), `python_typecheck` (mypy,
-fires only when configured) — alongside the Rust ones. Each Python verifier
-calls `verifier::detect::detect_project_languages(workspace)` and skips unless
-Python is detected at the edited file's project root, so registering both Rust
-and Python verifiers is safe for pure-Rust workspaces. Missing tools (no
-pytest/ruff/mypy on PATH) skip gracefully rather than blocking the turn.
+fires only when configured) — alongside the Rust ones. WO 32.20 added
+Node/Go/Generic verifiers following the same pattern: `node_test` (npm test /
+vitest), `node_lint` (eslint / tsc --noEmit), `go_test` (go test), `go_vet`
+(go vet), `generic_test` (make test / ctest / ./test.sh). `detect.rs` exposes
+`detect_project_languages(&Path) -> Vec<ProjectLanguage>` (sniffs `Cargo.toml`
+/ `pyproject.toml`|`setup.py`|`conftest.py` / `package.json` / `go.mod`) and
+each non-Rust verifier self-gates on language-marker detection at the edited
+file's project root, so registering all language verifiers is safe for
+pure-Rust workspaces. Missing tools (no pytest/ruff/mypy/npm/go on PATH) skip
+gracefully rather than blocking the turn.
+
+WO 33.14 phase 3 injected a `CommandRunner` trait
+(`src/session/verifier/types.rs`) abstracting `cargo`/`clippy` subprocess
+execution. Production uses `SystemCommandRunner` (wraps
+`std::process::Command`); tests inject a hand-rolled `FakeRunner` returning
+canned cargo JSON. `verify_build`/`verify_lint`/`verify_test` take
+`&dyn CommandRunner`, so the full event → cargo_root → spawn → parse → Verdict
+orchestration path runs in-process against the fake. One real-Cargo/Clippy
+integration test per verifier is kept `#[ignore]`d with an `integration:`
+reason naming the nextest profile.
 
 ### Context-based `BusVerifier` trait (ADR-043)
 
@@ -1005,8 +1020,9 @@ comparison.
 
 ### Coverage gate (WO 12.9, ADR-065; per-crate regression gate WO 28.7)
 
-The CI `coverage` job (now in `ci-nightly.yml`; was in the old
-monolithic workflow that was split in WO 33.3) runs `cargo llvm-cov --workspace --lcov
+The CI `coverage` job runs in `ci-nightly.yml` only (per ADR-074 reset —
+was in the old monolithic workflow pre-split, then in ci-merge.yml
+pre-reset). It runs `cargo llvm-cov --workspace --lcov
 --output-path lcov.info` and uploads `lcov.info` as an artifact.
 `scripts/check-cov-regression.sh` (WO 28.7) parses that lcov per-crate
 (by source-path prefix) and fails if any crate drops >1% below its floor
@@ -1027,23 +1043,33 @@ migration completed; there is no in-tree JavaScript to lint. No Python source
 is linted in-tree; the only `.py` files are test fixtures and a release
 script, so `ruff` is not wired.
 
-### CI workflows (2026-08-15 split)
+### CI workflows (2026-08-15 split, ADR-074 reset)
 
-The monolithic CI workflow was split into three
-trigger-scoped files (WO 33.3). No job was dropped; the old `quality` job
-was decomposed into separate `clippy` / `fast-tests` / `full-tests` jobs.
-CI references below should read as the new files:
+The monolithic CI workflow was split into three trigger-scoped files
+(WO 33.3) and then reset per ADR-074 (WO 33.x). The reset removed the
+artificial `needs:` chain in ci-merge (all merge jobs are now parallel
+siblings depending on `static` only), moved Ollama integration tests +
+coverage to nightly-only, replaced inline `--config` nextest flags with
+declarative `--profile` (`ci-full` for windows, `e2e` for e2e), scoped
+clippy (PR `--lib --bins`, merge `--all-targets`), renamed the `fmt` job
+→ `static` (it does conflict markers + TOML schema + artifact
+consistency + rustfmt), and stripped WO-incident comments (historical
+rationale moved to ADR-074). CI references below should read as the new
+files:
 
 | File | Trigger | Jobs | Target |
 |---|---|---|---|
-| `.github/workflows/ci-pr.yml` | `pull_request` | `fmt`, `clippy`, `fast-tests` (nextest `ci-fast`), `dead-refs`, `adr-xref` | <5 min PR gate, fail-fast + concurrency cancellation |
-| `.github/workflows/ci-merge.yml` | `push` to `main`/`dev` | everything in `ci-pr.yml` + `full-tests` (nextest `ci-full`) + `doctests` + `windows` + `e2e` + `integration` + `coverage` | pre-merge gate; parallel jobs |
-| `.github/workflows/ci-nightly.yml` | `schedule` + `workflow_dispatch` | `coverage` (full llvm-cov), `ollama` (live model integration), `e2e-exhaustive`, `cargo-audit`, `release-build` matrix | nightly depth + slow jobs that don't belong on PRs |
+| `.github/workflows/ci-pr.yml` | `pull_request` | `static`, `changes` (path-aware, WO 33.6), `clippy` (`--lib --bins`), `fast-tests` (nextest `ci-fast`), `dead-refs`, `adr-xref` | <5 min PR gate, fail-fast + concurrency cancellation |
+| `.github/workflows/ci-merge.yml` | `push` to `main`/`dev` | `static` → parallel `{clippy` (`--all-targets`), `full-tests` (nextest `ci-full`), `windows` (nextest `ci-full`), `e2e` (nextest `e2e`, `--features e2e-tests`)}` | pre-merge gate; no Ollama, no coverage (both nightly-only per ADR-074) |
+| `.github/workflows/ci-nightly.yml` | `schedule` + `workflow_dispatch` | `coverage` (full llvm-cov + `check-cov-regression.sh`), `ollama` (live model integration), `audit`, `release-build` matrix | nightly depth + slow jobs that don't belong on PRs |
 
-Coverage gate (`scripts/check-cov-regression.sh`, WO 28.7) now runs in
-`ci-merge.yml` and `ci-nightly.yml`, not just `ci-local.sh full`. The PR
-`clippy` gate is `--lib --bins` (was `--all-targets`) for faster feedback;
-the merge job still runs `--all-targets`.
+The `static` job (renamed from `fmt` in ADR-074) runs conflict-marker
+detection, TOML schema validation, `scripts/check-artifact-consistency.sh`
+(dead crate/binary refs, WO 28.12), and `cargo fmt --check`. Coverage
+gate (`scripts/check-cov-regression.sh`, WO 28.7) now runs in
+`ci-nightly.yml` only (was in ci-merge.yml pre-ADR-074). The PR `clippy`
+gate is `--lib --bins` (was `--all-targets`) for faster feedback; the
+merge job still runs `--all-targets`.
 
 ### Nextest profiles (WO 33.5)
 
@@ -1053,11 +1079,44 @@ flags:
 | Profile | Scope | Used by |
 |---|---|---|
 | `ci-fast` | lib + bins, no integration/e2e | `ci-pr.yml` `fast-tests` |
-| `ci-full` | whole workspace, no e2e/integration | `ci-merge.yml` `full-tests` |
-| `integration` | integration tests (needs live Ollama) | `ci-merge.yml` + `ci-nightly.yml` `integration` |
-| `e2e` | binary-spawn e2e suite (feature-gated `e2e`) | `ci-nightly.yml` `e2e-exhaustive` |
+| `ci-full` | whole workspace, no e2e/integration | `ci-merge.yml` `full-tests` + `windows` |
+| `integration` | integration tests (needs live Ollama) | `ci-nightly.yml` `ollama` (per ADR-074 — was in ci-merge pre-reset) |
+| `e2e` | binary-spawn e2e suite (feature-gated `e2e-tests`) | `ci-merge.yml` `e2e` + `ci-nightly.yml` `e2e-exhaustive` |
 
 Invoke locally: `cargo nextest run --profile ci-fast`.
+
+### Path-aware changed-package selection (WO 33.6)
+
+`scripts/changed-packages.sh` maps `git diff --name-only <base>..HEAD` to
+affected cargo packages including reverse-dep closure (4 internal edges,
+hardcoded adjacency table — `ponytail:` ceiling documented in script).
+`ci-pr.yml` runs a `changes` job that gates `clippy` + `fast-tests` on
+the output; docs-only / non-Rust changes emit `__NO_RUST_CHANGES__` and
+skip Rust CI entirely.
+
+### Test-tier improvements (WO 33.12-33.16, kf-rbac)
+
+Three test-tier hardening items shipped in the WO 33 series:
+
+- **Phase 1 sleep elimination (WO 33.12):** killed remaining wall-clock
+  sleeps in tests — replaced with event-driven synchronization (poll
+  helpers, `yield_now`, readiness probes). 9 files touched; genuine
+  timeout tests kept as-is.
+- **Phase 2 env-mutation elimination (WO 33.13/33.16):** replaced every
+  raw `std::env::set_var`/`remove_var` in test code with the `EnvGuard`
+  RAII helper (`src/shared/test_util.rs`) that restores the prior value
+  on Drop, making parallel `#[test]` execution safe without
+  `#[serial]`. 18 files touched; widened `EnvGuard::set` to
+  `impl AsRef<OsStr>`. Zero raw env mutations remain in test bodies.
+- **kf-rbac JWT test speedup:** injected a `JwksResolver` trait
+  (`crates/kf-rbac/src/jwt.rs`) so the JWKS fetch is the only network
+  step in `verify_jwt` and tests can inject an in-memory fake.
+  Production keeps `HttpJwksResolver` (wraps the existing OIDC-discovery
+  + reqwest path verbatim; no behaviour change). The 8 slow JWT tests
+  dropped from 690.8s total to <0.5s total. Root cause was RSA-2048
+  keygen per nextest process + real HTTP to an unreachable host;
+  replaced with precomputed RSA keypair consts + a `FailingJwksResolver`
+  fake.
 
 ### `kf-code update` subcommand (WO 33.17)
 
@@ -1104,16 +1163,21 @@ The root `Cargo.toml` exposes these features:
 - `pty` (non-default) — PTY-backed interactive bash commands via `portable-pty`
   (WO 21.5-R2; opt in via `--features pty`).
 - `computer_use` (non-default) — Anthropic hosted computer_use beta
-  (coordinate-vision model). Adapter wire format only: serializes a `computer`
+  (coordinate-vision model). Adapter wire format: serializes a `computer`
   tool as `{"type":"computer_20250124",...}`, sends the
   `anthropic-beta: computer-use-2025-01-24` header, and parses
-  `computer_tool_result` content blocks (WO 28.16 R1–R3). The vision execution
-  loop (screenshot capture + coordinate-action routing, R4) is deferred — the
-  hosted path is wired at the adapter seam but not yet driven end-to-end. Opt
-  in via `--features computer_use`; default OFF so zero computer_use wire bytes
-  reach the API in a default build. The local headless-Chrome CDP
-  `computer_use` tool (`src/tools/computer_use.rs`) is a separate capability
-  and is unaffected.
+  `computer_tool_result` content blocks (WO 28.16 R1–R3). The vision
+  execution loop (R4 — screenshot capture + coordinate-action routing)
+  shipped in WO 32.17: `ComputerUseConfig.hosted` flag (env
+  `KF_CODE_COMPUTER_USE_HOSTED`, TOML `[computer_use].hosted`) activates
+  the hosted tool; `computer_use.rs` splits into `local_def()` /
+  `hosted_def()` and dispatches to `run_hosted_action()` which translates
+  Anthropic's action vocabulary to CDP + always captures a screenshot for
+  the next model turn. Opt in via `--features computer_use`; default OFF
+  so zero computer_use wire bytes reach the API in a default build. The
+  local headless-Chrome CDP `computer_use` tool
+  (`src/tools/computer_use.rs`) is a separate capability and is
+  unaffected.
 - `landlock` – no longer a Cargo feature (WO 27.1). There is no `landlock`
   feature key in `[features]` at all; the landlock module is compiled
   unconditionally on Linux via `cfg(target_os = "linux")` and applied by
@@ -1144,12 +1208,13 @@ not the root binary.
 
 ## ADRs
 
-90 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+91 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
 execution replay (039), VFS minification (053), coverage-gate threshold
-policy (065), and many more. A drift test (`adr_xref_drift`) enforces that
-ADR file headers and the README index table agree.
+policy (065), CI architecture reset (074), and many more. A drift test
+(`adr_xref_drift`) enforces that ADR file headers and the README index
+table agree.
 
 Conventions: `ponytail:` annotations pin spec literals (if a ponytail test
 fails, the spec and impl drifted, not the test). `ceiling:` and `upgrade path:`

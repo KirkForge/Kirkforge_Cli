@@ -94,6 +94,88 @@
 
 ---
 
+## Session 2026-08-16 — WO win-audit: Unix-only code leak audit (worktree `.worktrees/wo-win-audit`, branch `wo/win-audit`)
+
+### What changed this session
+
+- **Audited the codebase for Unix-only code that leaks into the Windows
+  compile and trips `-D warnings`** (unused imports, dead code, size
+  lints that Linux never sees). The Windows CI job
+  (`.github/workflows/ci-merge.yml:windows`) runs with
+  `RUSTFLAGS: -Dwarnings` + `cargo nextest run --workspace`, so any
+  clippy lint that fires only on the Windows target is a hard CI
+  failure invisible on Linux.
+
+- **Audit method.** Cross-compiled for the installed
+  `x86_64-pc-windows-gnu` target: `cargo check --target x86_64-pc-windows-gnu --workspace --all-targets` (clean), then the
+  load-bearing check — `cargo clippy --target x86_64-pc-windows-gnu --workspace --all-targets -- -D warnings`. Also grep-audited
+  every `use std::os::unix::*` (4 file-scope + 40+ inline sites),
+  every `os::unix::` / `PermissionsExt` / `CommandExt` / `UnixStream`
+  / `UnixListener` / `setsid` / `setpgid` / `pre_exec` site, and
+  confirmed each is behind `#[cfg(unix)]` / `#[cfg(target_os = "linux")]`
+  either inline or via a gated parent `mod` declaration. Every
+  file-scope `use std::os::unix::*` is gated; every inline `use std::os::unix::*` is inside a `#[cfg(unix)]` block or a `#[cfg(unix)]` test fn or a `#[cfg(unix)]`/`#[cfg(target_os="linux")]` parent module. No ungated Unix-only imports remain.
+
+- **F1 — `crates/kf-compress-core/src/config.rs:207` (production fix).**
+  `ConfigError::Parse { source: toml::de::Error }` was >128 bytes on
+  the Windows target → `clippy::result_large_err` on
+  `PipelineConfig::from_file`'s `Result<Self, ConfigError>` return.
+  The `toml::de::Error` struct is larger on Windows than Linux (different
+  enum variant sizes across targets), so the lint fires only there.
+  Fix: box the `toml::de::Error` in the `Parse` variant
+  (`source: Box<toml::de::Error>`), and update `parse_source()` to
+  return `Some(&**source)` so the public accessor still returns
+  `&toml::de::Error` (API unchanged). Added a `ponytail:` comment
+  naming the ceiling (Windows-only size lint) and the upgrade path
+  (unbox if toml::de::Error shrinks). Impact: LOW (gitnexus — 4 direct
+  callers of `from_file`, all in same-file tests; `ConfigError` has 0
+  direct callers, only used as a return type).
+
+- **F2 — `src/daemon/mod.rs:442` (production fix).** The `#[cfg(unix)]`
+  `impl Default for DaemonState` existed (line 380-385) but the
+  `#[cfg(not(unix))]` `impl DaemonState` (line 442) had a `new()` fn
+  with no matching `Default` → `clippy::new_without_default` on the
+  Windows target. Fix: added `#[cfg(not(unix))] impl Default for
+  DaemonState { fn default() -> Self { Self::new() } }` mirroring the
+  unix impl. Impact: LOW (gitnexus — `DaemonState` has 0 direct
+  callers; it's only used by the gated `server` module).
+
+### Gate (HEAD on `wo/win-audit`, commit `fix(windows): gate Unix-only code for Windows clippy`)
+
+- `cargo clippy --target x86_64-pc-windows-gnu --workspace --all-targets -- -D warnings`:
+  PASS — `Finished dev profile [unoptimized + debuginfo] target(s) in 2m 43s`, 0 errors, 0 warnings. (Before the fixes: 2 errors — `clippy::result_large_err` on `kf-compress-core`, `clippy::new_without_default` on `kf-code`.)
+- `cargo check --target x86_64-pc-windows-gnu --workspace --all-targets`:
+  PASS — `Finished dev profile [unoptimized + debuginfo] target(s) in 10m 02s`, 0 warnings.
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings, 1.22s after cache)
+- `cargo clippy -p kf-compress-core -- -D warnings`: PASS (0 warnings, 22.28s)
+- `cargo fmt --check`: clean (exit 0)
+
+### Pending
+
+- None. Both Windows-only clippy lints fixed; audit confirms no ungated
+  Unix-only imports remain. The 4 Windows CI test failures (F1-F4 in
+  the prior session entry) were fixed by the parallel Windows-fix
+  subagent in commit `847e39d`; this audit's fixes are separate
+  (clippy lints, not test failures) and committed separately per the
+  task's "separate commit from the Windows test fixes" rule.
+
+### Notes
+
+- **Coordination with the Windows-fix subagent:** the two subagents
+  shared this worktree. The Windows-fix subagent reverted my
+  `kf-compress-core` edit (noted in their session entry above, line
+  88-93) thinking it was a stray change from an in-flight cross-build.
+  Re-applied the fix after confirming via `cargo clippy --target x86_64-pc-windows-gnu` that it is a real Windows CI failure (not a
+  stray change). No file conflict on `src/daemon/mod.rs` (the
+  Windows-fix subagent did not touch it).
+- **The `\\?\` prefix + `SetFileTime` write-access + platform
+  separator + clippy size/new-without-default** quartet covers the
+  four main classes of Windows-only CI failure in a Rust codebase
+  that uses `std::path` + `std::fs` + `cfg(unix)` gating. Worth
+  folding into AGENTS.md §7 if Windows-CI work recurs.
+
+---
+
 ## Session 2026-08-16 — WO env-race: kill Windows EnvGuard post-Drop live-env read (worktree `.worktrees/wo-envrace`, branch `wo/fix-env-race`)
 
 ### What changed this session

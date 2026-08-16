@@ -89,21 +89,32 @@ fn context_span(state: &AppState) -> (String, Color) {
         .as_ref()
         .map(|m| m.max_context_tokens)
         .unwrap_or(0);
+    // Cumulative tokens across the whole session — the "I've been doing
+    // work" signal. Used as the display value when the per-turn
+    // `last_turn_prompt_tokens` is 0 (e.g. the last response had no usage
+    // data, or the model's final turn was tool-only). The per-turn value
+    // is still used for the pressure *percentage* (it's the right "how
+    // full is the context window right now" signal).
+    let cumulative = state.budget.tokens_sent + state.budget.tokens_received;
     let used = state.budget.last_turn_prompt_tokens;
+    // Display value: prefer the per-turn count when non-zero (it's the
+    // most recent signal), fall back to cumulative so a session that has
+    // done work never shows "0 tokens".
+    let display = if used > 0 { used } else { cumulative };
 
     if let Some(pct) = budget_pct(used, max_ctx) {
         let color = pressure_color(pct);
         if pct < 50 {
             // Comfortable — show the token count, not the percentage.
-            (format!("{} tokens", format_token_count(used)), color)
+            (format!("{} tokens", format_token_count(display)), color)
         } else {
             (format!("{pct}% context"), color)
         }
     } else {
         // No budget known (no model, or max_context_tokens == 0). Show
-        // the cumulative sent count as a fallback signal.
+        // the cumulative count as a fallback signal.
         (
-            format!("{} tokens", format_token_count(state.budget.tokens_sent)),
+            format!("{} tokens", format_token_count(display)),
             Color::DarkGray,
         )
     }
@@ -246,6 +257,31 @@ mod tests {
         assert!(
             !row.contains("context"),
             "should NOT show percentage below 50%, got: {row:?}"
+        );
+    }
+
+    /// When the per-turn `last_turn_prompt_tokens` is 0 (e.g. the last
+    /// response had no usage data, or the final turn was tool-only) but
+    /// the session has done work (cumulative tokens > 0), the status bar
+    /// must show the cumulative count, NOT "0 tokens". This is the
+    /// regression guard for the "0 tokens · $0.00 after 147 tool calls"
+    /// bug — the user should always see activity when work has happened.
+    #[test]
+    fn status_bar_shows_cumulative_when_per_turn_is_zero() {
+        let mut state = make_state();
+        // Per-turn is 0 (no usage on the last response), but the session
+        // has sent 12k and received 3k tokens across prior turns.
+        state.budget.last_turn_prompt_tokens = 0;
+        state.budget.tokens_sent = 12_000;
+        state.budget.tokens_received = 3_000;
+        let row = status_row(&mut state, 80);
+        assert!(
+            row.contains("15.0K tokens"),
+            "should show cumulative 15k tokens, not 0, got: {row:?}"
+        );
+        assert!(
+            !row.contains("0 tokens"),
+            "should NOT show '0 tokens' when cumulative is non-zero, got: {row:?}"
         );
     }
 

@@ -2,6 +2,31 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-16 — WO readme: rewrite README as landing page + install/uninstall scripts (worktree `.worktrees/wo-readme`, branch `wo/readme`)
+
+### What changed this session
+
+- **README rewritten as a landing page** per AGENTS.md rule 10 ("README is a landing page, not a tech manual"). New structure: 4 shields.io badges (Rust 1.88+, CI, MIT, version 0.3.9), one-line description ("AI coding assistant that runs in your terminal. Open source, local-first, works with any LLM."), quick install (Linux/macOS curl + Windows irm), 3-step quick start, 3 plain-English bullets, links. 44 lines total (37 non-badge/link — under the 50-line gate). All technical content (architecture, config tables, feature flags, adapter list, plugin manifest format, verification-first prose) was already in `docs/TECHNICAL.md`; removed from README. Kept the "30 coding tasks" line because `scripts/check-artifact-consistency.sh` gate #3 requires the README count to match `ls benches/tasks/*.toml | wc -l` = 30 — a benchmark count is a factual claim, not a tech-manual table.
+- **`scripts/install.sh` expanded**: root installs to `/usr/local/bin`, non-root to `~/.local/bin`; creates `~/.config/kf-code/` config dir on non-root installs; prints "kf-code installed! Run: kf-code" at the end. Target mappings unchanged (gate #8 checks them against `release.yml`).
+- **`scripts/install.ps1` (new)**: Windows install. Downloads `x86_64-pc-windows-msvc` `.zip` from the latest release, verifies SHA256 against `SHA256SUMS.txt`, extracts to `$env:USERPROFILE\.kf-code\bin\`, adds to user PATH, prints success. `-DryRun` for syntax testing. No external modules — PowerShell 5.1+ ships with Windows.
+- **`scripts/uninstall.sh` (new)**: removes `~/.local/bin/kf-code` (and `/usr/local/bin` copy if root), prompts to optionally remove config + data dirs.
+- **`scripts/uninstall.ps1` (new)**: removes `$env:USERPROFILE\.kf-code\`, removes the PATH entry. `-RemoveConfig` also drops `~/.config/kf-code`.
+
+### Deviation from brief (disclosed)
+- Brief's quick-start step 1 was bare `kf-code` to start the TUI. The CLI (`src/cli.rs:35-36`) requires a subcommand: `command: Command` (not `Option<Command>`), so bare `kf-code` prints clap's "a subcommand is required" help dump and exits non-zero — it does NOT start the TUI. Used `kf-code run` instead, which is the actual TUI command (the prior README already used `kf-code run -m qwen2.5:0.5b`). Did not change the CLI to accept a default subcommand — out of scope (code change, not docs). Tracked here, not in a WO (docs-only task).
+
+### Gate (HEAD `216ecf9` on `wo/readme`)
+- `bash scripts/check-artifact-consistency.sh` → 10 passed, 0 failed.
+- `bash -n scripts/install.sh` / `bash -n scripts/uninstall.sh` → OK.
+- README 44 lines (37 non-badge/link, under 50).
+- No technical tables/config field lists/architecture diagrams in README.
+- `pwsh` not available on this box; `install.ps1` visually inspected (DryRun param present; real download test deferred to a Windows host).
+
+### Pending
+- Windows-side runtime test of `install.ps1` / `uninstall.ps1` on an actual Windows host (no pwsh on this Linux box). Syntax + logic reviewed; SHA256 verification, PATH manipulation, and zip extraction follow the documented release shape.
+
+---
+
 ## Session 2026-08-16 — WO env-race: kill Windows EnvGuard post-Drop live-env read (worktree `.worktrees/wo-envrace`, branch `wo/fix-env-race`)
 
 ### What changed this session

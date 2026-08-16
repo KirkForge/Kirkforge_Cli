@@ -5,6 +5,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- README rewritten as a landing page per AGENTS.md rule 10: 4 shields.io badges, one-line description, quick install (Linux/macOS + Windows), 3-step quick start, 3 plain-English bullets, links to docs. 44 lines (was 69). All technical content already in `docs/TECHNICAL.md`; removed from README. Kept the "30 coding tasks" line (`check-artifact-consistency.sh` gate #3 requires the count to match the benchmark task directory).
+
+### Added
+- `scripts/install.ps1`: Windows install. Downloads `x86_64-pc-windows-msvc` `.zip` from the latest release, verifies SHA256 against `SHA256SUMS.txt`, extracts to `$env:USERPROFILE\.kf-code\bin\`, adds to user PATH, prints success. `-DryRun` for syntax testing. No external modules.
+- `scripts/uninstall.sh`: removes `~/.local/bin/kf-code` (and `/usr/local/bin` copy if root), prompts to optionally remove config + data dirs.
+- `scripts/uninstall.ps1`: removes `$env:USERPROFILE\.kf-code\`, removes the PATH entry. `-RemoveConfig` also drops `~/.config/kf-code`.
+
+### Changed (install.sh)
+- `scripts/install.sh`: root installs to `/usr/local/bin`, non-root to `~/.local/bin`; creates `~/.config/kf-code/` config dir on non-root installs; prints "kf-code installed! Run: kf-code" at the end. Target mappings unchanged.
+
 ### Fixed
 - kf-budget-core: eliminated the last Windows-racy EnvGuard post-Drop live-env read. `env_guard_restores_prior_value_on_panic` (`crates/kf-budget-core/src/paths.rs`) read `std::env::var("KF_BUDGET_CONFIG_DIR")` after the inner guard's Drop (during panic unwind) and asserted the live value. On Windows this races other test threads. Replaced the post-Drop live-env read with an assertion on the captured `prior()` (the value Drop used to restore), captured out of the unwind closure via `AssertUnwindSafe`. Same fix pattern the two `env_guard_restores_prior_value_some_branch` tests already use (WO 10.0 / B8). No production code changed.
 - Windows stdin detach (P0 CI hang): `src/main/line_mode.rs::spawn_line_mode_approval_handler` no longer joins the reader thread on Windows. The blocking Windows console `read_line` is uninterruptible, so `reader_handle.join()` after `abort()` hung the runtime when shutdown fired mid-read. Split the join by cfg — `#[cfg(unix)]` joins (Unix `/dev/tty` poll loop is interruptible, join is bounded to ~200 ms); `#[cfg(not(unix))]` drops the handle (detach; the thread is reaped at process exit or when stdin closes). Unix behaviour unchanged. ADR-025 "Approval reader" updated to document the detach. Fixes the P0 Windows CI timeout source.

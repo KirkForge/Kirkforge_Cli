@@ -2,6 +2,106 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-16 — WO chat-fix: 3 critical TUI bugs (worktree `.worktrees/wo-chat-fix`, branch `wo/chat-fix`)
+
+The user had been unable to use kf-code's TUI for months — three critical
+bugs made the chat completely unusable. All three root causes found and
+fixed; the chat is now usable.
+
+### What changed this session
+
+- **Bug 1+3 — invisible textbox (commit 1, `4ed21bf`).** The user typed
+  into the input box but the text was NOT VISIBLE while typing — it only
+  appeared on Enter. Root cause: the plain text-edit arms of
+  `handle_input_key` in `src/tui/keys/mod.rs` (Char insert, Backspace,
+  Delete, arrows, Home/End, PageUp/Down, and the Enter message-send path)
+  all mutated `state.conversation.input` but never called
+  `state.mark_dirty()`. The render-on-state-change loop
+  (`src/tui/mod.rs` `run_event_loop`, line ~866) skips `terminal.draw`
+  when `state.dirty` is false, so the typed text was never painted. On
+  Enter, `is_generating=true` is set, the next 125ms slow-tick marks dirty
+  via the spinner path, and the text shows up as a chat message —
+  explaining "text appears on Enter". Fix: one line —
+  `state.mark_dirty()` before the final `Ok(())` in `handle_input_key`.
+  The early-return arms (F-keys, slash menu, file completer, Ctrl+*
+  combos) already mark dirty themselves. Secondary:
+  `render_cursor_line` in `src/tui/widgets/input.rs` now uses
+  `Color::Green` foreground (matching the input border) instead of
+  reverse video (`bg=White, fg=Black`). Reverse video relies on the
+  terminal supporting background colors; on terminals that don't (or
+  that render bg as the default), the cursor was invisible — the same
+  root-cause class. A green block on the default background is
+  universally supported on xterm-256color. Tests added (6, in selftest
+  `key_scenarios`): `typing_char_marks_state_dirty`,
+  `typing_second_char_keeps_state_dirty`, `backspace_marks_state_dirty`,
+  `arrow_key_marks_state_dirty`, `typed_char_is_visible_in_rendered_output`
+  (end-to-end through `render_app`),
+  `type_then_delete_repaints_to_placeholder`. Cursor tests in
+  `input.rs` updated to assert green fg + no bg (portable cursor
+  render) instead of reverse video (5 tests renamed + updated).
+
+- **Bug 2 — yeeted on approval (commit 2, `9bec421`).** The user approved
+  a tool call (pressed Y) and the TUI immediately exited/crashed. The
+  daemon log showed "executor task did not shut down within 3 s;
+  aborting" and "failed to disable raw mode / bracketed paste / mouse
+  capture / leave alternate screen" — the terminal was corrupted.
+  Root cause 1 (kb-reader): `spawn_kb_reader` in `src/tui/mod.rs` called
+  `shutdown.notify_one()` on the FIRST `event::read()` error. crossterm
+  can return transient errors (resize race, EAGAIN, a stdout write
+  holding the terminal lock), so a single hiccup mid-tool-execution —
+  right after an approval response, when the render path was writing
+  heavily to stdout — yeeted the user out. Fix: retry up to 3
+  consecutive errors before shutting down, with a 10ms backoff. A
+  genuine EOF (pty closed) returns Err repeatedly, so we still exit
+  promptly. The retry-decision logic is extracted into a pure
+  `should_shutdown_after_errors` helper so the contract is unit-testable.
+  Root cause 2 (approval dialog): `render_approval_dialog` in
+  `src/tui/components/approval.rs` called
+  `(area.height * 3 / 4).clamp(10, area.height)` which PANICS when
+  `area.height < 10` (min > max in clamp). A 0-dimension `Rect` passed
+  to `Clear` also corrupts the terminal. Fix: a pure
+  `approval_dialog_area` helper returns `None` for tiny terminals
+  (height < 4 or width < 20) and a valid, in-bounds `Rect` otherwise.
+  The renderer skips the dialog when `None` — the chat stays visible
+  and the approval stays pending; the user resizes and the next frame
+  renders the dialog. Tests added (12): 7 `approval_dialog_area_*`
+  (normal, small, tiny-height, tiny-width, min-height-4, height-9,
+  fuzz-fit) + 5 `kb_reader_*` (single-error, two-errors, three-errors,
+  threshold-inclusive, zero-errors).
+
+- **Bug 3 — terminal cleanup (commit 3, `9189545`).** The "failed to
+  disable raw mode / bracketed paste / mouse / alt screen" log spam
+  indicated the terminal was already corrupted when cleanup ran. This
+  is a symptom of bugs 1+2 (now fixed), but the cleanup path itself was
+  fragile: it relied entirely on crossterm commands that track mode
+  state, so when the state was corrupted, the cleanup failed too. Fix:
+  added `force_terminal_reset`, a best-effort raw ANSI escape sequence
+  reset written directly to stdout (bypassing crossterm's state
+  tracking). Called from both `teardown()` and `TerminalGuard::drop`,
+  so the terminal is reset on both normal exit and panic. Sequences:
+  disable bracketed paste, disable mouse (all modes), leave alt screen
+  (xterm + vt100), disable cursor-key application mode, reset all
+  attributes, show cursor, clear screen + home cursor. Each sequence is
+  written independently so a partial write still resets what it can;
+  errors are swallowed (best-effort). Tests added (2):
+  `force_terminal_reset_writes_ansi_escape_sequences` (pins the exact
+  sequences), `force_terminal_reset_does_not_panic_on_closed_writer`
+  (best-effort contract).
+
+### Gate (HEAD on `wo/chat-fix`, commit 3 — final)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 582 passed, 1 failed
+  (pre-existing flaky `tui::commands::route::tests::valid_tier_sends_resolved_model`
+  — fails on `origin/main` too, unrelated to these changes), 2816 skipped
+  (was 569 + 20 new tests across the 3 commits)
+
+### Pending
+- None. All 3 bugs fixed and tested. The flaky `route` test is a
+  pre-existing issue (channel race in `src/tui/commands/route.rs:175`),
+  not introduced by this session — verify by `git stash` + re-run on
+  `origin/main`: same failure.
+
 ## Session 2026-08-16 — WO tui-bugs: 3 TUI bug fixes (worktree `.worktrees/wo-tui-bugs`, branch `wo/tui-bugs`)
 
 ### What changed this session

@@ -26,14 +26,24 @@
   remains (not user-facing). Full rename was feasible (5 references, all in
   `src/tui/`) — no need to keep the enum variant name.
 
-### Gate (WO 34.7)
+- **WO 34.8 — Welcome screen.** Rewrote `render_welcome`
+  (`src/tui/widgets/welcome.rs`): banner + subtitle "AI coding assistant
+  for your repository" + CWD + recent sessions (3-5 from `session_picker`
+  when present, skipped when absent — no empty header) + quick actions
+  (`/`, `@`, `Ctrl+K`, `Ctrl+S`) + status line (`● Ready · <model>`).
+  Model name falls back to the connection model, then to `—`. Keystroke-
+  dismisses behavior unchanged (render gate on
+  `messages.is_empty() && input.is_empty()`). Added 7 unit tests; updated
+  the `empty_state` selftest (was checking for the old `/help` hint line).
+
+### Gate (WO 34.7 + 34.8)
 - `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
 - `cargo fmt --check`: PASS (clean)
-- `cargo nextest run -p kf-code --lib tui::`: 518 passed, 2816 skipped
+- `cargo nextest run -p kf-code --lib tui::`: 518 passed (34.7) / 48
+  passed tui::widgets + 7 welcome + 1 empty_state selftest (34.8)
 
 ### Pending
-- WO 34.8 (welcome screen), WO 34.9 (slash taxonomy), WO 34.10 (approval
-  dialog) — in progress this session.
+- WO 34.9 (slash taxonomy), WO 34.10 (approval dialog) — in progress.
 
 ---
 

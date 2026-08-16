@@ -516,9 +516,15 @@ fn empty_state() {
         rendered.contains("k i r k f o r g e"),
         "welcome banner missing on empty state"
     );
+    // WO 34.8: welcome now shows quick actions + subtitle instead of
+    // a single /help hint. The / quick-action label is always present.
     assert!(
-        rendered.contains("/help"),
-        "welcome screen should mention /help"
+        rendered.contains("AI coding assistant"),
+        "welcome subtitle missing on empty state"
+    );
+    assert!(
+        rendered.contains("Commands"),
+        "welcome quick-actions missing on empty state"
     );
 }
 

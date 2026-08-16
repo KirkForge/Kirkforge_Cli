@@ -244,7 +244,26 @@
 
 ## Version
 
-**Current: `0.3.9`** (Cargo.toml + Cargo.lock; bumped from `3.8.0` in commit `1f1cea9`). The `3.8.0` jump (commit `6e2e0d4`) was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for subsequent minors (only the last digit moves). Next target after `0.3.9`: `0.3.10` (do not bump `Cargo.toml` until the release cut).
+**Current: `0.3.10`** (Cargo.toml + Cargo.lock; bumped from `0.3.9` on branch `wo/forum` as release prep — NOT yet committed as the release cut, NOT tagged, NO GitHub release created). The `3.8.0` jump (commit `6e2e0d4`) was a one-off to reflect the WO 27/28/29/30 architecture step-change; the line returns to `0.3.x` for subsequent minors (only the last digit moves). The release commit + `v0.3.10` tag will be made by the owner after CI is green on `wo/forum`; the tag push triggers `release.yml`. Latest GitHub release is still `v0.3.6` (2026-07-27) — the 0.3.10 cut closes the gap (covers WO 27-34). GitHub Discussions enabled on the repo (6 default categories seeded: Announcements, General, Ideas, Q&A, Show and tell, Polls); welcome discussion #24 pinned in Announcements.
+
+## Session 2026-08-16 — WO Forum: GitHub Discussions + 0.3.10 release prep (worktree `.worktrees/wo-forum`, branch `wo/forum`)
+
+### What changed this session
+
+- **GitHub Discussions enabled** on `KirkForge/Kirkforge_Cli` via `gh api repos/KirkForge/Kirkforge_Cli -X PATCH -f has_discussions=true`. Enabling the feature seeded 6 default categories (Announcements / General / Ideas / Q&A / Show and tell / Polls) — the public GraphQL schema has no `createDiscussionCategory` mutation, so categories are UI-or-default-only; the defaults matched the task's ask. Created welcome discussion #24 in Announcements via the `createDiscussion` mutation (https://github.com/KirkForge/Kirkforge_Cli/discussions/24). Gate: `gh api repos/KirkForge/Kirkforge_Cli --jq '.has_discussions'` → `true`.
+- **Version bumped `0.3.9` → `0.3.10`** (release prep, NOT the release cut). `Cargo.toml` line 3 + `Cargo.lock` `kf-code` package (line 2089, via `cargo update -p kf-code`). `CHANGELOG.md` gained a `## [0.3.10] - 2026-08-16` section summarizing the WO 33-34 series (TUI IA reset, CI reset, test optimization, env-guard fixes, Windows fixes, discussions enabled). Detailed entries stay in `[Unreleased]` until the release cut folds them in. `scripts/bump-version.sh` was NOT used (it auto-creates a tag — the owner makes the release commit + tag after CI green).
+- **GitHub release list checked**: latest is `v0.3.6` (2026-07-27), then `v0.3.0`, `v0.2.0`. Confirms the owner's observation — the latest *tagged release* is 0.3.6 even though Cargo.toml was at 0.3.9; the 0.3.10 cut closes the gap (covers WO 27-34).
+
+### Gate
+
+- `cargo check -p kf-code --lib` → `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 9m 36s` (clean, no errors/warnings). Version bump is metadata-only; no code changed.
+- `gh api repos/KirkForge/Kirkforge_Cli --jq '.has_discussions'` → `true`.
+- `grep -A1 'name = "kf-code"' Cargo.lock` → `version = "0.3.10"`.
+
+### Pending / deferred
+
+- **Release cut NOT done (by design).** The owner makes the release commit on `wo/forum` after CI is green, then tags `v0.3.10` and pushes the tag to trigger `release.yml`. Remaining work: (a) get CI green on `wo/forum`, (b) commit the version bump (Cargo.toml + Cargo.lock + CHANGELOG.md + state.md), (c) `git tag -a v0.3.10 -m "Release v0.3.10"` + `git push origin v0.3.10`, (d) verify `gh release view v0.3.10` shows 6 platform binaries. Tracked here + `docs/workorders/` release cadence (ADR-024).
+- **Discussion categories: 5 of 5 requested already seeded by GitHub defaults** (Announcements, General, Ideas, Q&A, Show and tell). "Polls" is a bonus 6th default. No further category work needed. If custom categories are wanted later, they must be created via the web UI (no public API).
 
 ## Session 2026-08-16 — WO 32.16: Windows daemon stub test (worktree `.worktrees/wo-daemon-stub`, branch `wo/fix-daemon-stub`)
 

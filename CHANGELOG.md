@@ -15,6 +15,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed (install.sh)
 - `scripts/install.sh`: root installs to `/usr/local/bin`, non-root to `~/.local/bin`; creates `~/.config/kf-code/` config dir on non-root installs; prints "kf-code installed! Run: kf-code" at the end. Target mappings unchanged.
+## [0.3.10] - 2026-08-16
+
+Release prep — version bump only. The detailed entries for the WO 33-34 series live in `[Unreleased]` above and will be folded into this section at the release cut. Highlights:
+
+### Fixed
+- Windows stdin detach (P0 CI hang): `line_mode.rs` no longer joins the reader thread on Windows; `#[cfg(not(unix))]` drops the handle so the runtime can shut down mid-`read_line`. ADR-025 updated. Fixes the P0 Windows CI timeout.
+- kf-budget-core env-guard race: `env_guard_restores_prior_value_on_panic` now asserts the captured `prior()` instead of reading the live env after Drop, eliminating the last Windows-racy post-Drop env read. No production code changed.
+
+### Changed
+- TUI IA reset (WO 34.1-34.10): command palette (Ctrl+K), `/help` overlay, welcome screen rewrite, Sessions tab (F6) rename, Models tab (F2) chooser, Jobs tab (F4) rewrite, Settings tab (F5) regroup, slash-command tiering, action-first approval dialog with SAFE/REVIEW/DANGEROUS risk tiers, status bar simplified to 4 essentials. Killed the persistent F1-F6 tab bar; chat is the permanent primary surface; former tabs are overlays.
+- CI architecture reset (ADR-074): monolithic `ci.yml` split into `ci-pr.yml` / `ci-merge.yml` / `ci-nightly.yml`. Merge jobs parallel, scoped clippy (`--lib --bins` on PR, `--all-targets` on merge), declarative nextest profiles, integration job moved to nightly.
+- Test optimization (WO 33.14 phase 3, WO 33.16, Phase 1 sleeps): `CommandRunner` trait lets verifier tests inject a fake cargo/clippy runner; EnvGuard RAII replaced every raw `std::env::set_var` in test code; remaining blind wall-clock sleeps replaced with event-driven synchronization. JWT verifier tests dropped 690.8s → <0.5s via precomputed keys + fake JWKS resolver.
+- Path-aware changed-package test selection (WO 33.6): `scripts/changed-packages.sh` maps git diff to affected cargo packages; PR CI skips Rust entirely on docs-only changes.
+
+### Added
+- GitHub Discussions enabled (Announcements / General / Ideas / Q&A / Show and tell / Polls). Welcome discussion pinned in Announcements.
+- WO 32.16: Windows daemon-client stub fallback tests marked Done (shipped in `5bba9f4`, only the WO status line was outstanding).
+- WO 32.17: Anthropic hosted `computer_use` beta (coordinate-vision model) behind `KF_CODE_COMPUTER_USE_HOSTED`.
+- WO 32.19 R7: security emitter wired into the `kf-orchestrator` correction loop.
+- WO 32.20: Node/Go/Generic multi-language verifiers (node_test, node_lint, go_test, go_vet, generic_test).
+- WO 32.5: parallel scout/coder/reviewer orchestration (`/workflow run <name> --parallel`).
+- `kf-code update`: self-update subcommand (download, SHA256 verify, atomic rename).
 
 ### Fixed
 - Windows CI: fixed 4 failing Windows tests by addressing root causes (no test-rewrite-to-pass, no `#[ignore]`). (1) `tui::selftest::approval_prompt_display` — the approval dialog's `is_outside_cwd` check (`src/tui/components/approval.rs`) canonicalized the target path but compared against the raw `std::env::current_dir()` base. On Windows, `Path::canonicalize` returns an extended-length `\\?\C:\...` path while `current_dir()` returns `C:\...` (no prefix), so `canon.starts_with(base)` was always false → every in-CWD edit was mis-classified as `DANGEROUS` (rendered "DANGEROUS" not "REVIEW") and the diff preview was suppressed. Fix: canonicalize the base cwd too, so both sides of `starts_with` carry the same prefix on Windows (no-op on Unix). This was a production bug, not a test bug — the test assertion was correct. (2) `kf-context-index::edge_cases::mtime_rebuild_single_file_change` — the test opened the file read-only then called `set_modified`; on Windows `SetFileTime` requires `GENERIC_WRITE` handle access (read-only → `ERROR_ACCESS_DENIED`). Fix: open with `OpenOptions::new().write(true)` (harmless on Unix where `futimens` needs no write access). (3+4) `kf-routing::path_safety::tests` — two tests asserted exact `Some("...")` strings with forward slashes; on Windows `PathBuf::to_string_lossy()` uses `\`. Fix: gate the two `Some(string)` assertions behind `#[cfg(unix)]` + add `#[cfg(not(unix))]` equivalents asserting the backslash form. No production code changed for F3+F4.

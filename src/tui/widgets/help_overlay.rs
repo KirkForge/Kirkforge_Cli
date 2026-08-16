@@ -143,10 +143,7 @@ mod tests {
             }
         }
         assert!(found_border, "help overlay border/title should be visible");
-        assert!(
-            found_help_text,
-            "help overlay should show help_text() body"
-        );
+        assert!(found_help_text, "help overlay should show help_text() body");
     }
 
     /// The overlay does not panic on a tiny terminal (1×1) — it skips.

@@ -1,6 +1,12 @@
-/// Status bar — model info, token counts, connection state.
+/// Status bar — model, context pressure, cost, state (WO 34.3).
+///
+/// Reduced from 12+ indicators (every metric in the app) to 4 essentials:
+///   `● Model · context · $cost · State`
+/// plus the sandbox warning (`⚠️ UNSANDBOXED`) appended when active.
+/// Everything else lives in `/status`. The bar fits in ~50 chars; if it
+/// doesn't fit, the model name is truncated.
 use crate::tui::app::{AppState, ConnectionState};
-use crate::tui::rendering::{format_budget_indicator, format_duration, format_token_count};
+use crate::tui::rendering::{budget_pct, format_token_count};
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -11,235 +17,134 @@ use ratatui::{
 
 /// Render the status bar at the bottom of the screen.
 ///
-/// The tab indicator has been moved to the top tab bar (WO 17.9);
-/// the status bar now shows only connection, token, and time info.
+/// Four items, dot-separated, plus an optional sandbox warning:
+///   `● Claude Sonnet 4 · 82% context · $0.04 · Ready`
+///   `● Claude Sonnet 4 · 8.2k tokens · $0.04 · Ready`
+///   `● Claude Sonnet 4 · 8.2k tokens · $0.04 · Ready  ⚠️ UNSANDBOXED`
+///
+/// Context pressure shows as `NN% context` with a colour (green <50%,
+/// yellow 50-80%, red >80%) when the budget is known. Below 50% the
+/// token count is shown instead (`8.2k tokens`) so the bar is not
+/// noisy at comfortable levels. When no budget is known (no model
+/// connected, no max_context_tokens), the plain token count is shown.
 pub fn render_status(f: &mut Frame, area: Rect, state: &AppState) {
-    let left_info = match &state.provider.connection {
-        ConnectionState::Disconnected | ConnectionState::Connecting => {
-            Span::styled(" ⚡ Disconnected ", Style::default().fg(Color::Red))
-        }
-        ConnectionState::Connected { model, .. } => {
-            Span::styled(format!(" ◆ {model} "), Style::default().fg(Color::Green))
-        }
-        ConnectionState::Error(e) => {
-            Span::styled(format!(" ✗ {e} "), Style::default().fg(Color::Red))
-        }
-    };
+    let model = model_label(state);
+    let (context_text, context_color) = context_span(state);
+    let cost_str = cost_label(state);
+    let state_str = state_label(state);
 
-    let elapsed = format_duration(state.session.session_started.elapsed().as_secs_f64());
-    let cost_str = if state.budget.cumulative_cost > 0.001 {
-        format!(" ${:.4}", state.budget.cumulative_cost)
-    } else if state.budget.turn_cost > 0.0 {
-        format!(" ${:.4}", state.budget.turn_cost)
-    } else {
-        String::new()
-    };
-    let skill_count = state.services.skill_registry.len();
-    let skills_str = if skill_count > 0 {
-        format!(" {skill_count}sk")
-    } else {
-        String::new()
-    };
+    // Bullet + model.
+    let bullet = Span::styled("● ", Style::default().fg(Color::Green));
+    let model_span = Span::styled(model, Style::default().fg(Color::White));
 
-    // ── Plugin trust-tier indicator (Phase 2.3) ────────────────────
-    let plugin_str = state.provider.plugin_status.as_deref().unwrap_or("");
+    let sep = Span::styled(" · ", Style::default().fg(Color::DarkGray));
 
-    // ── Tool call counter (visible between tool calls when spinner is off) ──
-    let tool_calls_span: Span = if state.generation.turn_tool_calls > 0 {
-        Span::styled(
-            format!("🔧×{} ", state.generation.turn_tool_calls),
-            Style::default().fg(Color::Cyan),
-        )
-    } else {
-        Span::raw(String::new())
-    };
+    let context_span = Span::styled(context_text, Style::default().fg(context_color));
+    let cost_span = Span::styled(cost_str, Style::default().fg(Color::DarkGray));
+    let state_span = Span::styled(state_str, Style::default().fg(Color::Cyan));
 
-    // ── Continuation round indicator (WO 23.9-R3) ──────────────
-    // Active status info: "⟳ 3/5" during FinishReason::Length loops.
-    // Never-drop (like sandbox) so the user always sees continuation state.
-    let continuation_span: Span = if let Some((round, max)) = state.generation.continuation {
-        Span::styled(
-            format!("⟳ {round}/{max} "),
-            Style::default().fg(Color::Yellow),
-        )
-    } else {
-        Span::raw(String::new())
-    };
+    let mut spans = vec![
+        bullet,
+        model_span,
+        sep.clone(),
+        context_span,
+        sep.clone(),
+        cost_span,
+        sep,
+        state_span,
+    ];
 
-    // ── Budget indicator (v1.2-p6) ─────────────────────────────────
-    // If we have both a connected model and a non-zero per-turn
-    // prompt size, show "↑12.4K/128K (10%)" with a color that tells
-    // the user when /compact is a good idea. Otherwise fall back to
-    // the plain "↑12.4K" cumulative display (pre-first-turn, or no
-    // model connected, or no max_context_tokens configured).
+    // Sandbox warning — safety-critical, always appended when active.
+    if state.provider.unsandboxed {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            "⚠️ UNSANDBOXED",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(line).style(Style::default().bg(Color::Black).fg(Color::White));
+    f.render_widget(paragraph, area);
+}
+
+/// Model name for the status bar. Falls back to the connection state
+/// when no model is connected.
+fn model_label(state: &AppState) -> String {
+    match &state.provider.connection {
+        ConnectionState::Connected { model, .. } => model.clone(),
+        ConnectionState::Disconnected | ConnectionState::Connecting => "Disconnected".to_string(),
+        ConnectionState::Error(e) => format!("Error: {e}"),
+    }
+}
+
+/// Context pressure span: `(text, color)`. When the budget is known and
+/// pressure is >= 50%, shows `NN% context` with the threshold colour.
+/// Below 50% (or when no budget is known), shows the token count
+/// (`8.2k tokens`) so the bar stays quiet at comfortable levels.
+fn context_span(state: &AppState) -> (String, Color) {
     let max_ctx = state
         .provider
         .model_info
         .as_ref()
         .map(|m| m.max_context_tokens)
         .unwrap_or(0);
-    let sent_span: Span = if state.budget.last_turn_prompt_tokens > 0 && max_ctx > 0 {
-        let (text, color) = format_budget_indicator(
-            state.budget.last_turn_prompt_tokens,
-            max_ctx,
-            &state.ui.theme,
-        );
-        Span::styled(format!("↑{text} "), Style::default().fg(color))
-    } else {
-        Span::styled(
-            format!("↑{} ", format_token_count(state.budget.tokens_sent)),
-            Style::default().fg(Color::DarkGray),
-        )
-    };
-    let received_span = Span::styled(
-        format!("↓{} ", format_token_count(state.budget.tokens_received)),
-        Style::default().fg(Color::DarkGray),
-    );
-    let cost_span = Span::styled(cost_str.clone(), Style::default().fg(Color::DarkGray));
-    let elapsed_span = Span::styled(elapsed.clone(), Style::default().fg(Color::DarkGray));
-    let skills_span: Span = if skills_str.is_empty() {
-        Span::raw(String::new())
-    } else {
-        Span::styled(
-            format!("{skills_str} "),
-            Style::default().fg(Color::DarkGray),
-        )
-    };
-    let plugin_span: Span = if plugin_str.is_empty() {
-        Span::raw(String::new())
-    } else {
-        Span::styled(format!("{plugin_str} "), Style::default().fg(Color::Yellow))
-    };
+    let used = state.budget.last_turn_prompt_tokens;
 
-    // ── Memory visibility widget (WO 26.7-R3) ────────────────────
-    // Show "🧠N@t" (N facts, last-updated turn t) when the config flag is
-    // on and memory has been auto-populated this session. Droppable at
-    // narrow widths (added to the drop list below).
-    let memory_show = crate::shared::read_shared_config(&state.services.config)
-        .display
-        .memory_show_in_status;
-    let memory_span: Span = if memory_show {
-        if let Some((count, turn)) = state.session.memory_status {
-            Span::styled(
-                format!("🧠{count}@t{turn} "),
-                Style::default().fg(Color::Cyan),
-            )
+    if let Some(pct) = budget_pct(used, max_ctx) {
+        let color = pressure_color(pct);
+        if pct < 50 {
+            // Comfortable — show the token count, not the percentage.
+            (format!("{} tokens", format_token_count(used)), color)
         } else {
-            Span::raw(String::new())
+            (format!("{pct}% context"), color)
         }
     } else {
-        Span::raw(String::new())
-    };
-
-    // ── Sandbox indicator (v1.2-p12 follow-up) ─────────────────────
-    // Shown in the status bar only when PathGuard is unsandboxed.
-    let sandbox_span: Span = if state.provider.unsandboxed {
-        Span::styled(
-            "⚠️ UNSANDBOXED ".to_string(),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        // No budget known (no model, or max_context_tokens == 0). Show
+        // the cumulative sent count as a fallback signal.
+        (
+            format!("{} tokens", format_token_count(state.budget.tokens_sent)),
+            Color::DarkGray,
         )
-    } else {
-        Span::raw(String::new())
-    };
-
-    // Compute the spacer width from the actual rendered span widths.
-    // `Span::content` is the unstyled text length; we use that for
-    // layout math and rebuild with the styled spans for display.
-    let collapse_span = Span::styled(
-        format!(
-            " [Ctrl+T: tool collapse {}] ",
-            if state.conversation.tool_collapsed {
-                "ON"
-            } else {
-                "OFF"
-            }
-        ),
-        Style::default()
-            .fg(if state.conversation.tool_collapsed {
-                Color::Green
-            } else {
-                Color::DarkGray
-            })
-            .bg(Color::Black),
-    );
-    let separator = Span::styled(" │ ", Style::default().fg(Color::DarkGray));
-
-    // Display-cell width of a span. `chars().count()` undercounts wide
-    // emoji (e.g. `⚠️` is 2 cells but 1 char + variation selector), so
-    // add 1 for the known sandbox-emoji span when it's the UNSANDBOXED
-    // warning and for the 🧠 memory glyph (2 cells). `unicode-width` is
-    // not a direct dep here (only transitive via ratatui), so the manual
-    // correction stays cheaper than a new dependency.
-    let span_width = |span: &Span| {
-        let n = span.content.chars().count();
-        if span.content.contains('⚠') || span.content.contains('🧠') {
-            n + 1
-        } else {
-            n
-        }
-    };
-
-    let left_len = span_width(&left_info);
-
-    // Right-side spans in render order. The drop loop below mutates a
-    // visibility mask over these. Never-drop spans are excluded from
-    // the drop candidates list.
-    let mut right: Vec<Span> = vec![
-        collapse_span,
-        sandbox_span,
-        tool_calls_span,
-        continuation_span,
-        skills_span,
-        plugin_span,
-        memory_span,
-        sent_span,
-        received_span,
-        cost_span,
-        separator,
-        elapsed_span,
-    ];
-
-    // Drop order: drop first → last. Index into `right`.
-    // 6=memory_span, 5=plugin_span, 4=skills_span, 2=tool_calls_span, 0=collapse_span.
-    // Never-drop: 1=sandbox, 3=continuation, 7=sent, 8=received, 9=cost, 10=separator, 11=elapsed.
-    let drop_order: [usize; 5] = [6, 5, 4, 2, 0];
-
-    let right_width = |right: &[Span]| right.iter().map(|s| span_width(s)).sum::<usize>();
-    let fits = |right: &[Span]| area.width as usize >= left_len + right_width(right) + 2;
-
-    // Drop low-priority spans until it fits or only never-drop spans
-    // remain. Replace each dropped span with an empty span so indices
-    // stay stable.
-    if !fits(&right) {
-        for &idx in &drop_order {
-            if fits(&right) {
-                break;
-            }
-            right[idx] = Span::raw(String::new());
-        }
     }
+}
 
-    // Spacer between left and right. If the floor still doesn't fit,
-    // collapse to a single space so the overlap is the minimum, not
-    // every span piled up.
-    let floor = left_len + right_width(&right) + 2;
-    let space = if area.width as usize > floor {
-        area.width as usize - floor
-    } else if area.width as usize > left_len + 1 {
-        1
+/// Pressure colour: green <50%, yellow 50-80%, red >80%.
+fn pressure_color(pct: u8) -> Color {
+    if pct < 50 {
+        Color::Green
+    } else if pct < 80 {
+        Color::Yellow
     } else {
-        0
-    };
+        Color::Red
+    }
+}
 
-    let spacing = " ".repeat(space);
+/// Cost label: `$0.04` (cumulative), or empty when zero.
+fn cost_label(state: &AppState) -> String {
+    if state.budget.cumulative_cost > 0.001 {
+        format!("${:.2}", state.budget.cumulative_cost)
+    } else if state.budget.turn_cost > 0.0 {
+        format!("${:.2}", state.budget.turn_cost)
+    } else {
+        "$0.00".to_string()
+    }
+}
 
-    let mut line_spans = vec![left_info];
-    line_spans.push(Span::styled(spacing, Style::default()));
-    line_spans.extend(right);
-
-    let line = Line::from(line_spans);
-    let paragraph = Paragraph::new(line).style(Style::default().bg(Color::Black).fg(Color::White));
-    f.render_widget(paragraph, area);
+/// State label: `Generating…`, `Working…` (persona/workflow/test), or
+/// `Ready`. `Cancelled` is transient (no persistent flag) and is not
+/// surfaced here — the cancel message is already in the conversation.
+fn state_label(state: &AppState) -> &'static str {
+    if state.generation.is_generating {
+        "Generating…"
+    } else if state.generation.persona_in_progress.is_some()
+        || state.generation.workflow_in_progress.is_some()
+        || state.generation.test_in_progress
+    {
+        "Working…"
+    } else {
+        "Ready"
+    }
 }
 
 #[cfg(test)]
@@ -253,11 +158,20 @@ mod tests {
     fn make_state() -> AppState {
         let mut state = app_state();
         state.provider.connection = ConnectionState::Connected {
-            model: "test".into(),
+            model: "Claude Sonnet 4".into(),
             since: Instant::now(),
         };
         state.session.session_started = Instant::now() - Duration::from_secs(1);
-        state.budget.cumulative_cost = 0.01;
+        state.budget.cumulative_cost = 0.04;
+        state.provider.model_info = Some(crate::shared::ModelInfo {
+            name: "Claude Sonnet 4".into(),
+            supports_thinking: false,
+            tool_call_format: crate::shared::ToolCallStyle::Anthropic,
+            max_context_tokens: 200_000,
+            recommended_temperature: 0.0,
+            supports_images: false,
+            supports_cache: false,
+        });
         state
     }
 
@@ -277,124 +191,112 @@ mod tests {
         s
     }
 
-    /// Regression: the right-side spacer used to omit the Ctrl+T span,
-    /// pushing cost/elapsed off-screen on an 80-column terminal.
+    /// The 4-item bar fits in 50 chars (the WO 34.3 contract). A short
+    /// model name + low-token display + cost + Ready must all render.
     #[test]
-    fn status_bar_includes_cost_and_elapsed_on_80_cols() {
+    fn status_bar_4_item_layout_fits_in_50_chars() {
         let mut state = make_state();
+        // Low token count → shows "0 tokens", comfortable (green).
+        state.budget.last_turn_prompt_tokens = 0;
+        let row = status_row(&mut state, 50);
+        assert!(
+            row.contains("Claude Sonnet 4"),
+            "model should be visible at 50 cols, got: {row:?}"
+        );
+        assert!(
+            row.contains("$0.04"),
+            "cost should be visible at 50 cols, got: {row:?}"
+        );
+        assert!(
+            row.contains("Ready"),
+            "state should be visible at 50 cols, got: {row:?}"
+        );
+        assert!(
+            row.contains("tokens"),
+            "token count should be visible at 50 cols, got: {row:?}"
+        );
+    }
+
+    /// When context pressure is high (>= 50%), the bar shows
+    /// `NN% context` instead of the token count.
+    #[test]
+    fn status_bar_shows_context_pressure_when_high() {
+        let mut state = make_state();
+        // 164k / 200k = 82%.
+        state.budget.last_turn_prompt_tokens = 164_000;
         let row = status_row(&mut state, 80);
         assert!(
-            row.contains("1.0s"),
-            "elapsed time should be visible on 80-col status bar, got: {row:?}"
-        );
-        assert!(
-            row.contains("$0.0100"),
-            "cost should be visible on 80-col status bar, got: {row:?}"
+            row.contains("82% context"),
+            "should show pressure percentage at 82%, got: {row:?}"
         );
     }
 
-    /// WO 14.4: at narrow widths the plugin span (lowest priority)
-    /// drops before cost/elapsed, which are never-drop.
+    /// When context pressure is comfortable (< 50%), the bar shows
+    /// the token count, not the percentage.
     #[test]
-    fn status_bar_drops_plugin_count_below_70_cols() {
+    fn status_bar_shows_token_count_when_comfortable() {
         let mut state = make_state();
-        state.provider.plugin_status = Some("🔒1".into());
-        let wide = status_row(&mut state, 80);
-        let narrow = status_row(&mut state, 60);
+        // 8.2k / 200k = ~4%.
+        state.budget.last_turn_prompt_tokens = 8_200;
+        let row = status_row(&mut state, 80);
         assert!(
-            wide.contains("🔒"),
-            "plugin span should be visible at 80 cols, got: {wide:?}"
+            row.contains("8.2K tokens"),
+            "should show token count below 50%, got: {row:?}"
         );
         assert!(
-            !narrow.contains("🔒"),
-            "plugin span should be dropped at 60 cols, got: {narrow:?}"
-        );
-        assert!(
-            narrow.contains("1.0s"),
-            "elapsed should survive the drop at 60 cols, got: {narrow:?}"
-        );
-        assert!(
-            narrow.contains("$0.0100"),
-            "cost should survive the drop at 60 cols, got: {narrow:?}"
+            !row.contains("context"),
+            "should NOT show percentage below 50%, got: {row:?}"
         );
     }
 
-    /// WO 14.4: the UNSANDBOXED warning is never-drop — it stays even
-    /// at 40 cols when the session is unsandboxed.
+    /// The sandbox warning stays visible — it is safety-critical and
+    /// never dropped (WO 14.4 contract preserved).
     #[test]
-    fn status_bar_keeps_unsandboxed_warning_at_40_cols() {
+    fn status_bar_keeps_unsandboxed_warning() {
         let mut state = make_state();
         state.provider.unsandboxed = true;
-        let row = status_row(&mut state, 40);
+        let row = status_row(&mut state, 80);
         assert!(
             row.contains("UNSANDBOXED"),
-            "UNSANDBOXED warning must stay at 40 cols, got: {row:?}"
+            "UNSANDBOXED warning must stay visible, got: {row:?}"
         );
     }
 
-    /// WO 14.4: at 60 cols cost appears before elapsed (the right-side
-    /// spans didn't clip into each other). The current code only
-    /// checked `contains`, not rendering order.
+    /// Generating state is surfaced as `Generating…`.
     #[test]
-    fn status_bar_no_overlap_at_60_cols() {
+    fn status_bar_shows_generating_when_in_flight() {
         let mut state = make_state();
-        let row = status_row(&mut state, 60);
-        let cost = row.find("$0.0100");
-        let elapsed = row.find("1.0s");
-        assert!(
-            cost.is_some() && elapsed.is_some(),
-            "both cost and elapsed should be present at 60 cols, got: {row:?}"
-        );
-        assert!(
-            cost.unwrap() < elapsed.unwrap(),
-            "cost should render before elapsed at 60 cols (no overlap), got: {row:?}"
-        );
-    }
-
-    /// WO 26.7-R3: the memory widget renders once `memory_status` is
-    /// populated (showing fact count + last-updated turn), and drops at
-    /// narrow widths (it is a droppable span, not never-drop).
-    #[test]
-    fn status_bar_renders_memory_widget_when_populated() {
-        let mut state = make_state();
-        state.session.memory_status = Some((4, 7));
-        let row = status_row(&mut state, 80);
-        // The 🧠 emoji is wide (2 cells); the test buffer pads the
-        // continuation cell with a space, so assert on the emoji glyph
-        // and the count@turn separately rather than an exact string.
-        assert!(
-            row.contains('🧠') && row.contains("4@t7"),
-            "memory widget should render count@turn, got: {row:?}"
-        );
-    }
-
-    #[test]
-    fn status_bar_drops_memory_widget_below_50_cols() {
-        let mut state = make_state();
-        state.session.memory_status = Some((4, 7));
-        let wide = status_row(&mut state, 80);
-        let narrow = status_row(&mut state, 40);
-        assert!(
-            wide.contains('🧠') && wide.contains("4@t7"),
-            "memory widget should be visible at 80 cols, got: {wide:?}"
-        );
-        assert!(
-            !narrow.contains('🧠'),
-            "memory widget should drop at 40 cols, got: {narrow:?}"
-        );
-    }
-
-    #[test]
-    fn status_bar_hides_memory_widget_when_disabled() {
-        let mut state = make_state();
-        state.session.memory_status = Some((4, 7));
-        if let Ok(mut cfg) = state.services.config.write() {
-            cfg.display.memory_show_in_status = false;
-        }
+        state.generation.is_generating = true;
         let row = status_row(&mut state, 80);
         assert!(
-            !row.contains('🧠'),
-            "memory widget should be hidden when memory_show_in_status=false, got: {row:?}"
+            row.contains("Generating…"),
+            "should show Generating… when is_generating, got: {row:?}"
+        );
+    }
+
+    /// Disconnected state shows `Disconnected` as the model label.
+    #[test]
+    fn status_bar_shows_disconnected_when_no_model() {
+        let mut state = app_state();
+        state.provider.connection = ConnectionState::Disconnected;
+        let row = status_row(&mut state, 80);
+        assert!(
+            row.contains("Disconnected"),
+            "should show Disconnected when no model, got: {row:?}"
+        );
+    }
+
+    /// The 4-item format matches the WO spec exactly:
+    /// `● Model · context · $cost · State`.
+    #[test]
+    fn status_bar_format_matches_spec() {
+        let mut state = make_state();
+        state.budget.last_turn_prompt_tokens = 164_000; // 82%
+        let row = status_row(&mut state, 80);
+        // Bullet, model, separator, context, separator, cost, separator, state.
+        assert!(
+            row.starts_with("● Claude Sonnet 4 · 82% context · $0.04 · "),
+            "format should match `● Model · context · $cost · State`, got: {row:?}"
         );
     }
 }

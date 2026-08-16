@@ -15,15 +15,12 @@
 ### What changed this session
 
 - **WO 34.2 — /help overlay (commit 1):** `/help` (and `/h`, `/?`) now opens a centered bordered overlay rendering `help_text()` output on top of the chat, instead of pushing ~80 lines of help docs into `state.conversation.messages`. Esc closes; ↑/↓ scrolls. New `src/tui/widgets/help_overlay.rs` (centered 80%×80% box, Clear + Block + Paragraph + footer hint). `UiState` gained `help_overlay_visible: bool` + `help_overlay_scroll: usize`. `/help` dispatch (`slash_commands.rs`) sets the flag + resets scroll instead of pushing a system message. `render_app` (`mod.rs`) draws the overlay after the approval dialog, before the doom banner. New `handle_help_overlay_keys` in `keys/mod.rs` intercepts Esc/↑/↓ while the overlay is visible and consumes all other keys so typing does not leak into the input box. `help_text()` is unchanged — the overlay renders its output. Impact: LOW (gitnexus impact on `dispatch_slash_command`: 2 direct callers, LOW risk; `render_status` not touched in this commit). The conversation + session log are no longer polluted with help docs.
-- **WO 34.3 — status bar simplify (commit 2):** see below.
+- **WO 34.3 — status bar simplify (commit 2):** rewrote `render_status` (`src/tui/widgets/status.rs`) from 12+ indicators with a narrow-width drop-loop to 4 curated items: `● Model · context · $cost · State`. Context pressure shows as `NN% context` (green <50%, yellow 50-80%, red >80%) when pressure is >= 50%; below 50% the token count (`8.2k tokens`) is shown so the bar stays quiet at comfortable levels. The sandbox warning (`⚠️ UNSANDBOXED`) is preserved — appended after the 4 items when active (safety-critical, never dropped). Removed the drop-loop (line 187+), narrow-width deletion logic, memory widget, plugin span, tool-call counter, continuation span, skill span, collapse-span, elapsed, separator. Removed 6 drop-loop/memory/plugin tests; added 7 new tests pinning the 4-item layout (fits 50 chars), context-pressure thresholds, sandbox-warning retention, Generating/Disconnected state labels, and the exact spec format. Updated `help_text()` "Status bar:" section to match. Everything else (tokens sent/received, elapsed, skill count, plugin tiers, tool-call count, memory widget) lives in `/status`, `/plugins`, `/metrics`, `/memory` as before. Updated the `budget_indicator_update` selftest assertion (42k/128k = 32% now shows `42.0K tokens`, not `(32%)`). Impact: MEDIUM (gitnexus: `render_status` 2 direct callers `render_frame` + `status_row` test helper; 1 process `run_tui`; `help_text` 1 process `Dispatch_slash_command → All`).
 
 ### Gate (HEAD on `wo/34-b`)
 - `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
 - `cargo fmt --check`: PASS (clean)
-- `cargo nextest run -p kf-code --lib tui::`: 521 passed, 2816 skipped (includes 3 new `help_overlay` tests)
-
-### Pending
-- WO 34.3 (status bar rewrite) — next commit.
+- `cargo nextest run -p kf-code --lib tui::`: 521 passed, 2816 skipped (3 new `help_overlay` tests + 7 new `status` tests; 6 old drop-loop/memory/plugin `status` tests removed; `budget_indicator_update` selftest updated)
 
 ---
 

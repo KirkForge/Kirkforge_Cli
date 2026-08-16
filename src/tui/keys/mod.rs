@@ -570,7 +570,7 @@ fn parse_job_ids_lookup(cached: &str) -> Vec<String> {
 /// - Plugins (F3): toggle the selected plugin on/off
 /// - Jobs (F4): list all jobs
 /// - Settings (F5): show the value of the selected config key
-/// - Threads (F6): no-op (session picker handles its own Enter)
+/// - Sessions (F6): no-op (session picker handles its own Enter)
 async fn handle_tab_enter(
     state: &mut AppState,
     ctx: &HandleInputContext<'_>,
@@ -706,7 +706,7 @@ async fn handle_tab_enter(
                 .push_back(ConversationEntry::new("system", line));
             state.mark_dirty();
         }
-        ActiveTab::Threads | ActiveTab::Chat | ActiveTab::None => {}
+        ActiveTab::Sessions | ActiveTab::Chat | ActiveTab::None => {}
     }
     Ok(())
 }
@@ -967,6 +967,7 @@ async fn handle_command_palette_keys(
             Some(Ok(()))
         }
         _ => Some(Ok(())),
+    }
 }
 
 /// Help-overlay key handler (WO 34.2). Esc closes; ↑/↓ scroll; any
@@ -995,8 +996,6 @@ fn handle_help_overlay_keys(key: KeyEvent, state: &mut AppState) {
             // Consume all other keys while the overlay is visible so
             // typing does not leak into the input box.
         }
-    }
-}
     }
 }
 
@@ -1042,6 +1041,9 @@ pub(crate) async fn handle_input_key(
         // F1–F6 summon overlays on top of the chat surface. The tab bar is
         // gone (WO 34.1); F-keys still work but are not shown in the UI.
         // Esc clears the overlay back to ActiveTab::None (chat-only).
+        // ── F-key tab switching ───────────────────────────────────
+        // F1–F6 switch between Chat, Models, Plugins, Jobs, Settings, Sessions.
+        // Esc returns to Chat from any non-Chat tab.
         k if ActiveTab::from_key_code(k).is_some() => {
             let new_tab = ActiveTab::from_key_code(k).unwrap();
             // Reset list state when switching overlays so the highlight
@@ -1282,7 +1284,7 @@ pub(crate) async fn handle_input_key(
                     // visible discoverability layer alongside Ctrl+K. F-keys
                     // still work as invisible muscle-memory fallback.
                     'm' => open_overlay(state, ActiveTab::Models),
-                    's' => open_overlay(state, ActiveTab::Threads),
+                    's' => open_overlay(state, ActiveTab::Sessions),
                     'j' => open_overlay(state, ActiveTab::Jobs),
                     ',' => open_overlay(state, ActiveTab::Settings),
                     'p' => open_overlay(state, ActiveTab::Plugins),

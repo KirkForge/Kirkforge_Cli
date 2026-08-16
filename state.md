@@ -163,7 +163,62 @@
 - `cargo nextest run -p kf-code --lib tui::`: 518 passed, 2816 skipped
 
 ### Pending
-- WO 34.5 (Models chooser) + WO 34.6 (Jobs structured monitor) — next
+## Session 2026-08-16 — WO 34.7/34.8/34.9/34.10 TUI information architecture (worktree `.worktrees/wo34-d`, branch `wo/34-d`)
+
+### What changed this session
+
+- **WO 34.7 — Unify Sessions/Threads naming.** Renamed `ActiveTab::Threads`
+  → `ActiveTab::Sessions` in `src/tui/app.rs` (enum + `ALL` array + `label()`
+  + `from_key_code`). Renamed `render_threads` → `render_sessions` in
+  `src/tui/widgets/tabs.rs` and restructured the view into two subsections:
+  **RECENT** (recent sessions with `· N msgs` counts, from the session
+  picker) + **FORKS** (forks of the current session from `ForkManager`).
+  Updated render routing (`src/tui/mod.rs`), key dispatch
+  (`src/tui/keys/mod.rs`), and two stale doc comments. "Threads" is gone
+  from user-visible UI; only the `ThreadsChanged` daemon wire-event name
+  remains (not user-facing). Full rename was feasible (5 references, all in
+  `src/tui/`) — no need to keep the enum variant name.
+
+- **WO 34.8 — Welcome screen.** Rewrote `render_welcome`
+  (`src/tui/widgets/welcome.rs`): banner + subtitle "AI coding assistant
+  for your repository" + CWD + recent sessions (3-5 from `session_picker`
+  when present, skipped when absent — no empty header) + quick actions
+  (`/`, `@`, `Ctrl+K`, `Ctrl+S`) + status line (`● Ready · <model>`).
+  Model name falls back to the connection model, then to `—`. Keystroke-
+  dismisses behavior unchanged (render gate on
+  `messages.is_empty() && input.is_empty()`). Added 7 unit tests; updated
+  the `empty_state` selftest (was checking for the old `/help` hint line).
+
+- **WO 34.9 — Slash command taxonomy.** Reorganized `GROUPS` from 6
+  impl-concept groups (Session/Model/Safety/Workflow/Plugins/Diagnostics)
+  into 3 tiers: **Everyday** (9 commands), **Advanced** (15), **Developer**
+  (8). `complete_command` now ranks by `(group_rank, trigger)` so the
+  completion popup surfaces everyday commands first. `help_text` shows
+  Everyday expanded (one row per command) + Advanced/Developer collapsed
+  (one line each, triggers listed inline so every trigger still appears).
+  Added `group_rank` helper + 3 new tests. All 30 existing slash tests
+  stay green; all 34 triggers still appear in completion + help.
+
+- **WO 34.10 — Approval dialog.** Restructured the dialog to be
+  action-first: the headline is the *action* (`⚠ Change <path>` + `+N -M
+  lines` for edit_file/write_file; `⚠ Run command` + command text for
+  bash; `⚠ <tool> <path>` fallback), not the tool name. Standardized risk
+  to `SAFE`/`REVIEW`/`DANGEROUS` via a new `RiskTier` enum with one-line
+  explanations ("Reads files only" / "Modifies project files" / "Can
+  delete or overwrite data"). Replaced the old ad-hoc `risk_hint` +
+  `risk_summary_level` with `risk_tier()` + `risk_tier_explanation()` +
+  `risk_tier_color()` + `action_headline()` pure helpers. Dialog layout
+  chunk [0] bumped 2→3 lines for headline + detail + risk. Diff preview,
+  scroll, and keybindings unchanged. Updated the `approval_prompt_display`
+  selftest; added 9 new tests.
+
+### Gate (WO 34.7 + 34.8 + 34.9 + 34.10 — final)
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 534 passed (was 518 + 7
+  welcome + 3 slash taxonomy + 6 approval tier/headline)
+
+### Pending
 
 ---
 

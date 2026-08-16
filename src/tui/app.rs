@@ -91,6 +91,10 @@ impl ChatRenderCache {
 /// Ctrl-shortcuts) summon an overlay on top of the chat surface; Esc
 /// clears it back to `None`. The former persistent tab bar is gone
 /// (WO 34.1); the command palette (Ctrl+K) is the discovery mechanism.
+/// F1–F5 switch between panels. F6 opens the Sessions view.
+/// The Chat tab is the default and reproduces the existing
+/// single-panel layout. Other tabs replace the main content area
+/// with a dedicated panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ActiveTab {
     /// Chat-only mode — no overlay (default).
@@ -106,8 +110,8 @@ pub enum ActiveTab {
     Jobs,
     /// F5 / Ctrl+, — Config display and live reload
     Settings,
-    /// F6 / Ctrl+S — Threads overview (forks + sessions)
-    Threads,
+    /// F6 / Ctrl+S — Sessions overview (recent sessions + forks)
+    Sessions,
 }
 
 impl ActiveTab {
@@ -119,13 +123,13 @@ impl ActiveTab {
         ActiveTab::Plugins,
         ActiveTab::Jobs,
         ActiveTab::Settings,
-        ActiveTab::Threads,
+        ActiveTab::Sessions,
     ];
 
     /// Short label for overlays (e.g. "Models"). Returns "" for `None`.
     /// Matches the overlay panel header text, not the command-palette
     /// action label (the palette action "Open sessions" maps to
-    /// `ActiveTab::Threads`; this label is "Threads" to match the panel).
+    /// `ActiveTab::Sessions`; this label is "Threads" to match the panel).
     pub fn label(&self) -> &'static str {
         match self {
             ActiveTab::None => "",
@@ -134,7 +138,7 @@ impl ActiveTab {
             ActiveTab::Plugins => "Plugins",
             ActiveTab::Jobs => "Jobs",
             ActiveTab::Settings => "Settings",
-            ActiveTab::Threads => "Threads",
+            ActiveTab::Sessions => "Sessions",
         }
     }
 
@@ -147,7 +151,7 @@ impl ActiveTab {
             KeyCode::F(3) => Some(ActiveTab::Plugins),
             KeyCode::F(4) => Some(ActiveTab::Jobs),
             KeyCode::F(5) => Some(ActiveTab::Settings),
-            KeyCode::F(6) => Some(ActiveTab::Threads),
+            KeyCode::F(6) => Some(ActiveTab::Sessions),
             _ => None,
         }
     }
@@ -510,7 +514,7 @@ pub struct UiState {
     /// Tab panel system. Currently active tab. F1–F6 switch tabs.
     pub active_tab: ActiveTab,
     /// Row selection state for the active tab panel (Models, Plugins, Jobs,
-    /// Settings, Threads). `None` for Chat (no selectable rows).
+    /// Settings, Sessions). `None` for Chat (no selectable rows).
     pub tab_list_state: Option<usize>,
     /// Current working directory. Updated by Ctrl+O directory picker.
     pub cwd: std::path::PathBuf,

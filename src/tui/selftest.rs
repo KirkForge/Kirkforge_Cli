@@ -347,9 +347,14 @@ fn tool_call_grouping() {
 }
 
 /// Approval prompt display: a pending tool approval must render the
-/// dialog with the tool name and the "Approval Required" header.
+/// dialog with the "Approval Required" header and the action headline.
 /// Catches the borrow-scope regression where `mem::take` of the
 /// pending approval left the dialog blank.
+///
+/// WO 34.10: the dialog now headlines the ACTION, not the tool name.
+/// For `edit_file` the headline is `⚠ Change <path>`. The tool name
+/// is no longer the headline, so we assert the action headline + the
+/// risk tier instead of the tool name.
 #[test]
 fn approval_prompt_display() {
     let mut h = TuiTestHarness::new().connected("qwen2.5");
@@ -364,9 +369,19 @@ fn approval_prompt_display() {
         rendered.contains("Approval Required"),
         "approval dialog header missing"
     );
+    // WO 34.10: action-first headline for edit_file is `⚠ Change <path>`.
     assert!(
-        rendered.contains("edit_file"),
-        "tool name missing from approval dialog"
+        rendered.contains("Change"),
+        "action headline missing from approval dialog"
+    );
+    assert!(
+        rendered.contains("src/lib.rs"),
+        "target path missing from approval dialog"
+    );
+    // Risk tier must be shown (REVIEW for an in-CWD edit_file).
+    assert!(
+        rendered.contains("REVIEW"),
+        "risk tier missing from approval dialog"
     );
     // Pending approval survives the render (mem::take restores it).
     assert!(h.state.approval.pending_approval.is_some());
@@ -519,9 +534,15 @@ fn empty_state() {
         rendered.contains("k i r k f o r g e"),
         "welcome banner missing on empty state"
     );
+    // WO 34.8: welcome now shows quick actions + subtitle instead of
+    // a single /help hint. The / quick-action label is always present.
     assert!(
-        rendered.contains("/help"),
-        "welcome screen should mention /help"
+        rendered.contains("AI coding assistant"),
+        "welcome subtitle missing on empty state"
+    );
+    assert!(
+        rendered.contains("Commands"),
+        "welcome quick-actions missing on empty state"
     );
 }
 
@@ -566,6 +587,10 @@ fn slash_menu_shows_alias_quit() {
 /// Threads daemon picker) and crashes the whole render. WO 34.1 removed
 /// the tab bar, so we assert the overlay's own header text is present
 /// instead of a tab-bar label.
+/// Every F1–F6 tab must render through the full pipeline without panic.
+/// Catches a tab-panel widget that derefs empty state (e.g. the Sessions
+/// daemon picker) and crashes the whole render. Also verifies the active
+/// tab's bar label is highlighted so switching is visibly confirmed.
 #[test]
 fn tab_panels_render_without_panic() {
     for tab in ActiveTab::OVERLAYS {
@@ -626,26 +651,21 @@ fn tab_switch_preserves_chat_scroll() {
 /// `/help` output is generated from the COMMANDS table and rendered as
 /// a system message. Verifies the render path for a long system message
 /// and that both `/exit` and `/quit` are listed (catches a help-text
-/// regression that dropped aliases).
+/// /help overlay renders the command list. WO 34.2: /help now opens an
+/// overlay instead of pushing into the conversation; this test verifies
+/// the overlay renders the help text.
 #[test]
 fn help_message_renders_command_list() {
     let mut h = TuiTestHarness::new().connected("qwen2.5");
-    let text = crate::tui::keys::slash_commands::help_text(&h.state.services.skill_registry);
-    h.state
-        .conversation
-        .messages
-        .push_back(ConversationEntry::new("system", text));
+    // Simulate /help: set the overlay flag (the slash command does this)
+    h.state.ui.help_overlay_visible = true;
+    h.state.ui.help_overlay_scroll = 0;
 
-    // The help text is long; auto_scroll would pin to the bottom
-    // (keybindings section) and hide the command list at the top. Scroll
-    // to the top so the command listing is in view before asserting.
-    h.render(); // publish max_scroll
-    h.state.conversation.auto_scroll = false;
-    h.state.conversation.scroll_offset = 0;
-
+    h.render();
     h.assert_contains("/exit");
     h.assert_contains("/quit");
-    h.assert_contains("Session");
+    // The help text groups by tier (WO 34.9): Everyday/Advanced/Developer
+    h.assert_contains("Everyday");
 }
 
 /// Streaming markdown renders incrementally without panic. A heading

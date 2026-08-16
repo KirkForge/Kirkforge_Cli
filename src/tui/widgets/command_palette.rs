@@ -55,7 +55,7 @@ pub const ACTIONS: &[PaletteAction] = &[
     PaletteAction {
         label: "Open sessions",
         hint: "F6 / Ctrl+S",
-        kind: PaletteKind::Overlay(ActiveTab::Threads),
+        kind: PaletteKind::Overlay(ActiveTab::Sessions),
     },
     PaletteAction {
         label: "View jobs",

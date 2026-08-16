@@ -1033,8 +1033,8 @@ pub(crate) fn render_app(f: &mut Frame, state: &mut AppState) {
         ActiveTab::Settings => {
             crate::tui::widgets::tabs::render_settings(f, chunks[1], state);
         }
-        ActiveTab::Threads => {
-            crate::tui::widgets::tabs::render_threads(f, chunks[1], state);
+        ActiveTab::Sessions => {
+            crate::tui::widgets::tabs::render_sessions(f, chunks[1], state);
         }
     }
 
@@ -1132,7 +1132,6 @@ pub(crate) fn render_app(f: &mut Frame, state: &mut AppState) {
     // before the doom-loop banner (doom stays on top of everything).
     if state.ui.help_overlay_visible {
         crate::tui::widgets::help_overlay::render_help_overlay(f, size, state);
-    }
     }
 
     // Doom-loop warning banner. Renders last so it sits on top

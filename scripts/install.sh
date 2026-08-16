@@ -1,11 +1,18 @@
 #!/bin/sh
-# Install the latest kf-code release binary to ~/.local/bin.
+# Install the latest kf-code release binary to ~/.local/bin (or /usr/local/bin as root).
 # Usage: curl -fsSL https://raw.githubusercontent.com/KirkForge/Kirkforge_Cli/main/scripts/install.sh | sh
+# Dependencies: curl, tar, sha256sum (or shasum on macOS).
 
 set -eu
 
 REPO="KirkForge/Kirkforge_Cli"
-PREFIX="${PREFIX:-$HOME/.local}"
+
+# Root installs to /usr/local/bin; everyone else to ~/.local/bin.
+if [ "$(id -u)" -eq 0 ]; then
+    PREFIX="${PREFIX:-/usr/local}"
+else
+    PREFIX="${PREFIX:-$HOME/.local}"
+fi
 BIN_DIR="$PREFIX/bin"
 
 # Detect target triple.
@@ -94,6 +101,13 @@ for bin in kf-code; do
     chmod +x "$BIN_DIR/$bin"
 done
 
+# Config directory (~/.config/kf-code). Only created for non-root installs;
+# root installs leave per-user config to each user.
+if [ "$(id -u)" -ne 0 ]; then
+    CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/kf-code"
+    mkdir -p "$CONFIG_DIR"
+fi
+
 DATA_DIR="${DATA_DIR:-$PREFIX/share/kf-code}"
 PLUGIN_DIR="$DATA_DIR/plugins"
 mkdir -p "$PLUGIN_DIR"
@@ -134,6 +148,9 @@ fi
 echo "Installed kf-code to $BIN_DIR"
 
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
-    echo "Warning: $BIN_DIR is not on your PATH. Add it to your shell profile:"
-    echo "  export PATH=\"$BIN_DIR:\$PATH\""
+    echo "Warning: $BIN_DIR is not on your PATH. Add it to your shell profile:" >&2
+    echo "  export PATH=\"$BIN_DIR:\$PATH\"" >&2
 fi
+
+echo ""
+echo "kf-code installed! Run: kf-code"

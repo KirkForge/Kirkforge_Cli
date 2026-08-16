@@ -2,6 +2,114 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-16 — WO tui-polish: 6 TUI issues from real-world testing (worktree `.worktrees/wo-tui-polish`, branch `wo/tui-polish`)
+
+Six TUI issues found during a real-world bughunt session (147 tool calls,
+102 bash approvals, model name shown twice, token counter stuck at 0).
+All six root causes found and fixed; 6 gated commits.
+
+### What changed this session
+
+- **Bug 1 — token counter stuck at `0 tokens · $0.00` (commit 1,
+  `17e6bd0`).** Root cause: `context_span` in
+  `src/tui/widgets/status.rs` used the per-turn
+  `last_turn_prompt_tokens` as the display value. When the last response
+  had no usage data (provider emitted `usage: None`) or the final turn
+  was tool-only, the per-turn value was 0 while cumulative tokens were
+  non-zero, so the bar showed "0 tokens" even after 147 tool calls. The
+  pressure *percentage* still correctly uses the per-turn value (it's
+  the right "how full is the context window right now" signal), but the
+  *displayed count* now falls back to cumulative (`tokens_sent +
+  tokens_received`) when the per-turn value is 0. Test:
+  `status_bar_shows_cumulative_when_per_turn_is_zero`.
+
+- **Bug 2 — model name shown twice (commit 2, `f5cbabc`).** The header
+  at the top showed `◆ glm-5.2:cloud` and the status bar at the bottom
+  showed `● glm-5.2:cloud`. Root cause: WO 34.1 added the model to the
+  header; WO 34.3 added it to the status bar; neither was reconciled.
+  Fix: removed the model name from `render_header` — the header now
+  shows only `kf-code │ ● ready` / `⟳ busy <spinner>` /
+  `⚡ Disconnected`. The model lives in the status bar (bottom) only.
+  Tests: `header_shows_app_name_not_model`,
+  `header_shows_busy_when_generating`,
+  `header_shows_disconnected_when_no_model`.
+
+- **Bug 3 — tool call limit too low (commit 3, `4c1851c`).**
+  `max_tool_calls_per_turn` was 100, `max_continuation_rounds` was 5.
+  A long bughunt session hit both limits. Bumped defaults: 100 → 200,
+  5 → 20. Updated `tool_config_defaults_match_spec` assertions.
+
+- **Bug 4 — bash timeout too low (commit 4, `8792241`).**
+  `tool_timeout_secs` default was 30s. A `sleep 45` timed out. Bumped
+  default 30 → 120 in `default_tool_timeout_secs` + the two
+  defense-in-depth `unwrap_or(30)` fallbacks in `executor/mod.rs` and
+  `plugin_tools/wrapper.rs`. The bash tool's per-call `timeout` arg
+  default (30s, model-overridable) is unchanged — separate knob.
+
+- **Bug 5 — cross-turn assistant text bleed (commit 5, `b2fc821`).**
+  User reported "slaps all text into the same initial text response"
+  and "last action first." Root cause: the `Token` arm's
+  `is_current_turn` heuristic in `src/tui/events.rs` appended to the
+  last assistant entry if all entries after it were `tool`/`system`.
+  When a new turn started, the prior turn's tool entries were still the
+  last entries, so the new turn's text was appended to the prior turn's
+  assistant — mixing turn 2's text into turn 1's message. Fix: replaced
+  the heuristic with the `streaming` flag (set when the first token
+  arrives, cleared by `TurnComplete`). Within a turn (text → tool →
+  more text), the assistant stays `streaming` so text appends
+  correctly. After `TurnComplete` clears `streaming`, a new turn opens
+  a fresh entry. Also: new assistant entries from `Token` now set
+  `streaming = true` on creation (was `false`, which would have
+  prevented the second token from appending — caught by the
+  `drain_turn_events_pulls_all` regression). Tests:
+  `token_appends_across_tool_calls_within_turn` (within-turn),
+  `token_opens_new_entry_after_turn_complete` (cross-turn).
+
+- **Bug 6 — every bash command needs approval (commit 6, `c0389b8`).**
+  102 bash calls = 102 approvals. The `[A]lways` key only auto-approves
+  the EXACT command pattern (a safety feature — a prefix/wildcard allow
+  rule would match chained destructive commands like
+  `cargo test; rm -rf /`). Fix: added `/auto-approve` slash command that
+  toggles `config.security.auto_approve` for the current session
+  (in-memory + persisted to config.toml). Subcommands: `on` / `off` /
+  `status` (no arg toggles). `suggest_rule` is intentionally left as
+  exact-match — that is the safe default; `/auto-approve` is the
+  explicit broad opt-in. Tests: `auto_approve_on_sets_flag`,
+  `auto_approve_off_clears_flag`, `auto_approve_no_arg_toggles`,
+  `auto_approve_status_reports_without_mutating`,
+  `auto_approve_unknown_arg_returns_usage`.
+
+### Gate (HEAD on `wo/tui-polish`, commit 6 — final)
+
+- `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS
+  (0 warnings)
+- `cargo fmt --check`: PASS (clean)
+- `cargo nextest run -p kf-code --lib tui::`: 593 passed, 1 failed,
+  2816 skipped. The 1 failure is the pre-existing flaky
+  `tui::commands::route::tests::valid_tier_sends_resolved_model`
+  (channel `try_recv` race in an async test — fails on `origin/main`
+  too, documented in prior state.md entries; unrelated to these
+  changes). New tests: 12 (1 status, 3 header, 2 events, 5 auto-approve,
+  1 config-defaults assertion update).
+
+### Pending
+
+- None. All 6 bugs fixed and tested. No deferrals.
+
+### Notes
+
+- Impact analysis run on every edited symbol per AGENTS.md:
+  `render_status` (LOW), `default_max_tool_calls_per_turn` (LOW),
+  `default_tool_timeout_secs` (LOW), `dispatch_turn_event` (HIGH — but
+  only the `Token` arm heuristic changed, well-isolated, 2 regression
+  tests added), `suggest_rule` (HIGH — but NOT modified; only a new
+  `/auto-approve` command added, which is additive).
+- The `valid_tier_sends_resolved_model` flaky test is a channel
+  `try_recv` race in `src/tui/commands/route.rs:175` — it fails
+  intermittently because the async test's channel send/recv ordering
+  is not deterministic. This is a pre-existing issue (fails on
+  `origin/main`), not introduced by this session.
+
 ## Session 2026-08-16 — WO tmux-fix: 3 approval dialog bugs found in tmux testing (worktree `.worktrees/wo-tmux-fix`, branch `wo/tmux-fix`)
 
 Three approval-dialog rendering bugs found during real tmux (PTY) testing.

@@ -56,11 +56,11 @@ pub fn render_approval_dialog(
     let inner = block.inner(dialog_area);
 
     // Layout inside the dialog
-    //   [0] tool name + risk hint              (2 lines)
-    //   [1] args preview (scrollable)          (the rest)
-    //   [2] scroll indicator (if truncated)    (1 line, only when scrolled)
-    //   [3] instructions                       (1 line)
-    let args_window_height = inner.height.saturating_sub(4) as usize;
+    //   [0] action headline + detail + risk line   (3 lines)
+    //   [1] args preview (scrollable)              (the rest)
+    //   [2] scroll indicator (if truncated)        (1 line, only when scrolled)
+    //   [3] instructions                           (1 line)
+    let args_window_height = inner.height.saturating_sub(5) as usize;
 
     // Side-by-side diff: available whenever the terminal is at least 80
     // cols. The full-width panel makes this practical on most terminals.
@@ -193,14 +193,14 @@ pub fn render_approval_dialog(
 
     let constraints = if indicator_count > 0 {
         vec![
-            Constraint::Length(2),
+            Constraint::Length(3),
             Constraint::Length(args_window_height as u16),
             Constraint::Length(1),
             Constraint::Length(1),
         ]
     } else {
         vec![
-            Constraint::Length(2),
+            Constraint::Length(3),
             Constraint::Length(args_window_height as u16),
             Constraint::Length(1),
         ]
@@ -210,27 +210,31 @@ pub fn render_approval_dialog(
         .constraints(constraints)
         .split(inner);
 
-    // [0] Compact risk summary + risk hint
+    // [0] Compact action headline + risk line
     let (added, deleted) = diff_stats
         .as_ref()
         .map(|s| (s.added, s.deleted))
         .unwrap_or((0, 0));
-    let risk_level = risk_summary_level(approval, is_outside_cwd);
-    let summary_color = risk_summary_color(risk_level);
-    let summary = format!(
-        "{}  •  {}  •  +{} / -{} lines  •  {}",
-        approval.tool_name, path, added, deleted, risk_level
-    );
+    let risk_tier = risk_tier(approval, is_outside_cwd);
+    let summary_color = risk_tier_color(risk_tier);
+    // Action-first headline (WO 34.10): the action is the headline, not
+    // the tool name. For file edits: `⚠ Change <path>` + `+N -M lines`.
+    // For bash: `⚠ Run command` + the command text.
+    let (action_headline, action_detail) = action_headline(approval, path, added, deleted);
     let name_text = Paragraph::new(vec![
         Line::from(Span::styled(
-            summary,
+            action_headline,
             Style::default()
                 .fg(summary_color)
                 .add_modifier(Modifier::BOLD),
         )),
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(action_detail, Style::default().fg(Color::White)),
+        ]),
         Line::from(Span::styled(
-            format!(" Risk: {}", risk_hint(approval)),
-            Style::default().fg(risk_color(approval)),
+            format!("  {} — {}", risk_tier, risk_tier_explanation(risk_tier)),
+            Style::default().fg(risk_tier_color(risk_tier)),
         )),
     ]);
     f.render_widget(name_text, chunks[0]);
@@ -333,18 +337,58 @@ fn wrap_line(line: &str, width: usize) -> Vec<String> {
     out
 }
 
-/// Human-readable risk hint for the current approval.
+/// Standardized risk tier for an approval (WO 34.10).
 ///
-/// Pure function so the test suite can pin the mapping. Returns a
-/// short string suitable for the dialog's "Risk:" line. The heuristic
-/// is intentionally simple: read-only commands are green, write-ish
-/// commands are yellow, anything that touches `rm` / `dd` / `mkfs` /
-/// a path outside the project is red.
-pub fn risk_hint(approval: &PendingApproval) -> &'static str {
+/// Three tiers, each with a one-line explanation:
+///   - `SAFE`      — reads only, no state change
+///   - `REVIEW`    — modifies project files or runs a non-destructive shell
+///   - `DANGEROUS` — can delete or overwrite data, or writes outside the CWD
+///
+/// Replaces the old ad-hoc `risk_hint` ("destructive — could delete data"
+/// / "writes files or network" / "read-only" / "runs a shell command") and
+/// the old `risk_summary_level` ("low/medium/high risk"). The mapping is
+/// intentionally simple and pinned by tests so the wording is consistent
+/// across every approval dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RiskTier {
+    Safe,
+    Review,
+    Dangerous,
+}
+
+impl RiskTier {
+    /// Uppercase label shown in the dialog.
+    pub fn label(&self) -> &'static str {
+        match self {
+            RiskTier::Safe => "SAFE",
+            RiskTier::Review => "REVIEW",
+            RiskTier::Dangerous => "DANGEROUS",
+        }
+    }
+}
+
+impl std::fmt::Display for RiskTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// Classify an approval into a `RiskTier`. Pure function so the test
+/// suite can pin the mapping.
+///
+/// - `is_outside_cwd`: for file edits, whether the target path resolves
+///   outside the current working directory. Outside-CWD edits are
+///   `DANGEROUS` regardless of the tool, because the user can't easily
+///   see what's being changed.
+pub fn risk_tier(approval: &PendingApproval, is_outside_cwd: bool) -> RiskTier {
+    if is_outside_cwd {
+        return RiskTier::Dangerous;
+    }
     let name = approval.tool_name.as_str();
     if name == "bash" {
         if let Some(cmd) = approval.args.get("command").and_then(|v| v.as_str()) {
             let lower = cmd.to_lowercase();
+            // DANGEROUS: commands that can delete or overwrite data.
             if lower.contains("rm -rf")
                 || lower.contains("rm -fr")
                 || lower.contains("mkfs")
@@ -353,18 +397,9 @@ pub fn risk_hint(approval: &PendingApproval) -> &'static str {
                 || lower.contains("chmod -r 777")
                 || lower.contains("chmod 777 /")
             {
-                return "destructive — could delete data";
+                return RiskTier::Dangerous;
             }
-            if lower.contains("rm ")
-                || lower.contains("mv ")
-                || lower.contains("> ")
-                || lower.contains(">>")
-                || lower.contains("sed -i")
-                || lower.contains("curl ")
-                || lower.contains("wget ")
-            {
-                return "writes files or network";
-            }
+            // SAFE: read-only commands.
             if lower.starts_with("ls")
                 || lower.starts_with("cat")
                 || lower.starts_with("head")
@@ -375,51 +410,77 @@ pub fn risk_hint(approval: &PendingApproval) -> &'static str {
                 || lower.starts_with("echo ")
                 || lower.starts_with("pwd")
             {
-                return "read-only";
+                return RiskTier::Safe;
             }
-            return "runs a shell command";
+            // REVIEW: anything else that writes files or runs a shell
+            // command (rm without -rf, mv, >, >>, sed -i, curl, wget,
+            // cargo build, etc.).
+            return RiskTier::Review;
         }
     }
-    if name == "edit_file" {
-        return "modifies a file on disk";
+    if name == "edit_file" || name == "write_file" {
+        // File edits modify project files. They're REVIEW unless the
+        // path is outside the CWD (handled above → DANGEROUS).
+        return RiskTier::Review;
     }
-    if name == "write_file" {
-        return "creates or overwrites a file";
-    }
-    "executes a tool"
+    // Unknown tool — REVIEW is the safe default (don't assume safe).
+    RiskTier::Review
 }
 
-/// Color to render the risk hint in. Mirrors the hint's severity.
-fn risk_color(approval: &PendingApproval) -> Color {
-    let hint = risk_hint(approval);
-    if hint == "read-only" {
-        Color::Green
-    } else if hint.starts_with("destructive") {
-        Color::Red
-    } else {
-        Color::Yellow
-    }
-}
-
-/// Human-readable risk level for the compact summary line.
-/// Outside-the-working-directory paths or destructive hints are
-/// classified as "high risk"; read-only work is "low risk".
-fn risk_summary_level(approval: &PendingApproval, is_outside_cwd: bool) -> &'static str {
-    let hint = risk_hint(approval);
-    if is_outside_cwd || hint.starts_with("destructive") {
-        "high risk"
-    } else if hint == "read-only" {
-        "low risk"
-    } else {
-        "medium risk"
+/// One-line explanation for a risk tier. Shown in the dialog under the
+/// action headline so the user understands what the tier means.
+pub fn risk_tier_explanation(tier: RiskTier) -> &'static str {
+    match tier {
+        RiskTier::Safe => "Reads files only",
+        RiskTier::Review => "Modifies project files",
+        RiskTier::Dangerous => "Can delete or overwrite data",
     }
 }
 
-fn risk_summary_color(level: &str) -> Color {
-    match level {
-        "low risk" => Color::Green,
-        "high risk" => Color::Red,
-        _ => Color::Yellow,
+/// Color to render the risk tier in. Mirrors the tier's severity.
+pub fn risk_tier_color(tier: RiskTier) -> Color {
+    match tier {
+        RiskTier::Safe => Color::Green,
+        RiskTier::Review => Color::Yellow,
+        RiskTier::Dangerous => Color::Red,
+    }
+}
+
+/// Build the action-first headline + detail line for an approval
+/// (WO 34.10). The headline is the *action* (what will happen), not
+/// the tool name. Returns `(headline, detail)`:
+///   - File edits: `⚠ Change <path>` + `+N -M lines`
+///   - Bash:       `⚠ Run command` + the command text
+///   - Other:      `⚠ <tool_name>` + the path (fallback)
+///
+/// Pure function so the test suite can pin the wording.
+pub fn action_headline(
+    approval: &PendingApproval,
+    path: &str,
+    added: usize,
+    deleted: usize,
+) -> (String, String) {
+    let name = approval.tool_name.as_str();
+    match name {
+        "edit_file" | "write_file" => {
+            let headline = format!("⚠ Change  {path}");
+            let detail = format!("+{added} -{deleted} lines");
+            (headline, detail)
+        }
+        "bash" => {
+            let cmd = approval
+                .args
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let headline = "⚠ Run command".to_string();
+            (headline, cmd.to_string())
+        }
+        _ => {
+            // Fallback for unknown tools: show the tool name + path.
+            let headline = format!("⚠ {name}  {path}");
+            (headline, String::new())
+        }
     }
 }
 
@@ -531,73 +592,134 @@ mod tests {
         }
     }
 
-    /// Risk hint for `rm -rf` should be the destructive one.
+    /// Risk tier for `rm -rf` is DANGEROUS.
     #[test]
-    fn test_risk_hint_destructive_rm() {
+    fn test_risk_tier_destructive_rm() {
         let a = make_approval("bash", json!({"command": "rm -rf /tmp/old"}));
-        assert_eq!(risk_hint(&a), "destructive — could delete data");
+        assert_eq!(risk_tier(&a, false), RiskTier::Dangerous);
     }
 
-    /// Risk hint for `ls` should be read-only.
+    /// Risk tier for `ls` is SAFE.
     #[test]
-    fn test_risk_hint_read_only() {
+    fn test_risk_tier_safe_ls() {
         let a = make_approval("bash", json!({"command": "ls -la"}));
-        assert_eq!(risk_hint(&a), "read-only");
+        assert_eq!(risk_tier(&a, false), RiskTier::Safe);
     }
 
-    /// Risk hint for `cat` should be read-only.
+    /// Risk tier for `cat` is SAFE.
     #[test]
-    fn test_risk_hint_read_only_cat() {
+    fn test_risk_tier_safe_cat() {
         let a = make_approval("bash", json!({"command": "cat /etc/hostname"}));
-        assert_eq!(risk_hint(&a), "read-only");
+        assert_eq!(risk_tier(&a, false), RiskTier::Safe);
     }
 
-    /// Risk hint for `cargo build` (long-running, not destructive) is a generic shell command.
+    /// Risk tier for `cargo build` (long-running, not destructive) is REVIEW.
     #[test]
-    fn test_risk_hint_generic_cargo() {
+    fn test_risk_tier_review_cargo() {
         let a = make_approval("bash", json!({"command": "cargo build 2>&1 | tail -20"}));
-        assert_eq!(risk_hint(&a), "runs a shell command");
+        assert_eq!(risk_tier(&a, false), RiskTier::Review);
     }
 
-    /// Risk hint for `mv` (writes) is yellow.
+    /// Risk tier for `mv` (writes) is REVIEW.
     #[test]
-    fn test_risk_hint_writes_mv() {
+    fn test_risk_tier_review_mv() {
         let a = make_approval("bash", json!({"command": "mv old.txt new.txt"}));
-        assert_eq!(risk_hint(&a), "writes files or network");
+        assert_eq!(risk_tier(&a, false), RiskTier::Review);
     }
 
-    /// Risk hint for `edit_file` is the standard modify message.
+    /// Risk tier for `edit_file` is REVIEW (modifies project files).
     #[test]
-    fn test_risk_hint_edit_file() {
+    fn test_risk_tier_review_edit_file() {
         let a = make_approval(
             "edit_file",
             json!({"path": "x", "old_string": "a", "new_string": "b"}),
         );
-        assert_eq!(risk_hint(&a), "modifies a file on disk");
+        assert_eq!(risk_tier(&a, false), RiskTier::Review);
     }
 
-    /// Risk hint for `write_file` is the standard create message.
+    /// Risk tier for `write_file` is REVIEW.
     #[test]
-    fn test_risk_hint_write_file() {
+    fn test_risk_tier_review_write_file() {
         let a = make_approval("write_file", json!({"path": "x", "content": "y"}));
-        assert_eq!(risk_hint(&a), "creates or overwrites a file");
+        assert_eq!(risk_tier(&a, false), RiskTier::Review);
     }
 
-    /// Risk summary level mirrors the hint and flags outside-cwd paths.
+    /// Risk tier for an edit_file OUTSIDE the CWD is DANGEROUS.
     #[test]
-    fn test_risk_summary_level() {
-        let read_only = make_approval("bash", json!({"command": "ls"}));
-        assert_eq!(risk_summary_level(&read_only, false), "low risk");
-
-        let destructive = make_approval("bash", json!({"command": "rm -rf build"}));
-        assert_eq!(risk_summary_level(&destructive, false), "high risk");
-
-        let edit = make_approval(
+    fn test_risk_tier_outside_cwd_is_dangerous() {
+        let a = make_approval(
             "edit_file",
-            json!({"path": "src/main.rs", "old_string": "a", "new_string": "b"}),
+            json!({"path": "x", "old_string": "a", "new_string": "b"}),
         );
-        assert_eq!(risk_summary_level(&edit, false), "medium risk");
-        assert_eq!(risk_summary_level(&edit, true), "high risk");
+        assert_eq!(risk_tier(&a, true), RiskTier::Dangerous);
+    }
+
+    /// Risk tier for an unknown tool is REVIEW (safe default — don't
+    /// assume safe).
+    #[test]
+    fn test_risk_tier_unknown_tool_is_review() {
+        let a = make_approval("some_custom_tool", json!({"path": "x"}));
+        assert_eq!(risk_tier(&a, false), RiskTier::Review);
+    }
+
+    /// Risk tier explanation + label + color for each tier.
+    #[test]
+    fn test_risk_tier_label_explanation_color() {
+        assert_eq!(RiskTier::Safe.label(), "SAFE");
+        assert_eq!(RiskTier::Review.label(), "REVIEW");
+        assert_eq!(RiskTier::Dangerous.label(), "DANGEROUS");
+        assert_eq!(risk_tier_explanation(RiskTier::Safe), "Reads files only");
+        assert_eq!(
+            risk_tier_explanation(RiskTier::Review),
+            "Modifies project files"
+        );
+        assert_eq!(
+            risk_tier_explanation(RiskTier::Dangerous),
+            "Can delete or overwrite data"
+        );
+        assert_eq!(risk_tier_color(RiskTier::Safe), Color::Green);
+        assert_eq!(risk_tier_color(RiskTier::Review), Color::Yellow);
+        assert_eq!(risk_tier_color(RiskTier::Dangerous), Color::Red);
+    }
+
+    /// `RiskTier` implements `Display` as the uppercase label.
+    #[test]
+    fn test_risk_tier_display_is_label() {
+        assert_eq!(format!("{}", RiskTier::Safe), "SAFE");
+        assert_eq!(format!("{}", RiskTier::Review), "REVIEW");
+        assert_eq!(format!("{}", RiskTier::Dangerous), "DANGEROUS");
+    }
+
+    // ── WO 34.10: action-first headline ─────────────────────────────
+
+    /// File edit headline: `⚠ Change <path>` + `+N -M lines`.
+    #[test]
+    fn test_action_headline_edit_file() {
+        let a = make_approval(
+            "edit_file",
+            json!({"path": "src/tui/app.rs", "old_string": "a", "new_string": "b"}),
+        );
+        let (headline, detail) = action_headline(&a, "src/tui/app.rs", 18, 4);
+        assert_eq!(headline, "⚠ Change  src/tui/app.rs");
+        assert_eq!(detail, "+18 -4 lines");
+    }
+
+    /// Bash headline: `⚠ Run command` + the command text.
+    #[test]
+    fn test_action_headline_bash() {
+        let a = make_approval("bash", json!({"command": "cargo test"}));
+        let (headline, detail) = action_headline(&a, "-", 0, 0);
+        assert_eq!(headline, "⚠ Run command");
+        assert_eq!(detail, "cargo test");
+    }
+
+    /// Unknown tool headline: `⚠ <tool> <path>` (fallback).
+    #[test]
+    fn test_action_headline_unknown_tool() {
+        let a = make_approval("custom_tool", json!({"path": "x"}));
+        let (headline, detail) = action_headline(&a, "x", 0, 0);
+        assert_eq!(headline, "⚠ custom_tool  x");
+        assert_eq!(detail, "");
     }
 
     /// `wrap_line` is the building block of `format_args_preview`.

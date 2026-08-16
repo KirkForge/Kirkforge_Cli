@@ -347,9 +347,14 @@ fn tool_call_grouping() {
 }
 
 /// Approval prompt display: a pending tool approval must render the
-/// dialog with the tool name and the "Approval Required" header.
+/// dialog with the "Approval Required" header and the action headline.
 /// Catches the borrow-scope regression where `mem::take` of the
 /// pending approval left the dialog blank.
+///
+/// WO 34.10: the dialog now headlines the ACTION, not the tool name.
+/// For `edit_file` the headline is `⚠ Change <path>`. The tool name
+/// is no longer the headline, so we assert the action headline + the
+/// risk tier instead of the tool name.
 #[test]
 fn approval_prompt_display() {
     let mut h = TuiTestHarness::new().connected("qwen2.5");
@@ -364,9 +369,19 @@ fn approval_prompt_display() {
         rendered.contains("Approval Required"),
         "approval dialog header missing"
     );
+    // WO 34.10: action-first headline for edit_file is `⚠ Change <path>`.
     assert!(
-        rendered.contains("edit_file"),
-        "tool name missing from approval dialog"
+        rendered.contains("Change"),
+        "action headline missing from approval dialog"
+    );
+    assert!(
+        rendered.contains("src/lib.rs"),
+        "target path missing from approval dialog"
+    );
+    // Risk tier must be shown (REVIEW for an in-CWD edit_file).
+    assert!(
+        rendered.contains("REVIEW"),
+        "risk tier missing from approval dialog"
     );
     // Pending approval survives the render (mem::take restores it).
     assert!(h.state.approval.pending_approval.is_some());

@@ -46,14 +46,27 @@
   Added `group_rank` helper + 3 new tests. All 30 existing slash tests
   stay green; all 34 triggers still appear in completion + help.
 
-### Gate (WO 34.7 + 34.8 + 34.9)
+- **WO 34.10 — Approval dialog.** Restructured the dialog to be
+  action-first: the headline is the *action* (`⚠ Change <path>` + `+N -M
+  lines` for edit_file/write_file; `⚠ Run command` + command text for
+  bash; `⚠ <tool> <path>` fallback), not the tool name. Standardized risk
+  to `SAFE`/`REVIEW`/`DANGEROUS` via a new `RiskTier` enum with one-line
+  explanations ("Reads files only" / "Modifies project files" / "Can
+  delete or overwrite data"). Replaced the old ad-hoc `risk_hint` +
+  `risk_summary_level` with `risk_tier()` + `risk_tier_explanation()` +
+  `risk_tier_color()` + `action_headline()` pure helpers. Dialog layout
+  chunk [0] bumped 2→3 lines for headline + detail + risk. Diff preview,
+  scroll, and keybindings unchanged. Updated the `approval_prompt_display`
+  selftest; added 9 new tests.
+
+### Gate (WO 34.7 + 34.8 + 34.9 + 34.10 — final)
 - `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
 - `cargo fmt --check`: PASS (clean)
-- `cargo nextest run -p kf-code --lib tui::`: 528 passed (was 518 + 7
-  welcome + 3 slash taxonomy)
+- `cargo nextest run -p kf-code --lib tui::`: 534 passed (was 518 + 7
+  welcome + 3 slash taxonomy + 6 approval tier/headline)
 
 ### Pending
-- WO 34.10 (approval dialog) — in progress.
+- None from this session. All 4 workorders (34.7/34.8/34.9/34.10) done.
 
 ---
 

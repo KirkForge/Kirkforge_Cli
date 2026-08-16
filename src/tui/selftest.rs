@@ -853,6 +853,32 @@ mod key_scenarios {
         );
     }
 
+    /// `/exit` (and other slash commands) must dispatch even when an
+    /// overlay tab is active. Without this, a user who accidentally
+    /// opened an overlay (Ctrl+M / F2 / etc.) and then typed `/exit` +
+    /// Enter would see nothing happen — the overlay's Enter handler
+    /// (`handle_tab_enter`) ate the Enter and never looked at the input
+    /// box. Pins the regression: a slash command in the input box always
+    /// routes through the slash dispatcher, regardless of overlay state.
+    #[tokio::test]
+    async fn exit_command_dispatched_when_overlay_active() {
+        let mut h = KeyHarness::new();
+        // Simulate the user having opened the Models overlay.
+        h.state.ui.active_tab = ActiveTab::Models;
+        h.state.ui.tab_list_state = Some(0);
+        h.state.conversation.input = "/exit".into();
+        h.press(KeyCode::Enter).await;
+        assert!(
+            h.state.session.should_exit,
+            "/exit must dispatch (set should_exit) even when an overlay tab is active"
+        );
+        // The input box should be cleared as part of dispatch.
+        assert!(
+            h.state.conversation.input.is_empty(),
+            "/exit dispatch should clear the input box"
+        );
+    }
+
     /// Enter on empty input with no messages must be a no-op: no spurious
     /// message, no prompt sent to the executor, no quit. Guards the
     /// invariant that empty submits never reach the model.

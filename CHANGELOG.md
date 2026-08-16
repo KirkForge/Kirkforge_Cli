@@ -7,6 +7,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - TUI Esc bug (actually fixed this time): Esc was still toggling the thinking-panel visibility when `active_tab == None` and `thinking_buffer` was non-empty, despite the prior CHANGELOG entry claiming it was fixed. Esc is now cancel-only: it closes the slash menu, file completer, or active overlay tab, and is a no-op when none of those are open. The thinking panel is toggled by `/thinking` only. The `/thinking` confirmation message and the help-text keybinding line no longer claim Esc toggles.
+- TUI `/exit` (and other slash commands) now dispatch when an overlay tab is active. Previously, if a user had an overlay open (Ctrl+M / F2 / etc.) and typed `/exit` + Enter, the overlay's Enter handler swallowed the key and `/exit` did nothing — the user could not quit without first closing the overlay. The Enter handler now routes slash commands in the input box through the slash dispatcher regardless of overlay state; the overlay Enter is only for empty/non-slash input.
 
 ### Changed
 - README rewritten as a landing page per AGENTS.md rule 10: 4 shields.io badges, one-line description, quick install (Linux/macOS + Windows), 3-step quick start, 3 plain-English bullets, links to docs. 44 lines (was 69). All technical content already in `docs/TECHNICAL.md`; removed from README. Kept the "30 coding tasks" line (`check-artifact-consistency.sh` gate #3 requires the count to match the benchmark task directory).

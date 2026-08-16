@@ -22,15 +22,30 @@
   `esc_does_not_toggle_thinking_panel` (selftest `key_scenarios`) pins
   both directions (`false → false` and `true → true`).
 
-### Gate (HEAD on `wo/tui-bugs`, commit 1)
+- **Bug 2 — `/exit` swallowed by active overlay (commit 2).** The Enter
+  handler in `src/tui/keys/mod.rs` short-circuited to `handle_tab_enter`
+  when `active_tab != None && != Chat`. So if a user had an overlay open
+  (Ctrl+M / F2 / etc.) and typed `/exit` + Enter, the overlay's Enter
+  handler ate the key and `/exit` silently did nothing — the user could
+  not quit without first closing the overlay. The existing
+  `exit_and_quit_both_set_should_exit` test passed only because it ran in
+  chat-only mode and never hit this path. Fix: added a
+  `!state.conversation.input.starts_with('/')` guard to the overlay
+  short-circuit, so a slash command in the input box always routes
+  through the slash dispatcher regardless of overlay state. The overlay
+  Enter is only for empty/non-slash input. Test added:
+  `exit_command_dispatched_when_overlay_active` (selftest
+  `key_scenarios`) sets `active_tab = ActiveTab::Models`, types `/exit`,
+  presses Enter, asserts `session.should_exit == true`.
+
+### Gate (HEAD on `wo/tui-bugs`, commit 2)
 - `cargo clippy -p kf-code --lib --tests -- -D warnings`: PASS (0 warnings)
 - `cargo fmt --check`: PASS (clean)
-- `cargo nextest run -p kf-code --lib tui::`: 557 passed, 2816 skipped
-  (includes the new `esc_does_not_toggle_thinking_panel`)
+- `cargo nextest run -p kf-code --lib tui::`: 558 passed, 2816 skipped
+  (was 557 + 1 new `exit_command_dispatched_when_overlay_active`)
 
 ### Pending
-- Bug 2 (/exit when overlay active) + Bug 3 (input bar cursor + title) —
-  next commits in this session.
+- Bug 3 (input bar cursor + title) — next commit in this session.
 
 ---
 

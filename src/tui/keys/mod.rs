@@ -1429,8 +1429,18 @@ pub(crate) async fn handle_input_key(
         }
         KeyCode::Enter => {
             // On an active overlay (not chat-only), Enter invokes an
-            // overlay-specific action.
-            if state.ui.active_tab != ActiveTab::None && state.ui.active_tab != ActiveTab::Chat {
+            // overlay-specific action — UNLESS the user typed a slash
+            // command in the input box. A slash command in the input
+            // box always routes through the slash dispatcher, even when
+            // an overlay is open; otherwise /exit, /help, /clear, etc.
+            // would be silently swallowed by the overlay's Enter handler
+            // and the user could not quit or get help without first
+            // closing the overlay. The overlay Enter is only for
+            // empty/non-slash input.
+            if state.ui.active_tab != ActiveTab::None
+                && state.ui.active_tab != ActiveTab::Chat
+                && !state.conversation.input.starts_with('/')
+            {
                 handle_tab_enter(state, ctx).await?;
                 return Ok(());
             }

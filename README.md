@@ -3,7 +3,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.88%2B-orange)
 ![CI](https://img.shields.io/github/actions/workflow/status/KirkForge/Kirkforge_Cli/.github/workflows/ci-merge.yml?branch=dev)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Version](https://img.shields.io/badge/version-0.3.9-green)
+![Version](https://img.shields.io/badge/version-0.3.10-green)
 
 AI coding assistant that runs in your terminal. Open source, local-first, works with any LLM.
 

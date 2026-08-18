@@ -144,6 +144,19 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# 12. README version badge matches root Cargo.toml [package] version
+# (WO 35.7). Check-only — no auto-rewrite; the badge stays hand-edited,
+# this gate just catches drift.
+CARGO_VERSION=$(sed -n '/^\[package\]/,/^\[/p' Cargo.toml | grep -m1 -oP '^version\s*=\s*"\K[^"]+' || true)
+BADGE_VERSION=$(grep -m1 -oP 'img\.shields\.io/badge/version-\K[0-9.]+' README.md || true)
+if [ -n "$CARGO_VERSION" ] && [ "$CARGO_VERSION" = "$BADGE_VERSION" ]; then
+  echo "✓ README version badge ($BADGE_VERSION) matches Cargo.toml"
+  PASS=$((PASS+1))
+else
+  echo "✗ version badge mismatch (Cargo.toml=$CARGO_VERSION, README=$BADGE_VERSION)"
+  FAIL=$((FAIL+1))
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 if [ "$FAIL" -gt 0 ]; then

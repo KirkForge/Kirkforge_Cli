@@ -2,6 +2,46 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-19 — WO 35.0: external review verification + series planning (worktree `.worktrees/wo35`, branch `wo/35-series`)
+
+An external architecture review (ChatGPT, ~18 claims) was verified
+against the codebase by 5 read-only explore subagents; findings became
+the WO 35 series. No production code changed.
+
+### What changed this session
+
+- `docs/workorders/35.0-wo35-overview.md` — full verdict table
+  (confirmed / refuted, with file:line evidence) + series map.
+- `docs/workorders/35.1`-`35.7` — workorders for the confirmed
+  findings: pipeline semantics (P0), subagent worktrees (P1),
+  cooperative cancellation (P1), sandbox posture indicator (P2),
+  integration tests (P2), ModelClient wiring (P2), version-badge gate
+  (P3).
+- `docs/workorders/README.md` — Series 35 index table.
+- `CHANGELOG.md` one-liner; this state.md entry.
+
+### Key verification results
+
+- Confirmed: streaming fix is real and well-tested; orchestrator is
+  fan-out not pipeline (scout summary never reaches coder; reviewer
+  never sees the diff in EITHER mode); cancellation drops futures and
+  leaks temp dirs on cancel + error paths; no per-subagent worktree;
+  kf-orchestrator has zero runtime consumers; seccomp default-off;
+  `UNSANDBOXED` reflects PathGuard only; version badge drift; both
+  cross-component integration-test chains missing.
+- Refuted: "permissions are tool-centric not resource-centric" —
+  `src/shared/permission.rs` already implements ordered
+  tool+arg-key+glob allow/ask/deny; the review's own example works.
+  Also: sandbox stack order is rlimits→netns→landlock→seccomp (not
+  landlock→seccomp→rlimits); kf-rbac is an unwired crate; test-file
+  counts were off (276 files with test fns, not ~150).
+
+### Pending
+
+- WO 35.1-35.7 implementation (all Pending; see series map in
+  `docs/workorders/35.0-wo35-overview.md`).
+
+
 ## Session 2026-08-16 — WO tui-polish: 6 TUI issues from real-world testing (worktree `.worktrees/wo-tui-polish`, branch `wo/tui-polish`)
 
 Six TUI issues found during a real-world bughunt session (147 tool calls,

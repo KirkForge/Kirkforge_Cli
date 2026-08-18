@@ -710,3 +710,24 @@ workorders + 1 doc-audit workorder. See
 pending; only the planning commit (`d94c575`) has landed. WO 34.11 (this
 doc audit) is in progress. The series is the TUI IA reset — no Rust
 architecture changes, no new ADRs expected.
+
+### Series 35 — External review verification → orchestration hardening
+
+Series 35 is driven by an external architecture review (2026-08-19).
+Every review claim was verified against the codebase by 5 read-only
+subagents (see [WO 35.0](35.0-wo35-overview.md) for the full
+verdict table, including refuted claims). 7 workorders cover the
+confirmed findings: real pipeline semantics, subagent isolation,
+cooperative cancellation, sandbox posture visibility, integration
+tests, the kf-orchestrator seam, and a version-badge gate.
+
+| WO | Title | Status | Priority | Depends on |
+|----|-------|--------|----------|------------|
+| 35.0 | [Series overview + verification verdicts](35.0-wo35-overview.md) | Done | — | — |
+| 35.1 | [Real pipeline semantics for scout/coder/reviewer](35.1-pipeline-semantics.md) | Pending | P0 | 35.2 |
+| 35.2 | [Per-subagent worktree isolation + artifact return](35.2-subagent-worktrees.md) | Pending | P1 | — |
+| 35.3 | [Cooperative cancellation + temp-dir cleanup](35.3-cooperative-cancellation.md) | Pending | P1 | — |
+| 35.4 | [Sandbox posture indicator (real layer state)](35.4-sandbox-posture-indicator.md) | Pending | P2 | — |
+| 35.5 | [Cross-component integration tests (2 chains)](35.5-cross-component-integration-tests.md) | Pending | P2 | 35.1, 35.3 |
+| 35.6 | [Wire Executor into kf-orchestrator ModelClient](35.6-orchestrator-modelclient-wiring.md) | Pending | P2 | 35.1, 35.3 |
+| 35.7 | [Version badge consistency gate](35.7-version-badge-gate.md) | Pending | P3 | — |

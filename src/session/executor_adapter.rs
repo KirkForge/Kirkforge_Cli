@@ -14,7 +14,8 @@ use kf_orchestrator::{Emission, ModelClient, TaskBrief};
 
 use crate::session::task_spawner::InProcessTaskSpawner;
 use crate::shared::SharedConfig;
-use crate::tools::task::TaskRequest;
+use crate::tools::task::{TaskCancel, TaskRequest};
+use crate::tools::UndoStackRef;
 
 // Turn budget for one orchestrated delegation. The executor loop ends a
 // session early on a tool-call-free assistant message, so this is a
@@ -29,14 +30,24 @@ pub struct ExecutorAdapter {
     config: SharedConfig,
     model_name: String,
     ollama_host: String,
+    undo_stack: Option<UndoStackRef>,
+    supports_images: bool,
 }
 
 impl ExecutorAdapter {
-    pub fn new(config: SharedConfig, model_name: String, ollama_host: String) -> Self {
+    pub fn new(
+        config: SharedConfig,
+        model_name: String,
+        ollama_host: String,
+        undo_stack: Option<UndoStackRef>,
+        supports_images: bool,
+    ) -> Self {
         Self {
             config,
             model_name,
             ollama_host,
+            undo_stack,
+            supports_images,
         }
     }
 }
@@ -84,17 +95,33 @@ impl ModelClient for ExecutorAdapter {
             self.config.clone(),
             self.model_name.clone(),
             self.ollama_host.clone(),
-            None,
-            false,
+            self.undo_stack.clone(),
+            self.supports_images,
         );
+        // WO 36.5 execution hints: a brief carrying a persona is
+        // caller-framed (pipeline roles own their complete prompt — no
+        // mode frame on top, same one-wrapper rule as WO 35.1); a plain
+        // delegation-mode brief gets the adapter's frame below.
+        let persona = brief
+            .persona
+            .clone()
+            .unwrap_or_else(|| persona_for_template(&brief.template).to_string());
+        let prompt = if brief.persona.is_some() {
+            brief.description.clone()
+        } else {
+            brief_prompt(brief)
+        };
         let detail = spawner
             .run_task_detailed(TaskRequest {
-                prompt: brief_prompt(brief),
-                persona: persona_for_template(&brief.template).to_string(),
+                prompt,
+                persona,
                 model: None,
-                max_turns: ORCHESTRATOR_MAX_TURNS,
-                cancel: None,
-                owner: None,
+                max_turns: brief.max_turns.unwrap_or(ORCHESTRATOR_MAX_TURNS),
+                cancel: brief.cancel.clone().map(|c| TaskCancel {
+                    flag: c.flag,
+                    token: c.token,
+                }),
+                owner: brief.owner.clone(),
             })
             .await
             .map_err(anyhow::Error::msg)?;
@@ -167,6 +194,7 @@ mod tests {
             variables: serde_json::json!({"language": "python"}),
             target_file: Some("solution.py".into()),
             correction_prompt: Some("fix the missing hash".into()),
+            ..Default::default()
         };
         let prompt = brief_prompt(&brief);
         assert!(prompt.contains("\"artifact\" delegation mode"));
@@ -196,6 +224,8 @@ mod tests {
             adapter_config(&server.uri()),
             "e2e-test-model".into(),
             server.uri(),
+            None,
+            false,
         );
         let brief = TaskBrief {
             template: "hard-prompt".into(),

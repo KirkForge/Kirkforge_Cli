@@ -155,6 +155,7 @@ impl Orchestrator {
             }),
             target_file: target_file.map(|s| s.to_string()),
             correction_prompt: None,
+            ..Default::default()
         }
     }
 

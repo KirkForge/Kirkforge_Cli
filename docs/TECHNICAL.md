@@ -860,17 +860,18 @@ is exposed on `ParallelResult.coder_patch`. `run_parallel` and
 selected by `/workflow run <name> --parallel` reflects whether worktree
 isolation is enabled, not ordering. Each role registers a `TaskManager`
 entry (internal cancel bookkeeping, not rendered by `/jobs`) with the
-WO 35.3 cancel pair (flag + token) threaded into its `TaskRequest`, so
-`ParallelOrchestrator::cancel_all()` stops in-flight roles cooperatively
-(each runs cleanup, captures any worktree patch, and returns). The
-orchestrator holds one injectable `Arc<dyn TaskSpawner>` — the
-`InProcessTaskSpawner` seam, so no new executor construction, inheriting
-WO 32.4 landlock/CWD confinement and WO 30.6 approval forwarding. Since
-WO 35.1 the `TaskSpawner` contract is prompt-verbatim: callers apply persona
-preambles via `build_task_prompt` (`tools::task`) or pass their own role
-prompt — one wrapper, never two.
+WO 35.3 cancel pair (flag + token) and its owner id riding on the role's
+`TaskBrief`, so `ParallelOrchestrator::cancel_all()` stops in-flight
+roles cooperatively (each runs cleanup, captures any worktree patch, and
+returns) and cancel-by-owner still reaches role-spawned bash jobs. Since
+WO 36.5 the orchestrator holds one injectable `Arc<dyn ModelClient>` —
+production uses the `ExecutorAdapter` (below), so roles execute through
+the same seam as kf-orchestrator's delegation modes and inherit WO 32.4
+landlock/CWD confinement and WO 30.6 approval forwarding. The brief's
+persona marks it caller-framed: the pipeline's role prompt is the
+complete prompt (one wrapper, never two — the WO 35.1 rule).
 
-### Orchestrator ModelClient wiring (WO 35.6, ADR-075)
+### Orchestrator ModelClient wiring (WO 35.6 / 36.5, ADR-075)
 
 `kf-orchestrator`'s `ModelClient` trait has a production implementation in
 the binary: `session::executor_adapter::ExecutorAdapter`. Each
@@ -880,10 +881,17 @@ summed `CostStats` usage and a derived finish reason): `content` is the
 final assistant message, `format` echoes the brief's template, and
 persona selection maps `task-decompose` → `plan` (read-only) and the
 three writer modes → `coder` (ADR-075 documents the flattening and the
-rejected session-variant). The adapter has no production caller yet —
-reimplementing `ParallelOrchestrator` on `kf-orchestrator::Orchestrator`
-is a follow-up decision; the `EventSink` → binary event-bus bridge and
-the reducer port are separately tracked follow-ups.
+rejected session-variant). Since WO 36.5 the adapter is the pipeline's
+production executor: `ParallelOrchestrator` roles run as `TaskBrief`s
+through it. A brief carrying a `persona` is caller-framed (the pipeline
+owns the complete role prompt); delegation-mode briefs get the adapter's
+mode frame. Execution hints (`persona`, `max_turns`, `owner`, `cancel`)
+are serde-skipped brief fields consumed only by the adapter; the
+WO 35.2 worktree patch keeps traveling inside `Emission.content` via the
+subagent patch marker. `Orchestrator::delegate` is drivable end-to-end
+with this adapter (wiremock-tested); reimplementing the pipeline on
+`kf-orchestrator::Orchestrator` remains a follow-up decision, and the
+reducer port is separately tracked.
 
 ---
 

@@ -1,5 +1,5 @@
 //! Scout→coder→reviewer pipeline orchestration (WO 32.5; real pipeline
-//! semantics WO 35.1).
+//! semantics WO 35.1; ModelClient seam WO 36.5).
 //!
 //! Three subagents run as a pipeline, not a fan-out: the Scout (read-only
 //! `explore`) completes first and its context summary is injected into the
@@ -10,11 +10,20 @@
 //! role registers a `TaskManager` entry so `cancel_all()` (WO 35.3) can stop
 //! it cooperatively mid-flight — the entries are internal bookkeeping, not
 //! rendered by `/jobs`.
+//!
+//! Since WO 36.5 roles execute through kf-orchestrator's `ModelClient`
+//! seam (`ExecutorAdapter`): each role is a `TaskBrief` (persona, cancel
+//! pair, and owner ride on the brief) and the emission's `content` is the
+//! role summary — worktree patches still travel inside it via the WO 35.2
+//! patch marker. One execution seam for the pipeline and the orchestrator
+//! crate's delegation modes.
 
-use crate::session::task_spawner::{InProcessTaskSpawner, SUBAGENT_PATCH_MARKER};
+use crate::session::executor_adapter::ExecutorAdapter;
+use crate::session::task_spawner::SUBAGENT_PATCH_MARKER;
 use crate::shared::SharedConfig;
-use crate::tools::task::{TaskHandle, TaskManager, TaskRequest, TaskSpawner};
+use crate::tools::task::{TaskHandle, TaskManager};
 use crate::tools::UndoStackRef;
+use kf_orchestrator::{BriefCancel, Emission, ModelClient, TaskBrief};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -64,14 +73,16 @@ impl ParallelResult {
     }
 }
 
-/// Runs the Scout/Coder/Reviewer pipeline via a `TaskSpawner`.
+/// Runs the Scout/Coder/Reviewer pipeline through kf-orchestrator's
+/// `ModelClient` seam.
 ///
-/// Holds one injectable `Arc<dyn TaskSpawner>` — production callers get the
-/// `InProcessTaskSpawner` seam, which constructs the nested `Executor` with
-/// CWD confinement, landlock, and approval forwarding already wired by
-/// WO 32.4 / 30.6. No new executor construction here.
+/// Holds one injectable `Arc<dyn ModelClient>` — production callers get
+/// the `ExecutorAdapter`, which runs each role as an isolated subagent
+/// session through the `task` tool's spawner path with CWD confinement,
+/// landlock, and approval forwarding already wired by WO 32.4 / 30.6. No
+/// new executor construction here.
 pub struct ParallelOrchestrator {
-    spawner: Arc<dyn TaskSpawner>,
+    client: Arc<dyn ModelClient>,
     task_manager: Arc<Mutex<TaskManager>>,
 }
 
@@ -83,7 +94,7 @@ impl ParallelOrchestrator {
         undo_stack: Option<UndoStackRef>,
         supports_images: bool,
     ) -> Self {
-        Self::with_spawner(Arc::new(InProcessTaskSpawner::new(
+        Self::with_client(Arc::new(ExecutorAdapter::new(
             config,
             model_name,
             ollama_host,
@@ -92,11 +103,11 @@ impl ParallelOrchestrator {
         )))
     }
 
-    // Test seam: inject a mock TaskSpawner — the trait's dyn dispatch exists
-    // for exactly this (see its ponytail note). Production callers use `new`.
-    fn with_spawner(spawner: Arc<dyn TaskSpawner>) -> Self {
+    // Test seam: inject a mock ModelClient — the trait's dyn dispatch
+    // exists for exactly this. Production callers use `new`.
+    fn with_client(client: Arc<dyn ModelClient>) -> Self {
         Self {
-            spawner,
+            client,
             task_manager: Arc::new(Mutex::new(TaskManager::new())),
         }
     }
@@ -145,7 +156,11 @@ impl ParallelOrchestrator {
     }
 
     /// Spawn one subagent with the given persona and upstream handoff,
-    /// register it in the TaskManager, and await its result.
+    /// register it in the TaskManager, and await its result. The role runs
+    /// as one `TaskBrief` through the `ModelClient` seam (WO 36.5): the
+    /// persona marks the brief caller-framed, and the cancel pair + owner
+    /// from the registered handle ride on the brief so `cancel_all` and
+    /// cancel-by-owner keep working.
     async fn spawn_role(
         &self,
         role: &str,
@@ -158,8 +173,8 @@ impl ParallelOrchestrator {
         let prompt_summary: String = prompt.chars().take(100).collect();
 
         // Insert a default handle (its WO 35.3 cancel pair — flag + token —
-        // is cloned into the request so cancel_all() can stop the in-flight
-        // role cooperatively), then set metadata via get_mut.
+        // rides on the brief so cancel_all() can stop the in-flight role
+        // cooperatively), then set metadata via get_mut.
         let (task_id, cancel) = {
             let mut mgr = self.task_manager.lock().unwrap_or_else(|e| e.into_inner());
             let handle = TaskHandle::default();
@@ -172,17 +187,22 @@ impl ParallelOrchestrator {
             (id, cancel)
         };
 
-        let spawner = Arc::clone(&self.spawner);
-        let request = TaskRequest {
-            prompt,
-            persona: persona.to_string(),
-            model: None,
-            max_turns,
-            cancel: Some(cancel),
+        let brief = TaskBrief {
+            template: role.to_string(),
+            description: prompt,
+            variables: serde_json::Value::Null,
+            target_file: None,
+            correction_prompt: None,
+            persona: Some(persona.to_string()),
+            max_turns: Some(max_turns),
             owner: Some(task_id.clone()),
+            cancel: Some(BriefCancel {
+                flag: cancel.flag,
+                token: cancel.token,
+            }),
         };
-        let summary = match spawner.run_task(request).await {
-            Ok(s) => s,
+        let summary = match self.client.execute(&brief).await {
+            Ok(Emission { content, .. }) => content,
             Err(e) => format!("(failed: {e})"),
         };
 
@@ -448,22 +468,30 @@ mod tests {
         }
 
         fn orchestrator(self) -> ParallelOrchestrator {
-            ParallelOrchestrator::with_spawner(Arc::new(self))
+            ParallelOrchestrator::with_client(Arc::new(self))
         }
     }
 
+    // The probe speaks the ModelClient seam (WO 36.5): the brief's
+    // persona identifies the role, its description is the role prompt.
     #[async_trait::async_trait]
-    impl TaskSpawner for PipelineProbe {
-        async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
-            let phase = Self::phase(&request.persona);
+    impl ModelClient for PipelineProbe {
+        async fn execute(&self, brief: &TaskBrief) -> anyhow::Result<Emission> {
+            let persona = brief.persona.clone().unwrap_or_default();
+            let phase = Self::phase(&persona);
             self.events.lock().unwrap().push(format!("start:{phase}"));
             self.prompts
                 .lock()
                 .unwrap()
-                .push((request.persona.clone(), request.prompt.clone()));
+                .push((persona.clone(), brief.description.clone()));
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             self.events.lock().unwrap().push(format!("end:{phase}"));
-            Ok(Self::canned_summary(&request.persona))
+            Ok(Emission {
+                agent_id: "pipeline-probe".into(),
+                content: Self::canned_summary(&persona),
+                format: brief.template.clone(),
+                ..Default::default()
+            })
         }
     }
     // WO 35.1 gate (c): roles run strictly scout → coder → reviewer — the

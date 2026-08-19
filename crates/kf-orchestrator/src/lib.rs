@@ -35,7 +35,7 @@ pub use decompose::{
     MAX_SUBTASKS,
 };
 pub use delegate::{Orchestrator, OrchestratorConfig};
-pub use model::{ModelClient, PanickingClient, RecordingClient, TaskBrief};
+pub use model::{BriefCancel, ModelClient, PanickingClient, RecordingClient, TaskBrief};
 pub use modes::{
     execute_artifact, execute_hard_prompt, execute_schema_contract, finalize_artifact,
     finalize_hard_prompt, finalize_schema_contract, flush_signals_to_sink, parse_artifacts,

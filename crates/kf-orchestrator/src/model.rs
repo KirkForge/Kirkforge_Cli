@@ -9,13 +9,25 @@
 //! decision). Tests use [`RecordingClient`] which returns canned emissions
 //! from a queue.
 
-use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use crate::types::Emission;
+
+/// Cooperative-cancel handles a brief carries to the production adapter
+/// (WO 36.5): the flag ends the turn loop between steps, the token kills
+/// in-flight tool work. Mirrors the binary's `TaskCancel` pair — defined
+/// here so `TaskBrief` stays crate-local (the binary cannot be a dep).
+#[derive(Debug, Clone)]
+pub struct BriefCancel {
+    pub flag: Arc<AtomicBool>,
+    pub token: CancellationToken,
+}
 
 /// Inputs the orchestrator hands to a model. `template` is the
 /// TS template name (`"hard-prompt"`, `"schema-contract"`, `"artifact"`,
@@ -35,6 +47,23 @@ pub struct TaskBrief {
     /// production adapter decide how to splice it into the prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correction_prompt: Option<String>,
+    // ── Execution hints (WO 36.5) ── consumed only by the production
+    // adapter; `None` everywhere is the unchanged delegation-mode path.
+    // Not serialized: they are per-call execution plumbing, not brief
+    // content. `persona` set ⇒ the caller owns the prompt frame — the
+    // adapter runs `description` verbatim as the complete subagent
+    // prompt (pipeline roles); unset ⇒ the adapter frames the
+    // delegation-mode prompt itself.
+    #[serde(skip)]
+    pub persona: Option<String>,
+    #[serde(skip)]
+    pub max_turns: Option<usize>,
+    /// Owning task id (WO 36.2): tags the subagent's background bash
+    /// jobs so cancel-by-owner reaches them.
+    #[serde(skip)]
+    pub owner: Option<String>,
+    #[serde(skip)]
+    pub cancel: Option<BriefCancel>,
 }
 
 #[async_trait]

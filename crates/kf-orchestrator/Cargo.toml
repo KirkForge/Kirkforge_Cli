@@ -14,6 +14,10 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "fs", "io-util", "sync", "macros", "time"] }
+# WO 36.5: CancellationToken for BriefCancel — the cooperative-cancel
+# token the production adapter threads into the subagent executor.
+# Same version the root package already links; no size change.
+tokio-util = "0.7"
 async-trait.workspace = true
 tracing.workspace = true
 tempfile = { workspace = true }

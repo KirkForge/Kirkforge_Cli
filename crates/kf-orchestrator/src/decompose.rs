@@ -256,6 +256,7 @@ pub async fn decompose_task(
         }),
         target_file: None,
         correction_prompt: None,
+        ..Default::default()
     };
     let emission = client.execute(&brief).await?;
     let parsed = parse_decomposition(&emission.content);
@@ -290,6 +291,7 @@ pub async fn decompose_task(
         }),
         target_file: None,
         correction_prompt: None,
+        ..Default::default()
     };
     let retry_emission = client.execute(&retry_brief).await?;
     let mut dr = parse_decomposition(&retry_emission.content)

@@ -1,0 +1,299 @@
+//! WO 35.5 chain 2 — context economics integration test.
+//!
+//! retrieval (context index) → compression (stratum listener) → budget
+//! (slice + offload) → provider (wiremock NDJSON with usage) →
+//! verification (default verifier bus on the turn's file write), in one
+//! real executor turn against the mock provider.
+
+mod common;
+
+use common::{MockOllama, Reply};
+use kf_budget_core::TokenBudget;
+use kf_code::adapters::{adapter_for_with_provider, ProviderApiKeys};
+use kf_code::session::budget::{
+    register_sliced_listener, BudgetSlicedEvent, SharedBudget, SharedStore,
+};
+use kf_code::session::conversation::ConversationLog;
+use kf_code::session::executor::{Executor, TurnEvent};
+use kf_code::session::stratum::register_default_budget_listener;
+use kf_code::session::toolset::CompositeToolset;
+use kf_code::shared::Config;
+use kf_code::tools::bash::Bash;
+use kf_code::tools::write_file::WriteFile;
+use kf_code::tools::Tool;
+use kf_compress_core::store::InMemoryOffloadStore;
+use kf_context_index::ContextIndex;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+const MODEL: &str = "e2e-35-5-model";
+const ANCHOR_FN: &str = "chain_two_retrieval_anchor";
+
+fn ollama_adapter(mock_uri: &str) -> Box<dyn kf_code::adapters::ModelAdapter> {
+    let routing = HashMap::from([("e2e-".to_string(), "Ollama".to_string())]);
+    adapter_for_with_provider(
+        MODEL,
+        mock_uri,
+        None,
+        "anthropic",
+        30,
+        "https://opencode.ai/zen/v1/chat/completions",
+        None,
+        Some(&routing),
+        &ProviderApiKeys::default(),
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+// 40KB corpus file: unique head marker (must survive the slice head), a
+// middle marker deep in the file (must land in the offloaded middle —
+// the slice keeps only ~100 head/tail bytes), filler around it.
+fn big_fixture_content() -> String {
+    let mut content = String::from("BIGFILE_HEAD_MARKER\n");
+    for i in 0..60 {
+        content.push_str(&format!("filler line {i} of the big corpus file\n"));
+    }
+    content.push_str("BIGFILE_MIDDLE_MARKER\n");
+    for i in 60..1000 {
+        content.push_str(&format!("filler line {i} of the big corpus file\n"));
+    }
+    content
+}
+
+#[tokio::test]
+async fn turn_threads_retrieval_compression_budget_provider_verification() {
+    let fixture = tempfile::tempdir().expect("tempdir");
+    let corpus = "pub fn chain_two_retrieval_anchor() -> u32 { 42 }\n";
+    std::fs::write(fixture.path().join("corpus.rs"), corpus).unwrap();
+    let big_path = fixture.path().join("big.txt");
+    let big_content = big_fixture_content();
+    std::fs::write(&big_path, &big_content).unwrap();
+    let secret_path = fixture.path().join("secret_note.txt");
+
+    let mut cfg = Config::default();
+    cfg.security.sandbox_dir = Some(fixture.path().to_string_lossy().to_string());
+    cfg.security.auto_approve = true;
+    cfg.security.bash_sandbox_workdir = false;
+    cfg.security.audit_log_path =
+        Some(tempfile::NamedTempFile::new().unwrap().path().to_path_buf());
+    cfg.model
+        .adapter_routing
+        .insert("e2e-".to_string(), "Ollama".to_string());
+    cfg.model.request_timeout_secs = 30;
+
+    // Retrieval leg: index the corpus, attach to the executor's prompt
+    // builder — relevant symbols must reach the provider request.
+    let mut index = ContextIndex::new();
+    index
+        .index_file(&fixture.path().join("corpus.rs"), corpus)
+        .expect("index corpus");
+
+    let mock = MockOllama::start(
+        vec![
+            Reply::tool(
+                "bash",
+                serde_json::json!({
+                    "command": format!("cat {}", big_path.to_string_lossy()),
+                }),
+            ),
+            Reply::tool(
+                "write_file",
+                serde_json::json!({
+                    "path": secret_path.to_string_lossy().to_string(),
+                    "content": "-----BEGIN PRIVATE KEY-----\nnot a real key\n",
+                }),
+            ),
+            Reply::text("CHAIN TWO DONE").with_usage(7, 11),
+        ],
+        Vec::new(),
+    )
+    .await;
+
+    let (deny_list, path_guard, _read_gate) = kf_code::session::access::access_from_config(&cfg);
+    let tools = vec![
+        Arc::new(Bash::new(
+            deny_list,
+            path_guard.clone(),
+            false,
+            None,
+            kf_code::shared::SandboxConfig::default(),
+        )) as Arc<dyn Tool>,
+        Arc::new(WriteFile::new(None, path_guard, false, false)) as Arc<dyn Tool>,
+    ];
+    let mut composite = CompositeToolset::empty();
+    composite.add(Box::new(kf_code::session::toolset::VecToolset::new(
+        "chain2", tools,
+    )));
+
+    let log_path = fixture.path().join("conversation.ndjson");
+    let (conversation, _) = ConversationLog::open(log_path).expect("conversation log");
+    let mut executor = Executor::with_log(
+        ollama_adapter(&mock.uri()),
+        composite,
+        cfg,
+        conversation,
+        None,
+    )
+    .expect("executor");
+    executor.set_context_index(index);
+
+    // Budget leg: pre-load to Approaching so the bash result must be
+    // sliced; the offload store keeps the middle. The capture listener
+    // (registered first, returns None) records the slice event; the
+    // default stratum listener then compresses the sliced display.
+    let budget: SharedBudget = Arc::new(Mutex::new(TokenBudget {
+        ceiling: 2000,
+        approaching_ratio: 0.8,
+        used: 1800,
+    }));
+    let store: SharedStore = kf_code::session::budget::new_session_store();
+    executor.set_budget_stores(budget, store.clone());
+    let stratum_store = Arc::new(InMemoryOffloadStore::new());
+    executor.set_stratum_store(stratum_store.clone());
+    let captured: Arc<Mutex<Option<BudgetSlicedEvent>>> = Arc::new(Mutex::new(None));
+    let captured_clone = captured.clone();
+    register_sliced_listener(Arc::new(move |event: BudgetSlicedEvent| {
+        *captured_clone.lock().unwrap() = Some(event);
+        None
+    }));
+    register_default_budget_listener(stratum_store.clone());
+
+    let (approval_tx, mut approval_rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move { while approval_rx.recv().await.is_some() {} });
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+
+    let events = tokio::time::timeout(Duration::from_secs(30), async {
+        executor
+            .run_turn_collecting(
+                &format!("process the corpus with {ANCHOR_FN}"),
+                &approval_tx,
+                &cancelled,
+            )
+            .await
+    })
+    .await
+    .expect("turn must not wedge")
+    .expect("turn should complete");
+
+    // ── Provider leg: three requests, all with non-empty context. ──
+    let bodies = mock.request_bodies();
+    assert_eq!(bodies.len(), 3, "expected 3 model requests: {bodies:?}");
+    for (i, body) in bodies.iter().enumerate() {
+        let non_empty = body["messages"].as_array().is_some_and(|m| !m.is_empty());
+        assert!(non_empty, "request {i} must carry a non-empty context");
+    }
+
+    // ── Retrieval leg: the indexed symbol reached the first request. ──
+    let first = serde_json::to_string(&bodies[0]).unwrap();
+    assert!(
+        first.contains(ANCHOR_FN),
+        "context index symbol must reach the provider: {first}"
+    );
+
+    // ── Budget + compression legs: the 40KB bash result was sliced and
+    // the offloaded middle is retrievable from the store. ──
+    let bash_result = events
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            TurnEvent::ToolResult { name, output, .. } if name == "bash" => Some(output.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "no bash tool result event; events: {events:?}; requests: {:?}",
+                mock.request_bodies().len()
+            )
+        });
+    let event = captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("budget must have sliced the oversized bash result");
+    assert!(
+        event.original_size > bash_result.len(),
+        "sliced result ({}) must be far smaller than the original ({})",
+        bash_result.len(),
+        event.original_size
+    );
+    assert!(
+        bash_result.len() < 1500,
+        "final bash result must be sliced down ({} bytes): {bash_result}",
+        bash_result.len()
+    );
+    assert!(
+        bash_result.len() <= event.sliced_size,
+        "stratum compression must not grow the display: {} vs {}",
+        bash_result.len(),
+        event.sliced_size
+    );
+    let middle = store
+        .get(&event.key)
+        .expect("offloaded middle must be retrievable by slice key");
+    let middle = String::from_utf8_lossy(&middle);
+    assert!(
+        middle.contains("BIGFILE_MIDDLE_MARKER"),
+        "offloaded middle must carry the corpus middle"
+    );
+    assert!(
+        bash_result.contains("BIGFILE_HEAD_MARKER"),
+        "sliced head must keep the high-signal head"
+    );
+
+    // The sliced context (not the 40KB raw output) reached the provider.
+    let second = serde_json::to_string(&bodies[1]).unwrap();
+    assert!(
+        second.contains("BIGFILE_HEAD_MARKER"),
+        "provider must see the sliced head in the follow-up request"
+    );
+    assert!(
+        second.len() < big_content.len(),
+        "follow-up context must stay far below the raw corpus size"
+    );
+
+    // ── Provider accounting: CostStats matches the mock's usage exactly. ──
+    let cost_stats: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            TurnEvent::CostStats {
+                prompt_tokens,
+                completion_tokens,
+                ..
+            } => Some((*prompt_tokens, *completion_tokens)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        cost_stats,
+        vec![(7, 11)],
+        "token accounting must match the mock's emitted usage"
+    );
+
+    // ── Verification leg: a verifier ran on the turn's file write and
+    // flagged the PEM header. ──
+    let flagged = events.iter().any(|e| match e {
+        TurnEvent::Verification {
+            message, success, ..
+        } => !*success && message.to_lowercase().contains("secret"),
+        _ => false,
+    });
+    assert!(
+        flagged,
+        "security verifier must flag the PEM write; events: {events:?}"
+    );
+    assert!(secret_path.exists(), "the approved write must have landed");
+
+    // The turn's final text made it through the loop.
+    let text: String = events
+        .iter()
+        .filter_map(|e| match e {
+            TurnEvent::Token(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(text.contains("CHAIN TWO DONE"), "got: {text}");
+}

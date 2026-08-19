@@ -1,71 +1,60 @@
-# Lessons — WO 34.2 + 34.3 session (2026-08-16)
-
-Worktree `.worktrees/wo34-b`, branch `wo/34-b`.
+# lessons — WO 35.2/35.3 session (.worktrees/wo35-c)
 
 ## What I learned about this codebase
 
-- **`ModelInfo` has a `supports_cache: bool` field** (added for the
-  prompt-cache work). Test helpers that build a `ModelInfo` literal must
-  include it or the struct literal won't compile. The existing
-  `selftest.rs` helper had it; my first `status.rs` test helper missed it.
-  Always grep for an existing `ModelInfo { ... }` literal before writing a
-  new one.
-- **`UiState` is the right home for overlay visibility flags.** The WO
-  suggested `state.ui.help_overlay_visible` and that's where the existing
-  `slash_menu`, `file_completer`, `theme`, `paste_flash`, `last_input_rect`
-  fields live. Adding two bool/usize fields there is the smallest diff —
-  no new sub-struct needed.
-- **The key-handler stack order matters.** `handle_input_key` already had
-  a "top of stack" pattern: `handle_doom_loop_keys` runs first and returns
-  `Some(result)` if it consumed the key. The help-overlay handler follows
-  the same shape — runs before slash-menu/file-completer/search handlers
-  so the overlay has exclusive focus. Placing it after doom (doom stays
-  top priority) and before everything else is the right order.
-- **`help_text()` is `pub(crate)`** in `src/tui/keys/slash_commands.rs`.
-  The overlay widget (`src/tui/widgets/help_overlay.rs`) reaches it via
-  `crate::tui::keys::slash_commands::help_text`. No visibility change
-  needed — same crate.
-- **`budget_pct` (in `rendering/format.rs`) is the shared pure helper**
-  for context-pressure percentage. It returns `Option<u8>` (None when
-  max==0). The new status bar reuses it instead of re-computing. The
-  threshold colours (green/yellow/red) live in the `Theme`, but the WO
-  spec's thresholds (<50/50-80/>80) match `pressure_color` exactly — I
-  used plain `Color::Green/Yellow/Red` to keep the status bar
-  theme-independent for the pressure indicator (the WO named the colours
-  literally, not the theme fields).
-- **`format_budget_indicator` is now only used by its own tests** (the
-  status bar no longer calls it). It's still public + tested, so no dead
-  code. If a future WO removes those tests, the helper should be deleted
-  too.
-- **selftest.rs `budget_indicator_update` asserts on the rendered status
-  bar output.** Any change to the status bar format must update that test.
-  The assertion was `(32%)` (old `↑used/max (P%)` format); now it's
-  `42.0K tokens` (new `tokens` display below 50%).
+- **`Executor::with_log_and_undo*` re-derives its PathGuardTower from the
+  SharedConfig you pass it** — building subagent tools from a local modified
+  config is NOT enough; the executor must get a config clone with the same
+  `sandbox_dir` or its tower denies worktree writes. run_task now passes a
+  frozen clone (also better isolation semantics: parent config edits can't
+  move a subagent's sandbox mid-run).
+- **WorktreeSession derives its path from the session id alone**
+  (`$TMPDIR/kf-code-session-<id>`), globally namespaced, NOT per repo or per
+  pid. Tests using fixed ids poison later runs if a worktree outlives the
+  repo (`git worktree remove` needs the repo alive as CWD). Always: unique
+  per-pid ids in tests + drop the guard BEFORE deleting the test repo.
+- **`git add --intent-to-add` + `git diff HEAD` is the one-liner that folds
+  untracked files into an appliable patch** — no porcelain parsing needed.
+- **clippy `await_holding_lock` is crate-denied** — to serialize async test
+  bodies use `tokio::sync::Mutex` (guard legal across await), not std Mutex.
+- **`TaskStatus` precedence is result → error → cancel_requested** — keeping
+  a cancelled task's status honest while retaining its output needs a third
+  slot (`cancelled_result`), not reordering.
+- tokio "full" does NOT include the `test-util` feature → no
+  `#[tokio::test(start_paused)]`; dead-host tests pay real retry backoff
+  (~3s). Budget for it or pick a non-retryable failure mode.
+- Fresh-worktree first `cargo check` ≈ 3m40s (full dep tree); budget gates
+  accordingly. Nextest = process-per-test, which makes pid-namespaced temp
+  scans safe; libtest (threaded) needs an explicit lock (see task_spawner
+  RUN_TASK_TMP_LOCK).
+- Executor tests are ~5s each (checkpoint I/O); adding one test to
+  tests/dispatch.rs costs little wall time because nextest parallelizes.
+- Pre-existing flaky `valid_tier_sends_resolved_model` currently fails
+  deterministically on dev tip e82e305 in this environment (verified via
+  stash). Not ours.
 
 ## What I tried that didn't work
 
-- **First `help_overlay_renders_title_and_body` test asserted on row 0.**
-  The overlay is centered at 80%×80%, so on a 24-row terminal the title
-  border is at row 2, not row 0. Fixed by scanning all rows.
-- **First attempt checked `row.contains("Help")`.** The title text
-  (`Help — Esc to close, ↑/↓ to scroll`) is long; on an 80-col terminal
-  with an 80%-width box (64 cols) the title may be truncated or the
-  `↑/↓` glyphs render as multiple cells. Relaxed to also accept the
-  border glyph `─` as proof the box rendered. Both the title and the
-  help text body (`Built-in commands` / `/help`) are checked, so the
-  test still proves the overlay rendered with content.
+- snapshot-paused tokio test for the dead-host error path (no test-util
+  feature) — fell back to real-time backoff, ~2.7s, acceptable.
+- First version of the patch test deleted the test repo before the
+  WorktreeSession dropped → `git worktree remove` failed silently (warn
+  only) → leftover /tmp dir failed the NEXT test run with "already exists".
+  Fixed by explicit drop-before-cleanup + per-pid worktree ids.
 
-## What I'd do differently next time
+## Scope creep (disclosed)
 
-- **Run `cargo fmt` before the first test run**, not after. The first
-  `cargo fmt --check` after WO 34.2 flagged a trailing-newline diff in
-  `help_overlay.rs` that I then had to fold into the WO 34.3 commit.
-  Trivial, but it muddied the per-WO commit boundary.
-- **Check `selftest.rs` for status-bar-format assertions before starting
-  a status-bar rewrite.** I found `budget_indicator_update` only after
-  the compile failed on the test. A grep for `render_status` / `(32%)` /
-  `↑` across `src/tui/` before editing would have surfaced it up front.
-- **The `supports_cache` field on `ModelInfo`** bit me once. There's a
-  lesson in AGENTS.md about updating all `Config` literal sites when
-  adding a field; the same applies to `ModelInfo`. Could fold into
-  AGENTS.md §7 if it recurs.
+- src/tools/workflow.rs + src/tui/commands/workflow.rs: TaskRequest literal
+  updates only (new `cancel: None` field) — forced by the field addition,
+  no behavior change.
+- src/session/executor/tests/dispatch.rs: new test file edits (not in WO
+  file list, but the WO gate demands exactly this test).
+
+## What I'd do differently
+
+- Grep for `TaskRequest {` across src/ BEFORE deciding to add a field —
+  counted 11 literal sites; a trait-signature change would have been worse,
+  but the count should be in the workplan up front.
+- The `Helpers::tool_cancel_token` split (parent snapshot vs subagent live
+  child) could have been one commit-internal helper method on Executor from
+  the start instead of a map_or_else inline — fine at this size.

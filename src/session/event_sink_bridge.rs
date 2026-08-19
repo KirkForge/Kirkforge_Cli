@@ -8,7 +8,7 @@
 //! (the bus `Event` has no task field); a per-sink monotonic `sequence`
 //! keeps the idempotency key unique per emit.
 
-use crate::shared::event_bus::{EmitError, Event, EventBus};
+use crate::shared::event_bus::{Event, EventBus};
 use async_trait::async_trait;
 use kf_orchestrator::sink::{ArtifactEvent, EventSink};
 use serde_json::Value;
@@ -178,7 +178,5 @@ mod tests {
         })
         .await;
         assert!(!bus.running());
-        let err = EmitError::NotRunning;
-        let _ = format!("{err:?}");
     }
 }

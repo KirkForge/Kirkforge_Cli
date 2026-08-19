@@ -246,4 +246,76 @@ mod tests {
         assert_eq!(emission.model, "e2e-test-model");
         assert!(!emission.was_truncated());
     }
+
+    // WO 36.5 step 2: Orchestrator::delegate is drivable end-to-end from
+    // the binary's own executor — classify → brief → ExecutorAdapter →
+    // spawner → wiremock, back through hard-prompt finalize into the
+    // DelegationResult. The sink wiring also proves the WO 36.6 bridge
+    // end-to-end: the artifact.emitted event lands on the bus.
+    #[tokio::test]
+    async fn delegate_runs_end_to_end_through_the_real_adapter() {
+        let server = MockServer::start().await;
+        mount_reply(
+            &server,
+            "all done",
+            r#"{"prompt_tokens":7,"completion_tokens":11}"#,
+        )
+        .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bus = crate::shared::event_bus::EventBus::default();
+        let sink = crate::session::event_sink_bridge::EventBusSink::new(bus.clone());
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<crate::shared::event_bus::Event>>> =
+            Default::default();
+        let recorder = seen.clone();
+        let _unsub = bus.on("artifact.emitted", move |e| {
+            recorder.lock().unwrap().push(e);
+            std::future::ready(Ok(()))
+        });
+
+        let orch = kf_orchestrator::Orchestrator::new(
+            Arc::new(ExecutorAdapter::new(
+                adapter_config(&server.uri()),
+                "e2e-test-model".into(),
+                server.uri(),
+                None,
+                false,
+            )),
+            kf_orchestrator::OrchestratorConfig {
+                provider_key: "local-ollama".into(),
+                decompose_provider: "local-ollama".into(),
+                cwd: dir.path().to_string_lossy().to_string(),
+                memory: None,
+                sink: Some(Arc::new(sink)),
+            },
+        );
+
+        let result = orch
+            .delegate(kf_orchestrator::TaskInput {
+                description: "fix the lint errors in the auth module".into(),
+                mode_override: Some(kf_orchestrator::DelegationMode::HardPrompt),
+                ..Default::default()
+            })
+            .await
+            .expect("delegate must succeed");
+
+        assert_eq!(result.decision.mode, "hard-prompt");
+        assert_eq!(result.emission.content, "all done");
+        assert_eq!(result.emission.format, "hard-prompt");
+        assert_eq!(result.emission.total_tokens, 18, "7 prompt + 11 completion");
+        assert_eq!(result.provider_resolved.as_deref(), Some("local-ollama"));
+        assert_eq!(orch.stats().total_delegations, 1);
+
+        // The delegate() flush is awaited, so the bus handler has run.
+        let events = seen.lock().unwrap().clone();
+        assert_eq!(
+            events.len(),
+            1,
+            "artifact.emitted must reach the bus, got {events:?}"
+        );
+        assert_eq!(events[0].kind, "artifact.emitted");
+        assert!(events[0].value.as_ref().unwrap()["taskId"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("task-")));
+    }
 }

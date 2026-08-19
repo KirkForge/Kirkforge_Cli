@@ -114,7 +114,7 @@ impl ParallelOrchestrator {
 
     /// Run the scout→coder→reviewer pipeline. Entry point when worktree
     /// isolation is active (the coder then gets its own worktree, gated in
-    /// `run_task` on `session.worktree_enabled`). Since WO 35.1 this is the
+    /// `run_task_detailed` (via the brief) on `session.worktree_enabled`). Since WO 35.1 this is the
     /// same pipeline as `run_sequential` — the entry point no longer changes
     /// role ordering, only whether the coder is FS-isolated.
     pub async fn run_parallel(&self, task_description: &str) -> ParallelResult {
@@ -223,9 +223,9 @@ impl ParallelOrchestrator {
     }
 
     /// Cooperatively cancel every in-flight role (WO 35.3). Each role's
-    /// `run_task` observes its cancel flag between turn steps and its
-    /// token in-flight, runs cleanup, and returns. Returns the number of
-    /// roles that were still cancellable.
+    /// subagent session observes its cancel flag between turn steps and
+    /// its token in-flight, runs cleanup, and returns. Returns the number
+    /// of roles that were still cancellable.
     pub fn cancel_all(&self) -> usize {
         let mgr = self.task_manager.lock().unwrap_or_else(|e| e.into_inner());
         mgr.list()
@@ -239,8 +239,8 @@ impl ParallelOrchestrator {
 
 // Role prompt for one pipeline stage. `handoff` is the previous stage's
 // output: the scout summary for the coder, the coder's change summary +
-// patch for the reviewer. The returned prompt is passed to run_task
-// verbatim (WO 35.1: no second generic wrapper on top).
+// patch for the reviewer. The returned prompt is passed to the role's
+// brief verbatim (WO 35.1: no second generic wrapper on top).
 fn build_role_prompt(role: &str, persona: &str, task: &str, handoff: Option<&str>) -> String {
     let handoff = handoff.unwrap_or("");
     match role {
@@ -406,7 +406,7 @@ mod tests {
     }
 
     // WO 35.3: cancel_all must cooperatively cancel every non-terminal
-    // role handle (the flags/tokens spawn_role threads into run_task).
+    // role handle (the flags/tokens spawn_role threads onto the brief).
     // End-to-end "roles stop" needs a live model (integration tier); the
     // wiring is proven per-layer: this test (manager), the task-tool
     // CooperativeSpawner test (request threading), and the executor
@@ -419,7 +419,7 @@ mod tests {
             ParallelOrchestrator::new(config, "test-model".into(), "localhost".into(), None, false);
         let mgr = &orch.task_manager;
         // Simulate three in-flight roles: inserted handles with live cancel
-        // pairs, exactly what spawn_role registers before awaiting run_task.
+        // pairs, exactly what spawn_role registers before the brief runs.
         let tokens: Vec<_> = {
             let mut guard = mgr.lock().unwrap();
             (0..3)

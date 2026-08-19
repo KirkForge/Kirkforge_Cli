@@ -225,3 +225,42 @@
 - Removing a workspace dep from Cargo.toml regenerates Cargo.lock —
   revert it along with the scaffolding (`git checkout -- Cargo.lock`)
   or the "clean tree" check fails.
+
+# Lessons — WO 36.5/36.6 session (worktree wo36-d)
+
+## What I learned about this codebase
+
+- `tokio-util` in the root Cargo.toml is a PACKAGE dep, not a
+  workspace.dependencies entry — crates must declare `tokio-util = "0.7"`
+  directly. `tokio-util.workspace = true` fails with "was not found in
+  workspace.dependencies".
+- The gitnexus index lags the session-layer split badly (spawn_role,
+  run_task_detailed, ParallelOrchestrator all unresolved; TaskBrief
+  resolved only to an npm TS interface). For WO 35+ session-layer work,
+  manual grep caller analysis is the reliable Phase B; note the staleness
+  in workplan.md and proceed.
+- ADR-075's wording "content = the final assistant message (same
+  extraction the task tool's summary uses)" already covers the WO 35.2
+  patch marker riding in content — routing the pipeline through the
+  adapter needed NO Emission extension and NO ADR touch. Read the pinned
+  spec literal before extending types "per the WO's suggestion".
+- The "likely fault line" the WO 36.5 spec feared (per-call executor
+  construction fighting worktree lifecycle) is a non-issue:
+  run_task_detailed owns the entire worktree lifecycle per call (create →
+  snapshot cfg → diff_patch → Drop removes). The adapter is a stateless
+  mapper; only undo_stack/supports_images forwarding was missing.
+- kf-code's root [dependencies] includes tempfile = "3" — usable from
+  lib tests without a dev-dep addition.
+- wiremock Mock mounts respond to EVERY matching request (not a queue) —
+  a single mount_reply covers multi-turn sessions; only argument-varying
+  tests need the VecDeque harness in tests/common/mod.rs.
+- EmitError imported for a test-only `let err = ...` line triggers
+  unused_imports in the non-test lib build (clippy --all-targets builds
+  both) — don't import a type just to name it in a smoke line.
+
+## Scope creep log
+
+- None. Files touched are exactly the WO's list (crate model/lib/delegate/
+  decompose/Cargo.toml, executor_adapter, parallel_orchestrator,
+  event_sink_bridge [new], session/mod.rs [module reg], TECHNICAL, 3
+  workorder statuses, CHANGELOG, lessons, Cargo.lock).

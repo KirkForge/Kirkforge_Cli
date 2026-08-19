@@ -1022,7 +1022,15 @@ impl Executor {
 
         let mut had_parse_error = false;
 
-        while let Some(event) = rx.recv().await {
+        // WO 36.3: `live_token` is the executor's root cancel token
+        // (subagent executors from WO 35.3, parent sessions from WO 36.4).
+        // When attached, each next-event await below is raced against it so
+        // a stalled provider stream ends at cancel time instead of the next
+        // event or the adapter timeout. When absent, the plain await keeps
+        // the WO 15.7 semantics byte-identical.
+        let live_token = self.cancel_token.clone();
+
+        loop {
             if cancelled.load(Ordering::SeqCst) {
                 // The cancel watcher already emitted "Generation
                 // cancelled"; flush any partial assistant message
@@ -1080,6 +1088,26 @@ impl Executor {
                     crate::shared::FinishReason::Error,
                 ));
             }
+
+            // WO 36.3: race the next event against the live cancel token
+            // (above). A cancel fires the flag and re-enters the loop head,
+            // which flushes the partial message, appends placeholder tool
+            // results, and ends the iteration; dropping `event`'s recv here
+            // plus leaving the loop drops `rx`, aborting the in-flight
+            // request (the adapter producer task ends when its sends fail).
+            let event = if let Some(ref token) = live_token {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        cancelled.store(true, Ordering::SeqCst);
+                        continue;
+                    }
+                    ev = rx.recv() => ev,
+                }
+            } else {
+                rx.recv().await
+            };
+            let Some(event) = event else { break };
 
             match event {
                 StreamEvent::Text(t) => {

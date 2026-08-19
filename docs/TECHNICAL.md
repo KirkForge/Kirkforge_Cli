@@ -427,10 +427,14 @@ calls observe the token (a running bash's process group is killed in
 milliseconds, not at `tool_timeout_secs` — the subagent executor's per-call
 tokens are live children of the root token via `Executor::set_cancel_token`),
 and `run_task`'s own cleanup runs (temp-dir Drop guard, patch capture).
+An in-flight model stream is aborted mid-request: the turn loop races each
+next-event await against the attached root cancel token (WO 36.3) and drops
+the stream receiver on cancel, so a stalled provider stream ends the turn at
+cancel time (partial content flushed) instead of at the next event or the
+adapter's `request_timeout_secs`.
 Cancelled tasks keep status `Cancelled` but retain partial output in
 `TaskHandle.cancelled_result`, surfaced by `task_output`. Known ceilings
-(disclosed): an in-flight model stream ends at its next event or adapter
-timeout rather than being aborted mid-request; background bash jobs
+(disclosed): background bash jobs
 (`bash background=true`) spawned by a cancelled subagent are not killed (the
 global `BashJobRegistry` has no owner tracking — they remain cancellable via
 `bash_cancel` / `/jobs`); the parent session's own prompt-cancel keeps the

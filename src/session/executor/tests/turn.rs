@@ -7,7 +7,7 @@ use super::super::types::PLAN_COMPLETE_MARKER;
 use super::super::*;
 use super::common::*;
 use crate::shared::test_util::remove_test_file;
-use crate::shared::{FinishReason, StreamEvent};
+use crate::shared::{FinishReason, ModelInfo, StreamEvent, ToolDef};
 /// Smoke test for `PostTurnHookGuard`. Constructs a guard with the
 /// default `HookRunner` and lets it fall out of scope. The
 /// `HookRunner::run` call inside `Drop` is fire-and-forget and
@@ -271,4 +271,93 @@ async fn set_system_override_stores_and_clears() {
     assert_eq!(exe.system_override(), Some("custom prompt"));
     exe.set_system_override(None);
     assert_eq!(exe.system_override(), None);
+}
+
+// WO 36.3: an executor with an attached root cancel token must abort an
+// in-flight (stalled) model stream at cancel time, not at the next stream
+// event or the adapter timeout. Pre-WO 36.3 the loop awaited `rx.recv()`
+// inline, so a stream that never produced another event kept the turn
+// alive until `request_timeout_secs`. The stall is a `pending()` future —
+// the cancel is event-driven, no sleep-races (interval-overlap standard).
+struct StalledStreamAdapter;
+
+#[async_trait::async_trait]
+impl ModelAdapter for StalledStreamAdapter {
+    fn model_info(&self) -> ModelInfo {
+        make_info()
+    }
+
+    async fn stream(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDef],
+    ) -> anyhow::Result<mpsc::Receiver<StreamEvent>> {
+        let (tx, rx) = mpsc::channel(8);
+        tokio::spawn(async move {
+            // One token, then the stream stalls forever: the turn loop is
+            // parked in `rx.recv().await` until the cancel token fires.
+            let _ = tx.send(StreamEvent::Text("partial".to_string())).await;
+            std::future::pending::<()>().await;
+        });
+        Ok(rx)
+    }
+}
+
+#[tokio::test]
+async fn cancel_token_aborts_stalled_model_stream() {
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe =
+        make_executor(Box::new(StalledStreamAdapter), vec![], make_config(false)).unwrap();
+    let token = tokio_util::sync::CancellationToken::new();
+    exe.set_cancel_token(Some(token.clone()));
+    let exe = std::sync::Arc::new(tokio::sync::Mutex::new(exe));
+
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    let (event_tx, mut event_rx) = mpsc::channel::<TurnEvent>(64);
+    let turn_exe = std::sync::Arc::clone(&exe);
+    let turn = tokio::spawn(async move {
+        let mut guard = turn_exe.lock().await;
+        guard
+            .run_turn("hello", &approval_tx, &cancelled, &event_tx)
+            .await
+            .expect("cancelled turn returns Ok, not Err")
+    });
+
+    // Wait for the single streamed token — proves the turn is parked in
+    // the stalled stream before we cancel.
+    loop {
+        let ev = event_rx.recv().await.expect("event stream alive");
+        if matches!(ev, TurnEvent::Token(ref t) if t == "partial") {
+            break;
+        }
+    }
+    token.cancel();
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), turn)
+        .await
+        .expect("turn must return within 2s of cancel, not adapter timeout")
+        .expect("turn task must not panic");
+
+    // Cooperative-cancel semantics: TurnComplete was emitted (it is sent
+    // before run_turn returns) and the partial assistant message was
+    // flushed into the conversation.
+    let mut saw_complete = false;
+    while let Ok(ev) = event_rx.try_recv() {
+        if matches!(ev, TurnEvent::TurnComplete) {
+            saw_complete = true;
+        }
+    }
+    assert!(
+        saw_complete,
+        "TurnComplete must fire after mid-stream cancel"
+    );
+    let exe = std::sync::Arc::try_unwrap(exe)
+        .ok()
+        .expect("turn task dropped its executor ref");
+    let msgs = exe.into_inner().conversation_log().all().to_vec();
+    assert!(
+        msgs.iter()
+            .any(|m| matches!(m.role, Role::Assistant) && m.content.contains("partial")),
+        "cancelled stream must flush the partial assistant message; got {msgs:?}"
+    );
 }

@@ -330,11 +330,19 @@ controls apply (WO 30): **approval forwarding** — subagent destructive-tool ap
 are forwarded to the *parent* session's approval channel (set on the spawner from
 `Executor::run_turn`), so the user sees and decides them interactively in the TUI / line-mode;
 with no parent channel (top-level scheduled job) the P0 policy applies (auto-approve in CI,
-deny otherwise). **Worktree isolation** — a `coder` subagent gets its own git worktree and the
-path guard's `sandbox_dir` is pointed at it, so file edits land in a separate checkout whose
-path is returned in the summary for the parent to review/merge; `explore`/`plan` read the
-parent workspace. Bash CWD is not confined to the worktree (deferred — bash keeps its existing
-landlock/sandbox posture). Note: the executor's spawner is threaded into the dispatch
+deny otherwise). **Worktree isolation** (WO 35.2) — when `session.worktree_enabled` is set, a
+`coder` subagent gets its own `git worktree` (branched from the parent sandbox when that is
+itself a worktree, else the process CWD) and the cloned config's `sandbox_dir` is pointed at
+it before `access_from_config`, so the path guard, landlock extra paths, and the subagent
+executor's guard tower all center on the worktree; the executor receives a frozen config
+clone, not the live parent shared config. Before the worktree is dropped, uncommitted edits
+(tracked + untracked via `git add --intent-to-add`) are captured with `git diff HEAD` and
+returned as an appliable patch appended to the task summary, so the parent model can `git
+apply` the subagent's work; on an error return the patch is not captured (disclosed ceiling).
+`explore`/`plan` read the parent workspace unchanged. Bash CWD is not confined to the
+worktree (deferred — bash keeps its existing landlock/sandbox posture). The subagent temp
+dir (`kf-code-task-*`, conversation log + checkpoints) is removed by a Drop guard, so error
+returns and cancellation no longer leak it. Note: the executor's spawner is threaded into the dispatch
 `ToolContext` via `PreparedCall` (the parent `task` tool reaches it through `ctx.task_spawner`).
 
 Personas currently route through Anthropic-direct only. Bedrock/Vertex-configured users should use Anthropic API keys for persona invocation.

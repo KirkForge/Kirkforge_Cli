@@ -221,29 +221,54 @@ async fn test_cancelled_tool_batch_appends_placeholders() {
     assert!(tool_results[1].content.contains("cancelled"));
 }
 
-/// Two independent non-file tool calls must run concurrently, not sequentially.
-/// Two 200ms sleeps finishing in < 5s proves parallel dispatch — even under
-/// heavy parallel test load, two sequential 200ms sleeps + overhead would be
-/// under 5s, so a result > 5s would indicate serial dispatch. The original
-/// test used 1000ms sleeps with a 3.5s threshold, which was flaky under
-/// parallel cargo test load.
-#[tokio::test]
-async fn test_parallel_tool_batch_runs_concurrently() {
-    let tool_one = SleepingTool {
-        def: ToolDef {
+/// Tool that records (start, end) instants of each call into a shared
+/// log so tests can prove calls overlapped in time (concurrent dispatch)
+/// without wall-clock thresholds.
+struct IntervalTool {
+    intervals: Arc<Mutex<Vec<(std::time::Instant, std::time::Instant)>>>,
+    sleep_ms: u64,
+}
+
+#[async_trait::async_trait]
+impl Tool for IntervalTool {
+    fn def(&self) -> ToolDef {
+        ToolDef {
             name: "sleep",
             description: "sleep",
             parameters: serde_json::json!({"type": "object", "properties": {}}),
-        },
-        sleep_ms: 200,
-        call_count: Arc::new(Mutex::new(0)),
-        start_tx: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
+        let start = std::time::Instant::now();
+        tokio::time::sleep(std::time::Duration::from_millis(self.sleep_ms)).await;
+        self.intervals
+            .lock()
+            .unwrap()
+            .push((start, std::time::Instant::now()));
+        ToolOutcome::Success {
+            content: "done".into(),
+        }
+    }
+}
+
+/// Two independent non-file tool calls must run concurrently, not sequentially.
+/// Proven structurally: the second call must START before the first call ENDS
+/// (overlapping execution intervals). Serial dispatch makes overlap impossible
+/// no matter how loaded the machine is — unlike the wall-clock threshold this
+/// test used before, which flaked under parallel test load (a slow turn start
+/// inflated elapsed time even when dispatch was perfectly parallel).
+#[tokio::test]
+async fn test_parallel_tool_batch_runs_concurrently() {
+    let intervals: Arc<Mutex<Vec<(std::time::Instant, std::time::Instant)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let tool_one = IntervalTool {
+        intervals: intervals.clone(),
+        sleep_ms: 500,
     };
-    let tool_two = SleepingTool {
-        def: tool_one.def.clone(),
-        sleep_ms: 200,
-        call_count: Arc::new(Mutex::new(0)),
-        start_tx: Arc::new(std::sync::Mutex::new(None)),
+    let tool_two = IntervalTool {
+        intervals: intervals.clone(),
+        sleep_ms: 500,
     };
 
     let adapter = MockAdapter::new(
@@ -274,17 +299,10 @@ async fn test_parallel_tool_batch_runs_concurrently() {
     )
     .unwrap();
 
-    let start = tokio::time::Instant::now();
     let events = exe
         .run_turn_collecting("run two sleeps", &approval_tx, never_cancelled())
         .await
         .unwrap();
-    let elapsed = start.elapsed().as_secs_f64();
-
-    assert!(
-        elapsed < 5.0,
-        "two 200ms tool calls should run in parallel (elapsed {elapsed:.2}s)"
-    );
 
     let results: Vec<_> = events
         .iter()
@@ -295,6 +313,20 @@ async fn test_parallel_tool_batch_runs_concurrently() {
         .collect();
     assert_eq!(results.len(), 2, "both sleep calls should produce results");
     assert!(results.iter().all(|(_, o)| *o == "done"));
+
+    let logged = intervals.lock().unwrap();
+    assert_eq!(logged.len(), 2, "both calls should log an interval");
+    let (a_start, a_end) = logged[0];
+    let (b_start, b_end) = logged[1];
+    assert!(a_start < a_end);
+    assert!(b_start < b_end);
+    let latest_start = a_start.max(b_start);
+    let earliest_end = a_end.min(b_end);
+    assert!(
+        latest_start < earliest_end,
+        "calls must overlap in time (concurrent dispatch): \
+         first={a_start:?}..{a_end:?}, second={b_start:?}..{b_end:?}"
+    );
 }
 
 /// Deterministic mode (--seed) must produce the same tool-call sequence

@@ -19,6 +19,11 @@ pub struct TaskRequest {
     /// groups) instead of waiting out `tool_timeout_secs`. `None` =
     /// uncancellable (foreground `task` calls, workflow steps).
     pub cancel: Option<TaskCancel>,
+    /// Owning task id (WO 36.2). Set by callers that register the task in
+    /// a `TaskManager` (background `task`, orchestrator roles) so the
+    /// subagent's background bash jobs are tagged with it and die on
+    /// cancel. `None` = uncancellable callers (foreground, workflows).
+    pub owner: Option<String>,
 }
 
 /// The two cooperative-cancel primitives a running subagent observes,
@@ -306,13 +311,20 @@ impl TaskManager {
     /// before returning. Returns `false` if the task is unknown or already
     /// terminal.
     ///
+    /// WO 36.2: after the cooperative exit, background bash jobs the task
+    /// spawned (tagged with this task's id at spawn) are killed via
+    /// `BashJobRegistry::cancel_by_owner`. Main-session jobs (owner None)
+    /// and other tasks' jobs are never touched. The kill is async (the
+    /// registry locks are tokio Mutexes) while cancel() is sync, so it is
+    /// fired as a detached task when a runtime is up; outside one (sync
+    /// unit tests) the jobs stay manually cancellable via `bash_cancel`.
+    ///
     /// ceiling: the in-flight *model stream* is not aborted mid-request —
-    /// it ends at the next stream event or the adapter timeout; and
-    /// background bash jobs (`background=true` bash) spawned by the
-    /// subagent are NOT killed (the global registry has no owner
-    /// tracking) — they stay visible/cancellable via `bash_cancel` + `/jobs`.
-    /// Upgrade path: owner tag on `BashJobRegistry::spawn` + a task-id
-    /// field in `ToolContext`.
+    /// it ends at the next stream event or the adapter timeout.
+    /// ponytail: ceiling — owner tags are per-manager strings, so two
+    /// TaskManagers can mint the same "task-N" id and a cancel reaches
+    /// both tasks' jobs (cascade-like). Upgrade path: globally-unique
+    /// owner ids if nested background subagents become common.
     pub fn cancel(&self, id: &str) -> bool {
         let Some(handle) = self.tasks.get(id) else {
             return false;
@@ -323,6 +335,13 @@ impl TaskManager {
         handle.cancel_requested.store(true, Ordering::SeqCst);
         handle.cancel_token.cancel();
         handle.cancel_signal.notify_one();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let registry = crate::session::bash_jobs::global_registry();
+            let owner = id.to_string();
+            runtime.spawn(async move {
+                registry.cancel_by_owner(&owner).await;
+            });
+        }
         true
     }
 
@@ -523,6 +542,7 @@ impl Tool for Task {
                 model: model.clone(),
                 max_turns,
                 cancel: None,
+                owner: None,
             };
             let max_bg = self.max_bg;
             let permit = match self.concurrency_mode {
@@ -568,6 +588,10 @@ impl Tool for Task {
             let id_for_spawn = id.clone();
             let mut request = request;
             request.cancel = Some(cancel);
+            // WO 36.2: tag the request with the task id so background
+            // bash jobs the subagent spawns are attributable — cancel()
+            // kills exactly those via cancel_by_owner.
+            request.owner = Some(id_for_spawn.clone());
             tokio::spawn(async move {
                 started.store(true, Ordering::SeqCst);
                 let start = Instant::now();
@@ -616,6 +640,7 @@ impl Tool for Task {
                 model,
                 max_turns,
                 cancel: None,
+                owner: None,
             };
             match spawner.run_task(request).await {
                 Ok(summary) => ToolOutcome::Success { content: summary },
@@ -902,6 +927,7 @@ mod tests {
             model: Some("opencode/big-pickle".to_string()),
             max_turns: 1,
             cancel: None,
+            owner: None,
         };
         assert_eq!(req.model.as_deref(), Some("opencode/big-pickle"));
     }
@@ -914,6 +940,7 @@ mod tests {
             model: None,
             max_turns: 1,
             cancel: None,
+            owner: None,
         };
         assert!(req.model.is_none());
         assert!(
@@ -1055,6 +1082,7 @@ mod tests {
             model: Some("m".into()),
             max_turns: 3,
             cancel: None,
+            owner: None,
         };
         let s = format!("{req:?}");
         assert!(s.contains("coder") && s.contains("p") && s.contains("m"));
@@ -1659,6 +1687,90 @@ mod tests {
             token.is_cancelled(),
             "cancel() must cancel the shared token"
         );
+    }
+
+    // WO 36.2: cancelling a task kills exactly the background bash jobs it
+    // spawned (owner-tagged) and never main-session (owner-None) jobs.
+    // Uses the global registry because cancel()'s kill path goes through
+    // global_registry(); nextest isolates per-process, and no other test in
+    // this binary spawns owner-tagged global-registry jobs.
+    #[tokio::test]
+    async fn task_cancel_kills_owned_bash_jobs_spares_main_session() {
+        use crate::session::bash_jobs::JobStatus;
+
+        async fn spawn_job(
+            registry: &crate::session::bash_jobs::BashJobRegistry,
+            owner: &str,
+        ) -> u64 {
+            registry
+                .spawn(
+                    "sleep 30",
+                    None,
+                    None,
+                    &crate::session::access::DenyList::default(),
+                    &crate::session::access::PathGuard::default(),
+                    false,
+                    None,
+                    Some(owner),
+                )
+                .await
+                .unwrap()
+        }
+
+        let registry = crate::session::bash_jobs::global_registry();
+        let mut mgr = TaskManager::new();
+        let id = mgr.insert(TaskHandle {
+            started: Arc::new(AtomicBool::new(true)),
+            ..Default::default()
+        });
+
+        let owned = spawn_job(&registry, &id).await;
+        let other = spawn_job(&registry, "task-999").await;
+        let main_job = registry
+            .spawn(
+                "sleep 30",
+                None,
+                None,
+                &crate::session::access::DenyList::default(),
+                &crate::session::access::PathGuard::default(),
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(mgr.cancel(&id), "cancel should succeed for a running task");
+
+        // cancel() fires the registry kill as a detached task; poll (with
+        // a bounded deadline, like the bash_jobs tests) until it lands.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while registry.get(owned).await.unwrap().status == JobStatus::Running {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "owned job was not cancelled within 5s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            registry.get(owned).await.unwrap().status,
+            JobStatus::Cancelled
+        );
+
+        assert_eq!(
+            registry.get(other).await.unwrap().status,
+            JobStatus::Running,
+            "job owned by a different task id must survive"
+        );
+        assert_eq!(
+            registry.get(main_job).await.unwrap().status,
+            JobStatus::Running,
+            "main-session (owner-None) job must survive a task cancel"
+        );
+
+        // Cleanup: kill the survivors so the test leaves no 30s children.
+        registry.cancel(other).await;
+        registry.cancel(main_job).await;
     }
 
     struct CooperativeProbe {

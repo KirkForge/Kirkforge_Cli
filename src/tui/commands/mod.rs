@@ -169,6 +169,8 @@ mod tests {
         BashJob {
             id,
             command: "echo hi".to_string(),
+            owner: None,
+            pid: None,
             status,
             stdout: String::new(),
             stderr: String::new(),
@@ -288,6 +290,7 @@ mod tests {
                 &crate::session::access::PathGuard::default(),
                 false,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -312,6 +315,7 @@ mod tests {
                 &crate::session::access::DenyList::default(),
                 &crate::session::access::PathGuard::default(),
                 false,
+                None,
                 None,
             )
             .await
@@ -369,6 +373,7 @@ mod tests {
                 &crate::session::access::PathGuard::default(),
                 false,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -402,6 +407,7 @@ mod tests {
                 &crate::session::access::DenyList::default(),
                 &crate::session::access::PathGuard::default(),
                 false,
+                None,
                 None,
             )
             .await

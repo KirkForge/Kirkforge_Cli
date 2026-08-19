@@ -179,6 +179,7 @@ impl ParallelOrchestrator {
             model: None,
             max_turns,
             cancel: Some(cancel),
+            owner: Some(task_id.clone()),
         };
         let summary = match spawner.run_task(request).await {
             Ok(s) => s,

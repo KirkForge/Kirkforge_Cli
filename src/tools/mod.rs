@@ -104,6 +104,11 @@ pub struct ToolContext {
     pub diff_review: bool,
     pub task_spawner: Option<Arc<dyn task::TaskSpawner>>,
     pub tools: Option<Arc<CompositeToolset>>,
+    /// Owning subagent task id (WO 36.2). Background bash jobs spawned
+    /// under this context are tagged with it, so task-cancel paths kill
+    /// exactly the subagent's jobs (`BashJobRegistry::cancel_by_owner`).
+    /// `None` (main session) jobs are never touched by those paths.
+    pub task_owner: Option<String>,
     /// Optional channel for streaming partial tool output (e.g. PTY
     /// output) to the TUI while a command runs. `None` in non-interactive
     /// or test contexts — tools must treat it as best-effort.
@@ -118,6 +123,7 @@ impl std::fmt::Debug for ToolContext {
             .field("diff_review", &self.diff_review)
             .field("task_spawner", &self.task_spawner.is_some())
             .field("tools", &self.tools.is_some())
+            .field("task_owner", &self.task_owner)
             .field("event_tx", &self.event_tx.is_some())
             .finish()
     }
@@ -131,6 +137,7 @@ impl ToolContext {
             diff_review: true,
             task_spawner: None,
             tools: None,
+            task_owner: None,
             event_tx: None,
         }
     }
@@ -145,6 +152,7 @@ impl ToolContext {
             diff_review: true,
             task_spawner: None,
             tools: None,
+            task_owner: None,
             event_tx: None,
         }
     }
@@ -157,6 +165,7 @@ impl ToolContext {
             diff_review: true,
             task_spawner: Some(spawner),
             tools: None,
+            task_owner: None,
             event_tx: None,
         }
     }

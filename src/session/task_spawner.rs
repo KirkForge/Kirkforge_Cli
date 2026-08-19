@@ -411,6 +411,10 @@ impl InProcessTaskSpawner {
         if let Some(c) = &request.cancel {
             executor.set_cancel_token(Some(c.token.clone()));
         }
+        // WO 36.2: tag this executor's tool calls with the owning task id
+        // so background bash jobs the subagent spawns are attributable —
+        // TaskManager::cancel kills exactly those via cancel_by_owner.
+        executor.set_task_owner(request.owner.clone());
         // WO 35.1: the prompt is used verbatim — callers apply persona
         // preambles (build_task_prompt) or role prompts (the parallel
         // orchestrator) themselves, so a role prompt is no longer
@@ -604,6 +608,7 @@ mod tests {
             model: None,
             max_turns: 1,
             cancel: None,
+            owner: None,
         };
         let result = spawner.run_task(request).await;
         assert!(
@@ -641,6 +646,7 @@ mod tests {
             model: None,
             max_turns: 3,
             cancel: Some(cancel),
+            owner: None,
         };
         let result = spawner.run_task(request).await;
         assert_eq!(

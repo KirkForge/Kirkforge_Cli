@@ -94,6 +94,7 @@ impl ModelClient for ExecutorAdapter {
                 model: None,
                 max_turns: ORCHESTRATOR_MAX_TURNS,
                 cancel: None,
+                owner: None,
             })
             .await
             .map_err(anyhow::Error::msg)?;

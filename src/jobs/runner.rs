@@ -113,6 +113,8 @@ async fn run_bash_job(
             &path_guard,
             config.security.bash_sandbox_workdir,
             Some(&config.security.sandbox),
+            // Daemon-scheduled jobs belong to the main session.
+            None,
         )
         .await
     {

@@ -443,15 +443,23 @@ milliseconds, not at `tool_timeout_secs` — the subagent executor's per-call
 tokens are live children of the root token via `Executor::set_cancel_token`),
 and `run_task`'s own cleanup runs (temp-dir Drop guard, patch capture).
 Cancelled tasks keep status `Cancelled` but retain partial output in
-`TaskHandle.cancelled_result`, surfaced by `task_output`. Known ceilings
-(disclosed): an in-flight model stream ends at its next event or adapter
-timeout rather than being aborted mid-request; background bash jobs
-(`bash background=true`) spawned by a cancelled subagent are not killed (the
-global `BashJobRegistry` has no owner tracking — they remain cancellable via
-`bash_cancel` / `/jobs`); the parent session's own prompt-cancel keeps the
-WO 15.7 snapshot-at-dispatch token semantics (only subagent executors attach
-a live root token). `status` and `list` expose the state for the `/jobs` view
-(WO 30.2).
+`TaskHandle.cancelled_result`, surfaced by `task_output`. `TaskManager::cancel`
+also kills the background bash jobs the subagent spawned (WO 36.2): the
+`task`/orchestrator request carries the task id as `TaskRequest.owner`, the
+subagent `Executor` threads it into every `ToolContext.task_owner`, and
+`bash background=true` tags the registry job with it — cancel fires
+`BashJobRegistry::cancel_by_owner(task_id)`, which kills each owned job's
+process group the same way `bash_cancel` does (status flipped to `Cancelled`
+before the kill so the watcher preserves it; when the watcher is parked on
+the child mutex the group is killed by pid instead of waiting on the lock).
+Main-session jobs (owner `None`) and other tasks' jobs are never touched.
+Known ceilings (discisclosed): an in-flight model stream ends at its next
+event or adapter timeout rather than being aborted mid-request; owner ids are
+per-`TaskManager` strings, so two managers can mint the same `task-N` tag and
+a cancel reaches both (cascade-like); the parent session's own prompt-cancel
+keeps the WO 15.7 snapshot-at-dispatch token semantics (only subagent
+executors attach a live root token). `status` and `list` expose the state for
+the `/jobs` view (WO 30.2).
 
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`
 

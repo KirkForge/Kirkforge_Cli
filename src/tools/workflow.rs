@@ -247,6 +247,7 @@ impl StepRunner for TaskSpawnerStepRunner {
                 model: None,
                 max_turns: 1,
                 cancel: None,
+                owner: None,
             })
             .await
             .map_err(|e| anyhow::anyhow!("step '{name}' failed: {e}"))
@@ -345,6 +346,7 @@ impl StepRunner for TaskSpawnerStepRunner {
                                 model: None,
                                 max_turns: 1,
                                 cancel: None,
+                                owner: None,
                             })
                             .await
                             .map_err(|e| anyhow::anyhow!("step '{}' failed: {e}", req.name))?;

@@ -348,6 +348,11 @@ impl Tool for Bash {
                     &self.path_guard,
                     self.bash_sandbox_workdir,
                     Some(&self.sandbox_config),
+                    // WO 36.2: attribute the job to the calling task so
+                    // task-cancel paths kill exactly the subagent's jobs;
+                    // main-session calls carry owner None and are never
+                    // touched by cancel_by_owner.
+                    ctx.task_owner.as_deref(),
                 )
                 .await
             {

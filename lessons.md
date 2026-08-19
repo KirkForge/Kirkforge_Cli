@@ -103,3 +103,47 @@
   (NDJSON allows the last line to omit the separator). Real Ollama
   always sends the newline, so impact is mock/proxy-only. Note for a
   future hardening pass: flush the residual buffer at EOF.
+
+# lessons.md — WO 36.2 session (bash-job owner tracking)
+
+## What I learned about this codebase
+
+- **The bash-job watcher parks on the child mutex for the job's whole
+  lifetime**: the watcher task holds the `Arc<Mutex<Child>>` guard across
+  `child.wait().await`. Any code path that locks that mutex (the old
+  `cancel()`, `remove()`, `clean()` for running jobs, the spawn-eviction
+  pass) serializes behind the process's NATURAL exit — it cannot kill a
+  watcher-parked long-running job at all. This is the real story behind the
+  ignored `#[ignore = "timing-sensitive job-cancel race"]` TUI test. WO 36.2
+  fixed `cancel()` (flip status first + kill by pid on contention);
+  `remove()` on a still-running job still has the flaw — future work.
+- `tokio::sync::Mutex::blocking_lock()` panics on current-thread test
+  runtimes (same family as `block_in_place`, AGENTS §7). Grab `child.id()`
+  before moving the Child into the map instead.
+- gitnexus impact on `spawn`/`cancel`-style common names collates
+  same-name symbols across the repo ("96 direct callers, CRITICAL" for
+  BashJobRegistry::spawn) — grep the real callers before believing the
+  blast radius.
+- `TaskManager::cancel` must stay sync (sync #[test] callers); the async
+  registry kill is fired via `Handle::try_current()` + detached spawn —
+  silently skipped outside a runtime, which preserves old behavior in sync
+  tests.
+- Pre-existing leak (NOT mine, out of scope): `BashJobRegistry::spawn`
+  inserts the Running job record BEFORE `proc.spawn()?` — a spawn failure
+  leaves a phantom Running job with no watcher/watchdog. Note for a future
+  pass.
+- Owner-tag collision ceiling: TaskManager ids ("task-N") are per-manager
+  (Task tool, orchestrator, each subagent executor each have one), so
+  nested background subagents can mint duplicate owner tags; a cancel then
+  reaches same-tagged jobs of another manager (cascade-like). Documented
+  with `ponytail: ceiling` in cancel_by_owner + TaskManager::cancel.
+
+## Scope deviations / deferrals (disclosed)
+- Skipped a dedicated `ToolContext::with_task_owner()` constructor — would
+  be dead code (AGENTS §5 "no dead code"); the executor setter
+  (`set_task_owner`) is the single writer. Add the constructor when a
+  second construction site needs it.
+- Scope creep: src/session/process_group.rs (+`kill_process_group_by_pid`
+  helper) — required by the root-cause cancel fix, which the WO gate test
+  (a) cannot pass without: cancel-by-owner of a parked job would block
+  behind natural exit and never kill.

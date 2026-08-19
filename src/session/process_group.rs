@@ -69,6 +69,24 @@ pub fn kill_process_group(child: &mut Child) {
     }
 }
 
+/// Kill a process group by pid, without holding the `Child` handle.
+///
+/// Used when the watcher task parks on the child mutex inside
+/// `wait().await` for the job's whole lifetime — a lock-based kill would
+/// serialize behind the process's natural exit and never fire. Failure is
+/// silent: ESRCH (already dead) is the common benign case here.
+#[cfg(unix)]
+pub fn kill_process_group_by_pid(pid: u32) {
+    unsafe {
+        killpg(pid as i32, SIGKILL);
+    }
+}
+
+/// No process-group concept without a `Child` handle on non-Unix; the
+/// watcher's `wait()` still returns when the process exits.
+#[cfg(not(unix))]
+pub fn kill_process_group_by_pid(_pid: u32) {}
+
 /// Wait for a child to exit, bounded by a timeout.
 ///
 /// This is best-effort reaping: if the child does not exit in time it

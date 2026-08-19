@@ -44,6 +44,9 @@ pub(super) struct PreparedCall {
     /// reach it via `ctx.task_spawner` (WO 30.6). Previously this was None
     /// and the parent's task tool always errored "not available".
     task_spawner: Option<Arc<dyn crate::tools::task::TaskSpawner>>,
+    /// Owning subagent task id (WO 36.2) — lands in the per-call
+    /// `ToolContext.task_owner` so background bash jobs are attributable.
+    task_owner: Option<String>,
 }
 
 /// Phase-1 output: a buffered skip (denied/unknown tool/plan-mode/etc.) waiting
@@ -251,6 +254,7 @@ impl Executor {
                             .task_spawner
                             .clone()
                             .map(|s| s as Arc<dyn crate::tools::task::TaskSpawner>),
+                        task_owner: self.task_owner.clone(),
                     });
                 }
                 PreRunVerdict::Skip { events, message } => {
@@ -638,6 +642,7 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
         diff_review: prep.diff_review,
         task_spawner: prep.task_spawner.clone(),
         tools: None,
+        task_owner: prep.task_owner.clone(),
         event_tx: prep.event_tx,
     };
     let start = Instant::now();

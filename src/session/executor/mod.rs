@@ -122,6 +122,11 @@ pub struct Executor {
     /// `tool_timeout_secs`. `None` (parent sessions) keeps the
     /// snapshot-at-dispatch semantics (WO 15.7).
     cancel_token: Option<tokio_util::sync::CancellationToken>,
+    /// Owning subagent task id (WO 36.2). Set by the task spawner so
+    /// background bash jobs spawned by this executor are attributed to
+    /// the task — `TaskManager::cancel` then kills exactly those jobs.
+    /// `None` (parent sessions) leaves jobs unowned (main session).
+    task_owner: Option<String>,
 }
 
 impl Executor {
@@ -312,6 +317,7 @@ impl Executor {
             memory_store: crate::session::memory::MemoryStore::default_store().ok(),
             turn_count: 0,
             cancel_token: None,
+            task_owner: None,
         };
 
         // Register per-session budget and stratum hooks after construction
@@ -1052,6 +1058,14 @@ impl Executor {
     /// reaches in-flight tool calls; parent sessions leave it unset.
     pub fn set_cancel_token(&mut self, token: Option<tokio_util::sync::CancellationToken>) {
         self.cancel_token = token;
+    }
+
+    /// Attach the owning subagent task id (WO 36.2). Threaded into every
+    /// tool call's `ToolContext` so background bash jobs the subagent
+    /// spawns are tagged and cancellable by owner; parent sessions leave
+    /// it unset.
+    pub fn set_task_owner(&mut self, owner: Option<String>) {
+        self.task_owner = owner;
     }
 
     pub fn set_plan_mode(&mut self, enabled: bool) {

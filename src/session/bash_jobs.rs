@@ -8,7 +8,9 @@ use crate::session::bash_runner::{
     cap_to_string, check_bash_command_str, drain_capped, setup_rlimits, shell_program,
     MAX_BASH_OUTPUT_BYTES,
 };
-use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
+use crate::session::process_group::{
+    kill_process_group, kill_process_group_by_pid, reap_child, setup_process_group,
+};
 use crate::shared::SandboxConfig;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,6 +34,15 @@ pub enum JobStatus {
 pub struct BashJob {
     pub id: u64,
     pub command: String,
+    /// Owning subagent task id (WO 36.2). `None` = main session — such
+    /// jobs are never touched by task-cancel paths (`cancel_by_owner`
+    /// only matches `Some(owner)`).
+    pub owner: Option<String>,
+    /// Child process id, recorded so cancel can kill the process group
+    /// without the `Child` mutex (the watcher parks on that mutex inside
+    /// `wait().await` for the job's whole lifetime). `None` until the
+    /// child spawns / for synthesized test jobs.
+    pub pid: Option<u32>,
     pub status: JobStatus,
     pub stdout: String,
     pub stderr: String,
@@ -40,10 +51,12 @@ pub struct BashJob {
 }
 
 impl BashJob {
-    fn new(id: u64, command: String) -> Self {
+    fn new(id: u64, command: String, owner: Option<&str>) -> Self {
         Self {
             id,
             command,
+            owner: owner.map(str::to_string),
+            pid: None,
             status: JobStatus::Running,
             stdout: String::new(),
             stderr: String::new(),
@@ -123,6 +136,7 @@ impl BashJobRegistry {
         path_guard: &PathGuard,
         bash_sandbox_workdir: bool,
         sandbox: Option<&SandboxConfig>,
+        owner: Option<&str>,
     ) -> anyhow::Result<u64> {
         // Safety gate: every background bash command must pass the same
         // deny-list, dangerous-pattern, and sandbox-workdir checks as
@@ -172,7 +186,7 @@ impl BashJobRegistry {
             }
         }
 
-        let job = BashJob::new(id, command.to_string());
+        let job = BashJob::new(id, command.to_string(), owner);
         {
             let mut jobs = self.jobs.lock().await;
             // Re-check under the same lock before inserting; if another task
@@ -226,10 +240,19 @@ impl BashJobRegistry {
         let child = proc.spawn()?;
 
         // Store child handle for cancel(), wrapped so the watcher and
-        // cancel()/clean()/remove() can share it.
+        // cancel()/clean()/remove() can share it. The job's pid is
+        // recorded so cancel can kill the process group without this
+        // mutex when the watcher is parked on it (see cancel).
+        let pid = child.id();
         {
             let mut children = self.children.lock().await;
             children.insert(id, Arc::new(Mutex::new(child)));
+        }
+        {
+            let mut jobs = self.jobs.lock().await;
+            if let Some(job) = jobs.get_mut(&id) {
+                job.pid = pid;
+            }
         }
 
         // Spawn watcher: wait for output, update job record, remove child
@@ -398,37 +421,90 @@ impl BashJobRegistry {
 
     /// Cancel a running job.
     ///
-    /// Kills the child process and sets status to Cancelled.
+    /// Flips the status to `Cancelled` and kills the child process group.
+    ///
+    /// The status flip happens BEFORE the kill: the watcher preserves an
+    /// already-`Cancelled` status, so the kill below cannot be overwritten
+    /// with `Completed` even if the child exits concurrently. And the kill
+    /// does not wait on the child mutex: the watcher parks on it inside
+    /// `wait().await` for the job's whole lifetime, so a lock-based kill
+    /// would serialize behind the process's natural exit and never fire
+    /// for a long-running job. When the mutex is contended, the group is
+    /// killed by pid instead; the watcher reaps when `wait()` returns.
     pub async fn cancel(&self, id: u64) -> bool {
+        // Flip status first (also the read side for the pid fallback).
+        let mut found = false;
+        let pid = {
+            let mut jobs = self.jobs.lock().await;
+            match jobs.get_mut(&id) {
+                Some(job) => {
+                    if job.status == JobStatus::Running {
+                        job.status = JobStatus::Cancelled;
+                        job.finished_at = Some(chrono::Local::now());
+                        found = true;
+                    }
+                    job.pid
+                }
+                None => None,
+            }
+        };
+
         // Take the child handle and kill it. The child stays in the map
-        // until the watcher has reaped it (F5); this lock is released before
-        // the reap below so the watcher can still join it, but removal is
-        // done only in the watcher's reap path.
+        // until the watcher has reaped it (F5); try_lock avoids blocking
+        // on a watcher parked in wait().
         {
             let child = {
                 let mut children = self.children.lock().await;
                 children.remove(&id)
             };
             if let Some(child) = child {
-                let mut child = child.lock().await;
-                kill_process_group(&mut child);
-                reap_child(&mut child, Duration::from_secs(2)).await;
-            }
-        }
-
-        // Update job status
-        let mut found = false;
-        {
-            let mut jobs = self.jobs.lock().await;
-            if let Some(job) = jobs.get_mut(&id) {
-                if job.status == JobStatus::Running {
-                    job.status = JobStatus::Cancelled;
-                    job.finished_at = Some(chrono::Local::now());
-                    found = true;
+                match child.try_lock() {
+                    Ok(mut child) => {
+                        kill_process_group(&mut child);
+                        reap_child(&mut child, Duration::from_secs(2)).await;
+                    }
+                    Err(_) => {
+                        if let Some(pid) = pid {
+                            kill_process_group_by_pid(pid);
+                        }
+                    }
                 }
             }
         }
+
         found
+    }
+
+    /// Cancel every still-running job spawned by `owner` (WO 36.2).
+    ///
+    /// Kills each child exactly like [`cancel`](Self::cancel) does (same
+    /// kill/reap/flip path, reused per id) and returns how many jobs were
+    /// flipped to `Cancelled`. Jobs with a different owner — including
+    /// main-session jobs (`owner: None`) — are never touched; an unknown
+    /// owner cancels nothing and returns 0.
+    ///
+    /// ponytail: ceiling — owner ids are per-TaskManager strings, so two
+    /// managers can mint the same "task-N" tag and a cancel then reaches
+    /// both (behaves as cascade-cancel of the task's descendants). Upgrade
+    /// path: globally-unique owner ids if nested background subagents
+    /// become common.
+    pub async fn cancel_by_owner(&self, owner: &str) -> usize {
+        let ids: Vec<u64> = {
+            let jobs = self.jobs.lock().await;
+            jobs.iter()
+                .filter(|(_, j)| {
+                    j.status == JobStatus::Running && j.owner.as_deref() == Some(owner)
+                })
+                .map(|(&id, _)| id)
+                .collect()
+        };
+        let mut cancelled = 0;
+        for id in ids {
+            if self.cancel(id).await {
+                cancelled += 1;
+            }
+        }
+        cancelled
     }
 
     /// Remove a job from the registry (also cleans up the child handle).
@@ -571,6 +647,7 @@ mod tests {
                 &PathGuard::default(),
                 false,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -597,6 +674,7 @@ mod tests {
                 &PathGuard::default(),
                 false,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -619,6 +697,7 @@ mod tests {
                 &PathGuard::default(),
                 false,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -630,6 +709,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
                 None,
             )
             .await
@@ -666,6 +746,7 @@ mod tests {
                 &PathGuard::default(),
                 false,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -689,6 +770,7 @@ mod tests {
                 &PathGuard::default(),
                 false,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -708,6 +790,7 @@ mod tests {
                 &PathGuard::default(),
                 false,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -719,6 +802,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
                 None,
             )
             .await
@@ -751,6 +835,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
                 None,
             )
             .await;
@@ -802,6 +887,7 @@ mod tests {
                     &PathGuard::default(),
                     false,
                     None,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -816,6 +902,7 @@ mod tests {
                 &DenyList::default(),
                 &PathGuard::default(),
                 false,
+                None,
                 None,
             )
             .await;
@@ -852,6 +939,7 @@ mod tests {
                 &PathGuard::default(),
                 false,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -887,6 +975,7 @@ mod tests {
                 &PathGuard::default(),
                 false,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -916,6 +1005,8 @@ mod tests {
                 BashJob {
                     id,
                     command: "stuck".into(),
+                    owner: None,
+                    pid: None,
                     status: JobStatus::Running,
                     stdout: String::new(),
                     stderr: String::new(),
@@ -933,6 +1024,8 @@ mod tests {
                 BashJob {
                     id,
                     command: "done".into(),
+                    owner: None,
+                    pid: None,
                     status: JobStatus::Completed(0),
                     stdout: String::new(),
                     stderr: String::new(),
@@ -979,6 +1072,7 @@ mod tests {
                 &PathGuard::default(),
                 false,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1000,5 +1094,117 @@ mod tests {
             "watcher death should flip Running → Failed, got {:?}",
             job.status
         );
+    }
+
+    // ── WO 36.2: owner tracking + cancel-by-owner ──
+
+    /// Gate (a): a job spawned with owner X dies (killed + reaped inside
+    /// the call, exactly like `cancel`) and its status flips to Cancelled
+    /// when cancel_by_owner(X) runs.
+    #[tokio::test]
+    async fn test_cancel_by_owner_kills_owned_job() {
+        let reg = BashJobRegistry::new();
+        let id = reg
+            .spawn(
+                "sleep 30",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                Some("task-7"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            reg.get(id).await.unwrap().owner.as_deref(),
+            Some("task-7"),
+            "owner tag must be recorded on the job"
+        );
+
+        let cancelled = reg.cancel_by_owner("task-7").await;
+        assert_eq!(cancelled, 1, "exactly the owned job should be cancelled");
+
+        let job = reg.get(id).await.unwrap();
+        assert_eq!(job.status, JobStatus::Cancelled);
+        assert!(job.finished_at.is_some());
+    }
+
+    /// Gate (b) + invariant: main-session jobs (owner None) are NEVER
+    /// cancelled by a subagent cancel — only the matching owner's job
+    /// flips; the None-owner job keeps running untouched.
+    #[tokio::test]
+    async fn test_cancel_by_owner_never_touches_main_session_jobs() {
+        let reg = BashJobRegistry::new();
+        let main_id = reg
+            .spawn(
+                "sleep 30",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let sub_id = reg
+            .spawn(
+                "sleep 30",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                Some("task-9"),
+            )
+            .await
+            .unwrap();
+
+        let cancelled = reg.cancel_by_owner("task-9").await;
+        assert_eq!(cancelled, 1);
+
+        let sub = reg.get(sub_id).await.unwrap();
+        assert_eq!(sub.status, JobStatus::Cancelled);
+        let main_job = reg.get(main_id).await.unwrap();
+        assert_eq!(
+            main_job.status,
+            JobStatus::Running,
+            "owner-None (main session) job must survive a subagent cancel"
+        );
+        assert!(main_job.finished_at.is_none());
+
+        // Cleanup: kill the survivor so the test leaves no 30s child.
+        assert!(reg.cancel(main_id).await);
+    }
+
+    /// Gate (c): an unknown owner cancels nothing; the count is honest.
+    #[tokio::test]
+    async fn test_cancel_by_owner_unknown_owner_is_noop() {
+        let reg = BashJobRegistry::new();
+        let id = reg
+            .spawn(
+                "sleep 30",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                Some("task-1"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(reg.cancel_by_owner("task-999").await, 0);
+        assert_eq!(
+            reg.get(id).await.unwrap().status,
+            JobStatus::Running,
+            "unknown owner must not disturb the job"
+        );
+        assert!(reg.cancel(id).await);
     }
 }

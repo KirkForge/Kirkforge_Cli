@@ -92,6 +92,11 @@ mod tests {
         let mut cfg = Config::default();
         cfg.model.default_model = default_model.into();
         cfg.model.routing_model_map = map;
+        // dead host: model validation must fail with CheckFailed instead of
+        // consulting the developer's real Ollama daemon (a live daemon turns
+        // `:cloud` fallback names into NotFound + background pull, which
+        // never sends on model_tx and makes this test machine-dependent)
+        cfg.model.ollama_host = "http://127.0.0.1:9".to_string();
         AppState::new(std::sync::Arc::new(std::sync::RwLock::new(cfg)))
     }
 

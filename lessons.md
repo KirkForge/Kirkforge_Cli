@@ -1,60 +1,44 @@
-# lessons — WO 35.2/35.3 session (.worktrees/wo35-c)
+# lessons — WO 35.1 session (.worktrees/wo35-d)
 
-## What I learned about this codebase
+## What I learned
 
-- **`Executor::with_log_and_undo*` re-derives its PathGuardTower from the
-  SharedConfig you pass it** — building subagent tools from a local modified
-  config is NOT enough; the executor must get a config clone with the same
-  `sandbox_dir` or its tower denies worktree writes. run_task now passes a
-  frozen clone (also better isolation semantics: parent config edits can't
-  move a subagent's sandbox mid-run).
-- **WorktreeSession derives its path from the session id alone**
-  (`$TMPDIR/kf-code-session-<id>`), globally namespaced, NOT per repo or per
-  pid. Tests using fixed ids poison later runs if a worktree outlives the
-  repo (`git worktree remove` needs the repo alive as CWD). Always: unique
-  per-pid ids in tests + drop the guard BEFORE deleting the test repo.
-- **`git add --intent-to-add` + `git diff HEAD` is the one-liner that folds
-  untracked files into an appliable patch** — no porcelain parsing needed.
-- **clippy `await_holding_lock` is crate-denied** — to serialize async test
-  bodies use `tokio::sync::Mutex` (guard legal across await), not std Mutex.
-- **`TaskStatus` precedence is result → error → cancel_requested** — keeping
-  a cancelled task's status honest while retaining its output needs a third
-  slot (`cancelled_result`), not reordering.
-- tokio "full" does NOT include the `test-util` feature → no
-  `#[tokio::test(start_paused)]`; dead-host tests pay real retry backoff
-  (~3s). Budget for it or pick a non-retryable failure mode.
-- Fresh-worktree first `cargo check` ≈ 3m40s (full dep tree); budget gates
-  accordingly. Nextest = process-per-test, which makes pid-namespaced temp
-  scans safe; libtest (threaded) needs an explicit lock (see task_spawner
-  RUN_TASK_TMP_LOCK).
-- Executor tests are ~5s each (checkpoint I/O); adding one test to
-  tests/dispatch.rs costs little wall time because nextest parallelizes.
-- Pre-existing flaky `valid_tier_sends_resolved_model` currently fails
-  deterministically on dev tip e82e305 in this environment (verified via
-  stash). Not ours.
+- **WO specs written before sibling WOs land go stale fast**: 35.1's file list
+  named 4 files; the double-wrap fix actually required touching
+  `src/tools/workflow.rs` (TaskSpawnerStepRunner used by jobs/runner.rs) and
+  `src/tools/task.rs` because 35.2/35.3 added raw-prompt `run_task` callers
+  the spec didn't know about. Always re-grep call sites, trust the code.
+- **`run_task`'s prompt contract is now verbatim** — any future caller must
+  apply `build_task_prompt` (in `tools::task`, NOT task_spawner) or pass a
+  complete role prompt. Missed callers silently lose the persona preamble.
+- **The TaskSpawner trait's dyn dispatch is the sanctioned test seam** —
+  "ponytail: single impl, dyn dispatch for test injection" is literal.
+  `ParallelOrchestrator::with_spawner` (private) injects a probe that records
+  start/end events; strict-order + prompt-content assertions in one test,
+  no DI framework.
+- **Sequencing tests without a model**: probe spawner + 10ms in-flight sleep;
+  under a (wrong) join! fan-out all three `start:` events precede the first
+  `end:` on the single-threaded test runtime — deterministic.
+- **`str::as_str()` on a `&str` is unstable (`str_as_str`)** — when changing
+  `let prompt = build_task_prompt(...)` (String) to a borrow, also drop the
+  later `.as_str()` call sites.
+- Fresh-worktree cold `cargo check` on this box: 7m50s+ (over a 7min timeout
+  once). Budget ≥10min for first checks; incremental are ~15s.
+- nextest filter syntax: multiple bare filters are OR'd
+  (`nextest run ... session::parallel_orchestrator tools::task` works).
+- Borrow gotcha: `let x = &vec.lock().unwrap().iter().find(...).unwrap().1`
+  — the MutexGuard temporary dies at statement end. Clone out of the guard
+  or bind the guard first.
 
 ## What I tried that didn't work
 
-- snapshot-paused tokio test for the dead-host error path (no test-util
-  feature) — fell back to real-time backoff, ~2.7s, acceptable.
-- First version of the patch test deleted the test repo before the
-  WorktreeSession dropped → `git worktree remove` failed silently (warn
-  only) → leftover /tmp dir failed the NEXT test run with "already exists".
-  Fixed by explicit drop-before-cleanup + per-pid worktree ids.
+- Returning `&'static str` from a helper that maps unknown personas to the
+  input `&str` — lifetime clash; return String in tests.
+- First `cargo check` attempt hit the 7min tool timeout (cold build); rerun
+  with 20min budget, fine after.
 
-## Scope creep (disclosed)
+## Scope creep disclosure (also in workplan.md)
 
-- src/tools/workflow.rs + src/tui/commands/workflow.rs: TaskRequest literal
-  updates only (new `cancel: None` field) — forced by the field addition,
-  no behavior change.
-- src/session/executor/tests/dispatch.rs: new test file edits (not in WO
-  file list, but the WO gate demands exactly this test).
-
-## What I'd do differently
-
-- Grep for `TaskRequest {` across src/ BEFORE deciding to add a field —
-  counted 11 literal sites; a trait-signature change would have been worse,
-  but the count should be in the workplan up front.
-- The `Helpers::tool_cancel_token` split (parent snapshot vs subagent live
-  child) could have been one commit-internal helper method on Executor from
-  the start instead of a map_or_else inline — fine at this size.
+- `src/tools/workflow.rs`: not named by the WO; required because its
+  TaskSpawnerStepRunner (also the path for jobs/runner.rs) calls run_task
+  with raw prompts and the verbatim-prompt contract change requires it to
+  wrap.

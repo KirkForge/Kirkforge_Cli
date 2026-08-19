@@ -2,6 +2,38 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-19 — WO 35 series implementation: all 7 workorders landed on dev
+
+Merged to dev in gated steps, CI green on each push (final: run on
+`6e321d32`). Series status: 35.0 Done · 35.1 Done · 35.2 Done ·
+35.3 Partially done (disclosed) · 35.4 Done · 35.5 Done · 35.6 Done
+(with disclosed follow-ups) · 35.7 Done. Per-WO details in
+`docs/workorders/35.x` + CHANGELOG.
+
+- **ADR count is now 92** (ADR-075, Emission flattening — folded into
+  state.md per doc-sync rule; TECHNICAL.md was bumped in the WO 35.6
+  commit).
+- **Both "known flaky" tests are fixed by root cause, not documented
+  away**: `valid_tier_sends_resolved_model` (consulted the dev
+  machine's live Ollama daemon → dead-host hermetic config,
+  `c1329610`) and `test_parallel_tool_batch_runs_concurrently`
+  (wall-clock threshold → structural interval-overlap proof,
+  `1621e4ce`). The kf-code lib suite is fully green: 3426/3426 twice.
+- **New external dep in the kf-code binary via WO 35.6**: `rusqlite`
+  (bundled SQLite, dragged by kf-memory-store now that kf-code depends
+  on kf-orchestrator). regex/base64/sha2/hex were already present. If
+  binary size regresses measurably, the fallback is feature-gating
+  memory behind the orchestrator dep — tracked as the noted follow-up.
+- **35.5 bonus fix**: Phase-3 read-gate denied just-created new-file
+  writes (`2e552284`) — real seam bug found by the new integration
+  tests.
+- **Pending (disclosed)**: WO 35.3 remainder (background-bash
+  owner-tracking cancel, mid-request model-stream abort, parent
+  prompt-cancel token); WO 35.6 follow-ups (EventSink→EventBus bridge,
+  reducer port, ParallelOrchestrator-on-kf-orchestrator decision);
+  budget `used`-counter wiring gap noted in 35.5's lessons. All listed
+  in the WO Status sections.
+
 ## Session 2026-08-19 — WO 35.2 + 35.3: subagent worktree isolation + cooperative cancellation (worktree `.worktrees/wo35-c`, branch `wo/35.2-3-subagent`)
 
 ### What changed this session

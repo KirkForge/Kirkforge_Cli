@@ -406,9 +406,25 @@ override: `KF_CODE_TASK_CONCURRENCY_MODE`.
 Each background task is tracked with a derived `TaskStatus`
 (`Pending | Running | Completed | Cancelled | Failed | TimedOut`) plus
 `TaskMetadata` (model, persona, ≤100-char prompt summary, started_at,
-duration_ms, token_estimate, parent_task_id). `TaskManager::cancel` stops a
-running subagent via a per-task cancel flag and a `select!` race; `status`
-and `list` expose the state for the `/jobs` view (WO 30.2).
+duration_ms, token_estimate, parent_task_id). `TaskManager::cancel` (WO 35.3)
+is cooperative: it sets the per-task flag, cancels the task's
+`CancellationToken`, and the worker *awaits* `run_task` to completion — no
+future-dropping. The subagent turn loop observes the flag between steps
+(exiting early with its partial summary + worktree patch), in-flight tool
+calls observe the token (a running bash's process group is killed in
+milliseconds, not at `tool_timeout_secs` — the subagent executor's per-call
+tokens are live children of the root token via `Executor::set_cancel_token`),
+and `run_task`'s own cleanup runs (temp-dir Drop guard, patch capture).
+Cancelled tasks keep status `Cancelled` but retain partial output in
+`TaskHandle.cancelled_result`, surfaced by `task_output`. Known ceilings
+(disclosed): an in-flight model stream ends at its next event or adapter
+timeout rather than being aborted mid-request; background bash jobs
+(`bash background=true`) spawned by a cancelled subagent are not killed (the
+global `BashJobRegistry` has no owner tracking — they remain cancellable via
+`bash_cancel` / `/jobs`); the parent session's own prompt-cancel keeps the
+WO 15.7 snapshot-at-dispatch token semantics (only subagent executors attach
+a live root token). `status` and `list` expose the state for the `/jobs` view
+(WO 30.2).
 
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`
 
@@ -786,7 +802,10 @@ lets the agent loop and bench harness run a named template via a tool call.
 subagents in parallel — Scout (`explore` persona, read-only), Coder (`coder`
 persona, write), Reviewer (`plan` persona, read-only critique) — via
 `tokio::join!` on `InProcessTaskSpawner::run_task`. Each subagent gets its own
-`TaskManager` entry for `/jobs` lifecycle visibility. Triggered by
+`TaskManager` entry for `/jobs` lifecycle visibility, with the WO 35.3 cancel
+pair (flag + token) threaded into its `TaskRequest`, so
+`ParallelOrchestrator::cancel_all()` stops all in-flight roles cooperatively
+(each runs cleanup, captures any worktree patch, and returns). Triggered by
 `/workflow run <name> --parallel`; the workflow's first prompt-bearing step
 becomes the task description for all three roles. Sequential fallback
 (`run_sequential`) runs the three roles one-by-one when `worktree_enabled` is

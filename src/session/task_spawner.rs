@@ -366,10 +366,28 @@ impl TaskSpawner for InProcessTaskSpawner {
             }
         });
 
-        let cancelled = Arc::new(AtomicBool::new(false));
+        // WO 35.3: the cancel flag from the TaskRequest (shared with the
+        // TaskHandle) drives the executor's existing AtomicBool machinery;
+        // the token is attached to the executor so in-flight tool calls
+        // die on cancel. `cancel(None)` requests are uncancellable — the
+        // flag is a local no-op like before.
+        let cancelled = request
+            .cancel
+            .as_ref()
+            .map(|c| Arc::clone(&c.flag))
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+        if let Some(c) = &request.cancel {
+            executor.set_cancel_token(Some(c.token.clone()));
+        }
         let prompt = build_task_prompt(&request.persona, &request.prompt);
 
         for turn_num in 0..request.max_turns {
+            // Cooperative cancel exit (WO 35.3): checked before each turn —
+            // a task cancelled before start or between turns returns its
+            // partial summary + patch instead of starting more model work.
+            if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
             let input = if turn_num == 0 {
                 prompt.as_str()
             } else {
@@ -517,12 +535,20 @@ mod tests {
         dirs
     }
 
+    // The two run_task tests below scan the shared `kf-code-task-<pid>-*`
+    // temp namespace; serialize them so a concurrent run_task's live temp
+    // dir can't fail the other's leak assertion under threaded libtest.
+    // (nextest runs each test in its own process and never contends.)
+    // tokio Mutex: the guard is held across the run_task await.
+    static RUN_TASK_TMP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     // Error returns from a turn must not leak the temp dir (WO 35.3 item,
     // covered here because the guard landed with the 35.2 restructure).
     // A dead host makes the model request fail (ECONNREFUSED); the
     // adapter's retry backoff (~3.7s total) runs in real time.
     #[tokio::test]
     async fn run_task_error_return_still_cleans_temp_dir() {
+        let _tmp_lock = RUN_TASK_TMP_LOCK.lock().await;
         let mut cfg = Config::default();
         cfg.model.request_timeout_secs = 5;
         let config: SharedConfig = Arc::new(std::sync::RwLock::new(cfg));
@@ -538,6 +564,7 @@ mod tests {
             persona: "coder".into(),
             model: None,
             max_turns: 1,
+            cancel: None,
         };
         let result = spawner.run_task(request).await;
         assert!(
@@ -548,6 +575,44 @@ mod tests {
         assert!(
             leftover.is_empty(),
             "temp dir leaked on error return: {leftover:?}"
+        );
+    }
+
+    // WO 35.3: a pre-cancelled task must exit cooperatively before any
+    // model work (turn loop checks the flag up front), still return its
+    // (empty) summary, and clean the temp dir. No network involved.
+    #[tokio::test]
+    async fn run_task_precancelled_exits_early_and_cleans_temp_dir() {
+        let _tmp_lock = RUN_TASK_TMP_LOCK.lock().await;
+        let config: SharedConfig = Arc::new(std::sync::RwLock::new(Config::default()));
+        let spawner = InProcessTaskSpawner::new(
+            config,
+            "test-model".into(),
+            "127.0.0.1:1".into(),
+            None,
+            false,
+        );
+        let cancel = crate::tools::task::TaskCancel {
+            flag: Arc::new(AtomicBool::new(true)),
+            token: tokio_util::sync::CancellationToken::new(),
+        };
+        let request = TaskRequest {
+            prompt: "never starts".into(),
+            persona: "coder".into(),
+            model: None,
+            max_turns: 3,
+            cancel: Some(cancel),
+        };
+        let result = spawner.run_task(request).await;
+        assert_eq!(
+            result.unwrap(),
+            "(no assistant response produced)",
+            "pre-cancelled task returns its empty summary without model calls"
+        );
+        let leftover = task_temp_dirs_for_this_pid();
+        assert!(
+            leftover.is_empty(),
+            "temp dir leaked on cancel: {leftover:?}"
         );
     }
 }

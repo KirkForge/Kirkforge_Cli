@@ -9,7 +9,7 @@
 
 use crate::adapters;
 use crate::session::conversation::ConversationLog;
-use crate::session::executor::{ApprovalRequest, ApprovalResponse, Executor};
+use crate::session::executor::{ApprovalRequest, ApprovalResponse, Executor, TurnEvent};
 use crate::session::worktree::WorktreeSession;
 use crate::shared::{Config, Role, SharedConfig};
 use crate::tools::task::{TaskConcurrencyMode, TaskRequest, TaskSpawner};
@@ -128,9 +128,34 @@ impl InProcessTaskSpawner {
     }
 }
 
+// WO 35.6: rich outcome of one subagent run. `run_task` (the trait
+// method) keeps its summary-only shape; the executor adapter consumes
+// the detail to fill kf-orchestrator's `Emission` fields.
+pub(crate) struct TaskRunDetail {
+    pub summary: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    /// "stop" | "tool_calls" | "length" — derived from the turn outcome
+    /// (continuation exhaustion → "length"; trailing tool calls →
+    /// "tool_calls"; else "stop"). Mirrors the FinishReason vocabulary
+    /// kf-orchestrator's modes parse.
+    pub finish_reason: String,
+}
+
 #[async_trait::async_trait]
 impl TaskSpawner for InProcessTaskSpawner {
     async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+        self.run_task_detailed(request).await.map(|d| d.summary)
+    }
+}
+
+impl InProcessTaskSpawner {
+    /// `run_task` plus the accounting the orchestrator adapter needs:
+    /// summed CostStats token counts and a finish-reason string.
+    pub(crate) async fn run_task_detailed(
+        &self,
+        request: TaskRequest,
+    ) -> Result<TaskRunDetail, String> {
         let mut cfg = crate::shared::read_shared_config(&self.config).clone();
 
         // WO 30.0.6: subagent provider override. Resolution order for the
@@ -392,6 +417,10 @@ impl TaskSpawner for InProcessTaskSpawner {
         // double-wrapped in a generic "You are..." preamble.
         let prompt = request.prompt.as_str();
 
+        let mut prompt_tokens: i64 = 0;
+        let mut completion_tokens: i64 = 0;
+        let mut truncated = false;
+
         for turn_num in 0..request.max_turns {
             // Cooperative cancel exit (WO 35.3): checked before each turn —
             // a task cancelled before start or between turns returns its
@@ -400,10 +429,28 @@ impl TaskSpawner for InProcessTaskSpawner {
                 break;
             }
             let input = if turn_num == 0 { prompt } else { "continue" };
-            executor
+            let events = executor
                 .run_turn_collecting(input, &approval_tx, &cancelled)
                 .await
                 .map_err(|e| format!("task turn {turn_num} failed: {e}"))?;
+            for ev in &events {
+                match ev {
+                    TurnEvent::CostStats {
+                        prompt_tokens: p,
+                        completion_tokens: c,
+                        ..
+                    } => {
+                        prompt_tokens += *p as i64;
+                        completion_tokens += *c as i64;
+                    }
+                    // Emitted before the exhaustion check, so round > max
+                    // marks a truncation the executor stopped continuing.
+                    TurnEvent::ContinuationRound { round, max } if round > max => {
+                        truncated = true;
+                    }
+                    _ => {}
+                }
+            }
 
             if turn_num + 1 >= request.max_turns {
                 break;
@@ -451,7 +498,32 @@ impl TaskSpawner for InProcessTaskSpawner {
                 result = format!("{result}\n\n{SUBAGENT_PATCH_MARKER}\n{patch}");
             }
         }
-        Ok(result)
+
+        // WO 35.6: finish reason for the Emission. Precedence: truncation
+        // (continuation exhausted) > trailing tool calls (session hit
+        // max_turns mid-dialog) > clean stop.
+        let last_assistant = executor
+            .conversation_log()
+            .all()
+            .iter()
+            .rev()
+            .find(|m| matches!(m.role, Role::Assistant));
+        let has_pending_tools =
+            last_assistant.is_some_and(|m| m.tool_calls.as_ref().is_some_and(|t| !t.is_empty()));
+        let finish_reason = if truncated {
+            "length"
+        } else if has_pending_tools {
+            "tool_calls"
+        } else {
+            "stop"
+        };
+
+        Ok(TaskRunDetail {
+            summary: result,
+            prompt_tokens,
+            completion_tokens,
+            finish_reason: finish_reason.to_string(),
+        })
     }
 }
 

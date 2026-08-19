@@ -3,9 +3,11 @@
 //! a `ModelProviderConfig` and a prompt template; here we collapse that to a
 //! single async call returning an [`Emission`].
 //!
-//! The production wiring (kf-code `Executor` implementing this trait) is
-//! deferred — see WO 29.7 status. Tests use [`RecordingClient`] which
-//! returns canned emissions from a queue.
+//! The production wiring lives in the kf-code binary (WO 35.6):
+//! `session::executor_adapter::ExecutorAdapter` implements this trait over
+//! the executor's subagent sessions (see ADR-075 for the flattening
+//! decision). Tests use [`RecordingClient`] which returns canned emissions
+//! from a queue.
 
 use std::sync::Mutex;
 

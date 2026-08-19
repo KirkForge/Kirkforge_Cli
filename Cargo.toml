@@ -94,6 +94,12 @@ regex = "1"
 thiserror.workspace = true
 # Test doctor (WO 12.4) — workspace member, called from `kf-code doctor`.
 kf-testdoctor = { path = "crates/kf-testdoctor" }
+# Orchestrator pipeline (WO 35.6) — ModelClient production impl lives in
+# src/session/executor_adapter.rs. Drags kf-routing + kf-memory-store
+# (and rusqlite) into the binary; accepted because the WO 35 line
+# converges the binary on this crate (ParallelOrchestrator follow-up
+# needs delegate + memory regardless).
+kf-orchestrator = { workspace = true }
 
 # TUI
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "unstable"] }

@@ -633,9 +633,10 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
 
     // ── kf-plugin in-process tools (feature-gated, WO 29.1) ──
     // When the `kf-plugin-tools` feature is enabled, the six plugin tools
-    // register as direct Rust calls. doctor/health/tools run natively; the
-    // three verify commands emit a "not yet implemented" message pending a
-    // real model client in the orchestrator crate (WO 29.7 shipped a stub).
+    // register as direct Rust calls. doctor/health/tools run natively;
+    // verify (security emitter) and audit-verify (hash-chain walker) run
+    // natively since WO 35.6; verify-workspace stays deferred on the
+    // un-ported reducer.
     #[cfg(feature = "kf-plugin-tools")]
     {
         let cfg = kf_code::shared::read_shared_config(&shared_config);

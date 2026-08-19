@@ -70,3 +70,36 @@
   is a slimmed version of it plus the worktree scan.
 - Debug-panic with full request/event dumps earlier (the dump beat 20
   minutes of code reading twice).
+
+## WO 35.6 — ExecutorAdapter wiring (2026-08-19)
+
+### What I learned
+- The ollama NDJSON stream parser (`ollama_ndjson.rs:216`) only decodes
+  `\n`-terminated lines — a final unterminated line is silently dropped at
+  EOF. Wiremock fixtures MUST end with a trailing newline or the model
+  "returns nothing" with zero events and no error. Cost me a debug cycle
+  because "(no assistant response produced)" is non-empty and passed a
+  lazy `!content.is_empty()` assert — assert the exact expected content
+  in mock-backed tests.
+- The `ignore` crate honors `.gitignore` only inside a git repo
+  (require_git default). Tests that assert gitignore behavior on a
+  tempdir must `git init` it first.
+- `run_turn_collecting` discards FinishReason; the only structural
+  truncation signal in the event stream is `ContinuationRound { round,
+  max }` with round > max (emitted before the exhaustion check). That is
+  how run_task_detailed derives finish_reason "length".
+- kf-orchestrator drags kf-memory-store → rusqlite (bundled SQLite) into
+  the kf-code binary. regex/base64/sha2/hex were already deps. Owner
+  accepted; disclosed in workplan + report.
+- gitnexus index (main checkout) predates task_spawner.rs/plugin_tools
+  — impact() not-found for their symbols. Grep cross-layer check was the
+  fallback; detect_changes saw only doc + comment edits.
+- Scope creep log: src/session/mod.rs (module registration for the new
+  file), src/main/run_session.rs (stale comment doc-sync), Cargo.toml
+  comment. All mandated by the WO's doc-sync rules.
+
+### Bugs found that are NOT mine to fix here
+- The NDJSON trailing-line drop above is arguably spec-noncompliant
+  (NDJSON allows the last line to omit the separator). Real Ollama
+  always sends the newline, so impact is mock/proxy-only. Note for a
+  future hardening pass: flush the residual buffer at EOF.

@@ -50,7 +50,7 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-orchestrator ← orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of @kirkforge/orchestrator (WO 29.7)
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── benches/tasks/             ← 30 benchmark task definitions (TOML)
-└── docs/adr/                  ← 91 Architecture Decision Records
+└── docs/adr/                  ← 92 Architecture Decision Records
 ```
 
 The workspace has ~3,300 `#[test]` functions (~2,400 under `src/`,
@@ -94,7 +94,7 @@ shell fallback — they exist only as Rust. `kf-testdoctor` ships as the
 | `kf-routing` | session | Pure orchestrator modules: classifier, routing, correction, truth model, profiles, cost, path safety (WO 29.3) | Active |
 | `kf-rbac` | security | RBAC (roles/permissions/actor), timing-safe API-key auth, OIDC JWT/JWKS verification — port of `@kirkforge/core-rbac` (WO 29.5). ES512 verify deferred (jsonwebtoken has no ES512 variant). | Active |
 | `kf-memory-store` | session | Routing-oriented memory store: MemoryStore facade + InMemory/File/SQLite adapters (port of `@kirkforge/memory-palace`, WO 29.6) | Active |
-| `kf-orchestrator` | session | Orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of `@kirkforge/orchestrator` (WO 29.7). Reducer + verifiers + ModelClient production impl deferred. | Active |
+| `kf-orchestrator` | session | Orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of `@kirkforge/orchestrator` (WO 29.7). `ModelClient` production impl: `src/session/executor_adapter.rs` (WO 35.6, ADR-075). Reducer + deterministic verifiers still deferred. | Active |
 
 "Excluded" crates exist on disk but are not built by default.
 
@@ -667,11 +667,15 @@ when the compile-time feature is on. So `/plugins disable stratum` removes
 "stratum" from `enabled_plugins` and the Stratum tools/hooks stay live only
 on the next `kf-code run` that re-registers them. `plugin_sources` is only
 needed for external/shell plugins. The `kf-plugin` self-plugin is folded
-behind the `kf-plugin-tools` feature (WO 29.1): `doctor`, `health`, and
-`tools` run as native Rust calls; `verify`, `verify_workspace`, and
-`audit_verify` emit a "not yet implemented" message pending a real model
-client in the orchestrator crate (WO 29.7 shipped the crate with a stub
-`PanickingClient`). The external linters themselves (ESLint, TypeScript,
+behind the `kf-plugin-tools` feature (WO 29.1): `doctor`, `health`,
+`tools`, `verify`, and `audit_verify` run as native Rust calls; `verify`
+runs the orchestrator crate's security emitter over the working tree and
+`audit_verify` walks the WO 29.4 hash chain over an audit JSONL file
+(both WO 35.6); `verify_workspace` still reports "not implemented
+(reducer not ported)". The orchestrator's `ModelClient` has a production
+impl (`session::executor_adapter::ExecutorAdapter`, WO 35.6 / ADR-075),
+though the verify commands are deterministic and do not call it. The
+external linters themselves (ESLint, TypeScript,
 Ruff, Pyright, Bandit) stay external subprocesses under both paths
 (ADR-050). The TS tree (`npm/kf-plugin/`) and shell-plugin tree
 (`plugins/kf-plugin/`) were deleted in WO 29.9 — the Rust path is the sole
@@ -832,6 +836,21 @@ WO 32.4 landlock/CWD confinement and WO 30.6 approval forwarding. Since
 WO 35.1 the `TaskSpawner` contract is prompt-verbatim: callers apply persona
 preambles via `build_task_prompt` (`tools::task`) or pass their own role
 prompt — one wrapper, never two.
+
+### Orchestrator ModelClient wiring (WO 35.6, ADR-075)
+
+`kf-orchestrator`'s `ModelClient` trait has a production implementation in
+the binary: `session::executor_adapter::ExecutorAdapter`. Each
+`TaskBrief` is mapped onto an isolated subagent session through
+`InProcessTaskSpawner::run_task_detailed` (the `task` tool's path, plus
+summed `CostStats` usage and a derived finish reason): `content` is the
+final assistant message, `format` echoes the brief's template, and
+persona selection maps `task-decompose` → `plan` (read-only) and the
+three writer modes → `coder` (ADR-075 documents the flattening and the
+rejected session-variant). The adapter has no production caller yet —
+reimplementing `ParallelOrchestrator` on `kf-orchestrator::Orchestrator`
+is a follow-up decision; the `EventSink` → binary event-bus bridge and
+the reducer port are separately tracked follow-ups.
 
 ---
 
@@ -1204,9 +1223,10 @@ The root `Cargo.toml` exposes these features:
    Rust calls with full in-process event context (ADR-047).
 - `kf-plugin-tools` (default) — registers the six `kf-plugin` tools as
   compiled-in Rust impls (WO 29.1). `doctor`/`health`/`tools` run natively;
-  the three verify tools emit a "not yet implemented" message pending a real
-  model client in the orchestrator crate (WO 29.7). With the feature off, no
-  `kf-plugin` tools are registered — the shell/Node fallback that lived under
+  `verify` (security emitter) and `audit_verify` (hash-chain walker) also run
+  natively since WO 35.6; `verify_workspace` reports "not implemented
+  (reducer not ported)". With the feature off, no `kf-plugin` tools are
+  registered — the shell/Node fallback that lived under
   `plugins/kf-plugin/` was deleted in WO 29.9.
 - `pty` (non-default) — PTY-backed interactive bash commands via `portable-pty`
   (WO 21.5-R2; opt in via `--features pty`).
@@ -1256,11 +1276,12 @@ not the root binary.
 
 ## ADRs
 
-91 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+92 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
 execution replay (039), VFS minification (053), coverage-gate threshold
-policy (065), CI architecture reset (074), and many more. A drift test
+policy (065), CI architecture reset (074), Emission flattening for the
+executor-backed ModelClient (075), and many more. A drift test
 (`adr_xref_drift`) enforces that ADR file headers and the README index
 table agree.
 

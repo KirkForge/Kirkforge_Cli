@@ -11,6 +11,7 @@ pub mod config;
 pub mod conversation;
 pub mod error_recovery;
 pub mod executor;
+pub mod executor_adapter;
 pub mod git_sanitation;
 pub mod hooks;
 pub mod mcp_client;

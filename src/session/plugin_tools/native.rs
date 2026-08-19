@@ -1,12 +1,15 @@
 //! Compiled-in Rust implementations of the `kf-plugin` tools (WO 29.1).
 //!
 //! Replaces the former `plugins/kf-plugin/tools/*.sh` shell wrappers (deleted
-//! in WO 29.9) that each `exec node $CLI <cmd>`. Three of the six commands
-//! (`doctor`, `health`, `tools`) run fully natively here; the three verify
-//! commands still emit a "not yet implemented" message pending completion of
-//! the orchestrator pipeline (WO 29.7 shipped the crate with a stub
-//! `PanickingClient`; the real model-backed verify path is the remaining
-//! work to make these tools do real verification).
+//! in WO 29.9) that each `exec node $CLI <cmd>`. `doctor`, `health`,
+//! `tools`, `verify`, and `audit-verify` run fully natively here (WO 35.6
+//! de-stubbed `verify` — security emitter via `kf_orchestrator::verifier` —
+//! and `audit-verify` — JSONL walker over the WO 29.4 hash chain).
+//! `verify-workspace` remains an honest deferral: assembling a
+//! `ReducedStatePacket` needs the un-ported reducer.
+//! The orchestrator's `ModelClient` now has a production impl
+//! (`session::executor_adapter::ExecutorAdapter`, WO 35.6), but the verify
+//! commands are deterministic by design and do not call it.
 //!
 //! Enabled by the `kf-plugin-tools` cargo feature (default on). When the
 //! feature is off, no `kf-plugin` tools are registered — the shell/Node
@@ -15,6 +18,7 @@
 use crate::shared::{ToolDef, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -179,15 +183,15 @@ impl Tool for PluginHealth {
 
     async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
         // The TS version bootstrapped the Node orchestrator for SLO stats.
-        // The Rust runtime has no embedded model-backed orchestrator yet
-        // (WO 29.7 shipped the crate with a stub client), so report the
-        // folded-tool path as healthy and flag the verify/SLO gap.
+        // The Rust runtime wires the orchestrator crate's ModelClient to
+        // the executor adapter (WO 35.6), but SLO stats are still
+        // unported — report the folded-tool path as healthy and flag it.
         ToolOutcome::Success {
-            content:
-                "Status:         ok\n\
+            content: "Status:         ok\n\
                       Tools:          native (compiled-in, kf-plugin-tools feature)\n\
-                      Orchestrator:   crate present (WO 29.7); model-backed verify/SLO stats pending\n"
-                    .to_string(),
+                      Orchestrator:   crate present (WO 29.7); ModelClient wired to the\n\
+                      \x20executor adapter (WO 35.6); SLO stats pending\n"
+                .to_string(),
         }
     }
 }
@@ -224,17 +228,99 @@ impl Tool for PluginToolsList {
     }
 }
 
-// ── verify / verify-workspace / audit-verify: deferred to WO 29.7 ───────
+// ── verify: deterministic security emitter (WO 35.6 de-stub) ────────────
 
-fn deferred_message(cmd: &str, remaining: &str) -> String {
-    format!(
-        "{cmd}: not yet implemented as a native Rust call (WO 29.1 Phase 1).\n\
-         The orchestrator crate (WO 29.7) and audit hash-chain (WO 29.4) both\n\
-         \x20shipped, but the ModelClient trait still has no production impl\n\
-         \x20(`PanickingClient` stub only); these tools need a real model-backed\n\
-         \x20path before they do real verification.\n\
-         \x20Remaining work: {remaining}"
-    )
+use kf_orchestrator::verifier::{scan_files, SecurityFinding};
+
+// ponytail: capped walk — verify is an on-demand diagnostic; 2000 files
+// bounds the regex scan on large repos. Raise or make configurable when
+// someone verifies a monorepo and hits the cap.
+const VERIFY_MAX_FILES: usize = 2000;
+
+const SCANNABLE_EXTS: &[&str] = &["ts", "tsx", "mjs", "cjs", "js", "jsx", "mts", "cts", "py"];
+
+fn collect_scannable_files(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in ignore::WalkBuilder::new(root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .build()
+        .flatten()
+    {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let scannable = entry
+            .path()
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| SCANNABLE_EXTS.contains(&ext));
+        if scannable {
+            out.push(entry.into_path());
+            if out.len() >= VERIFY_MAX_FILES {
+                break;
+            }
+        }
+    }
+    out
+}
+
+fn render_verify(files: &[PathBuf], findings: &[SecurityFinding], pretty: bool) -> String {
+    if !pretty {
+        return serde_json::to_string_pretty(&json!({
+            "security": {
+                "status": if findings.is_empty() { "pass" } else { "fail" },
+                "files_scanned": files.len(),
+                "findings": findings.iter().map(|f| json!({
+                    "rule": f.rule_id,
+                    "file": f.file.display().to_string(),
+                    "line": f.line,
+                })).collect::<Vec<_>>(),
+            },
+            "lint": "emitter not ported",
+            "type": "emitter not ported",
+            "graph": "emitter not ported",
+            "overall": if findings.is_empty() { "pass (security-only coverage)" } else { "fail" },
+        }))
+        .unwrap_or_else(|_| "{}".to_string());
+    }
+    let mut out = format!(
+        "verify: security scan complete ({} files scanned)\n",
+        files.len()
+    );
+    out.push_str(&format!(
+        "  security: {}\n",
+        if findings.is_empty() {
+            "PASS (0 findings)".to_string()
+        } else {
+            format!("FAIL ({} findings)", findings.len())
+        }
+    ));
+    for f in findings.iter().take(50) {
+        out.push_str(&format!(
+            "    {} {}:{}\n",
+            f.rule_id,
+            f.file.display(),
+            f.line
+        ));
+    }
+    if findings.len() > 50 {
+        out.push_str(&format!("    ... and {} more\n", findings.len() - 50));
+    }
+    out.push_str("  lint:  emitter not ported (reducer + lint emitters pending)\n");
+    out.push_str("  type:  emitter not ported\n");
+    out.push_str("  graph: emitter not ported\n");
+    out.push_str(&format!(
+        "  overall: {}\n",
+        if findings.is_empty() {
+            "PASS (security-only coverage)"
+        } else {
+            "FAIL"
+        }
+    ));
+    out
 }
 
 struct PluginVerify {
@@ -247,14 +333,30 @@ impl Tool for PluginVerify {
         self.def.clone()
     }
 
-    async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
+        // `task` exists for verifier language routing in the TS pipeline;
+        // the security emitter scans by extension, so it is accepted and
+        // unused here.
+        let pretty = !args.get("json").and_then(|v| v.as_bool()).unwrap_or(false);
+        let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let files = collect_scannable_files(&root);
+        let findings = scan_files(&files);
         ToolOutcome::Success {
-            content: deferred_message(
-                "verify",
-                "port orchestrator.verify() + the lint/type/security/graph emitters to Rust.",
-            ),
+            content: render_verify(&files, &findings, pretty),
         }
     }
+}
+
+// ── verify-workspace: honest deferral (reducer not ported) ──────────────
+
+fn deferred_message(cmd: &str, remaining: &str) -> String {
+    format!(
+        "{cmd}: not implemented (reducer not ported).\n\
+         Assembling the ReducedStatePacket this command promises requires the\n\
+         \x20deterministic reducer from `orchestrator/src/reducer.ts`, which is\n\
+         \x20not ported to kf-orchestrator yet.\n\
+         \x20Remaining work: {remaining}"
+    )
 }
 
 struct PluginVerifyWorkspace {
@@ -271,10 +373,38 @@ impl Tool for PluginVerifyWorkspace {
         ToolOutcome::Success {
             content: deferred_message(
                 "verify-workspace",
-                "port verifyWorkspace() + ReducedStatePacket assembly to Rust.",
+                "port the reducer + ReducedStatePacket assembly to Rust, then wire\n\
+                 \x20the workspace walk onto it.",
             ),
         }
     }
+}
+
+// ── audit-verify: JSONL hash-chain walker (WO 35.6 de-stub) ─────────────
+
+use crate::shared::audit::{chain_hash_of, initial_hash, AuditEvent};
+
+// Replay the chain in `path` from genesis. Ok((events, None)) = intact;
+// Ok((events_before_break, Some(sequence))) = broken at that event.
+fn verify_audit_jsonl(
+    path: &std::path::Path,
+    hmac_key: Option<&str>,
+) -> Result<(usize, Option<u64>), String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut prev = initial_hash(hmac_key);
+    let mut count = 0usize;
+    for line in content.lines().filter(|l| !l.trim().is_empty()) {
+        let event: AuditEvent = serde_json::from_str(line)
+            .map_err(|e| format!("line {}: not an audit event: {e}", count + 1))?;
+        let expected = chain_hash_of(&prev, &event, hmac_key);
+        if event.chain_hash != expected {
+            return Ok((count, Some(event.sequence)));
+        }
+        prev = event.chain_hash;
+        count += 1;
+    }
+    Ok((count, None))
 }
 
 struct PluginAuditVerify {
@@ -287,13 +417,38 @@ impl Tool for PluginAuditVerify {
         self.def.clone()
     }
 
-    async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
-        ToolOutcome::Success {
-            content: deferred_message(
-                "audit-verify",
-                "port the core-events hash-chain (chainHashOf/initialHash) to Rust, then the JSONL walker.",
+    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
+        let file = match args.get("file").and_then(|v| v.as_str()) {
+            Some(f) if !f.trim().is_empty() => f,
+            _ => {
+                return ToolOutcome::Failure(crate::shared::ToolError::invalid_args(
+                    "Missing or empty 'file' argument",
+                ));
+            }
+        };
+        let pretty = !args.get("json").and_then(|v| v.as_bool()).unwrap_or(false);
+        let hmac_key = args.get("hmac_key").and_then(|v| v.as_str());
+        let result = verify_audit_jsonl(std::path::Path::new(file), hmac_key);
+        let content = match result {
+            Ok((events, None)) if pretty => format!("OK: {events} events, chain intact\n"),
+            Ok((events, None)) => {
+                serde_json::to_string_pretty(&json!({"status": "ok", "events": events}))
+                    .unwrap_or_else(|_| "{}".into())
+            }
+            Ok((before, Some(seq))) if pretty => format!(
+                "FAIL: chain broken at sequence {seq} ({before} events verified before the break)\n"
             ),
-        }
+            Ok((before, Some(seq))) => serde_json::to_string_pretty(&json!({
+                "status": "fail",
+                "broken_at_sequence": seq,
+                "events_verified": before,
+            }))
+            .unwrap_or_else(|_| "{}".into()),
+            Err(e) if pretty => format!("ERROR: {e}\n"),
+            Err(e) => serde_json::to_string_pretty(&json!({"status": "error", "error": e}))
+                .unwrap_or_else(|_| "{}".into()),
+        };
+        ToolOutcome::Success { content }
     }
 }
 
@@ -343,7 +498,8 @@ pub fn all_plugin_sdk_tools() -> Vec<Arc<dyn Tool>> {
                     "type": "object",
                     "properties": {
                         "file": { "type": "string", "description": "Path to audit JSONL file" },
-                        "json": { "type": "boolean", "description": "Emit JSON instead of human-readable text", "default": false }
+                        "json": { "type": "boolean", "description": "Emit JSON instead of human-readable text", "default": false },
+                        "hmac_key": { "type": "string", "description": "HMAC key the chain was sealed with (omit for plain SHA-256 chains)" }
                     },
                     "required": ["file"]
                 }),
@@ -383,7 +539,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn health_returns_ok_status() {
+    async fn health_reports_wired_model_client() {
         let tool = PluginHealth {
             def: tool_def("plugin_health", "health", json!({})),
         };
@@ -391,7 +547,11 @@ mod tests {
         match out {
             ToolOutcome::Success { content } => {
                 assert!(content.contains("ok"), "health should report ok: {content}");
-                assert!(content.contains("WO 29.7"));
+                assert!(
+                    content.contains("WO 35.6"),
+                    "should cite the wiring WO: {content}"
+                );
+                assert!(content.contains("SLO stats pending"));
             }
             other => panic!("expected Success, got {other:?}"),
         }
@@ -414,44 +574,158 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn verify_deferred_message_is_explicit() {
-        let tool = PluginVerify {
-            def: tool_def("plugin_verify", "verify", json!({})),
-        };
-        let out = tool.run(&ToolContext::new(), json!({})).await;
-        match out {
-            ToolOutcome::Success { content } => {
-                assert!(content.contains("not yet implemented"));
-                assert!(content.contains("WO 29.7"));
-                assert!(content.contains("PanickingClient"));
-            }
-            other => panic!("expected Success, got {other:?}"),
+    // WO 35.6: verify runs the real security emitter. The tool itself
+    // scans the process cwd; the pure helper is tested against a
+    // tempdir so the test does not depend on (or scan) the repo tree.
+    #[test]
+    fn verify_scan_finds_findings_in_tempdir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("evil.py"), "eval('evil')\n").unwrap();
+        std::fs::write(dir.path().join("clean.ts"), "export const x = 1;\n").unwrap();
+        let files = collect_scannable_files(dir.path());
+        assert_eq!(files.len(), 2, "both JS and Py files collected");
+        let findings = scan_files(&files);
+        assert!(findings.iter().any(|f| f.rule_id == "py-eval"));
+        let text = render_verify(&files, &findings, true);
+        assert!(text.contains("security: FAIL (1 findings)"), "{text}");
+        assert!(text.contains("overall: FAIL"));
+        assert!(text.contains("emitter not ported"));
+    }
+
+    #[test]
+    fn verify_scan_clean_tempdir_passes_with_coverage_label() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("clean.py"), "print('hi')\n").unwrap();
+        let files = collect_scannable_files(dir.path());
+        let findings = scan_files(&files);
+        assert!(findings.is_empty());
+        let text = render_verify(&files, &findings, true);
+        assert!(text.contains("security: PASS (0 findings)"), "{text}");
+        assert!(text.contains("overall: PASS (security-only coverage)"));
+        let as_json = render_verify(&files, &findings, false);
+        assert!(as_json.contains("\"status\": \"pass\""), "{as_json}");
+    }
+
+    #[test]
+    fn verify_scan_respects_gitignore() {
+        let dir = tempfile::tempdir().unwrap();
+        // The ignore crate honors .gitignore only inside a git repo
+        // (require_git default), so give the tempdir one.
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .arg(dir.path())
+            .status()
+            .expect("git init");
+        std::fs::write(dir.path().join(".gitignore"), "ignored.py\n").unwrap();
+        std::fs::write(dir.path().join("ignored.py"), "eval('evil')\n").unwrap();
+        std::fs::write(dir.path().join("kept.py"), "eval('also evil')\n").unwrap();
+        let files = collect_scannable_files(dir.path());
+        assert!(
+            files
+                .iter()
+                .all(|f| f.file_name().is_some_and(|n| n != "ignored.py")),
+            "gitignored files must be skipped: {files:?}"
+        );
+    }
+
+    fn sealed_audit_jsonl(path: &std::path::Path, tamper: bool) {
+        use crate::shared::audit::{AuditAction, AuditOutcome};
+        let mut prev = initial_hash(None);
+        let mut lines = Vec::new();
+        for i in 0..3u64 {
+            let mut event = AuditEvent {
+                id: format!("evt-{i}"),
+                sequence: i,
+                timestamp: format!("2026-08-19T00:00:{i:02}Z"),
+                action: AuditAction::ToolInvoke,
+                outcome: AuditOutcome::Success,
+                actor_id: "tester".into(),
+                tenant_id: "default".into(),
+                reason: "test event".into(),
+                chain_hash: String::new(),
+                policy_hash: None,
+                trace_id: None,
+                metadata: Some(json!({"i": i})),
+            };
+            event.chain_hash = chain_hash_of(&prev, &event, None);
+            prev = event.chain_hash.clone();
+            lines.push(serde_json::to_string(&event).unwrap());
         }
+        if tamper {
+            // Rewrite the middle event's reason without resealing the chain.
+            let mut evt: serde_json::Value = serde_json::from_str(&lines[1]).unwrap();
+            evt["reason"] = json!("tampered after the fact");
+            lines[1] = serde_json::to_string(&evt).unwrap();
+        }
+        std::fs::write(path, lines.join("\n") + "\n").unwrap();
     }
 
     #[tokio::test]
-    async fn audit_verify_deferred_message_mentions_hash_chain() {
+    async fn audit_verify_ok_on_intact_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        sealed_audit_jsonl(&path, false);
         let tool = PluginAuditVerify {
             def: tool_def("plugin_audit_verify", "audit", json!({})),
         };
-        let out = tool.run(&ToolContext::new(), json!({})).await;
+        let out = tool
+            .run(
+                &ToolContext::new(),
+                json!({"file": path.display().to_string()}),
+            )
+            .await;
         match out {
             ToolOutcome::Success { content } => {
-                assert!(content.contains("hash-chain"));
+                assert!(content.contains("OK: 3 events, chain intact"), "{content}");
             }
             other => panic!("expected Success, got {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn verify_workspace_deferred_message() {
+    async fn audit_verify_fails_on_tampered_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        sealed_audit_jsonl(&path, true);
+        let tool = PluginAuditVerify {
+            def: tool_def("plugin_audit_verify", "audit", json!({})),
+        };
+        let out = tool
+            .run(
+                &ToolContext::new(),
+                json!({"file": path.display().to_string(), "json": true}),
+            )
+            .await;
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("\"status\": \"fail\""), "{content}");
+                assert!(content.contains("\"broken_at_sequence\": 1"), "{content}");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_verify_missing_file_arg_is_invalid_args() {
+        let tool = PluginAuditVerify {
+            def: tool_def("plugin_audit_verify", "audit", json!({})),
+        };
+        assert!(matches!(
+            tool.run(&ToolContext::new(), json!({})).await,
+            ToolOutcome::Failure(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn verify_workspace_deferral_names_the_reducer() {
         let tool = PluginVerifyWorkspace {
             def: tool_def("plugin_verify_workspace", "vw", json!({})),
         };
         let out = tool.run(&ToolContext::new(), json!({})).await;
         match out {
             ToolOutcome::Success { content } => {
+                assert!(content.contains("not implemented (reducer not ported)"));
                 assert!(content.contains("ReducedStatePacket"));
             }
             other => panic!("expected Success, got {other:?}"),

@@ -11,7 +11,7 @@ Two series live side by side in this directory:
 - **Plugin3** — 4-digit numbers (`0001`–`0047`). Output-side sibling of Stratum:
   slicing, compaction, token budget, hooks, cost reporting, and the Plugin3
   fold-in. Originally a vendored design doc set; now part of the core.
-- **CLI** — 3-digit numbers (`001`–`073`). Native KirkForge-Cli ADRs covering
+- **CLI** — 3-digit numbers (`001`–`075`). Native KirkForge-Cli ADRs covering
   the TUI, model adapters, tool dispatch, event bus, verifier slots, plugin
   system, LSP, VS Code bridge, and the Stratum/Draw/Video fold-ins.
 
@@ -114,6 +114,7 @@ verifies the table and the file headers agree.
 | [072](./072-mcp-sampling-trust-model.md) | MCP Sampling Trust Model and Approval Flow | Accepted | CLI |
 | [073](./073-tools-session-layering-ports.md) | tools↔session Layering Ports (break the cycle) | Accepted (partially implemented) | CLI |
 | [074](./074-ci-architecture-reset.md) | CI architecture reset — PR / merge / nightly tiers | Accepted | CLI |
+| [075](./075-emission-final-assistant-message.md) | Emission flattening for the executor-backed ModelClient | Accepted | CLI |
 
 ## Cross-references
 

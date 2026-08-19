@@ -6,12 +6,13 @@
 //! path safety) lives in `kf-routing`; this crate owns the stateful
 //! orchestration that ties those decisions to model calls + memory writes.
 //!
-//! ## Deferral note (WO 29.7)
-//! `ModelClient` is a trait seam — no production implementation ships in
-//! this crate. Tests use [`model::RecordingClient`]. Wiring the kf-code
-//! `Executor` to implement `ModelClient` is the follow-up.
+//! ## Wiring status (WO 35.6)
+//! `ModelClient` has a production implementation in the kf-code binary:
+//! `session::executor_adapter::ExecutorAdapter` maps a [`model::TaskBrief`]
+//! onto an isolated subagent session (ADR-075 flattening: final assistant
+//! message + summed usage). Tests use [`model::RecordingClient`].
 //! The deterministic reducer + verifier bus (`orchestrator-verifiers.ts`,
-//! `reducer.ts`) is also NOT ported here; the packet on each
+//! `reducer.ts`) is still NOT ported here; the packet on each
 //! `DelegationResult` is `None` until that ships. The correction loop
 //! still functions: it feeds the (possibly-default) packet into
 //! `kf_routing::correction::decide_correction`.

@@ -833,3 +833,84 @@ async fn test_denied_edit_records_single_access_denied_result() {
         "conversation should contain exactly one Access denied message, got {denial_msgs:?}"
     );
 }
+
+// WO 35.3: an executor with an attached root cancel token must kill an
+// in-flight bash child when the token fires + the flag is set — the
+// subagent cancellation path. Without the live child token (pre-WO 35.3
+// snapshot semantics) the sleep would run to its 60s tool timeout.
+#[cfg(unix)]
+#[tokio::test]
+async fn attached_cancel_token_kills_inflight_bash_promptly() {
+    use crate::tools::bash::Bash;
+
+    let tmp = std::env::temp_dir();
+    let marker = tmp.join(format!("kf_code_exec_cancel_marker_{}", std::process::id()));
+    let marker_str = marker.to_string_lossy().to_string();
+    remove_test_file(&marker);
+
+    let bash = Arc::new(Bash::new(
+        crate::shared::access::DenyList::default(),
+        crate::shared::access::PathGuard::default(),
+        false,
+        None,
+        crate::shared::SandboxConfig::default(),
+    ));
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-cancel-1".into(),
+                name: "bash".into(),
+                arguments: serde_json::json!({
+                    "command": format!("sleep 30; touch {marker_str}"),
+                    "timeout": 60,
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![bash], make_config(true)).unwrap();
+
+    // The subagent cancel pair: flag (turn-loop machinery) + root token
+    // (per-call child tokens derive from it).
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let token = tokio_util::sync::CancellationToken::new();
+    exe.set_cancel_token(Some(token.clone()));
+
+    // Cancel 300ms in — mid-sleep. Mirrors TaskManager::cancel().
+    {
+        let flag = Arc::clone(&flag);
+        let token = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            token.cancel();
+        });
+    }
+
+    let start = std::time::Instant::now();
+    let events = exe
+        .run_turn_collecting("run the sleep", &approval_tx, &flag)
+        .await
+        .expect("turn should end cooperatively, not error");
+
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "bash must die on cancel within a bounded window, took {elapsed:?}; events: {events:?}"
+    );
+
+    // The process group really died: no descendant survives to touch the
+    // marker (1s grace mirrors the bash tool's own cancel test).
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    assert!(
+        !marker.exists(),
+        "cancelled bash left a surviving descendant that touched the marker"
+    );
+    remove_test_file(&marker);
+}

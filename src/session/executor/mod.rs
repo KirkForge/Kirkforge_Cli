@@ -114,6 +114,14 @@ pub struct Executor {
 
     /// Turn counter for rate-limited memory extraction.
     turn_count: u64,
+
+    /// Root cooperative-cancel token (WO 35.3). When attached (subagent
+    /// executors), per-tool-call cancel tokens are live children of it, so
+    /// an external cancel (`TaskManager::cancel`) kills in-flight tool
+    /// work — bash process groups — instead of waiting out
+    /// `tool_timeout_secs`. `None` (parent sessions) keeps the
+    /// snapshot-at-dispatch semantics (WO 15.7).
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl Executor {
@@ -303,6 +311,7 @@ impl Executor {
             trace: None,
             memory_store: crate::session::memory::MemoryStore::default_store().ok(),
             turn_count: 0,
+            cancel_token: None,
         };
 
         // Register per-session budget and stratum hooks after construction
@@ -1038,6 +1047,13 @@ impl Executor {
     /// Enable or disable plan mode. When enabled, only read-only
     /// discovery tools are allowed to execute; mutating tools are
     /// denied at the dispatch layer.
+    /// Attach a root cooperative-cancel token (WO 35.3). Subagent
+    /// executors get the token from their `TaskRequest` so external cancel
+    /// reaches in-flight tool calls; parent sessions leave it unset.
+    pub fn set_cancel_token(&mut self, token: Option<tokio_util::sync::CancellationToken>) {
+        self.cancel_token = token;
+    }
+
     pub fn set_plan_mode(&mut self, enabled: bool) {
         self.plan_mode = enabled;
     }

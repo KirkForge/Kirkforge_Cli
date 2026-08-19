@@ -136,17 +136,19 @@ impl ParallelOrchestrator {
         let prompt = build_role_prompt(role, persona, task_description);
         let prompt_summary: String = prompt.chars().take(100).collect();
 
-        // Insert a default handle, then set metadata via get_mut — TaskHandle
-        // has private fields (started/cancel_requested/cancel_signal) that
-        // can't be set from outside the module, so we use Default + update.
-        let task_id = {
+        // Insert a default handle (its WO 35.3 cancel pair — flag + token —
+        // is cloned into the request so cancel_all() can stop the in-flight
+        // role cooperatively), then set metadata via get_mut.
+        let (task_id, cancel) = {
             let mut mgr = self.task_manager.lock().unwrap_or_else(|e| e.into_inner());
-            let id = mgr.insert(TaskHandle::default());
+            let handle = TaskHandle::default();
+            let cancel = handle.cancel_handles();
+            let id = mgr.insert(handle);
             if let Some(h) = mgr.get_mut(&id) {
                 h.metadata.persona = persona.to_string();
                 h.metadata.prompt_summary = prompt_summary;
             }
-            id
+            (id, cancel)
         };
 
         let spawner = InProcessTaskSpawner::new(
@@ -161,6 +163,7 @@ impl ParallelOrchestrator {
             persona: persona.to_string(),
             model: None,
             max_turns,
+            cancel: Some(cancel),
         };
         let summary = match spawner.run_task(request).await {
             Ok(s) => s,
@@ -168,13 +171,33 @@ impl ParallelOrchestrator {
         };
 
         // Record the terminal state + duration so /jobs renders correctly.
+        // A cancelled role keeps status Cancelled but retains its partial
+        // output (incl. any worktree patch) in cancelled_result.
         {
             let mut mgr = self.task_manager.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(h) = mgr.get_mut(&task_id) {
-                h.result = Some(summary.clone());
+                if h.cancel_requested.load(std::sync::atomic::Ordering::SeqCst) {
+                    h.cancelled_result = Some(summary.clone());
+                } else {
+                    h.result = Some(summary.clone());
+                }
             }
         }
         SubagentResult { task_id, summary }
+    }
+
+    /// Cooperatively cancel every in-flight role (WO 35.3). Each role's
+    /// `run_task` observes its cancel flag between turn steps and its
+    /// token in-flight, runs cleanup, and returns. Returns the number of
+    /// roles that were still cancellable.
+    pub fn cancel_all(&self) -> usize {
+        let mgr = self.task_manager.lock().unwrap_or_else(|e| e.into_inner());
+        mgr.list()
+            .iter()
+            .filter(|e| !e.status.is_terminal())
+            .map(|e| mgr.cancel(&e.id))
+            .filter(|cancelled| *cancelled)
+            .count()
     }
 }
 
@@ -266,5 +289,37 @@ mod tests {
         let mgr = orch.task_manager();
         // Fresh manager is empty until roles are spawned.
         assert!(mgr.lock().unwrap().list().is_empty());
+    }
+
+    // WO 35.3: cancel_all must cooperatively cancel every non-terminal
+    // role handle (the flags/tokens spawn_role threads into run_task).
+    // End-to-end "roles stop" needs a live model (integration tier); the
+    // wiring is proven per-layer: this test (manager), the task-tool
+    // CooperativeSpawner test (request threading), and the executor
+    // attached-token test (in-flight tool death).
+    #[test]
+    fn cancel_all_cancels_inflight_role_handles() {
+        let config: SharedConfig =
+            Arc::new(std::sync::RwLock::new(crate::shared::Config::default()));
+        let orch =
+            ParallelOrchestrator::new(config, "test-model".into(), "localhost".into(), None, false);
+        let mgr = orch.task_manager();
+        // Simulate three in-flight roles: inserted handles with live cancel
+        // pairs, exactly what spawn_role registers before awaiting run_task.
+        let tokens: Vec<_> = {
+            let mut guard = mgr.lock().unwrap();
+            (0..3)
+                .map(|_| {
+                    let handle = TaskHandle::default();
+                    let token = handle.cancel_handles().token;
+                    guard.insert(handle);
+                    token
+                })
+                .collect()
+        };
+        assert_eq!(orch.cancel_all(), 3);
+        assert!(tokens.iter().all(|t| t.is_cancelled()));
+        // Second call: everything terminal now — nothing left to cancel.
+        assert_eq!(orch.cancel_all(), 0);
     }
 }

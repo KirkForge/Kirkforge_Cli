@@ -2,6 +2,54 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-19 — WO 35.2 + 35.3: subagent worktree isolation + cooperative cancellation (worktree `.worktrees/wo35-c`, branch `wo/35.2-3-subagent`)
+
+### What changed this session
+
+- **WO 35.2 (Done)** — per-subagent worktree isolation + patch return:
+  `run_task` gives writer personas (any persona except `explore`/`plan`,
+  gated on `session.worktree_enabled`) their own `WorktreeSession`
+  (branched from the parent sandbox when it is a git worktree, else CWD;
+  hard error on create failure, mirroring run_session). The cloned config's
+  `sandbox_dir` is set before `access_from_config`, and the executor gets a
+  frozen config clone (not the live parent SharedConfig) so its guard tower
+  matches. `WorktreeSession::diff_patch()` (`git add --intent-to-add` +
+  `git diff HEAD`, covers untracked) is captured before Drop and appended
+  to the task summary as an appliable patch. Ceiling: on Err returns the
+  worktree drops without a patch.
+- **WO 35.3 (Partially done, disclosed)** — cooperative cancellation:
+  `TaskRequest.cancel: Option<TaskCancel>` carries the TaskHandle's flag +
+  CancellationToken into `run_task` (loop checks flag each turn; token
+  attached via `Executor::set_cancel_token`; per-call tool tokens are live
+  child tokens in `prepare_batch`). `TaskManager::cancel` sets flag + token
+  + notify; the task tool worker awaits `run_task` (no select/drop);
+  cancelled tasks retain partial output in `cancelled_result` (surfaced by
+  `task_output`). `ParallelOrchestrator::cancel_all()`. Temp-dir cleanup is
+  Drop-based (`TempDirGuard`). The old `ceiling:` comment in task.rs is
+  resolved/removed; a new honest ceiling comment lives on
+  `TaskManager::cancel`.
+- Docs: TECHNICAL.md subagent/cancel/orchestrator sections, both workorder
+  status flips, CHANGELOG.
+
+### Pending
+
+- WO 35.3 remaining work (see `docs/workorders/35.3-cooperative-cancellation.md`):
+  1. Cancel background bash jobs owned by a cancelled subagent — needs an
+     owner tag on `BashJobRegistry::spawn` + a task-id threaded
+     `ToolContextBuilder` → `ToolContext` → Bash tool, then
+     cancel-by-owner in the cancel path.
+  2. Abort an in-flight model stream mid-request (select adapter stream
+     against the token in `stream_iteration`).
+  3. Parent-session prompt cancel still uses snapshot-at-dispatch tool
+     tokens (WO 15.7) — thread a root token from the TUI cancel watcher
+     through `set_cancel_token`.
+- WO 35.1, 35.4-35.7 implementation (see series map in
+  `docs/workorders/35.0-wo35-overview.md`).
+- Known limitation (WO 35.2): subagent bash CWD stays at process root —
+  landlock allows r/w there, so a coder's *bash* writes can reach the
+  parent workspace (write_file/edit_file are properly confined to the
+  worktree). Fixing needs a default-workdir field in ToolContext.
+
 ## Session 2026-08-19 — WO 35.0: external review verification + series planning (worktree `.worktrees/wo35`, branch `wo/35-series`)
 
 An external architecture review (ChatGPT, ~18 claims) was verified

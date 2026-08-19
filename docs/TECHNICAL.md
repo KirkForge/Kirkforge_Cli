@@ -342,11 +342,19 @@ controls apply (WO 30): **approval forwarding** — subagent destructive-tool ap
 are forwarded to the *parent* session's approval channel (set on the spawner from
 `Executor::run_turn`), so the user sees and decides them interactively in the TUI / line-mode;
 with no parent channel (top-level scheduled job) the P0 policy applies (auto-approve in CI,
-deny otherwise). **Worktree isolation** — a `coder` subagent gets its own git worktree and the
-path guard's `sandbox_dir` is pointed at it, so file edits land in a separate checkout whose
-path is returned in the summary for the parent to review/merge; `explore`/`plan` read the
-parent workspace. Bash CWD is not confined to the worktree (deferred — bash keeps its existing
-landlock/sandbox posture). Note: the executor's spawner is threaded into the dispatch
+deny otherwise). **Worktree isolation** (WO 35.2) — when `session.worktree_enabled` is set, a
+`coder` subagent gets its own `git worktree` (branched from the parent sandbox when that is
+itself a worktree, else the process CWD) and the cloned config's `sandbox_dir` is pointed at
+it before `access_from_config`, so the path guard, landlock extra paths, and the subagent
+executor's guard tower all center on the worktree; the executor receives a frozen config
+clone, not the live parent shared config. Before the worktree is dropped, uncommitted edits
+(tracked + untracked via `git add --intent-to-add`) are captured with `git diff HEAD` and
+returned as an appliable patch appended to the task summary, so the parent model can `git
+apply` the subagent's work; on an error return the patch is not captured (disclosed ceiling).
+`explore`/`plan` read the parent workspace unchanged. Bash CWD is not confined to the
+worktree (deferred — bash keeps its existing landlock/sandbox posture). The subagent temp
+dir (`kf-code-task-*`, conversation log + checkpoints) is removed by a Drop guard, so error
+returns and cancellation no longer leak it. Note: the executor's spawner is threaded into the dispatch
 `ToolContext` via `PreparedCall` (the parent `task` tool reaches it through `ctx.task_spawner`).
 
 Personas currently route through Anthropic-direct only. Bedrock/Vertex-configured users should use Anthropic API keys for persona invocation.
@@ -410,9 +418,25 @@ override: `KF_CODE_TASK_CONCURRENCY_MODE`.
 Each background task is tracked with a derived `TaskStatus`
 (`Pending | Running | Completed | Cancelled | Failed | TimedOut`) plus
 `TaskMetadata` (model, persona, ≤100-char prompt summary, started_at,
-duration_ms, token_estimate, parent_task_id). `TaskManager::cancel` stops a
-running subagent via a per-task cancel flag and a `select!` race; `status`
-and `list` expose the state for the `/jobs` view (WO 30.2).
+duration_ms, token_estimate, parent_task_id). `TaskManager::cancel` (WO 35.3)
+is cooperative: it sets the per-task flag, cancels the task's
+`CancellationToken`, and the worker *awaits* `run_task` to completion — no
+future-dropping. The subagent turn loop observes the flag between steps
+(exiting early with its partial summary + worktree patch), in-flight tool
+calls observe the token (a running bash's process group is killed in
+milliseconds, not at `tool_timeout_secs` — the subagent executor's per-call
+tokens are live children of the root token via `Executor::set_cancel_token`),
+and `run_task`'s own cleanup runs (temp-dir Drop guard, patch capture).
+Cancelled tasks keep status `Cancelled` but retain partial output in
+`TaskHandle.cancelled_result`, surfaced by `task_output`. Known ceilings
+(disclosed): an in-flight model stream ends at its next event or adapter
+timeout rather than being aborted mid-request; background bash jobs
+(`bash background=true`) spawned by a cancelled subagent are not killed (the
+global `BashJobRegistry` has no owner tracking — they remain cancellable via
+`bash_cancel` / `/jobs`); the parent session's own prompt-cancel keeps the
+WO 15.7 snapshot-at-dispatch token semantics (only subagent executors attach
+a live root token). `status` and `list` expose the state for the `/jobs` view
+(WO 30.2).
 
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`
 
@@ -790,7 +814,10 @@ lets the agent loop and bench harness run a named template via a tool call.
 subagents in parallel — Scout (`explore` persona, read-only), Coder (`coder`
 persona, write), Reviewer (`plan` persona, read-only critique) — via
 `tokio::join!` on `InProcessTaskSpawner::run_task`. Each subagent gets its own
-`TaskManager` entry for `/jobs` lifecycle visibility. Triggered by
+`TaskManager` entry for `/jobs` lifecycle visibility, with the WO 35.3 cancel
+pair (flag + token) threaded into its `TaskRequest`, so
+`ParallelOrchestrator::cancel_all()` stops all in-flight roles cooperatively
+(each runs cleanup, captures any worktree patch, and returns). Triggered by
 `/workflow run <name> --parallel`; the workflow's first prompt-bearing step
 becomes the task description for all three roles. Sequential fallback
 (`run_sequential`) runs the three roles one-by-one when `worktree_enabled` is

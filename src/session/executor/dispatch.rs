@@ -233,7 +233,16 @@ impl Executor {
                         idx,
                         invocation: tc.clone(),
                         tool,
-                        cancel_token: tool_cancel_token(cancelled),
+                        // WO 35.3: when a root cancel token is attached
+                        // (subagent executors), per-call tokens are LIVE
+                        // children — an external cancel fires them mid-run
+                        // and a bash child dies immediately instead of at
+                        // `tool_timeout_secs`. Parent sessions keep the
+                        // snapshot-at-dispatch semantics (WO 15.7).
+                        cancel_token: self.cancel_token.as_ref().map_or_else(
+                            || tool_cancel_token(cancelled),
+                            |root| root.child_token(),
+                        ),
                         resolved_path: resolved,
                         timeout: self.tool_call_timeout(),
                         diff_review: read_shared_config(&self.config).security.diff_review,

@@ -10,13 +10,61 @@
 use crate::adapters;
 use crate::session::conversation::ConversationLog;
 use crate::session::executor::{ApprovalRequest, ApprovalResponse, Executor};
-use crate::shared::{Role, SharedConfig};
+use crate::session::worktree::WorktreeSession;
+use crate::shared::{Config, Role, SharedConfig};
 use crate::tools::task::{TaskConcurrencyMode, TaskRequest, TaskSpawner};
 use crate::tools::toolset::{CompositeToolset, VecToolset};
 use crate::tools::{Tool, UndoStackRef};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+// WO 35.2: only writer personas need filesystem isolation — `explore` and
+// `plan` get read-only toolsets, so they keep the parent sandbox. The `_`
+// arm in the toolset filter below (full toolset) is the same predicate.
+fn subagent_worktree_wanted(cfg: &Config, persona: &str) -> bool {
+    cfg.session.worktree_enabled && !matches!(persona, "explore" | "plan")
+}
+
+// The repo the subagent worktree branches from: the parent's sandbox when it
+// is itself a git worktree (session-level --worktree mode, so the subagent
+// sees the parent worktree's HEAD), otherwise the process CWD — the same
+// root `run_session` uses for the session worktree.
+fn subagent_worktree_root(cfg: &Config) -> std::path::PathBuf {
+    cfg.security
+        .sandbox_dir
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.join(".git").exists())
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        })
+}
+
+// Drop-based cleanup for the subagent temp dir (WO 35.3 item, done here
+// because run_task is restructured in the same pass): end-of-function
+// `remove_dir_all` leaked the conversation log + checkpoints on every
+// error path (`?` returns) and on cancellation. The guard runs on all of
+// them, plus panics.
+struct TempDirGuard(std::path::PathBuf);
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn task_temp_tag() -> String {
+    format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    )
+}
 
 /// Spawn a subagent task inside an isolated `Executor` with a temporary
 /// conversation log.
@@ -76,7 +124,7 @@ impl InProcessTaskSpawner {
 #[async_trait::async_trait]
 impl TaskSpawner for InProcessTaskSpawner {
     async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
-        let cfg = crate::shared::read_shared_config(&self.config).clone();
+        let mut cfg = crate::shared::read_shared_config(&self.config).clone();
 
         // WO 30.0.6: subagent provider override. Resolution order for the
         // model: per-call `task` arg → subagent_provider.model → parent's
@@ -102,6 +150,25 @@ impl TaskSpawner for InProcessTaskSpawner {
                     "model '{effective_model}' not in allowed subagent models list"
                 ));
             }
+        }
+
+        // WO 35.2: per-subagent worktree isolation for writer personas.
+        // Mirrors run_session.rs: sandbox_dir is set BEFORE access_from_config
+        // so the path guard, landlock extra paths, and the executor's guard
+        // tower all center on the worktree. Creation failure is a hard error
+        // (same policy as the session-level worktree in run_session.rs).
+        let worktree = if subagent_worktree_wanted(&cfg, &request.persona) {
+            let tag = format!("task-{}", task_temp_tag());
+            let root = subagent_worktree_root(&cfg);
+            Some(
+                WorktreeSession::create(&tag, &root)
+                    .map_err(|e| format!("subagent worktree creation failed: {e}"))?,
+            )
+        } else {
+            None
+        };
+        if let Some(wt) = &worktree {
+            cfg.security.sandbox_dir = Some(wt.path().to_string_lossy().to_string());
         }
 
         let adapter = adapters::caching::maybe_wrap_cached(
@@ -225,16 +292,10 @@ impl TaskSpawner for InProcessTaskSpawner {
             _ => all,
         };
 
-        let temp_dir = std::env::temp_dir().join(format!(
-            "kf-code-task-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0)
-        ));
+        let temp_dir = std::env::temp_dir().join(format!("kf-code-task-{}", task_temp_tag()));
         std::fs::create_dir_all(&temp_dir)
             .map_err(|e| format!("failed to create task temp dir: {e}"))?;
+        let _temp_guard = TempDirGuard(temp_dir.clone());
         let log_path = temp_dir.join("conversation.ndjson");
 
         let conversation = ConversationLog::open_async(log_path.clone())
@@ -242,13 +303,18 @@ impl TaskSpawner for InProcessTaskSpawner {
             .map_err(|e| format!("failed to open task conversation log: {e}"))?
             .0;
 
-        let shared_config: SharedConfig = self.config.clone();
+        // The executor gets a frozen clone of the (worktree-adjusted) config,
+        // not the parent's live SharedConfig: its guard tower is built from
+        // this snapshot, so writes must be gated against the worktree
+        // sandbox, and a mid-run parent config edit should not move a
+        // subagent's sandbox underneath it.
+        let exec_config: SharedConfig = Arc::new(std::sync::RwLock::new(cfg.clone()));
         let mut composite = CompositeToolset::empty();
         composite.add(Box::new(VecToolset::new("task", tools)));
         let mut executor = Executor::with_log_and_undo(
             adapter,
             composite,
-            shared_config,
+            exec_config,
             conversation,
             None,
             self.undo_stack.clone(),
@@ -300,10 +366,28 @@ impl TaskSpawner for InProcessTaskSpawner {
             }
         });
 
-        let cancelled = Arc::new(AtomicBool::new(false));
+        // WO 35.3: the cancel flag from the TaskRequest (shared with the
+        // TaskHandle) drives the executor's existing AtomicBool machinery;
+        // the token is attached to the executor so in-flight tool calls
+        // die on cancel. `cancel(None)` requests are uncancellable — the
+        // flag is a local no-op like before.
+        let cancelled = request
+            .cancel
+            .as_ref()
+            .map(|c| Arc::clone(&c.flag))
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+        if let Some(c) = &request.cancel {
+            executor.set_cancel_token(Some(c.token.clone()));
+        }
         let prompt = build_task_prompt(&request.persona, &request.prompt);
 
         for turn_num in 0..request.max_turns {
+            // Cooperative cancel exit (WO 35.3): checked before each turn —
+            // a task cancelled before start or between turns returns its
+            // partial summary + patch instead of starting more model work.
+            if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
             let input = if turn_num == 0 {
                 prompt.as_str()
             } else {
@@ -344,8 +428,26 @@ impl TaskSpawner for InProcessTaskSpawner {
             .map(|m| m.content.clone())
             .unwrap_or_else(|| "(no assistant response produced)".to_string());
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        Ok(summary)
+        // WO 35.2: capture the subagent's uncommitted worktree edits as an
+        // appliable patch BEFORE the WorktreeSession Drop runs
+        // `git worktree remove --force` (which would discard them). The
+        // patch rides in the summary so the caller — the parent model —
+        // can review and `git apply` it. Ceiling: on an Err return the
+        // worktree is dropped without a patch (infra failures mid-coder;
+        // upgrade path: capture in a catch-all before `?` propagation).
+        // ponytail: trait signature stays Result<String, String> — the
+        // executor's tool-result slicing already bounds context growth.
+        let mut result = summary;
+        if let Some(wt) = &worktree {
+            let patch = wt.diff_patch();
+            if !patch.trim().is_empty() {
+                result = format!(
+                    "{result}\n\n--- subagent patch (uncommitted worktree changes; apply in \
+                     the parent with `git apply`) ---\n{patch}"
+                );
+            }
+        }
+        Ok(result)
     }
 }
 
@@ -388,5 +490,129 @@ mod tests {
     fn build_task_prompt_for_plan_persona_mentions_architect() {
         let p = build_task_prompt("plan", "plan Z");
         assert!(p.contains("architect") && p.contains("Plan Complete"));
+    }
+
+    // ── WO 35.2: worktree gating + temp-dir hygiene ──
+
+    #[test]
+    fn subagent_worktree_gated_on_flag_and_writer_persona() {
+        let mut cfg = Config::default();
+        cfg.session.worktree_enabled = true;
+        assert!(subagent_worktree_wanted(&cfg, "coder"));
+        assert!(!subagent_worktree_wanted(&cfg, "explore"));
+        assert!(!subagent_worktree_wanted(&cfg, "plan"));
+        cfg.session.worktree_enabled = false;
+        assert!(
+            !subagent_worktree_wanted(&cfg, "coder"),
+            "flag off = shared sandbox"
+        );
+    }
+
+    #[test]
+    fn temp_dir_guard_removes_dir_on_drop() {
+        let dir = std::env::temp_dir().join(format!("kf-code-guard-test-{}", task_temp_tag()));
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("nested").join("conversation.ndjson"), "{}").unwrap();
+        drop(TempDirGuard(dir.clone()));
+        assert!(!dir.exists(), "guard must remove the tree on drop");
+    }
+
+    fn task_temp_dirs_for_this_pid() -> Vec<std::path::PathBuf> {
+        let mut dirs: Vec<_> = std::fs::read_dir(std::env::temp_dir())
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        p.file_name().is_some_and(|n| {
+                            n.to_string_lossy()
+                                .starts_with(&format!("kf-code-task-{}", std::process::id()))
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        dirs.sort();
+        dirs
+    }
+
+    // The two run_task tests below scan the shared `kf-code-task-<pid>-*`
+    // temp namespace; serialize them so a concurrent run_task's live temp
+    // dir can't fail the other's leak assertion under threaded libtest.
+    // (nextest runs each test in its own process and never contends.)
+    // tokio Mutex: the guard is held across the run_task await.
+    static RUN_TASK_TMP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    // Error returns from a turn must not leak the temp dir (WO 35.3 item,
+    // covered here because the guard landed with the 35.2 restructure).
+    // A dead host makes the model request fail (ECONNREFUSED); the
+    // adapter's retry backoff (~3.7s total) runs in real time.
+    #[tokio::test]
+    async fn run_task_error_return_still_cleans_temp_dir() {
+        let _tmp_lock = RUN_TASK_TMP_LOCK.lock().await;
+        let mut cfg = Config::default();
+        cfg.model.request_timeout_secs = 5;
+        let config: SharedConfig = Arc::new(std::sync::RwLock::new(cfg));
+        let spawner = InProcessTaskSpawner::new(
+            config,
+            "test-model".into(),
+            "127.0.0.1:1".into(),
+            None,
+            false,
+        );
+        let request = TaskRequest {
+            prompt: "doomed".into(),
+            persona: "coder".into(),
+            model: None,
+            max_turns: 1,
+            cancel: None,
+        };
+        let result = spawner.run_task(request).await;
+        assert!(
+            result.is_err(),
+            "dead host must surface an error, got {result:?}"
+        );
+        let leftover = task_temp_dirs_for_this_pid();
+        assert!(
+            leftover.is_empty(),
+            "temp dir leaked on error return: {leftover:?}"
+        );
+    }
+
+    // WO 35.3: a pre-cancelled task must exit cooperatively before any
+    // model work (turn loop checks the flag up front), still return its
+    // (empty) summary, and clean the temp dir. No network involved.
+    #[tokio::test]
+    async fn run_task_precancelled_exits_early_and_cleans_temp_dir() {
+        let _tmp_lock = RUN_TASK_TMP_LOCK.lock().await;
+        let config: SharedConfig = Arc::new(std::sync::RwLock::new(Config::default()));
+        let spawner = InProcessTaskSpawner::new(
+            config,
+            "test-model".into(),
+            "127.0.0.1:1".into(),
+            None,
+            false,
+        );
+        let cancel = crate::tools::task::TaskCancel {
+            flag: Arc::new(AtomicBool::new(true)),
+            token: tokio_util::sync::CancellationToken::new(),
+        };
+        let request = TaskRequest {
+            prompt: "never starts".into(),
+            persona: "coder".into(),
+            model: None,
+            max_turns: 3,
+            cancel: Some(cancel),
+        };
+        let result = spawner.run_task(request).await;
+        assert_eq!(
+            result.unwrap(),
+            "(no assistant response produced)",
+            "pre-cancelled task returns its empty summary without model calls"
+        );
+        let leftover = task_temp_dirs_for_this_pid();
+        assert!(
+            leftover.is_empty(),
+            "temp dir leaked on cancel: {leftover:?}"
+        );
     }
 }

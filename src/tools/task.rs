@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 /// Request to spawn a subagent task.
 #[derive(Debug, Clone)]
@@ -12,6 +13,20 @@ pub struct TaskRequest {
     pub persona: String,
     pub model: Option<String>,
     pub max_turns: usize,
+    /// Cooperative cancel handles (WO 35.3). The flag drives the
+    /// subagent's turn loop (the executor's existing `AtomicBool`
+    /// machinery); the token kills in-flight tool work (bash process
+    /// groups) instead of waiting out `tool_timeout_secs`. `None` =
+    /// uncancellable (foreground `task` calls, workflow steps).
+    pub cancel: Option<TaskCancel>,
+}
+
+/// The two cooperative-cancel primitives a running subagent observes,
+/// sourced from one [`TaskHandle`].
+#[derive(Debug, Clone)]
+pub struct TaskCancel {
+    pub flag: Arc<AtomicBool>,
+    pub token: CancellationToken,
 }
 
 /// Lifecycle state of a background subagent task.
@@ -141,16 +156,23 @@ fn format_duration_ms(ms: u64) -> String {
 /// `result` / `error` remain the source of truth for completion/failure (so
 /// the existing `task_output` tool is unchanged); [`TaskStatus`] is derived
 /// from them plus the `started` / `cancel_requested` flags — no second copy
-/// of completion state to drift.
+/// of completion state to drift. `cancelled_result` (WO 35.3) retains the
+/// partial summary of a cooperatively-cancelled task — including any
+/// worktree patch — without flipping the derived status off `Cancelled`.
 #[derive(Debug, Clone)]
 pub struct TaskHandle {
     pub result: Option<String>,
     pub error: Option<String>,
+    /// Partial output of a cancelled task; `task_output` surfaces it.
+    pub cancelled_result: Option<String>,
     pub completed: Arc<tokio::sync::Notify>,
     pub metadata: TaskMetadata,
     started: Arc<AtomicBool>,
-    cancel_requested: Arc<AtomicBool>,
+    pub(crate) cancel_requested: Arc<AtomicBool>,
     cancel_signal: Arc<tokio::sync::Notify>,
+    /// Cooperative-cancel token: cancelled together with the flag so
+    /// in-flight tool work (bash children) dies promptly (WO 35.3).
+    pub(crate) cancel_token: CancellationToken,
 }
 
 impl Default for TaskHandle {
@@ -158,16 +180,26 @@ impl Default for TaskHandle {
         Self {
             result: None,
             error: None,
+            cancelled_result: None,
             completed: Arc::new(tokio::sync::Notify::new()),
             metadata: TaskMetadata::default(),
             started: Arc::new(AtomicBool::new(false)),
             cancel_requested: Arc::new(AtomicBool::new(false)),
             cancel_signal: Arc::new(tokio::sync::Notify::new()),
+            cancel_token: CancellationToken::new(),
         }
     }
 }
 
 impl TaskHandle {
+    /// The cancel handles to thread into a `TaskRequest` for this task.
+    pub(crate) fn cancel_handles(&self) -> TaskCancel {
+        TaskCancel {
+            flag: Arc::clone(&self.cancel_requested),
+            token: self.cancel_token.clone(),
+        }
+    }
+
     /// Derived lifecycle state. See [`TaskStatus`].
     pub fn status(&self) -> TaskStatus {
         if let Some(r) = &self.result {
@@ -238,13 +270,22 @@ impl TaskManager {
         self.tasks.get(id).map(|h| h.status())
     }
 
-    /// Request cancellation of a running task. Sets the per-task cancel flag
-    /// and wakes the worker's `select!` arm so `run_task` is dropped. Returns
-    /// `false` if the task is unknown or already terminal.
+    /// Request cooperative cancellation of a running task (WO 35.3): sets
+    /// the per-task cancel flag AND cancels the task's token. The subagent
+    /// turn loop observes the flag between steps, in-flight tool calls
+    /// observe the token (a running bash's process group is killed within
+    /// milliseconds instead of at `tool_timeout_secs`), and `run_task`
+    /// runs its own cleanup (temp-dir guard, worktree patch capture)
+    /// before returning. Returns `false` if the task is unknown or already
+    /// terminal.
     ///
-    /// The flag is `Arc<AtomicBool>` — the same primitive the executor uses
-    /// for cooperative cancellation — surfaced here at the manager layer so
-    /// callers (TUI `/jobs <id> cancel`, programmatic) can stop a subagent.
+    /// ceiling: the in-flight *model stream* is not aborted mid-request —
+    /// it ends at the next stream event or the adapter timeout; and
+    /// background bash jobs (`background=true` bash) spawned by the
+    /// subagent are NOT killed (the global registry has no owner
+    /// tracking) — they stay visible/cancellable via `bash_cancel` + `/jobs`.
+    /// Upgrade path: owner tag on `BashJobRegistry::spawn` + a task-id
+    /// field in `ToolContext`.
     pub fn cancel(&self, id: &str) -> bool {
         let Some(handle) = self.tasks.get(id) else {
             return false;
@@ -253,6 +294,7 @@ impl TaskManager {
             return false;
         }
         handle.cancel_requested.store(true, Ordering::SeqCst);
+        handle.cancel_token.cancel();
         handle.cancel_signal.notify_one();
         true
     }
@@ -450,6 +492,7 @@ impl Tool for Task {
                 persona: persona.clone(),
                 model: model.clone(),
                 max_turns,
+                cancel: None,
             };
             let max_bg = self.max_bg;
             let permit = match self.concurrency_mode {
@@ -470,10 +513,9 @@ impl Tool for Task {
                         .unwrap_or_else(|_| panic!("bg_semaphore closed unexpectedly"))
                 }
             };
-            // Per-task lifecycle handles. `started` distinguishes Pending from
-            // Running; `cancel_requested`/`cancel_signal` drive cancellation.
-            let started = Arc::new(AtomicBool::new(false));
-            let cancel_signal = Arc::new(tokio::sync::Notify::new());
+            // Per-task lifecycle handles: a default handle owns the
+            // `started` flag and the WO 35.3 cancel pair (flag + token);
+            // clones go to the worker and into the TaskRequest.
             let metadata = TaskMetadata {
                 model,
                 persona,
@@ -483,41 +525,28 @@ impl Tool for Task {
                 token_estimate: None,
                 parent_task_id: None,
             };
+            let handle = TaskHandle {
+                metadata,
+                ..Default::default()
+            };
+            let started = Arc::clone(&handle.started);
+            let cancel = handle.cancel_handles();
             let id = {
                 let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
-                guard.insert(TaskHandle {
-                    result: None,
-                    error: None,
-                    completed: Arc::new(tokio::sync::Notify::new()),
-                    metadata,
-                    started: started.clone(),
-                    cancel_requested: Arc::new(AtomicBool::new(false)),
-                    cancel_signal: cancel_signal.clone(),
-                })
+                guard.insert(handle)
             };
             let id_for_spawn = id.clone();
+            let mut request = request;
+            request.cancel = Some(cancel);
             tokio::spawn(async move {
                 started.store(true, Ordering::SeqCst);
                 let start = Instant::now();
-                let result = tokio::select! {
-                    r = spawner.run_task(request) => r,
-                    _ = cancel_signal.notified() => {
-                        // ceiling: dropping run_task mid-flight leaks its
-                        // temp dir (cleanup runs at the end of run_task).
-                        // Bounded: one small tempdir per cancelled subagent
-                        // in $TMPDIR. Upgrade path: thread a cancel token
-                        // into TaskSpawner::run_task so it cooperates and
-                        // runs its own cleanup.
-                        drop(permit);
-                        let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
-                        if let Some(h) = guard.tasks.get_mut(&id_for_spawn) {
-                            h.metadata.duration_ms =
-                                Some(start.elapsed().as_millis() as u64);
-                            h.completed.clone().notify_one();
-                        }
-                        return;
-                    }
-                };
+                // WO 35.3: cooperative cancellation — no select!/drop race.
+                // run_task observes the cancel flag between turn steps and
+                // the cancel token in-flight (bash children), then runs its
+                // own cleanup (temp-dir guard, worktree patch capture)
+                // before this await resolves.
+                let result = spawner.run_task(request).await;
                 drop(permit);
                 let duration_ms = start.elapsed().as_millis() as u64;
                 let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
@@ -525,8 +554,22 @@ impl Tool for Task {
                     let notify = handle.completed.clone();
                     handle.metadata.duration_ms = Some(duration_ms);
                     match result {
-                        Ok(summary) => handle.result = Some(summary),
-                        Err(err) => handle.error = Some(err),
+                        // A task that finished after cancel keeps status
+                        // `Cancelled` (cancel_requested wins over the
+                        // partial Ok) but retains its output — including
+                        // any worktree patch — in `cancelled_result`.
+                        Ok(summary) => {
+                            if handle.cancel_requested.load(Ordering::SeqCst) {
+                                handle.cancelled_result = Some(summary);
+                            } else {
+                                handle.result = Some(summary);
+                            }
+                        }
+                        Err(err) => {
+                            if !handle.cancel_requested.load(Ordering::SeqCst) {
+                                handle.error = Some(err);
+                            }
+                        }
                     }
                     notify.notify_one();
                 }
@@ -542,6 +585,7 @@ impl Tool for Task {
                 persona,
                 model,
                 max_turns,
+                cancel: None,
             };
             match spawner.run_task(request).await {
                 Ok(summary) => ToolOutcome::Success { content: summary },
@@ -602,6 +646,16 @@ impl Tool for TaskOutput {
             Some(handle) if handle.error.is_some() => ToolOutcome::Error {
                 message: handle.error.clone().unwrap_or_default(),
             },
+            // WO 35.3: a cancelled task is terminal — surface its retained
+            // partial output (incl. worktree patch) instead of "running".
+            Some(handle) if handle.cancel_requested.load(Ordering::SeqCst) => {
+                ToolOutcome::Success {
+                    content: handle
+                        .cancelled_result
+                        .clone()
+                        .unwrap_or_else(|| format!("Task {id} was cancelled.")),
+                }
+            }
             Some(_) => ToolOutcome::Success {
                 content: format!("Task {id} is still running."),
             },
@@ -664,6 +718,32 @@ mod tests {
             let _ = &self.finish;
             std::future::pending::<()>().await;
             Ok("done".to_string())
+        }
+    }
+
+    // WO 35.3: stands in for InProcessTaskSpawner to prove the wiring —
+    // the worker must thread the handle's cancel pair into the TaskRequest
+    // and await run_task to completion instead of dropping it.
+    struct CooperativeSpawner {
+        started: Arc<tokio::sync::Notify>,
+        observed_cancel: Arc<std::sync::Mutex<Option<TaskCancel>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TaskSpawner for CooperativeSpawner {
+        async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+            self.started.notify_one();
+            let cancel = request
+                .cancel
+                .clone()
+                .ok_or_else(|| "no cancel handle in request".to_string())?;
+            // The cooperative shape: keep working until the flag fires,
+            // then return (cleanup "ran" — observable via the flag).
+            while !cancel.flag.load(Ordering::SeqCst) {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            *self.observed_cancel.lock().unwrap() = Some(cancel);
+            Ok("partial work".to_string())
         }
     }
 
@@ -739,6 +819,7 @@ mod tests {
             persona: "explorer".to_string(),
             model: Some("opencode/big-pickle".to_string()),
             max_turns: 1,
+            cancel: None,
         };
         assert_eq!(req.model.as_deref(), Some("opencode/big-pickle"));
     }
@@ -750,8 +831,13 @@ mod tests {
             persona: "explorer".to_string(),
             model: None,
             max_turns: 1,
+            cancel: None,
         };
         assert!(req.model.is_none());
+        assert!(
+            req.cancel.is_none(),
+            "foreground requests are uncancellable"
+        );
     }
 
     #[tokio::test]
@@ -886,6 +972,7 @@ mod tests {
             persona: "coder".into(),
             model: Some("m".into()),
             max_turns: 3,
+            cancel: None,
         };
         let s = format!("{req:?}");
         assert!(s.contains("coder") && s.contains("p") && s.contains("m"));
@@ -1372,5 +1459,141 @@ mod tests {
             Some(TaskStatus::Cancelled),
             "cancelled task must read as Cancelled, not Failed"
         );
+    }
+
+    // ── WO 35.3: cooperative cancellation wiring ──
+
+    #[tokio::test]
+    async fn cancel_reaches_run_task_cooperatively_and_retains_partial_output() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let task = Task::with_manager(manager.clone());
+        let CooperativeProbe {
+            spawner,
+            observed_cancel,
+        } = CooperativeProbe::new();
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(spawner);
+        let ctx = ToolContext::with_spawner(spawner);
+        let outcome = task
+            .run(
+                &ctx,
+                serde_json::json!({ "prompt": "long running", "background": true }),
+            )
+            .await;
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected Success, got {other:?}"),
+        };
+        let id = extract_task_id(&content);
+        poll_until("task reaches Running status", || {
+            matches!(
+                manager
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .status(&id),
+                Some(TaskStatus::Running)
+            )
+            .then_some(())
+        })
+        .await;
+
+        assert!(
+            manager
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .cancel(&id),
+            "cancel should succeed for a running task"
+        );
+
+        // The worker no longer drops the future: run_task observes the
+        // cancel flag through the TaskRequest and returns on its own, the
+        // token it was handed is the handle's (cancelled by cancel()).
+        poll_until("run_task observed cancel and returned", || {
+            observed_cancel.lock().unwrap().is_some().then_some(())
+        })
+        .await;
+        let cancel = observed_cancel.lock().unwrap().take().unwrap();
+        assert!(
+            cancel.token.is_cancelled(),
+            "cancel() must cancel the token threaded into the request"
+        );
+        poll_until("worker records terminal state", || {
+            manager
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .status(&id)
+                .as_ref()
+                .is_some_and(|s| s.is_terminal())
+                .then_some(())
+        })
+        .await;
+
+        let guard = manager.lock().unwrap_or_else(|e| e.into_inner());
+        let handle = guard.get(&id).unwrap();
+        assert_eq!(handle.status(), TaskStatus::Cancelled);
+        assert!(
+            handle.result.is_none(),
+            "cancelled task must not read as Completed"
+        );
+        assert_eq!(
+            handle.cancelled_result.as_deref(),
+            Some("partial work"),
+            "partial output (incl. patch) must be retained for task_output"
+        );
+        assert!(handle.metadata.duration_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn task_output_surfaces_cancelled_partial_result() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let id = {
+            let mut mgr = manager.lock().unwrap_or_else(|e| e.into_inner());
+            mgr.insert(TaskHandle {
+                cancelled_result: Some("partial + patch".to_string()),
+                ..Default::default()
+            })
+        };
+        // Simulate cancel() having fired (flag set).
+        {
+            let mgr = manager.lock().unwrap_or_else(|e| e.into_inner());
+            mgr.cancel(&id);
+        }
+        let tool = TaskOutput::new(manager);
+        let outcome = tool
+            .run(&ToolContext::new(), serde_json::json!({ "id": id }))
+            .await;
+        match outcome {
+            ToolOutcome::Success { content } => assert_eq!(content, "partial + patch"),
+            other => panic!("expected Success with retained output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn task_cancel_cancels_handle_token() {
+        let mut mgr = TaskManager::new();
+        let id = mgr.insert(TaskHandle::default());
+        let token = mgr.get(&id).unwrap().cancel_handles().token;
+        assert!(mgr.cancel(&id));
+        assert!(
+            token.is_cancelled(),
+            "cancel() must cancel the shared token"
+        );
+    }
+
+    struct CooperativeProbe {
+        spawner: CooperativeSpawner,
+        observed_cancel: Arc<std::sync::Mutex<Option<TaskCancel>>>,
+    }
+
+    impl CooperativeProbe {
+        fn new() -> Self {
+            let observed_cancel = Arc::new(std::sync::Mutex::new(None));
+            Self {
+                spawner: CooperativeSpawner {
+                    started: Arc::new(tokio::sync::Notify::new()),
+                    observed_cancel: observed_cancel.clone(),
+                },
+                observed_cancel,
+            }
+        }
     }
 }

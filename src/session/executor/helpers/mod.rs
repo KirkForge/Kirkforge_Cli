@@ -71,6 +71,15 @@ pub(crate) fn record_turn_metric(
         finish_reason: format!("{finish_reason:?}").to_lowercase(),
     });
 }
+/// Snapshot the `cancelled` flag into a fresh token at dispatch time.
+///
+/// This is the PARENT-session path (WO 15.7): the flag→token bridge cannot
+/// watch a `&AtomicBool` for the turn's lifetime, so a cancel arriving after
+/// dispatch is only observed via the collect-loop handle aborts — bounded by
+/// each tool's own timeout. Subagent executors attach a live root token
+/// (WO 35.3, `Executor::set_cancel_token`) and `prepare_batch` derives
+/// per-call child tokens from it instead, so `TaskManager::cancel` reaches
+/// in-flight tool calls immediately.
 pub(crate) fn tool_cancel_token(
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> tokio_util::sync::CancellationToken {

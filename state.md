@@ -2,6 +2,42 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-20 — WO 36.3 + 36.4: stream abort on cancel + parent live token (worktree `.worktrees/wo36-c`, branch `wo/36.3-4-cancel`)
+
+### What changed this session
+
+- **WO 36.3 (Done)** — `stream_iteration` (executor turn loop) races each
+  next-event await against the executor's live root cancel token
+  (`tokio::select!`, biased to cancel). On cancel: flag set → the loop's
+  existing cancelled path (flush partial assistant message, placeholder
+  tool results, `Finished(Error)`) → stream receiver dropped, aborting the
+  in-flight request. No root token attached → plain await, WO 15.7
+  semantics byte-identical. Test
+  `cancel_token_aborts_stalled_model_stream` (stalled adapter = one token
+  then `pending()`; event-driven cancel; 2s bounded window), 5x green.
+- **WO 36.4 (Done)** — `Executor::run` (TUI session loop) installs a fresh
+  per-turn token via `set_cancel_token` at each input (one-shot tokens; a
+  prior turn's cancel cannot leak); the cancel watcher fires flag + token
+  together on the Esc path. Per-tool tokens become live children (timeout
+  independent, parent cancel cascades); parent streams get the 36.3 abort.
+  Tests `esc_cancel_aborts_stalled_parent_stream` +
+  `esc_cancel_cascades_to_live_tool_token` (real watcher via
+  `cancel_tx.send(())`), 5x green each.
+- **WO 35.3 flipped to Done** — its three deferrals resolved: background
+  bash jobs → WO 36.2 (owner tracking; lands separately, cited in the 35.3
+  status note), stream abort → 36.3, parent token → 36.4. TECHNICAL.md
+  cancellation section updated (bash-jobs ceiling note now points at 36.2).
+- Gates: full kf-code lib suite 3429/3429 green, clippy
+  `--lib --tests -D warnings` clean, fmt clean (outputs pasted in the
+  session report).
+
+### Pending
+
+- WO 36.2 (bash-job owner tracking) — separate branch/commit; on merge it
+  owns the TECHNICAL.md bash-jobs ceiling sentence removal.
+- Rest of the WO 36 series (36.1, 36.5, 36.6) per
+  `docs/workorders/36.0-wo36-overview.md`.
+
 ## Session 2026-08-19 — WO 35 series implementation: all 7 workorders landed on dev
 
 Merged to dev in gated steps, CI green on each push (final: run on
@@ -29,7 +65,8 @@ Merged to dev in gated steps, CI green on each push (final: run on
   tests.
 - **Pending (disclosed)**: WO 35.3 remainder (background-bash
   owner-tracking cancel, mid-request model-stream abort, parent
-  prompt-cancel token); WO 35.6 follow-ups (EventSink→EventBus bridge,
+  prompt-cancel token — all since resolved, see the 2026-08-20 session
+  above); WO 35.6 follow-ups (EventSink→EventBus bridge,
   reducer port, ParallelOrchestrator-on-kf-orchestrator decision);
   budget `used`-counter wiring gap noted in 35.5's lessons. All listed
   in the WO Status sections.

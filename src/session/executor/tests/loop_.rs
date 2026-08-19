@@ -991,3 +991,186 @@ async fn doom_loop_circuit_breaker_disabled_when_zero() {
         );
     }
 }
+
+// ── WO 36.4: parent-session live cancel token (TUI Esc path) ──────────
+
+/// Drives a full `Executor::run` loop with one channel per control input,
+/// mirroring the TUI wiring, so tests can exercise the real cancel-watcher
+/// path (`cancel_tx.send(())` = the Esc/Ctrl+C key) end-to-end.
+struct RunHarness {
+    input_tx: mpsc::UnboundedSender<String>,
+    cancel_tx: mpsc::UnboundedSender<()>,
+    event_rx: mpsc::Receiver<TurnEvent>,
+    handle: tokio::task::JoinHandle<()>,
+    // Remaining channel ends not consumed by `run`, kept alive for the
+    // loop's lifetime (a dropped end closes its channel).
+    // reason: one field per control channel; grouping would obscure the wiring.
+    #[allow(clippy::type_complexity)]
+    _keepalive: (
+        mpsc::UnboundedReceiver<ApprovalRequest>,
+        mpsc::UnboundedSender<ConversationLog>,
+        mpsc::UnboundedSender<crate::session::prompt::CompactRequest>,
+        mpsc::UnboundedSender<String>,
+        mpsc::UnboundedSender<()>,
+        mpsc::UnboundedSender<Config>,
+        mpsc::UnboundedSender<bool>,
+        mpsc::UnboundedSender<kf_plugin_host::PluginRegistry>,
+    ),
+}
+
+fn spawn_executor_run(mut exe: Executor) -> RunHarness {
+    let (input_tx, input_rx) = mpsc::unbounded_channel::<String>();
+    let (event_tx, event_rx) = mpsc::channel::<TurnEvent>(64);
+    let (approval_tx, approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
+    let (cancel_tx, cancel_rx) = mpsc::unbounded_channel::<()>();
+    let (resume_tx, resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+    let (compact_tx, compact_rx) =
+        mpsc::unbounded_channel::<crate::session::prompt::CompactRequest>();
+    let (model_tx, model_rx) = mpsc::unbounded_channel::<String>();
+    let (undo_tx, undo_rx) = mpsc::unbounded_channel::<()>();
+    let (config_tx, config_rx) = mpsc::unbounded_channel::<Config>();
+    let (plan_tx, plan_rx) = mpsc::unbounded_channel::<bool>();
+    let (plugin_tx, plugin_rx) = mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
+
+    let handle = tokio::spawn(async move {
+        exe.run(
+            input_rx,
+            event_tx,
+            approval_tx,
+            cancel_rx,
+            resume_rx,
+            compact_rx,
+            model_rx,
+            undo_rx,
+            config_rx,
+            plan_rx,
+            plugin_rx,
+        )
+        .await
+        .expect("executor run loop returns Ok");
+    });
+
+    RunHarness {
+        input_tx,
+        cancel_tx,
+        event_rx,
+        handle,
+        _keepalive: (
+            approval_rx,
+            resume_tx,
+            compact_tx,
+            model_tx,
+            undo_tx,
+            config_tx,
+            plan_tx,
+            plugin_tx,
+        ),
+    }
+}
+
+/// Bounded wait for `TurnComplete` — the proof that an Esc-cancelled turn
+/// ends cooperatively within the window, not at the adapter/tool timeout.
+async fn wait_turn_complete_within(event_rx: &mut mpsc::Receiver<TurnEvent>, secs: u64) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .expect("TurnComplete must arrive within the bounded window");
+        let ev = tokio::time::timeout(remaining, event_rx.recv())
+            .await
+            .expect("turn must end cooperatively, not at adapter/tool timeout")
+            .expect("event stream alive");
+        if matches!(ev, TurnEvent::TurnComplete) {
+            return;
+        }
+    }
+}
+
+/// Esc on the TUI must abort an in-flight (stalled) parent-session model
+/// stream via the live per-turn token — the same WO 36.3 abort, driven
+/// through the real cancel watcher instead of a direct token cancel.
+/// Pre-WO 36.4 the parent attached no root token, so the turn loop's
+/// select never fired and the turn hung on the stalled stream.
+#[tokio::test]
+async fn esc_cancel_aborts_stalled_parent_stream() {
+    let exe = make_executor(Box::new(StalledStreamAdapter), vec![], make_config(false)).unwrap();
+    let mut h = spawn_executor_run(exe);
+
+    h.input_tx.send("hello".to_string()).unwrap();
+    loop {
+        let ev = h.event_rx.recv().await.expect("event stream alive");
+        if matches!(ev, TurnEvent::Token(ref t) if t == "partial") {
+            break;
+        }
+    }
+    // The TUI's Esc/Ctrl+C path.
+    h.cancel_tx.send(()).unwrap();
+
+    wait_turn_complete_within(&mut h.event_rx, 2).await;
+    h.handle.abort();
+}
+
+/// Tool that stalls until its per-call cancel token fires (signalling its
+/// start via a oneshot so the test cancels deterministically mid-run).
+struct AwaitCancelTool {
+    started: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+}
+
+#[async_trait::async_trait]
+impl Tool for AwaitCancelTool {
+    fn def(&self) -> ToolDef {
+        ToolDef {
+            name: "await_cancel",
+            description: "stalls until its cancel token fires",
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        }
+    }
+
+    async fn run(&self, ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
+        if let Ok(mut guard) = self.started.lock() {
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(());
+            }
+        }
+        // Only completes when the per-call token is a LIVE child of the
+        // parent token: pre-WO 36.4 it was a flag snapshot (WO 15.7)
+        // that never fires mid-run, so this would hang until
+        // tool_timeout_secs (120s) — far past the test's bounded window.
+        ctx.token.cancelled().await;
+        ToolOutcome::Failure(ToolError::Cancelled)
+    }
+}
+
+/// Esc on the TUI must cascade into in-flight tool calls: per-tool tokens
+/// are children of the parent's live per-turn token, so the watcher's
+/// cancel fires them mid-run (tool timeout stays independently triggerable).
+#[tokio::test]
+async fn esc_cancel_cascades_to_live_tool_token() {
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let tool = Arc::new(AwaitCancelTool {
+        started: Arc::new(std::sync::Mutex::new(Some(started_tx))),
+    });
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-esc-1".into(),
+                name: "await_cancel".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+    let exe = make_executor(Box::new(adapter), vec![tool], make_config(true)).unwrap();
+    let mut h = spawn_executor_run(exe);
+
+    h.input_tx.send("run it".to_string()).unwrap();
+    started_rx.await.expect("tool must start before cancel");
+    h.cancel_tx.send(()).unwrap();
+
+    wait_turn_complete_within(&mut h.event_rx, 2).await;
+    h.handle.abort();
+}

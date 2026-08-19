@@ -272,3 +272,62 @@ async fn set_system_override_stores_and_clears() {
     exe.set_system_override(None);
     assert_eq!(exe.system_override(), None);
 }
+
+#[tokio::test]
+async fn cancel_token_aborts_stalled_model_stream() {
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe =
+        make_executor(Box::new(StalledStreamAdapter), vec![], make_config(false)).unwrap();
+    let token = tokio_util::sync::CancellationToken::new();
+    exe.set_cancel_token(Some(token.clone()));
+    let exe = std::sync::Arc::new(tokio::sync::Mutex::new(exe));
+
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    let (event_tx, mut event_rx) = mpsc::channel::<TurnEvent>(64);
+    let turn_exe = std::sync::Arc::clone(&exe);
+    let turn = tokio::spawn(async move {
+        let mut guard = turn_exe.lock().await;
+        guard
+            .run_turn("hello", &approval_tx, &cancelled, &event_tx)
+            .await
+            .expect("cancelled turn returns Ok, not Err")
+    });
+
+    // Wait for the single streamed token — proves the turn is parked in
+    // the stalled stream before we cancel.
+    loop {
+        let ev = event_rx.recv().await.expect("event stream alive");
+        if matches!(ev, TurnEvent::Token(ref t) if t == "partial") {
+            break;
+        }
+    }
+    token.cancel();
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), turn)
+        .await
+        .expect("turn must return within 2s of cancel, not adapter timeout")
+        .expect("turn task must not panic");
+
+    // Cooperative-cancel semantics: TurnComplete was emitted (it is sent
+    // before run_turn returns) and the partial assistant message was
+    // flushed into the conversation.
+    let mut saw_complete = false;
+    while let Ok(ev) = event_rx.try_recv() {
+        if matches!(ev, TurnEvent::TurnComplete) {
+            saw_complete = true;
+        }
+    }
+    assert!(
+        saw_complete,
+        "TurnComplete must fire after mid-stream cancel"
+    );
+    let exe = std::sync::Arc::try_unwrap(exe)
+        .ok()
+        .expect("turn task dropped its executor ref");
+    let msgs = exe.into_inner().conversation_log().all().to_vec();
+    assert!(
+        msgs.iter()
+            .any(|m| matches!(m.role, Role::Assistant) && m.content.contains("partial")),
+        "cancelled stream must flush the partial assistant message; got {msgs:?}"
+    );
+}

@@ -442,6 +442,11 @@ calls observe the token (a running bash's process group is killed in
 milliseconds, not at `tool_timeout_secs` — the subagent executor's per-call
 tokens are live children of the root token via `Executor::set_cancel_token`),
 and `run_task`'s own cleanup runs (temp-dir Drop guard, patch capture).
+An in-flight model stream is aborted mid-request: the turn loop races each
+next-event await against the attached root cancel token (WO 36.3) and drops
+the stream receiver on cancel, so a stalled provider stream ends the turn at
+cancel time (partial content flushed) instead of at the next event or the
+adapter's `request_timeout_secs`.
 Cancelled tasks keep status `Cancelled` but retain partial output in
 `TaskHandle.cancelled_result`, surfaced by `task_output`. `TaskManager::cancel`
 also kills the background bash jobs the subagent spawned (WO 36.2): the
@@ -453,12 +458,17 @@ process group the same way `bash_cancel` does (status flipped to `Cancelled`
 before the kill so the watcher preserves it; when the watcher is parked on
 the child mutex the group is killed by pid instead of waiting on the lock).
 Main-session jobs (owner `None`) and other tasks' jobs are never touched.
-Known ceilings (discisclosed): an in-flight model stream ends at its next
-event or adapter timeout rather than being aborted mid-request; owner ids are
-per-`TaskManager` strings, so two managers can mint the same `task-N` tag and
-a cancel reaches both (cascade-like); the parent session's own prompt-cancel
-keeps the WO 15.7 snapshot-at-dispatch token semantics (only subagent
-executors attach a live root token). `status` and `list` expose the state for
+In-flight model streams abort promptly on cancel (WO 36.3): the stream
+iteration races its next-event await against the live cancel token and, when
+it fires, drops the stream future (aborting the request) and takes the
+cooperative cancelled path. The parent session gets the same prompt
+cancellation (WO 36.4): `Executor::run` installs a fresh per-turn live token
+at each input (tokens are one-shot), the TUI's Esc cancel watcher fires the
+flag and the token together, and per-tool child tokens derive from it (tool
+timeouts stay independently triggerable while parent cancel cascades).
+Known ceiling (disclosed): owner ids are per-`TaskManager` strings, so two
+managers can mint the same `task-N` tag and a cancel reaches both
+(cascade-like). `status` and `list` expose the state for
 the `/jobs` view (WO 30.2).
 
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`

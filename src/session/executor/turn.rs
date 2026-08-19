@@ -682,8 +682,15 @@ impl Executor {
                     .and_then(|v| v.as_str())
                     .unwrap_or(""),
             );
-            let needs_read_gate =
-                tc.name == "edit_file" || (tc.name == "write_file" && path.exists());
+            // The read-before-edit gate is enforced pre-body in Phase 2.5
+            // (dispatch.rs) using pre-run file state. Re-checking it here
+            // with post-body state would flip a just-created new file into
+            // looking like an unread overwrite (the Phase 2.5 body already
+            // ran and created it), denying a write that already happened.
+            // Only the defensive fallback (no resolved path carried in,
+            // i.e. direct record calls outside the batch flow) re-checks.
+            let needs_read_gate = resolved_path.is_none()
+                && (tc.name == "edit_file" || (tc.name == "write_file" && path.exists()));
             if needs_read_gate {
                 if let GuardVerdict::Denied(msg) = self.sandbox.check_edit(path, &resolved) {
                     let denied = format!("🔒 Access denied: {msg}");

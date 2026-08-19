@@ -59,7 +59,7 @@ The workspace has ~3,300 `#[test]` functions (~2,400 under `src/`,
 
 ### Compiled-in vs satellite
 
-The root `kf-code` binary directly depends on six crates:
+The root `kf-code` binary directly depends on eight crates:
 
 | Crate | Role |
 |---|---|
@@ -69,14 +69,29 @@ The root `kf-code` binary directly depends on six crates:
 | `kf-workflow` | JSON workflow engine (reuses the `task` tool's spawner) |
 | `kf-lsp` | LSP client pool |
 | `kf-bench` | Benchmark task types, loader, verifier, report writers |
+| `kf-testdoctor` | Test-coverage diagnostics behind `kf-code doctor` (WO 12.4) |
+| `kf-orchestrator` | Delegation/decompose/correction pipeline; `ModelClient` impl + security verifier (WO 35.6) |
 
-The remaining seven crates are **satellites**: they build as support
+The remaining five crates are **satellites**: they build as support
 libraries. `kf-compress-core` and `kf-budget-core` compile in behind the
 `stratum` / `budget` features (ADR-046/047) and retain shell-plugin fallbacks
-for feature-off builds (ADR-050). `kf-routing`, `kf-rbac`, `kf-memory-store`,
-and `kf-orchestrator` are foundation libraries (WO 29.3–29.7 ports) with no
-shell fallback — they exist only as Rust. `kf-testdoctor` ships as the
-`kf-code doctor` CLI.
+for feature-off builds (ADR-050). `kf-routing`, `kf-rbac`, and
+`kf-memory-store` are foundation libraries (WO 29.3–29.7 ports) with no
+shell fallback — they exist only as Rust.
+
+**Release-binary cost of the orchestrator chain (WO 36.1, 2026-08-19).**
+Measured in one worktree (`cargo build --release -p kf-code`, packaged
+like `release.yml`'s tar.gz): with the WO 35.6 `kf-orchestrator` dep
+20,619,832 bytes raw / 7,322,987 bytes tar.gz; with the dep removed
+20,603,448 / 7,317,485 — a 16,384-byte (0.08%) cost, far under the ~5%
+gate, so the dep stays ungated. The chain is
+`kf-orchestrator → kf-memory-store → rusqlite` (bundled SQLite C), but
+nothing in the binary constructs `SqliteAdapter` (kf-code's `remember`
+tool uses its own JSON-file `shared::memory::MemoryStore`, a different
+type), so fat LTO + `opt-level = "z"` drops the unreachable SQLite code
+and the linker never pulls the bundled C objects. Re-measure if a
+binary code path starts calling kf-memory-store's
+`MemoryStore::open`/`SqliteAdapter`.
 
 ### Crate map
 

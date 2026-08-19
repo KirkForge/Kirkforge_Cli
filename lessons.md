@@ -103,3 +103,28 @@
   (NDJSON allows the last line to omit the separator). Real Ollama
   always sends the newline, so impact is mock/proxy-only. Note for a
   future hardening pass: flush the residual buffer at EOF.
+
+## WO 36.1 — Binary-size measurement (2026-08-20)
+
+### What I learned
+- Fat LTO + `opt-level = "z"` + `strip` makes unreachable `pub` code in
+  statically-linked workspace crates effectively free: the whole
+  kf-orchestrator chain (incl. rusqlite with bundled SQLite C) costs
+  16,384 B raw / 5,502 B tar.gz (0.08%) because nothing in the binary
+  constructs `SqliteAdapter` — the linker never pulls the bundled C
+  archive objects. "Drags X into the binary" is a compile-graph claim,
+  not a size claim; only the measurement tells you.
+- kf-code has TWO unrelated `MemoryStore` types: its own JSON-file
+  `crate::shared::memory::MemoryStore` (used by the remember tool) and
+  kf-memory-store's facade. Grepping `MemoryStore` in src/ hits the
+  local one; the kf-memory-store one is only reached via kf-orchestrator
+  (types + InMemoryAdapter in tests) — never constructed in the binary.
+- Release.yml packages `tar -czf` of the bare kf-code binary (gzip
+  default level); `--workspace` build but only kf-code ships. Replicate
+  with tar -czf for the honest "what ships" number.
+- Measurement build times on this 8-core box: full clean release build
+  ~19 min; rebuild after removing one workspace dep ~12 min (LTO link
+  dominates). Budget accordingly.
+- Removing a workspace dep from Cargo.toml regenerates Cargo.lock —
+  revert it along with the scaffolding (`git checkout -- Cargo.lock`)
+  or the "clean tree" check fails.

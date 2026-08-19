@@ -64,6 +64,32 @@ impl MockAdapter {
     }
 }
 
+/// Adapter whose stream emits one token then stalls forever. The turn
+/// loop parks in `rx.recv().await` until a live cancel token fires —
+/// used by the WO 36.3/36.4 cancellation tests. The stall is a
+/// `pending()` future, so the tests are event-driven, not sleep-races.
+pub(super) struct StalledStreamAdapter;
+
+#[async_trait::async_trait]
+impl ModelAdapter for StalledStreamAdapter {
+    fn model_info(&self) -> ModelInfo {
+        make_info()
+    }
+
+    async fn stream(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDef],
+    ) -> anyhow::Result<mpsc::Receiver<StreamEvent>> {
+        let (tx, rx) = mpsc::channel(8);
+        tokio::spawn(async move {
+            let _ = tx.send(StreamEvent::Text("partial".to_string())).await;
+            std::future::pending::<()>().await;
+        });
+        Ok(rx)
+    }
+}
+
 #[async_trait::async_trait]
 impl ModelAdapter for MockAdapter {
     fn model_info(&self) -> ModelInfo {

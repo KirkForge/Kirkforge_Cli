@@ -437,9 +437,14 @@ Cancelled tasks keep status `Cancelled` but retain partial output in
 (disclosed): background bash jobs
 (`bash background=true`) spawned by a cancelled subagent are not killed (the
 global `BashJobRegistry` has no owner tracking — they remain cancellable via
-`bash_cancel` / `/jobs`); the parent session's own prompt-cancel keeps the
-WO 15.7 snapshot-at-dispatch token semantics (only subagent executors attach
-a live root token). `status` and `list` expose the state for the `/jobs` view
+`bash_cancel` / `/jobs`; owner-tracking cancel is WO 36.2, landing
+separately). The parent session gets the same prompt cancellation
+(WO 36.4): `Executor::run` installs a fresh per-turn live token at each
+input (tokens are one-shot), the TUI's Esc cancel watcher fires the flag and
+the token together, per-tool child tokens derive from it (tool timeouts
+stay independently triggerable while parent cancel cascades), and the
+WO 36.3 stream-abort race covers the parent's in-flight streams too.
+`status` and `list` expose the state for the `/jobs` view
 (WO 30.2).
 
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`

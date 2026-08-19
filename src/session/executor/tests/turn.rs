@@ -7,7 +7,7 @@ use super::super::types::PLAN_COMPLETE_MARKER;
 use super::super::*;
 use super::common::*;
 use crate::shared::test_util::remove_test_file;
-use crate::shared::{FinishReason, ModelInfo, StreamEvent, ToolDef};
+use crate::shared::{FinishReason, StreamEvent};
 /// Smoke test for `PostTurnHookGuard`. Constructs a guard with the
 /// default `HookRunner` and lets it fall out of scope. The
 /// `HookRunner::run` call inside `Drop` is fire-and-forget and
@@ -271,36 +271,6 @@ async fn set_system_override_stores_and_clears() {
     assert_eq!(exe.system_override(), Some("custom prompt"));
     exe.set_system_override(None);
     assert_eq!(exe.system_override(), None);
-}
-
-// WO 36.3: an executor with an attached root cancel token must abort an
-// in-flight (stalled) model stream at cancel time, not at the next stream
-// event or the adapter timeout. Pre-WO 36.3 the loop awaited `rx.recv()`
-// inline, so a stream that never produced another event kept the turn
-// alive until `request_timeout_secs`. The stall is a `pending()` future —
-// the cancel is event-driven, no sleep-races (interval-overlap standard).
-struct StalledStreamAdapter;
-
-#[async_trait::async_trait]
-impl ModelAdapter for StalledStreamAdapter {
-    fn model_info(&self) -> ModelInfo {
-        make_info()
-    }
-
-    async fn stream(
-        &self,
-        _messages: &[Message],
-        _tools: &[ToolDef],
-    ) -> anyhow::Result<mpsc::Receiver<StreamEvent>> {
-        let (tx, rx) = mpsc::channel(8);
-        tokio::spawn(async move {
-            // One token, then the stream stalls forever: the turn loop is
-            // parked in `rx.recv().await` until the cancel token fires.
-            let _ = tx.send(StreamEvent::Text("partial".to_string())).await;
-            std::future::pending::<()>().await;
-        });
-        Ok(rx)
-    }
 }
 
 #[tokio::test]

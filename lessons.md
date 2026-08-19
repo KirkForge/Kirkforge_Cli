@@ -1,3 +1,56 @@
+# Lessons — WO 36.3/36.4 session (worktree wo36-c)
+
+## What I learned about this codebase
+
+- The cancelled-flush block in `stream_iteration` sits INSIDE the loop
+  body; a `break` out of the stream loop skips it (partial content lost,
+  `Finished(Stop)` instead of `Finished(Error)`). Correct shape: hoist the
+  flag check to the loop HEAD, let the cancel-token select arm `continue`
+  into it. First draft used `break` — test caught it (conversation had no
+  assistant message). The conversation-log assert was worth the Arc<tokio
+  Mutex> wrapper it cost.
+- `detect_changes()` indexes the MAIN checkout, not worktrees — it reports
+  "no changes" for worktree edits. Phase B impact analysis is the real
+  tool here; note it in workplan.md.
+- Shared `CARGO_TARGET_DIR` across worktrees produces cross-contaminated
+  error output occasionally (a phantom `TaskRequest { owner }` E0063 from
+  the WO 36.2 worktree's concurrent build). Symptom: errors about code
+  that doesn't exist in this tree. Fix: rerun; "Blocking waiting for file
+  lock on build directory" in the output confirms contention.
+- tests/loop_.rs harness pattern for driving the FULL `Executor::run`
+  loop: one unbounded channel per control input; keepalive tuple holds the
+  channel ends `run` does NOT consume (run takes approval_tx/event_tx —
+  those move in; the approval RECEIVER must be kept alive or sends fail).
+  `clippy::type_complexity` needs an allow on the 8-tuple.
+- `tokio::sync::oneshot::Sender::send` consumes self — incompatible with
+  `Tool::run(&self, ...)`. The codebase pattern is
+  `Arc<Mutex<Option<Sender>>>` + take() (see SleepingTool); match it.
+- Child modules see ancestors' private `use` imports via glob
+  (`use super::super::*` in tests pulls executor/mod.rs's `Role`,
+  `mpsc`, `ModelAdapter`...). Sibling test modules do NOT see each
+  other's imports — shared mocks go in tests/common.rs (pub(super)).
+- `CancellationToken` is one-shot and forever-cancelled once fired —
+  per-turn tokens must be freshly installed each turn; the watcher cancels
+  via a shared `Arc<Mutex<CancellationToken>>` slot the input arm swaps.
+  Esc racing the swap is covered by the pre-existing iteration-start flag
+  check.
+
+## What didn't work / would do differently
+
+- First test draft asserted on the spawned task's return value — but
+  `run_turn` returns `Result<()>`, so there's no event vec to assert on.
+  Drain the event channel with try_recv instead (TurnComplete is sent
+  before run_turn returns).
+- Initially left StalledStreamAdapter in tests/turn.rs with pub(super);
+  moved to tests/common.rs — it's shared by two test modules and
+  common.rs is the documented shared-mock home.
+
+## Permanent conventions to fold into AGENTS.md (candidate)
+
+- Worktree + shared target dir: phantom compile errors ⇒ rerun before
+  diagnosing; check for lock-wait lines.
+- tests/common.rs is the home for mocks shared across executor test
+  sub-modules.
 # lessons.md — WO 35.5 session
 
 ## What I learned about this codebase

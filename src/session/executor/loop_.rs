@@ -157,6 +157,16 @@ impl Executor {
     ) -> anyhow::Result<()> {
         let cancelled = Arc::new(AtomicBool::new(false));
 
+        // WO 36.4: the parent session's live cancel token. The slot holds
+        // the CURRENT turn's token; the watcher cancels it alongside the
+        // flag so an Esc aborts in-flight streams (WO 36.3) and cascades
+        // into live per-tool child tokens, instead of the flag-only
+        // snapshot-at-dispatch semantics (WO 15.7). Tokens are one-shot,
+        // so every new turn installs a fresh one below.
+        let turn_cancel = Arc::new(std::sync::Mutex::new(
+            tokio_util::sync::CancellationToken::new(),
+        ));
+
         // Cancel watcher: drains the cancel channel and sets the
         // shared flag so that an in-flight turn can observe
         // cancellation without waiting for the outer `select!` to
@@ -165,9 +175,14 @@ impl Executor {
         // not polled while a turn streamed.
         let cancel_event_tx = event_tx.clone();
         let cancel_watcher_cancelled = cancelled.clone();
+        let cancel_watcher_token = turn_cancel.clone();
         tokio::spawn(async move {
             while cancel_rx.recv().await.is_some() {
                 cancel_watcher_cancelled.store(true, Ordering::SeqCst);
+                cancel_watcher_token
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .cancel();
                 if cancel_event_tx
                     .send(TurnEvent::Token("\n⚠️ Generation cancelled\n".into()))
                     .await
@@ -500,6 +515,21 @@ impl Executor {
                 }
                 Some(input) = input_rx.recv() => {
                     cancelled.store(false, Ordering::SeqCst);
+                    // WO 36.4: install a fresh per-turn token (one-shot,
+                    // so the previous turn's cancel must not leak into
+                    // this one). Attached via `set_cancel_token`, the
+                    // stream-await race (WO 36.3) and per-tool child
+                    // tokens are live for this turn. An Esc racing this
+                    // swap still exits promptly: the watcher re-sets the
+                    // flag, and the turn-loop's iteration-start flag
+                    // check catches it.
+                    let turn_token = {
+                        let mut slot =
+                            turn_cancel.lock().unwrap_or_else(|e| e.into_inner());
+                        *slot = tokio_util::sync::CancellationToken::new();
+                        slot.clone()
+                    };
+                    self.set_cancel_token(Some(turn_token));
                     // Events stream live into `event_tx` during the turn;
                     // no batch to forward afterwards. A send failure inside
                     // the turn means the TUI dropped its receiver — flush

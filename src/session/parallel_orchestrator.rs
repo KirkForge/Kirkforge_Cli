@@ -1,26 +1,32 @@
-//! Parallel scout/coder/reviewer orchestration (WO 32.5).
+//! Scout→coder→reviewer pipeline orchestration (WO 32.5; real pipeline
+//! semantics WO 35.1).
 //!
-//! Spawns three subagents in parallel — Scout (read-only explore), Coder
-//! (write), Reviewer (read-only plan/critique) — each via the existing
-//! `InProcessTaskSpawner`, and collects their summaries. Each subagent gets
-//! a `TaskManager` entry for lifecycle visibility (`/jobs`).
-//!
-//! Sequential fallback when worktree isolation is disabled: without FS
-//! confinement, parallel bash calls can interfere, so the three roles run
-//! one after another instead of concurrently.
+//! Three subagents run as a pipeline, not a fan-out: the Scout (read-only
+//! `explore`) completes first and its context summary is injected into the
+//! Coder's prompt; the Coder (write; own worktree when
+//! `session.worktree_enabled`, WO 35.2) returns a change summary plus an
+//! appliable diff patch, which is injected into the Reviewer's prompt; the
+//! Reviewer (read-only `plan`) critiques the Coder's actual changes. Each
+//! role registers a `TaskManager` entry so `cancel_all()` (WO 35.3) can stop
+//! it cooperatively mid-flight — the entries are internal bookkeeping, not
+//! rendered by `/jobs`.
 
-use crate::session::task_spawner::InProcessTaskSpawner;
+use crate::session::task_spawner::{InProcessTaskSpawner, SUBAGENT_PATCH_MARKER};
 use crate::shared::SharedConfig;
 use crate::tools::task::{TaskHandle, TaskManager, TaskRequest, TaskSpawner};
 use crate::tools::UndoStackRef;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-/// Result of one parallel orchestration run.
+/// Result of one pipeline orchestration run.
 #[derive(Debug, Clone)]
 pub struct ParallelResult {
     pub scout: SubagentResult,
     pub coder: SubagentResult,
+    /// The Coder's appliable diff patch, extracted from its summary via the
+    /// WO 35.2 patch marker. `None` when worktree isolation is off or the
+    /// coder produced no changes.
+    pub coder_patch: Option<String>,
     pub reviewer: SubagentResult,
 }
 
@@ -34,7 +40,8 @@ pub struct SubagentResult {
 impl ParallelResult {
     /// Human-readable multi-line summary for the TUI / line-mode output.
     pub fn summary(&self) -> String {
-        let mut lines = vec!["Parallel orchestration complete:".to_string()];
+        let mut lines =
+            vec!["Pipeline orchestration complete (scout → coder → reviewer):".to_string()];
         lines.push(format!(
             "  Scout    [{}] — {}",
             self.scout.task_id, self.scout.summary
@@ -43,6 +50,12 @@ impl ParallelResult {
             "  Coder    [{}] — {}",
             self.coder.task_id, self.coder.summary
         ));
+        if let Some(patch) = &self.coder_patch {
+            lines.push(format!(
+                "  Coder patch: {} lines (apply in the parent with `git apply`)",
+                patch.lines().count()
+            ));
+        }
         lines.push(format!(
             "  Reviewer [{}] — {}",
             self.reviewer.task_id, self.reviewer.summary
@@ -51,18 +64,14 @@ impl ParallelResult {
     }
 }
 
-/// Spawns Scout/Coder/Reviewer subagents, either in parallel (when worktree
-/// isolation is active) or sequentially (fallback).
+/// Runs the Scout/Coder/Reviewer pipeline via a `TaskSpawner`.
 ///
-/// Reuses `InProcessTaskSpawner` — the single seam that constructs the nested
-/// `Executor` with CWD confinement, landlock, and approval forwarding already
-/// wired by WO 32.4 / 30.6. No new executor construction here.
+/// Holds one injectable `Arc<dyn TaskSpawner>` — production callers get the
+/// `InProcessTaskSpawner` seam, which constructs the nested `Executor` with
+/// CWD confinement, landlock, and approval forwarding already wired by
+/// WO 32.4 / 30.6. No new executor construction here.
 pub struct ParallelOrchestrator {
-    config: SharedConfig,
-    model_name: String,
-    ollama_host: String,
-    undo_stack: Option<UndoStackRef>,
-    supports_images: bool,
+    spawner: Arc<dyn TaskSpawner>,
     task_manager: Arc<Mutex<TaskManager>>,
 }
 
@@ -74,66 +83,78 @@ impl ParallelOrchestrator {
         undo_stack: Option<UndoStackRef>,
         supports_images: bool,
     ) -> Self {
-        Self {
+        Self::with_spawner(Arc::new(InProcessTaskSpawner::new(
             config,
             model_name,
             ollama_host,
             undo_stack,
             supports_images,
+        )))
+    }
+
+    // Test seam: inject a mock TaskSpawner — the trait's dyn dispatch exists
+    // for exactly this (see its ponytail note). Production callers use `new`.
+    fn with_spawner(spawner: Arc<dyn TaskSpawner>) -> Self {
+        Self {
+            spawner,
             task_manager: Arc::new(Mutex::new(TaskManager::new())),
         }
     }
 
-    /// The task manager tracking the 3 parallel subagents. Pub so the TUI
-    /// `/jobs` view can render them.
-    pub fn task_manager(&self) -> Arc<Mutex<TaskManager>> {
-        self.task_manager.clone()
-    }
-
-    /// Run scout/coder/reviewer in parallel via `tokio::join!`. Each subagent
-    /// gets its own TaskManager entry. Use when worktree isolation is active
-    /// (CWD confinement prevents parallel bash interference).
+    /// Run the scout→coder→reviewer pipeline. Entry point when worktree
+    /// isolation is active (the coder then gets its own worktree, gated in
+    /// `run_task` on `session.worktree_enabled`). Since WO 35.1 this is the
+    /// same pipeline as `run_sequential` — the entry point no longer changes
+    /// role ordering, only whether the coder is FS-isolated.
     pub async fn run_parallel(&self, task_description: &str) -> ParallelResult {
-        let (scout, coder, reviewer) = tokio::join!(
-            self.spawn_role("scout", "explore", task_description, 1),
-            self.spawn_role("coder", "coder", task_description, 1),
-            self.spawn_role("reviewer", "plan", task_description, 1),
-        );
-        ParallelResult {
-            scout,
-            coder,
-            reviewer,
-        }
+        self.run_pipeline(task_description).await
     }
 
-    /// Sequential fallback: run the three roles one after another. Used when
-    /// worktree isolation is disabled — without FS confinement, parallel bash
-    /// calls can interfere (WO 32.4 prerequisite).
+    /// Run the scout→coder→reviewer pipeline. Entry point when worktree
+    /// isolation is disabled (the coder shares the parent sandbox). Same
+    /// pipeline as `run_parallel` since WO 35.1 — see its doc for the one
+    /// remaining difference.
     pub async fn run_sequential(&self, task_description: &str) -> ParallelResult {
+        self.run_pipeline(task_description).await
+    }
+
+    // The pipeline: scout's summary flows into the coder's prompt; the
+    // coder's change summary + patch flow into the reviewer's prompt.
+    async fn run_pipeline(&self, task_description: &str) -> ParallelResult {
         let scout = self
-            .spawn_role("scout", "explore", task_description, 1)
+            .spawn_role("scout", "explore", task_description, None, 1)
             .await;
-        let coder = self.spawn_role("coder", "coder", task_description, 1).await;
+        let coder = self
+            .spawn_role("coder", "coder", task_description, Some(&scout.summary), 1)
+            .await;
         let reviewer = self
-            .spawn_role("reviewer", "plan", task_description, 1)
+            .spawn_role(
+                "reviewer",
+                "plan",
+                task_description,
+                Some(&coder.summary),
+                1,
+            )
             .await;
         ParallelResult {
             scout,
+            coder_patch: extract_patch(&coder.summary).map(str::to_string),
             coder,
             reviewer,
         }
     }
 
-    /// Spawn one subagent with the given persona, register it in the
-    /// TaskManager, and await its result.
+    /// Spawn one subagent with the given persona and upstream handoff,
+    /// register it in the TaskManager, and await its result.
     async fn spawn_role(
         &self,
         role: &str,
         persona: &str,
         task_description: &str,
+        handoff: Option<&str>,
         max_turns: usize,
     ) -> SubagentResult {
-        let prompt = build_role_prompt(role, persona, task_description);
+        let prompt = build_role_prompt(role, persona, task_description, handoff);
         let prompt_summary: String = prompt.chars().take(100).collect();
 
         // Insert a default handle (its WO 35.3 cancel pair — flag + token —
@@ -151,13 +172,7 @@ impl ParallelOrchestrator {
             (id, cancel)
         };
 
-        let spawner = InProcessTaskSpawner::new(
-            self.config.clone(),
-            self.model_name.clone(),
-            self.ollama_host.clone(),
-            self.undo_stack.clone(),
-            self.supports_images,
-        );
+        let spawner = Arc::clone(&self.spawner);
         let request = TaskRequest {
             prompt,
             persona: persona.to_string(),
@@ -201,31 +216,47 @@ impl ParallelOrchestrator {
     }
 }
 
-fn build_role_prompt(role: &str, persona: &str, task: &str) -> String {
+// Role prompt for one pipeline stage. `handoff` is the previous stage's
+// output: the scout summary for the coder, the coder's change summary +
+// patch for the reviewer. The returned prompt is passed to run_task
+// verbatim (WO 35.1: no second generic wrapper on top).
+fn build_role_prompt(role: &str, persona: &str, task: &str, handoff: Option<&str>) -> String {
+    let handoff = handoff.unwrap_or("");
     match role {
         "scout" => format!(
-            "You are the Scout in a parallel scout/coder/reviewer orchestration. \
-             Explore the codebase with read-only tools (read, grep, glob). Identify \
-             the files relevant to the task, the patterns to follow, and any risks. \
-             Produce a concise context summary for the Coder.\n\nTask: {task}"
+            "You are the Scout in a scout→coder→reviewer pipeline. Explore \
+             the codebase with read-only tools (read, grep, glob). Identify \
+             the files relevant to the task, the patterns to follow, and any \
+             risks. Produce a concise context summary for the Coder.\n\nTask: {task}"
         ),
         "coder" => format!(
-            "You are the Coder in a parallel scout/coder/reviewer orchestration. \
-             Implement the task with the full toolset. Work efficiently and summarize \
-             what you changed and why. The Scout is exploring in parallel; you may \
-             not have its context yet — proceed with your own judgment.\n\nTask: {task}"
+            "You are the Coder in a scout→coder→reviewer pipeline. Implement \
+             the task with the full toolset, using the Scout's context summary \
+             below. Work efficiently and summarize what you changed and \
+             why.\n\nTask: {task}\n\nScout context summary:\n{handoff}"
         ),
         "reviewer" => format!(
-            "You are the Reviewer in a parallel scout/coder/reviewer orchestration. \
-             Review the task with read-only tools only. Identify potential issues, \
-             edge cases, and verification steps the Coder should run. End with: \
-             \"## Review Complete\".\n\nTask: {task}"
+            "You are the Reviewer in a scout→coder→reviewer pipeline. Review \
+             the Coder's changes below with read-only tools only — critique \
+             the actual change summary and diff patch, not the task in the \
+             abstract. Identify potential issues, edge cases, and \
+             verification steps the Coder should run. End with: \
+             \"## Review Complete\".\n\nTask: {task}\n\nCoder's change summary and diff:\n{handoff}"
         ),
         _ => {
             // Fallback: defer to the persona's default prompt builder.
-            crate::session::task_spawner::build_task_prompt(persona, task)
+            crate::tools::task::build_task_prompt(persona, task)
         }
     }
+}
+
+// Split the WO 35.2 patch artifact back out of a coder summary. Returns the
+// patch text after the marker, or None when the summary carries no patch
+// (worktree isolation off, or no changes).
+fn extract_patch(summary: &str) -> Option<&str> {
+    summary
+        .split_once(SUBAGENT_PATCH_MARKER)
+        .map(|(_, patch)| patch.trim())
 }
 
 #[cfg(test)]
@@ -243,6 +274,7 @@ mod tests {
                 task_id: "task-2".into(),
                 summary: "edited foo.rs".into(),
             },
+            coder_patch: None,
             reviewer: SubagentResult {
                 task_id: "task-3".into(),
                 summary: "looks good".into(),
@@ -252,32 +284,92 @@ mod tests {
         assert!(s.contains("Scout") && s.contains("task-1") && s.contains("found 3 files"));
         assert!(s.contains("Coder") && s.contains("task-2") && s.contains("edited foo.rs"));
         assert!(s.contains("Reviewer") && s.contains("task-3") && s.contains("looks good"));
+        assert!(!s.contains("patch:"), "no patch line without a patch");
+    }
+
+    #[test]
+    fn parallel_result_summary_notes_coder_patch_when_present() {
+        let r = ParallelResult {
+            scout: SubagentResult {
+                task_id: "task-1".into(),
+                summary: "found 3 files".into(),
+            },
+            coder: SubagentResult {
+                task_id: "task-2".into(),
+                summary: format!("edited foo.rs\n\n{SUBAGENT_PATCH_MARKER}\n+one\n+two"),
+            },
+            coder_patch: Some("+one\n+two".into()),
+            reviewer: SubagentResult {
+                task_id: "task-3".into(),
+                summary: "looks good".into(),
+            },
+        };
+        let s = r.summary();
+        assert!(s.contains("Coder patch: 2 lines"), "got: {s}");
     }
 
     #[test]
     fn build_role_prompt_scout_mentions_read_only() {
-        let p = build_role_prompt("scout", "explore", "do X");
+        let p = build_role_prompt("scout", "explore", "do X", None);
         assert!(p.contains("Scout") && p.contains("read-only") && p.contains("do X"));
     }
 
     #[test]
     fn build_role_prompt_coder_mentions_implement() {
-        let p = build_role_prompt("coder", "coder", "do Y");
+        let p = build_role_prompt("coder", "coder", "do Y", None);
         assert!(p.contains("Coder") && p.contains("Implement") && p.contains("do Y"));
     }
 
     #[test]
     fn build_role_prompt_reviewer_mentions_review_complete() {
-        let p = build_role_prompt("reviewer", "plan", "do Z");
+        let p = build_role_prompt("reviewer", "plan", "do Z", None);
         assert!(p.contains("Reviewer") && p.contains("Review Complete") && p.contains("do Z"));
     }
 
     #[test]
     fn build_role_prompt_unknown_role_falls_back_to_persona_prompt() {
-        let p = build_role_prompt("unknown", "explore", "do W");
-        // The fallback delegates to task_spawner's build_task_prompt which
+        let p = build_role_prompt("unknown", "explore", "do W", None);
+        // The fallback delegates to tools::task's build_task_prompt which
         // mentions "research" for the explore persona.
         assert!(p.contains("research") || p.contains("do W"));
+    }
+
+    // WO 35.1 gate (a): the coder prompt carries the scout summary.
+    #[test]
+    fn build_role_prompt_coder_carries_scout_handoff() {
+        let p = build_role_prompt(
+            "coder",
+            "coder",
+            "do Y",
+            Some("SCOUT: a.rs is load-bearing"),
+        );
+        assert!(
+            p.contains("Scout context summary") && p.contains("SCOUT: a.rs is load-bearing"),
+            "got: {p}"
+        );
+        // The pre-35.1 "may not have its context yet" excuse must be gone.
+        assert!(!p.contains("may not have its context"));
+    }
+
+    // WO 35.1 gate (b): the reviewer prompt carries the coder's change
+    // summary + diff patch.
+    #[test]
+    fn build_role_prompt_reviewer_carries_coder_handoff() {
+        let coder_summary = "edited a.rs\n\n{SUBAGENT_PATCH_MARKER}\n+a.rs +1";
+        let p = build_role_prompt("reviewer", "plan", "do Z", Some(coder_summary));
+        assert!(
+            p.contains("Coder's change summary and diff")
+                && p.contains("edited a.rs")
+                && p.contains("+a.rs +1"),
+            "got: {p}"
+        );
+    }
+
+    #[test]
+    fn extract_patch_splits_on_marker_or_returns_none() {
+        let with = format!("summary text\n\n{SUBAGENT_PATCH_MARKER}\n+diff\n-line");
+        assert_eq!(extract_patch(&with), Some("+diff\n-line"));
+        assert_eq!(extract_patch("no patch here"), None);
     }
 
     #[test]
@@ -286,9 +378,10 @@ mod tests {
             Arc::new(std::sync::RwLock::new(crate::shared::Config::default()));
         let orch =
             ParallelOrchestrator::new(config, "test-model".into(), "localhost".into(), None, false);
-        let mgr = orch.task_manager();
-        // Fresh manager is empty until roles are spawned.
-        assert!(mgr.lock().unwrap().list().is_empty());
+        // Fresh manager is empty until roles are spawned. (Private field —
+        // the pub task_manager() accessor was removed in WO 35.1; /jobs
+        // never read it.)
+        assert!(orch.task_manager.lock().unwrap().list().is_empty());
     }
 
     // WO 35.3: cancel_all must cooperatively cancel every non-terminal
@@ -303,7 +396,7 @@ mod tests {
             Arc::new(std::sync::RwLock::new(crate::shared::Config::default()));
         let orch =
             ParallelOrchestrator::new(config, "test-model".into(), "localhost".into(), None, false);
-        let mgr = orch.task_manager();
+        let mgr = &orch.task_manager;
         // Simulate three in-flight roles: inserted handles with live cancel
         // pairs, exactly what spawn_role registers before awaiting run_task.
         let tokens: Vec<_> = {
@@ -321,5 +414,157 @@ mod tests {
         assert!(tokens.iter().all(|t| t.is_cancelled()));
         // Second call: everything terminal now — nothing left to cancel.
         assert_eq!(orch.cancel_all(), 0);
+    }
+
+    // ── WO 35.1: pipeline semantics at the TaskSpawner seam ──
+
+    // Records start/end events per role and the exact prompt each role
+    // received, returning persona-canned summaries so the handoff content
+    // is observable. The 10ms in-flight pause gives a (wrong) concurrent
+    // dispatch room to interleave its starts before the first end.
+    struct PipelineProbe {
+        events: Arc<Mutex<Vec<String>>>,
+        prompts: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    impl PipelineProbe {
+        fn phase(persona: &str) -> String {
+            match persona {
+                "explore" => "scout".to_string(),
+                "plan" => "reviewer".to_string(),
+                other => other.to_string(),
+            }
+        }
+
+        fn canned_summary(persona: &str) -> String {
+            match persona {
+                "explore" => "SCOUT-SUMMARY: a.rs and b.rs are relevant".to_string(),
+                "coder" => {
+                    format!("CODED: edited a.rs\n\n{SUBAGENT_PATCH_MARKER}\n+a.rs +1 line")
+                }
+                _ => "REVIEW: looks good".to_string(),
+            }
+        }
+
+        fn orchestrator(self) -> ParallelOrchestrator {
+            ParallelOrchestrator::with_spawner(Arc::new(self))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TaskSpawner for PipelineProbe {
+        async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+            let phase = Self::phase(&request.persona);
+            self.events.lock().unwrap().push(format!("start:{phase}"));
+            self.prompts
+                .lock()
+                .unwrap()
+                .push((request.persona.clone(), request.prompt.clone()));
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            self.events.lock().unwrap().push(format!("end:{phase}"));
+            Ok(Self::canned_summary(&request.persona))
+        }
+    }
+    // WO 35.1 gate (c): roles run strictly scout → coder → reviewer — the
+    // reviewer must not start before the coder completes. Also proves the
+    // prompt handoffs (a)/(b) end-to-end and the coder_patch extraction.
+    #[tokio::test]
+    async fn run_pipeline_sequences_roles_and_threads_context() {
+        let probe = PipelineProbe {
+            events: Arc::new(Mutex::new(Vec::new())),
+            prompts: Arc::new(Mutex::new(Vec::new())),
+        };
+        let events = probe.events.clone();
+        let prompts = probe.prompts.clone();
+        let orch = probe.orchestrator();
+
+        let result = orch.run_parallel("refactor the frobnicator").await;
+
+        // (c) strict pipeline order: each role ends before the next starts.
+        // A tokio::join! fan-out would emit all three starts first.
+        let ev = events.lock().unwrap().clone();
+        assert_eq!(
+            ev,
+            vec![
+                "start:scout",
+                "end:scout",
+                "start:coder",
+                "end:coder",
+                "start:reviewer",
+                "end:reviewer"
+            ],
+            "roles must run strictly in sequence, got {ev:?}"
+        );
+
+        // (a) coder prompt contains the scout summary; no generic wrapper
+        // doubles it up (WO 35.1 double-wrap fix).
+        let prompts = prompts.lock().unwrap().clone();
+        let coder_prompt = &prompts
+            .iter()
+            .find(|(p, _)| p == "coder")
+            .expect("coder prompt recorded")
+            .1;
+        assert!(
+            coder_prompt.contains("SCOUT-SUMMARY: a.rs and b.rs are relevant"),
+            "coder must receive the scout summary, got: {coder_prompt}"
+        );
+        assert!(
+            !coder_prompt.contains("focused implementation assistant"),
+            "role prompt must not be double-wrapped in the generic preamble"
+        );
+
+        // (b) reviewer prompt contains the coder's change summary + patch.
+        let reviewer_prompt = &prompts
+            .iter()
+            .find(|(p, _)| p == "plan")
+            .expect("reviewer prompt recorded")
+            .1;
+        assert!(
+            reviewer_prompt.contains("CODED: edited a.rs")
+                && reviewer_prompt.contains("+a.rs +1 line"),
+            "reviewer must receive the coder's diff, got: {reviewer_prompt}"
+        );
+
+        // The patch is extracted into the result (WO 35.2 artifact reuse).
+        assert_eq!(result.coder_patch.as_deref(), Some("+a.rs +1 line"));
+        assert_eq!(result.reviewer.summary, "REVIEW: looks good");
+        assert_eq!(
+            result.scout.summary,
+            "SCOUT-SUMMARY: a.rs and b.rs are relevant"
+        );
+    }
+
+    // run_sequential shares the pipeline: same handoffs, same order.
+    #[tokio::test]
+    async fn run_sequential_is_the_same_pipeline() {
+        let probe = PipelineProbe {
+            events: Arc::new(Mutex::new(Vec::new())),
+            prompts: Arc::new(Mutex::new(Vec::new())),
+        };
+        let events = probe.events.clone();
+        let prompts = probe.prompts.clone();
+        let orch = probe.orchestrator();
+
+        let result = orch.run_sequential("do the thing").await;
+        assert_eq!(
+            events.lock().unwrap().clone(),
+            vec![
+                "start:scout",
+                "end:scout",
+                "start:coder",
+                "end:coder",
+                "start:reviewer",
+                "end:reviewer"
+            ]
+        );
+        let reviewer_prompt = prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(p, _)| p == "plan")
+            .map(|(_, prompt)| prompt.clone())
+            .expect("reviewer prompt recorded");
+        assert!(reviewer_prompt.contains("+a.rs +1 line"));
+        assert!(result.coder_patch.is_some());
     }
 }

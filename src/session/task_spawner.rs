@@ -19,6 +19,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+// Marker separating the coder's change summary from its worktree patch in
+// the string run_task returns (WO 35.2). pub(crate) so the parallel
+// orchestrator can extract the patch without duplicating the literal
+// (WO 35.1).
+pub(crate) const SUBAGENT_PATCH_MARKER: &str =
+    "--- subagent patch (uncommitted worktree changes; apply in the parent with `git apply`) ---";
+
 // WO 35.2: only writer personas need filesystem isolation — `explore` and
 // `plan` get read-only toolsets, so they keep the parent sandbox. The `_`
 // arm in the toolset filter below (full toolset) is the same predicate.
@@ -379,7 +386,11 @@ impl TaskSpawner for InProcessTaskSpawner {
         if let Some(c) = &request.cancel {
             executor.set_cancel_token(Some(c.token.clone()));
         }
-        let prompt = build_task_prompt(&request.persona, &request.prompt);
+        // WO 35.1: the prompt is used verbatim — callers apply persona
+        // preambles (build_task_prompt) or role prompts (the parallel
+        // orchestrator) themselves, so a role prompt is no longer
+        // double-wrapped in a generic "You are..." preamble.
+        let prompt = request.prompt.as_str();
 
         for turn_num in 0..request.max_turns {
             // Cooperative cancel exit (WO 35.3): checked before each turn —
@@ -388,11 +399,7 @@ impl TaskSpawner for InProcessTaskSpawner {
             if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
                 break;
             }
-            let input = if turn_num == 0 {
-                prompt.as_str()
-            } else {
-                "continue"
-            };
+            let input = if turn_num == 0 { prompt } else { "continue" };
             executor
                 .run_turn_collecting(input, &approval_tx, &cancelled)
                 .await
@@ -441,56 +448,16 @@ impl TaskSpawner for InProcessTaskSpawner {
         if let Some(wt) = &worktree {
             let patch = wt.diff_patch();
             if !patch.trim().is_empty() {
-                result = format!(
-                    "{result}\n\n--- subagent patch (uncommitted worktree changes; apply in \
-                     the parent with `git apply`) ---\n{patch}"
-                );
+                result = format!("{result}\n\n{SUBAGENT_PATCH_MARKER}\n{patch}");
             }
         }
         Ok(result)
     }
 }
 
-pub(crate) fn build_task_prompt(persona: &str, task: &str) -> String {
-    match persona {
-        "explore" => format!(
-            "You are an exploratory research assistant. Read files, search, and gather context. \
-             Do not edit files or run destructive commands. Produce a concise summary.\n\nTask: {task}"
-        ),
-        "plan" => format!(
-            "You are a software architect. Explore with read-only tools only. \
-             Design a step-by-step implementation plan and end with: \"## Plan Complete\".\n\nTask: {task}"
-        ),
-        _ => format!(
-            "You are a focused implementation assistant with the full toolset. \
-             Work efficiently in this isolated context and summarize what you changed and why.\n\nTask: {task}"
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // WO 28.1: moved from tools::task — these test `build_task_prompt`, which
-    // relocated here alongside the InProcessTaskSpawner that uses it.
-    #[test]
-    fn build_task_prompt_for_coder_persona_mentions_implementation() {
-        let p = build_task_prompt("coder", "do X");
-        assert!(p.contains("implementation") && p.contains("do X"));
-    }
-
-    #[test]
-    fn build_task_prompt_for_explore_persona_mentions_research() {
-        let p = build_task_prompt("explore", "explore Y");
-        assert!(p.contains("research") && p.contains("explore Y"));
-    }
-
-    #[test]
-    fn build_task_prompt_for_plan_persona_mentions_architect() {
-        let p = build_task_prompt("plan", "plan Z");
-        assert!(p.contains("architect") && p.contains("Plan Complete"));
-    }
 
     // ── WO 35.2: worktree gating + temp-dir hygiene ──
 

@@ -240,7 +240,9 @@ impl StepRunner for TaskSpawnerStepRunner {
     async fn run_step(&self, name: &str, prompt: &str, persona: &str) -> Result<String> {
         self.spawner
             .run_task(crate::tools::task::TaskRequest {
-                prompt: prompt.to_string(),
+                // WO 35.1: callers own the persona preamble — run_task is
+                // verbatim now.
+                prompt: crate::tools::task::build_task_prompt(persona, prompt),
                 persona: persona.to_string(),
                 model: None,
                 max_turns: 1,
@@ -335,7 +337,10 @@ impl StepRunner for TaskSpawnerStepRunner {
                     kf_workflow::StepKind::Agent => {
                         let result = spawner
                             .run_task(crate::tools::task::TaskRequest {
-                                prompt: req.prompt,
+                                prompt: crate::tools::task::build_task_prompt(
+                                    &req.persona,
+                                    &req.prompt,
+                                ),
                                 persona: req.persona,
                                 model: None,
                                 max_turns: 1,

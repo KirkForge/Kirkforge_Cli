@@ -808,23 +808,30 @@ subagent personas within a single session. Workflows are invoked two ways: the
 TUI `/workflow run` slash command, and the `workflow_run` tool (WO 9.1) which
 lets the agent loop and bench harness run a named template via a tool call.
 
-### Parallel orchestration (WO 32.5)
+### Scout→coder→reviewer pipeline (WO 32.5; pipeline semantics WO 35.1)
 
-`ParallelOrchestrator` (`src/session/parallel_orchestrator.rs`) spawns three
-subagents in parallel — Scout (`explore` persona, read-only), Coder (`coder`
-persona, write), Reviewer (`plan` persona, read-only critique) — via
-`tokio::join!` on `InProcessTaskSpawner::run_task`. Each subagent gets its own
-`TaskManager` entry for `/jobs` lifecycle visibility, with the WO 35.3 cancel
-pair (flag + token) threaded into its `TaskRequest`, so
-`ParallelOrchestrator::cancel_all()` stops all in-flight roles cooperatively
-(each runs cleanup, captures any worktree patch, and returns). Triggered by
-`/workflow run <name> --parallel`; the workflow's first prompt-bearing step
-becomes the task description for all three roles. Sequential fallback
-(`run_sequential`) runs the three roles one-by-one when `worktree_enabled` is
-false (without CWD confinement, parallel bash calls can interfere). The
-orchestrator reuses the existing `InProcessTaskSpawner` seam — no new executor
-construction, inheriting WO 32.4 landlock/CWD confinement and WO 30.6 approval
-forwarding.
+`ParallelOrchestrator` (`src/session/parallel_orchestrator.rs`) runs three
+subagents as a real pipeline, not a fan-out: the Scout (`explore` persona,
+read-only) completes first and its context summary is injected into the
+Coder's prompt; the Coder (`coder` persona, write, own worktree when
+`session.worktree_enabled` per WO 35.2) returns a change summary plus an
+appliable diff patch, which is injected into the Reviewer's prompt; the
+Reviewer (`plan` persona, read-only) critiques the Coder's actual changes
+(not the task blurb) and ends with "## Review Complete". The extracted patch
+is exposed on `ParallelResult.coder_patch`. `run_parallel` and
+`run_sequential` are the same pipeline since WO 35.1 — the entry point
+selected by `/workflow run <name> --parallel` reflects whether worktree
+isolation is enabled, not ordering. Each role registers a `TaskManager`
+entry (internal cancel bookkeeping, not rendered by `/jobs`) with the
+WO 35.3 cancel pair (flag + token) threaded into its `TaskRequest`, so
+`ParallelOrchestrator::cancel_all()` stops in-flight roles cooperatively
+(each runs cleanup, captures any worktree patch, and returns). The
+orchestrator holds one injectable `Arc<dyn TaskSpawner>` — the
+`InProcessTaskSpawner` seam, so no new executor construction, inheriting
+WO 32.4 landlock/CWD confinement and WO 30.6 approval forwarding. Since
+WO 35.1 the `TaskSpawner` contract is prompt-verbatim: callers apply persona
+preambles via `build_task_prompt` (`tools::task`) or pass their own role
+prompt — one wrapper, never two.
 
 ---
 

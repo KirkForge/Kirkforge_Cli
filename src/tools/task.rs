@@ -224,11 +224,38 @@ impl TaskHandle {
 }
 
 /// Trait for an object that can spawn isolated subagent tasks.
+///
+/// WO 35.1 contract: `request.prompt` is used verbatim as the subagent's
+/// first-turn input — the spawner does NOT add a persona preamble. Callers
+/// passing a raw user/workflow prompt apply [`build_task_prompt`] first;
+/// callers with their own role prompt (the parallel orchestrator) pass it
+/// as-is. One wrapper, never two.
 #[async_trait::async_trait]
 // ponytail: single impl, dyn dispatch for test injection; inline if MockSpawner ever removed
 pub trait TaskSpawner: Send + Sync {
     /// Spawn and run a task synchronously, returning its summary.
     async fn run_task(&self, request: TaskRequest) -> Result<String, String>;
+}
+
+// Persona preamble wrapper for raw prompts. Born in tools::task (WO 28.1
+// moved it to task_spawner when the spawner did the wrapping; WO 35.1 moved
+// it back — callers own the preamble now, and tools must not reach into the
+// session layer for it).
+pub(crate) fn build_task_prompt(persona: &str, task: &str) -> String {
+    match persona {
+        "explore" => format!(
+            "You are an exploratory research assistant. Read files, search, and gather context. \
+             Do not edit files or run destructive commands. Produce a concise summary.\n\nTask: {task}"
+        ),
+        "plan" => format!(
+            "You are a software architect. Explore with read-only tools only. \
+              Design a step-by-step implementation plan and end with: \"## Plan Complete\".\n\nTask: {task}"
+        ),
+        _ => format!(
+            "You are a focused implementation assistant with the full toolset. \
+              Work efficiently in this isolated context and summarize what you changed and why.\n\nTask: {task}"
+        ),
+    }
 }
 
 /// Per-session background task manager.
@@ -474,6 +501,9 @@ impl Tool for Task {
             .and_then(|m| m.as_u64())
             .map(|m| (m as usize).max(1))
             .unwrap_or(1);
+        // WO 35.1: apply the persona preamble here — run_task uses the
+        // prompt verbatim. prompt_summary below stays the raw user prompt.
+        let full_prompt = build_task_prompt(&persona, &prompt);
 
         let spawner = match &ctx.task_spawner {
             Some(s) => s.clone(),
@@ -488,7 +518,7 @@ impl Tool for Task {
             let manager = self.task_manager.clone();
             let prompt_summary: String = prompt.chars().take(100).collect();
             let request = TaskRequest {
-                prompt,
+                prompt: full_prompt,
                 persona: persona.clone(),
                 model: model.clone(),
                 max_turns,
@@ -581,7 +611,7 @@ impl Tool for Task {
             }
         } else {
             let request = TaskRequest {
-                prompt,
+                prompt: full_prompt,
                 persona,
                 model,
                 max_turns,
@@ -669,6 +699,58 @@ mod tests {
     use super::*;
     use crate::tools::ToolContext;
     use std::sync::atomic::AtomicBool;
+
+    // WO 28.1: these followed the spawner to task_spawner; WO 35.1 moved
+    // them back with build_task_prompt (callers own the preamble now).
+    #[test]
+    fn build_task_prompt_for_coder_persona_mentions_implementation() {
+        let p = build_task_prompt("coder", "do X");
+        assert!(p.contains("implementation") && p.contains("do X"));
+    }
+
+    #[test]
+    fn build_task_prompt_for_explore_persona_mentions_research() {
+        let p = build_task_prompt("explore", "explore Y");
+        assert!(p.contains("research") && p.contains("explore Y"));
+    }
+
+    #[test]
+    fn build_task_prompt_for_plan_persona_mentions_architect() {
+        let p = build_task_prompt("plan", "plan Z");
+        assert!(p.contains("architect") && p.contains("Plan Complete"));
+    }
+
+    // WO 35.1: the Task tool applies the preamble itself (run_task is
+    // verbatim), so the request reaching the spawner must already carry it.
+    #[tokio::test]
+    async fn task_tool_wraps_raw_prompt_with_persona_preamble() {
+        struct PromptCapture {
+            seen: Arc<std::sync::Mutex<Option<String>>>,
+        }
+        #[async_trait::async_trait]
+        impl TaskSpawner for PromptCapture {
+            async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+                *self.seen.lock().unwrap() = Some(request.prompt);
+                Ok("ok".to_string())
+            }
+        }
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(PromptCapture { seen: seen.clone() });
+        let tool = Task::new();
+        let ctx = ToolContext::with_spawner(spawner);
+        let outcome = tool
+            .run(&ctx, serde_json::json!({"prompt": "do the thing"}))
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "got {outcome:?}"
+        );
+        let p = seen.lock().unwrap().clone().unwrap();
+        assert!(
+            p.contains("implementation assistant") && p.contains("do the thing"),
+            "spawner must receive the wrapped prompt once, got: {p}"
+        );
+    }
 
     // Poll a condition until it returns Some(T), with a bounded 1s total budget
     // and a 10ms interval. Replaces `for _ in 0..50 { sleep(20ms) }` loops.

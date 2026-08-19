@@ -5,8 +5,9 @@
 //! rendering, and cancellation. Each step is executed via the existing
 //! `task` tool's `InProcessTaskSpawner` through a thin `StepRunner`
 //! implementation. The `--parallel` flag (WO 32.5) dispatches to
-//! `ParallelOrchestrator` for scout/coder/reviewer fan-out instead of the
-//! sequential DAG runner.
+//! `ParallelOrchestrator` for the scout→coder→reviewer pipeline (WO 35.1
+//! gave it real stage-to-stage context handoff) instead of the sequential
+//! DAG runner.
 
 use crate::shared::read_shared_config;
 use crate::tools::task::TaskSpawner;
@@ -198,9 +199,11 @@ async fn handle_run(
 
     let name_for_spawn = name.clone();
     if parallel {
-        // WO 32.5: parallel scout/coder/reviewer fan-out. The workflow's
+        // WO 32.5/35.1: scout→coder→reviewer pipeline. The workflow's
         // first agent step prompt becomes the task description for all
-        // three roles. Worktree isolation gates parallel vs sequential.
+        // three roles; each stage's output is handed to the next. The
+        // worktree flag selects the entry point (coder isolation), not
+        // the ordering — both entries run the same pipeline.
         let task_description = workflow
             .steps
             .iter()
@@ -227,7 +230,7 @@ async fn handle_run(
             let result = if worktree_enabled {
                 orchestrator.run_parallel(&task_description).await
             } else {
-                tracing::info!("worktree disabled; running scout/coder/reviewer sequentially");
+                tracing::info!("worktree disabled; coder runs without an isolated worktree");
                 orchestrator.run_sequential(&task_description).await
             };
             let summary = result.summary();
@@ -243,11 +246,11 @@ async fn handle_run(
             );
         });
         let mode = if worktree_enabled {
-            "parallel"
+            "coder worktree isolated"
         } else {
-            "sequential (worktree disabled)"
+            "coder worktree shared"
         };
-        return format!("🚀 Started workflow '{name}' — scout/coder/reviewer ({mode}).");
+        return format!("🚀 Started workflow '{name}' — scout/coder/reviewer pipeline ({mode}).");
     }
 
     tokio::spawn(async move {
@@ -337,7 +340,9 @@ impl StepRunner for TuiStepRunner {
         ));
         let summary = spawner
             .run_task(crate::tools::task::TaskRequest {
-                prompt: prompt.to_string(),
+                // WO 35.1: callers own the persona preamble — run_task is
+                // verbatim now.
+                prompt: crate::tools::task::build_task_prompt(persona, prompt),
                 persona: persona.to_string(),
                 model: None,
                 max_turns: 1,
@@ -386,7 +391,7 @@ impl StepRunner for LineStepRunner {
         ));
         spawner
             .run_task(crate::tools::task::TaskRequest {
-                prompt: prompt.to_string(),
+                prompt: crate::tools::task::build_task_prompt(persona, prompt),
                 persona: persona.to_string(),
                 model: None,
                 max_turns: 1,

@@ -10,6 +10,7 @@ pub mod carryover;
 pub mod config;
 pub mod conversation;
 pub mod error_recovery;
+pub mod event_sink_bridge;
 pub mod executor;
 pub mod executor_adapter;
 pub mod git_sanitation;

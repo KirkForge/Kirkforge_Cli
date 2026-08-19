@@ -409,6 +409,13 @@ ports `@kirkforge/core-events`'s `EventBus`: async `emit` with idempotency
 cache (TTL + size cap) and bounded buffer, `on` returning an unsub
 callable, `drain_buffer`, `shutdown`, and `graceful_shutdown`. Dead sinks
 (http/syslog/worm) are deliberately not ported — zero production consumers.
+kf-orchestrator's `EventSink` bridges onto this bus via
+`session::event_sink_bridge::EventBusSink` (WO 36.6): the bus `Event` shape
+accepted the artifact events cheaply (kind/stream_id/timestamp/value carry
+over, `task_id` folds into the value, per-sink sequence keeps the
+idempotency key unique), so no TracingSink fallback was needed. Emit
+failures (bus shut down) log a warning — the bridge exists so artifact
+events are not silently swallowed.
 
 `ToolConfig.max_continuation_rounds` (default 5, clamped 0–50) caps how many
 times the turn loop will continue after `FinishReason::Length`. When the cap

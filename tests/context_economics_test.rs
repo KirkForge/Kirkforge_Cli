@@ -18,7 +18,7 @@ use kf_code::session::executor::{Executor, TurnEvent};
 use kf_code::session::stratum::register_default_budget_listener;
 use kf_code::session::toolset::CompositeToolset;
 use kf_code::shared::Config;
-use kf_code::tools::bash::Bash;
+use kf_code::tools::read_file::ReadFile;
 use kf_code::tools::write_file::WriteFile;
 use kf_code::tools::Tool;
 use kf_compress_core::store::InMemoryOffloadStore;
@@ -95,9 +95,14 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
     let mock = MockOllama::start(
         vec![
             Reply::tool(
-                "bash",
+                "read_file",
                 serde_json::json!({
-                    "command": format!("cat {}", big_path.to_string_lossy()),
+                    "path": big_path.to_string_lossy(),
+                    // whole-file read: offset=0 + limit>=total lines returns
+                    // the RAW content (no pagination header) — same shape
+                    // the bash `cat` leg used, but cross-platform.
+                    "offset": 0,
+                    "limit": 100_000,
                 }),
             ),
             Reply::tool(
@@ -113,15 +118,14 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
     )
     .await;
 
-    let (deny_list, path_guard, _read_gate) = kf_code::session::access::access_from_config(&cfg);
+    let (_deny_list, path_guard, _read_gate) = kf_code::session::access::access_from_config(&cfg);
+    // read_file (not bash) produces the oversized tool result so the chain
+    // runs identically on Windows — `cat` is POSIX-only and a failed bash
+    // call yields no oversized result to slice. minify_above_bytes is set
+    // huge so minification does not shrink the corpus before the budget
+    // slicer sees it.
     let tools = vec![
-        Arc::new(Bash::new(
-            deny_list,
-            path_guard.clone(),
-            false,
-            None,
-            kf_code::shared::SandboxConfig::default(),
-        )) as Arc<dyn Tool>,
+        Arc::new(ReadFile::new(path_guard.clone(), false, usize::MAX)) as Arc<dyn Tool>,
         Arc::new(WriteFile::new(None, path_guard, false, false)) as Arc<dyn Tool>,
     ];
     let mut composite = CompositeToolset::empty();
@@ -141,7 +145,7 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
     .expect("executor");
     executor.set_context_index(index);
 
-    // Budget leg: pre-load to Approaching so the bash result must be
+    // Budget leg: pre-load to Approaching so the read_file result must be
     // sliced; the offload store keeps the middle. The capture listener
     // (registered first, returns None) records the slice event; the
     // default stratum listener then compresses the sliced display.
@@ -194,18 +198,20 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
         "context index symbol must reach the provider: {first}"
     );
 
-    // ── Budget + compression legs: the 40KB bash result was sliced and
+    // ── Budget + compression legs: the 40KB read_file result was sliced and
     // the offloaded middle is retrievable from the store. ──
-    let bash_result = events
+    let oversized_result = events
         .iter()
         .rev()
         .find_map(|e| match e {
-            TurnEvent::ToolResult { name, output, .. } if name == "bash" => Some(output.clone()),
+            TurnEvent::ToolResult { name, output, .. } if name == "read_file" => {
+                Some(output.clone())
+            }
             _ => None,
         })
         .unwrap_or_else(|| {
             panic!(
-                "no bash tool result event; events: {events:?}; requests: {:?}",
+                "no read_file tool result event; events: {events:?}; requests: {:?}",
                 mock.request_bodies().len()
             )
         });
@@ -213,22 +219,22 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
         .lock()
         .unwrap()
         .clone()
-        .expect("budget must have sliced the oversized bash result");
+        .expect("budget must have sliced the oversized read_file result");
     assert!(
-        event.original_size > bash_result.len(),
+        event.original_size > oversized_result.len(),
         "sliced result ({}) must be far smaller than the original ({})",
-        bash_result.len(),
+        oversized_result.len(),
         event.original_size
     );
     assert!(
-        bash_result.len() < 1500,
-        "final bash result must be sliced down ({} bytes): {bash_result}",
-        bash_result.len()
+        oversized_result.len() < 1500,
+        "final read_file result must be sliced down ({} bytes): {oversized_result}",
+        oversized_result.len()
     );
     assert!(
-        bash_result.len() <= event.sliced_size,
+        oversized_result.len() <= event.sliced_size,
         "stratum compression must not grow the display: {} vs {}",
-        bash_result.len(),
+        oversized_result.len(),
         event.sliced_size
     );
     let middle = store
@@ -240,8 +246,8 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
         "offloaded middle must carry the corpus middle"
     );
     assert!(
-        bash_result.contains("BIGFILE_HEAD_MARKER"),
-        "sliced head must keep the high-signal head"
+        oversized_result.contains("BIGFILE_HEAD_MARKER"),
+        "sliced head must keep the high-signal head; got: {oversized_result}"
     );
 
     // The sliced context (not the 40KB raw output) reached the provider.

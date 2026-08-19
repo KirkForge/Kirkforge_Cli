@@ -731,3 +731,18 @@ tests, the kf-orchestrator seam, and a version-badge gate.
 | 35.5 | [Cross-component integration tests (2 chains)](35.5-cross-component-integration-tests.md) | Pending | P2 | 35.1, 35.3 |
 | 35.6 | [Wire Executor into kf-orchestrator ModelClient](35.6-orchestrator-modelclient-wiring.md) | Pending | P2 | 35.1, 35.3 |
 | 35.7 | [Version badge consistency gate](35.7-version-badge-gate.md) | Pending | P3 | — |
+
+### Series 36 — Close the WO 35 remainders; unify orchestration
+
+Driven by the WO 35 session-close debt list (every item a disclosed
+deferral, not a new wish). See [WO 36.0](36.0-wo36-overview.md).
+
+| WO | Title | Status | Priority | Depends on |
+|----|-------|--------|----------|------------|
+| 36.0 | [Series overview](36.0-wo36-overview.md) | In Progress | — | — |
+| 36.1 | [Measure release binary; decide rusqlite](36.1-binary-size-rusqlite.md) | Pending | P1 | — |
+| 36.2 | [Bash-job owner tracking + cancel-by-owner](36.2-bash-job-owner-tracking.md) | Pending | P1 | — |
+| 36.3 | [Abort model streams mid-request on cancel](36.3-stream-abort.md) | Pending | P1 | — |
+| 36.4 | [Live cancel token for the parent session](36.4-parent-cancel-token.md) | Pending | P2 | 36.3 |
+| 36.5 | [Production-wire the ModelClient seam](36.5-modelclient-production-wiring.md) | Pending | P2 | 36.3, 36.4 |
+| 36.6 | [EventSink → EventBus bridge](36.6-eventsink-bridge.md) | Pending | P3 | folds into 36.5 |

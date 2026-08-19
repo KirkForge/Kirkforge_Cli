@@ -5,6 +5,8 @@
 //! `/status` is in the help text and on the keys.rs dispatch line,
 //! so a real implementation was overdue.
 
+use crate::session::sandbox_posture::SandboxPosture;
+use crate::shared::Config;
 use crate::tui::app::{AppState, ConnectionState};
 
 /// Render the current session's status as a multi-line string.
@@ -55,6 +57,13 @@ pub async fn handle_status_command(_args: &str, state: &AppState) -> String {
     let elapsed = state.session.session_started.elapsed();
     let elapsed_str = crate::tui::rendering::format_duration(elapsed.as_secs_f64());
 
+    // WO 35.4: real sandbox layer state (PathGuard/Landlock/seccomp/netns/
+    // worktree), read from the live config so /reload keeps it honest.
+    let sandbox = {
+        let config = crate::shared::read_shared_config(&state.services.config);
+        sandbox_block(&config)
+    };
+
     format!(
         "Status:\n\
          \n\
@@ -69,7 +78,9 @@ pub async fn handle_status_command(_args: &str, state: &AppState) -> String {
          \x20 Turn cost:       ${turn_cost:.4}\n\
          \x20 Cumulative:      ${cum_cost:.4}\n\
          \n\
-         {pressure}\n",
+         {pressure}\n\
+         \n\
+         {sandbox}\n",
         model = model,
         session_id = state.session.session_id,
         elapsed = elapsed_str,
@@ -82,9 +93,36 @@ pub async fn handle_status_command(_args: &str, state: &AppState) -> String {
     )
 }
 
+// The /status sandbox checklist (WO 35.4): header + the five layer rows.
+// Separate from handle_status_command so the rendered shape is testable
+// without an AppState.
+fn sandbox_block(config: &Config) -> String {
+    let posture = SandboxPosture::from_config(config);
+    let mut out = String::from("Sandbox:");
+    for line in posture.checklist_lines(config.security.sandbox_dir.as_deref()) {
+        out.push('\n');
+        out.push_str(&line);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::shared::Config;
     use crate::tui::rendering::format_duration;
+
+    #[test]
+    fn status_sandbox_block_lists_all_five_layers() {
+        let block = super::sandbox_block(&Config::default());
+        assert!(block.starts_with("Sandbox:"));
+        for layer in ["PathGuard", "Landlock", "seccomp", "network ns", "worktree"] {
+            assert!(block.contains(layer), "missing {layer} in:\n{block}");
+        }
+        if !cfg!(feature = "seccomp") {
+            assert!(block.contains("✗ (build with --features seccomp)"));
+        }
+        assert_eq!(block.lines().count(), 6);
+    }
 
     #[test]
     fn format_duration_sub_minute() {

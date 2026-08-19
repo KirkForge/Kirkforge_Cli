@@ -24,6 +24,7 @@ pub mod process_group;
 pub mod prompt;
 pub mod replay;
 pub mod router;
+pub mod sandbox_posture;
 pub mod session_fork;
 pub mod session_index;
 pub mod skills;

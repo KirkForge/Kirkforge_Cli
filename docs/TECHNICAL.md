@@ -292,6 +292,18 @@ counter, Ctrl+T hint) drop before overlapping, while elapsed, cost, and the
 `⚠️ UNSANDBOXED` warning stay at all widths. The drop loop re-runs every frame,
 so a resize to 40 cols immediately re-evaluates the priority mask.
 
+The `⚠️ UNSANDBOXED` bar flag means exactly "no PathGuard write scope" — it says
+nothing about the other sandbox layers. The full picture is the `/status`
+**sandbox posture checklist** (WO 35.4): five rows (PathGuard, Landlock,
+seccomp, network ns, worktree) rendered from `SandboxPosture::from_config`
+(`src/session/sandbox_posture.rs`), a pure config + compile-time-cfg snapshot
+(Landlock mirrors the `#[cfg(target_os = "linux")]` module gate, seccomp
+`cfg!(feature = "seccomp")`, netns the `harden && no_network` bash-runner gate).
+✗ rows carry their enable hint (`build with --features seccomp`,
+`pass --no-network`) so the opt-in features are discoverable without reading
+Cargo.toml; the checklist is read from the live shared config, so `/reload`
+keeps it honest.
+
 `/sessions tree` renders the fork tree as ASCII (read from
 `<data_dir>/sessions/forks/<id>/fork.json` via
 `session_index::build_fork_tree`). The result is a flat list of roots with

@@ -253,6 +253,10 @@ proptest = "1.6"
 criterion = { version = "0.5", features = ["async_tokio"] }
 # HTTP mock server for Ollama adapter integration tests without a live model.
 wiremock = "0.6"
+# WO 40.5: serializes tests that mutate process-global OnceLock registries
+# (SESSION_MODE) which cannot be dependency-injected. Zero binary-size impact
+# (dev-dep only).
+serial_test = "3"
 
 [[test]]
 name = "e2e"

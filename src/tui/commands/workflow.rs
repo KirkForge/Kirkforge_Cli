@@ -453,7 +453,7 @@ pub fn format_summary(name: &str, summary: &kf_workflow::WorkflowSummary) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::test_util::app_state;
+    use crate::shared::test_util::{app_state, CwdGuard};
     use crate::tui::app::AppState;
     use crate::tui::commands::PersonaResult;
     use tokio::sync::mpsc;
@@ -502,8 +502,7 @@ mod tests {
             r#"{"name":"smoke","steps":[{"name":"a","prompt":"x","persona":"explore"}]}"#,
         )
         .unwrap();
-        let cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = CwdGuard::set(tmp.path()).await;
 
         let mut state = empty_state();
         let (tx, _rx) = mpsc::unbounded_channel::<PersonaResult>();
@@ -511,8 +510,6 @@ mod tests {
         assert!(out.contains("Started workflow 'smoke'"));
         assert!(state.generation.workflow_in_progress.is_some());
         assert!(state.generation.workflow_cancel.is_some());
-
-        std::env::set_current_dir(cwd).unwrap();
     }
 
     #[tokio::test]
@@ -525,8 +522,7 @@ mod tests {
             r#"{"name":"par","steps":[{"name":"a","prompt":"do the thing","persona":"explore"}]}"#,
         )
         .unwrap();
-        let cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = CwdGuard::set(tmp.path()).await;
 
         let mut state = empty_state();
         let (tx, _rx) = mpsc::unbounded_channel::<PersonaResult>();
@@ -538,8 +534,6 @@ mod tests {
             "parallel flag should trigger fan-out message, got: {out}"
         );
         assert!(state.generation.workflow_in_progress.is_some());
-
-        std::env::set_current_dir(cwd).unwrap();
     }
 
     #[tokio::test]
@@ -564,8 +558,7 @@ mod tests {
             r#"{"name":"par","steps":[{"name":"a","prompt":"do the thing","persona":"explore"}]}"#,
         )
         .unwrap();
-        let cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = CwdGuard::set(tmp.path()).await;
 
         let mut state = empty_state();
         let (tx, _rx) = mpsc::unbounded_channel::<PersonaResult>();
@@ -590,8 +583,6 @@ mod tests {
         );
         assert!(state.generation.workflow_orchestrator.is_none());
         assert!(state.generation.workflow_in_progress.is_none());
-
-        std::env::set_current_dir(cwd).unwrap();
     }
 
     #[test]

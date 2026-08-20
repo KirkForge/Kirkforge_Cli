@@ -464,22 +464,10 @@ impl StepRunner for TaskSpawnerStepRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_util::CwdGuard;
     use crate::tools::task::TaskRequest;
     use crate::tools::ToolContext;
-    use std::sync::{Mutex as StdMutex, OnceLock};
-    use tokio::sync::Mutex;
-
-    /// Global guard serializing tests that mutate the process CWD.
-    /// `find_workflow_file` resolves `.kf-code/workflows/<name>.json`
-    /// relative to CWD, so two CDB-mutating tests running in parallel
-    /// would race and flake. The guard is process-local and test-only.
-    /// `tokio::sync::Mutex` (not `std::sync`) because the guard is held
-    /// across the `tool.run(...).await` call — `find_workflow_file` runs
-    /// inside that async call and must observe the test's CDB.
-    static CWD_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-    async fn cwd_lock() -> tokio::sync::MutexGuard<'static, ()> {
-        CWD_GUARD.get_or_init(|| Mutex::new(())).lock().await
-    }
+    use std::sync::Mutex as StdMutex;
 
     /// Spawner that echoes the prompt back as the summary. Records every
     /// call so tests can assert on persona + interpolated prompt.
@@ -561,7 +549,6 @@ mod tests {
 
     #[tokio::test]
     async fn runs_workflow_and_interpolates_vars() {
-        let _guard = cwd_lock().await;
         let tmp = tempfile::tempdir().unwrap();
         write_template(
             tmp.path(),
@@ -571,8 +558,7 @@ mod tests {
                 {"name":"plan","prompt":"Design ${feature}","persona":"plan","depends_on":["explore"]}
             ]}"#,
         );
-        let cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = CwdGuard::set(tmp.path()).await;
 
         let calls = Arc::new(StdMutex::new(Vec::new()));
         let spawner: Arc<dyn TaskSpawner> = Arc::new(EchoSpawner {
@@ -587,7 +573,6 @@ mod tests {
                 serde_json::json!({"template": "demo", "vars": {"feature": "auth"}}),
             )
             .await;
-        std::env::set_current_dir(cwd).unwrap();
 
         let content = match out {
             ToolOutcome::Success { content } => content,
@@ -614,10 +599,8 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_template_returns_error() {
-        let _guard = cwd_lock().await;
         let tmp = tempfile::tempdir().unwrap();
-        let cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _cwd = CwdGuard::set(tmp.path()).await;
         let spawner: Arc<dyn TaskSpawner> = Arc::new(EchoSpawner {
             calls: Arc::new(StdMutex::new(Vec::new())),
         });
@@ -625,7 +608,6 @@ mod tests {
         let out = WorkflowTool::new(DenyList::default(), PathGuard::default(), false)
             .run(&ctx, serde_json::json!({"template": "nope"}))
             .await;
-        std::env::set_current_dir(cwd).unwrap();
         match out {
             ToolOutcome::Error { message } => assert!(message.contains("not found")),
             other => panic!("expected Error, got {other:?}"),

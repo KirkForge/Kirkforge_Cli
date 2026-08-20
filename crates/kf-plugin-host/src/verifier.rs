@@ -25,6 +25,7 @@ use std::time::Instant;
 /// Hard bound on a verifier script's runtime, mirroring the binary's
 /// 5s hook timeout. Verifiers are quick checks (grep-style scripts);
 /// anything longer is a hang, not slowness.
+#[cfg(unix)]
 const VERIFIER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A plugin verifier that can be invoked.

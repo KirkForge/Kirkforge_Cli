@@ -306,6 +306,15 @@ mod tests {
         assert_eq!(result.provider_resolved.as_deref(), Some("local-ollama"));
         assert_eq!(orch.stats().total_delegations, 1);
 
+        // WO 37.2 (ADR-076): the reducer attaches a real packet — this
+        // clean delegation (no files written) folds to Pass.
+        let packet = result.packet.as_ref().expect("packet must be populated");
+        assert_eq!(
+            packet.verification.overall,
+            kf_orchestrator::OverallVerdict::Pass
+        );
+        assert_eq!(packet.turn, 0);
+
         // The delegate() flush is awaited, so the bus handler has run.
         let events = seen.lock().unwrap().clone();
         assert_eq!(

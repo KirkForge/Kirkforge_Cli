@@ -50,7 +50,7 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-orchestrator ← orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of @kirkforge/orchestrator (WO 29.7)
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── benches/tasks/             ← 30 benchmark task definitions (TOML)
-└── docs/adr/                  ← 92 Architecture Decision Records
+└── docs/adr/                  ← 93 Architecture Decision Records
 ```
 
 The workspace has ~3,300 `#[test]` functions (~2,400 under `src/`,
@@ -109,7 +109,7 @@ binary code path starts calling kf-memory-store's
 | `kf-routing` | session | Pure orchestrator modules: classifier, routing, correction, truth model, profiles, cost, path safety (WO 29.3) | Active |
 | `kf-rbac` | security | RBAC (roles/permissions/actor), timing-safe API-key auth, OIDC JWT/JWKS verification — port of `@kirkforge/core-rbac` (WO 29.5). ES512 verify deferred (jsonwebtoken has no ES512 variant). | Active |
 | `kf-memory-store` | session | Routing-oriented memory store: MemoryStore facade + InMemory/File/SQLite adapters (port of `@kirkforge/memory-palace`, WO 29.6) | Active |
-| `kf-orchestrator` | session | Orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of `@kirkforge/orchestrator` (WO 29.7). `ModelClient` production impl: `src/session/executor_adapter.rs` (WO 35.6, ADR-075). Reducer + deterministic verifiers still deferred. | Active |
+| `kf-orchestrator` | session | Orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of `@kirkforge/orchestrator` (WO 29.7). `ModelClient` production impl: `src/session/executor_adapter.rs` (WO 35.6, ADR-075). Reducer folds verification state into `DelegationResult.packet` (WO 37.2, ADR-076); deterministic lint/types/graph verifiers still deferred. | Active |
 
 "Excluded" crates exist on disk but are not built by default.
 
@@ -711,8 +711,9 @@ behind the `kf-plugin-tools` feature (WO 29.1): `doctor`, `health`,
 `tools`, `verify`, and `audit_verify` run as native Rust calls; `verify`
 runs the orchestrator crate's security emitter over the working tree and
 `audit_verify` walks the WO 29.4 hash chain over an audit JSONL file
-(both WO 35.6); `verify_workspace` still reports "not implemented
-(reducer not ported)". The orchestrator's `ModelClient` has a production
+(both WO 35.6); `verify_workspace` still reports not-implemented — the
+crate reducer shipped in WO 37.2 (ADR-076), but this tool is not yet
+wired to it. The orchestrator's `ModelClient` has a production
 impl (`session::executor_adapter::ExecutorAdapter`, WO 35.6 / ADR-075),
 though the verify commands are deterministic and do not call it. The
 external linters themselves (ESLint, TypeScript,
@@ -897,8 +898,23 @@ are serde-skipped brief fields consumed only by the adapter; the
 WO 35.2 worktree patch keeps traveling inside `Emission.content` via the
 subagent patch marker. `Orchestrator::delegate` is drivable end-to-end
 with this adapter (wiremock-tested); reimplementing the pipeline on
-`kf-orchestrator::Orchestrator` remains a follow-up decision, and the
-reducer port is separately tracked.
+`kf-orchestrator::Orchestrator` remains a follow-up decision.
+
+### Reducer (WO 37.2, ADR-076)
+
+Every `Orchestrator::delegate` call folds its verification state into the
+`packet` on the returned `DelegationResult` (`kf_orchestrator::reducer`):
+changes from the written-file signals, security from scanning those files
+(resolved against the delegation cwd), lint/types/graph at default (no
+in-crate producers — external linters stay external per ADR-050), and the
+overall verdict from the ADR-076 fold (Fail ← critical findings or error
+categories; Warn ← non-error findings; Pass ← all clean, including the
+empty case; the reducer never emits `Unknown`). The correction loop feeds
+this packet into `decide_correction`, so clean delegations accept on turn
+0 instead of cycling corrections until exhaustion, and
+`execute_decomposition` subtask verdicts become real. Deterministic
+lint/types/graph emitters remain unported; wiring the binary's
+`plugin_verify_workspace` tool to the crate reducer is follow-up work.
 
 ---
 
@@ -1272,8 +1288,9 @@ The root `Cargo.toml` exposes these features:
 - `kf-plugin-tools` (default) — registers the six `kf-plugin` tools as
   compiled-in Rust impls (WO 29.1). `doctor`/`health`/`tools` run natively;
   `verify` (security emitter) and `audit_verify` (hash-chain walker) also run
-  natively since WO 35.6; `verify_workspace` reports "not implemented
-  (reducer not ported)". With the feature off, no `kf-plugin` tools are
+  natively since WO 35.6; `verify_workspace` reports not-implemented (the
+  crate reducer shipped in WO 37.2/ADR-076; this tool is not yet wired to
+  it). With the feature off, no `kf-plugin` tools are
   registered — the shell/Node fallback that lived under
   `plugins/kf-plugin/` was deleted in WO 29.9.
 - `pty` (non-default) — PTY-backed interactive bash commands via `portable-pty`
@@ -1324,12 +1341,13 @@ not the root binary.
 
 ## ADRs
 
-92 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+93 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
 execution replay (039), VFS minification (053), coverage-gate threshold
 policy (065), CI architecture reset (074), Emission flattening for the
-executor-backed ModelClient (075), and many more. A drift test
+executor-backed ModelClient (075), the reducer contract for
+`DelegationResult.packet` (076), and many more. A drift test
 (`adr_xref_drift`) enforces that ADR file headers and the README index
 table agree.
 

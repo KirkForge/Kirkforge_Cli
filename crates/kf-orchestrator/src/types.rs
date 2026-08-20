@@ -1,7 +1,7 @@
 //! Shared type surface for the orchestrator. Port of
 //! `orchestrator/src/types.ts` (the parts the delegation/decompose/correction
-//! pipeline needs). The reducer + verifier-shape types are not ported here —
-//! they live in `kf_routing::correction` and a future reducer module.
+//! pipeline needs). Verifier-shape types live in `kf_routing::correction`;
+//! the fold that populates them is [`crate::reducer`] (ADR-076).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -1,3 +1,37 @@
+# Lessons — WO 37.2 session (worktree wo37-b)
+
+## What I learned about this codebase
+
+- `lessons.md` is TRACKED here despite AGENTS.md calling it gitignored — it's
+  a newest-first per-session log. Append your section at the top; never
+  overwrite. (I clobbered it once; `git checkout -- lessons.md` + prepend.)
+- `ReducedStatePacket` in `kf_routing::correction` was already the complete
+  shape — the WO's "if it's a placeholder, extend it" concern was false.
+  Thirty seconds of reading types.rs saved an additive-struct detour.
+- Written-file signal paths are RELATIVE (mode executors record the bare
+  `name`); any scan must join against the delegation cwd. The correction
+  loop's own R7 re-scan does NOT join — pre-existing latent gap; decision
+  actions unaffected (analysis in ADR-076 consequences).
+- The root `Cargo.toml` `kf-routing = {...}` line at ~70 is the
+  `[workspace.dependencies]` table — the binary itself does NOT depend on
+  kf-routing. Consumers of packet types need kf-orchestrator re-exports
+  (added `OverallVerdict`, same pattern as `DelegationMode`).
+- GitNexus index for this repo is STALE (points at `npm/kf-plugin/` TS files
+  deleted in WO 29.9) — impact() returns targets in dead files. Cross-layer
+  grep is the reliable blast-radius method until re-indexed.
+- `cargo check -p kf-code --lib` cold build exceeds 5 min in a fresh
+  worktree; budget 10-25 min for binary gates. Workspace clippy: ~7 min.
+- rustfmt explodes table-driven test literals one-tuple-per-line — write the
+  table, run `cargo fmt` immediately, don't hand-fight it.
+
+## What didn't work / would do differently
+
+- Referenced `kf_routing::correction::OverallVerdict` from the binary's e2e
+  test before checking the dep edge — cost one full lib-test compile cycle
+  (~5 min). Check `grep -n "^\[" Cargo.toml` section context first.
+
+---
+
 # Lessons — WO 36.3/36.4 session (worktree wo36-c)
 
 ## What I learned about this codebase

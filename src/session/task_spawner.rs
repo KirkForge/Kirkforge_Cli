@@ -62,15 +62,35 @@ impl Drop for TempDirGuard {
     }
 }
 
+// WO 38.4: identity mints from the process-global task counter, never a
+// clock. Two `task` calls in one assistant message land in the same
+// millisecond; with pid+millis they collided on the temp dir (two
+// subagents sharing one conversation.ndjson — first finisher deleted it
+// under the other) and on the worktree path (stale recovery
+// force-removed a LIVE sibling worktree). The pid prefix stays for
+// debuggability; the counter guarantees uniqueness.
 fn task_temp_tag() -> String {
     format!(
         "{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0)
+        crate::tools::task::next_unique_id()
     )
+}
+
+// Create the per-task temp dir for a freshly minted tag (WO 38.4). A
+// pre-existing dir at a globally unique tag means leftover state or
+// corruption — error instead of silently sharing (and eventually
+// deleting) a sibling's conversation log.
+fn create_task_temp_dir(tag: &str) -> Result<std::path::PathBuf, String> {
+    let dir = std::env::temp_dir().join(format!("kf-code-task-{tag}"));
+    if dir.exists() {
+        return Err(format!(
+            "task temp dir already exists (stale state?): {}",
+            dir.display()
+        ));
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create task temp dir: {e}"))?;
+    Ok(dir)
 }
 
 /// Spawn a subagent task inside an isolated `Executor` with a temporary
@@ -324,9 +344,7 @@ impl InProcessTaskSpawner {
             _ => all,
         };
 
-        let temp_dir = std::env::temp_dir().join(format!("kf-code-task-{}", task_temp_tag()));
-        std::fs::create_dir_all(&temp_dir)
-            .map_err(|e| format!("failed to create task temp dir: {e}"))?;
+        let temp_dir = create_task_temp_dir(&task_temp_tag())?;
         let _temp_guard = TempDirGuard(temp_dir.clone());
         let log_path = temp_dir.join("conversation.ndjson");
 
@@ -659,5 +677,189 @@ mod tests {
             leftover.is_empty(),
             "temp dir leaked on cancel: {leftover:?}"
         );
+    }
+
+    // ── WO 38.4: collision-proof identities ──
+
+    #[test]
+    fn task_temp_tag_never_repeats_even_in_the_same_millisecond() {
+        // The clock-based tag (pid+millis) returned identical strings for
+        // same-ms spawns; the counter-minted tag cannot.
+        let a = task_temp_tag();
+        let b = task_temp_tag();
+        assert_ne!(a, b, "same-ms spawns must never share a tag");
+    }
+
+    #[test]
+    fn create_task_temp_dir_rejects_pre_existing_dir() {
+        let tag = format!(
+            "{}-preexist-{}",
+            std::process::id(),
+            crate::tools::task::next_unique_id()
+        );
+        let first = create_task_temp_dir(&tag).expect("fresh tag must create");
+        assert!(first.exists());
+        let err = create_task_temp_dir(&tag).expect_err("collision must be an error");
+        assert!(
+            err.contains("already exists"),
+            "collision must be an error, not silent sharing: {err}"
+        );
+        let _ = std::fs::remove_dir_all(first);
+    }
+
+    fn live_dirs_with_prefix(prefix: &str) -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(std::env::temp_dir())
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        p.file_name()
+                            .is_some_and(|n| n.to_string_lossy().starts_with(prefix))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    // WO 38.4 gap test: two run_task calls launched concurrently WITHOUT
+    // artificial distinct ids must land in distinct temp dirs (both alive
+    // simultaneously — no first-finisher deletion of a sibling's log) and
+    // both error out cleanly against the dead host. multi_thread flavor:
+    // this is a real-concurrency test and the production runtime is
+    // multi-threaded; on current_thread the two long-lived spawned tasks
+    // starve behind the main task's poll loop.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn same_ms_double_spawn_gets_distinct_temp_dirs() {
+        let _tmp_lock = RUN_TASK_TMP_LOCK.lock().await;
+        let mut cfg = Config::default();
+        cfg.model.request_timeout_secs = 5;
+        let config: SharedConfig = Arc::new(std::sync::RwLock::new(cfg));
+        let spawner = Arc::new(InProcessTaskSpawner::new(
+            config,
+            "test-model".into(),
+            "127.0.0.1:1".into(),
+            None,
+            false,
+        ));
+        let mk = |p: &'static str| TaskRequest {
+            prompt: p.into(),
+            persona: "coder".into(),
+            model: None,
+            max_turns: 1,
+            cancel: None,
+            owner: None,
+        };
+        // Real spawned tasks (an un-awaited future never runs — the poll
+        // loop below must observe dirs while both tasks are in flight).
+        let spawner_a = spawner.clone();
+        let a = tokio::spawn(async move { spawner_a.run_task(mk("doomed a")).await });
+        let spawner_b = spawner.clone();
+        let b = tokio::spawn(async move { spawner_b.run_task(mk("doomed b")).await });
+
+        // Both dirs must be alive at the same time (the adapter's retry
+        // backoff keeps the tasks in flight for seconds).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let dirs = loop {
+            let dirs = task_temp_dirs_for_this_pid();
+            if dirs.len() >= 2 {
+                break dirs;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "two live temp dirs never appeared: {dirs:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        assert_ne!(dirs[0], dirs[1], "same-ms spawns must not share a temp dir");
+
+        let ra = a.await.expect("task a panicked");
+        let rb = b.await.expect("task b panicked");
+        assert!(ra.is_err() && rb.is_err(), "dead host must fail both tasks");
+        let leftover = task_temp_dirs_for_this_pid();
+        assert!(leftover.is_empty(), "temp dirs leaked: {leftover:?}");
+    }
+
+    // WO 38.4 gap test (worktree half): the same double spawn under
+    // worktree isolation must create two distinct worktrees — with the
+    // clock tag they collided and stale recovery force-removed the LIVE
+    // sibling. Both are cleaned up on error return. multi_thread flavor:
+    // real-concurrency test (see the temp-dir variant above).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn same_ms_double_spawn_gets_distinct_worktrees() {
+        let _tmp_lock = RUN_TASK_TMP_LOCK.lock().await;
+        // A throwaway git repo as the worktree root so the test never
+        // touches the checkout it runs in.
+        let repo = tempfile::tempdir().expect("repo tempdir");
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test"],
+            vec!["config", "user.name", "test"],
+        ] {
+            let out = std::process::Command::new("git")
+                .args(&args)
+                .current_dir(repo.path())
+                .output()
+                .expect("git spawn");
+            assert!(out.status.success(), "git {args:?} failed");
+        }
+        std::fs::write(repo.path().join("base.txt"), "base\n").unwrap();
+        for args in [vec!["add", "."], vec!["commit", "-m", "init"]] {
+            let out = std::process::Command::new("git")
+                .args(&args)
+                .current_dir(repo.path())
+                .output()
+                .expect("git spawn");
+            assert!(out.status.success(), "git {args:?} failed");
+        }
+
+        let mut cfg = Config::default();
+        cfg.model.request_timeout_secs = 5;
+        cfg.session.worktree_enabled = true;
+        cfg.security.sandbox_dir = Some(repo.path().to_string_lossy().to_string());
+        let config: SharedConfig = Arc::new(std::sync::RwLock::new(cfg));
+        let spawner = Arc::new(InProcessTaskSpawner::new(
+            config,
+            "test-model".into(),
+            "127.0.0.1:1".into(),
+            None,
+            false,
+        ));
+        let mk = |p: &'static str| TaskRequest {
+            prompt: p.into(),
+            persona: "coder".into(),
+            model: None,
+            max_turns: 1,
+            cancel: None,
+            owner: None,
+        };
+        let spawner_a = spawner.clone();
+        let a = tokio::spawn(async move { spawner_a.run_task(mk("doomed a")).await });
+        let spawner_b = spawner.clone();
+        let b = tokio::spawn(async move { spawner_b.run_task(mk("doomed b")).await });
+
+        let prefix = format!("kf-code-session-task-{}", std::process::id());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let dirs = loop {
+            let dirs = live_dirs_with_prefix(&prefix);
+            if dirs.len() >= 2 {
+                break dirs;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "two live worktrees never appeared: {dirs:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        assert_ne!(dirs[0], dirs[1], "same-ms spawns must not share a worktree");
+
+        let ra = a.await.expect("task a panicked");
+        let rb = b.await.expect("task b panicked");
+        assert!(ra.is_err() && rb.is_err(), "dead host must fail both tasks");
+        for d in &dirs {
+            assert!(
+                !d.exists(),
+                "worktree {d:?} must be removed on error return"
+            );
+        }
     }
 }

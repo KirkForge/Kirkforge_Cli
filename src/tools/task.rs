@@ -13,6 +13,37 @@ use tokio_util::sync::CancellationToken;
 /// collisions impossible by construction.
 static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Mint a process-unique number from the global counter (WO 38.4): the
+/// same source that owns task ids, so filesystem identities derived from
+/// it (temp dirs, worktree tags) can never collide on same-millisecond
+/// spawns the way a pid+millis clock tag could.
+pub(crate) fn next_unique_id() -> u64 {
+    NEXT_TASK_ID.fetch_add(1, Ordering::SeqCst)
+}
+
+/// Link a parent executor's live cancel token to a nested task's cancel
+/// pair (WO 38.4). Inside a subagent executor, `ctx.token` is a live
+/// child of that executor's attached root token — when the outer task is
+/// cancelled the child fires, and this watcher translates that into the
+/// nested handle's flag + token so the child stops cooperatively instead
+/// of outliving its parent. The second select arm retires the watcher
+/// when the nested task finishes normally, so watchers don't pile up.
+fn cascade_parent_cancel(
+    parent: CancellationToken,
+    child: TaskCancel,
+    done: Arc<tokio::sync::Notify>,
+) {
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = parent.cancelled() => {
+                child.flag.store(true, Ordering::SeqCst);
+                child.token.cancel();
+            }
+            _ = done.notified() => {}
+        }
+    });
+}
+
 /// Request to spawn a subagent task.
 #[derive(Debug, Clone)]
 pub struct TaskRequest {
@@ -571,6 +602,9 @@ impl Tool for Task {
             // Per-task lifecycle handles: a default handle owns the
             // `started` flag and the WO 35.3 cancel pair (flag + token);
             // clones go to the worker and into the TaskRequest.
+            // WO 38.4: record the spawning (sub)agent's task id so task
+            // trees are traceable — top-level spawns keep None.
+            let parent_task_id = ctx.task_owner.clone();
             let metadata = TaskMetadata {
                 model,
                 persona,
@@ -578,7 +612,7 @@ impl Tool for Task {
                 started_at: chrono::Local::now(),
                 duration_ms: None,
                 token_estimate: None,
-                parent_task_id: None,
+                parent_task_id,
             };
             let handle = TaskHandle {
                 metadata,
@@ -586,6 +620,16 @@ impl Tool for Task {
             };
             let started = Arc::clone(&handle.started);
             let cancel = handle.cancel_handles();
+            // WO 38.4: cancel cascade — when this call runs inside a
+            // subagent, ctx.token is a live child of that subagent
+            // executor's root token, so an outer cancel reaches the
+            // nested background task too. Retired on completion via the
+            // handle's `completed` notify (fired by the worker below).
+            cascade_parent_cancel(
+                ctx.token.clone(),
+                cancel.clone(),
+                Arc::clone(&handle.completed),
+            );
             let id = {
                 let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
                 guard.insert(handle)
@@ -639,15 +683,31 @@ impl Tool for Task {
                 ),
             }
         } else {
+            // WO 38.4: foreground nested tasks derive their cancel pair
+            // from the parent executor's live token (ctx.token) the same
+            // way background ones do — outer cancel stops the child
+            // between turns (flag) and in-flight (token). Main-session
+            // tokens never fire, so top-level foreground tasks stay
+            // uncancellable exactly as before.
+            let cancel = TaskCancel {
+                flag: Arc::new(AtomicBool::new(false)),
+                token: CancellationToken::new(),
+            };
+            let done = Arc::new(tokio::sync::Notify::new());
+            cascade_parent_cancel(ctx.token.clone(), cancel.clone(), done.clone());
             let request = TaskRequest {
                 prompt: full_prompt,
                 persona,
                 model,
                 max_turns,
-                cancel: None,
-                owner: None,
+                cancel: Some(cancel),
+                // Owner rides with the ancestor so bash jobs the child
+                // spawns die with the ancestor's cancel-by-owner kill.
+                owner: ctx.task_owner.clone(),
             };
-            match spawner.run_task(request).await {
+            let result = spawner.run_task(request).await;
+            done.notify_one();
+            match result {
                 Ok(summary) => ToolOutcome::Success { content: summary },
                 Err(err) => ToolOutcome::Error { message: err },
             }
@@ -1855,5 +1915,126 @@ mod tests {
                 observed_cancel,
             }
         }
+    }
+
+    // ── WO 38.4: cancel cascades to nested subagents ──
+
+    // Outer cancel must stop a subagent's own background child. The ctx
+    // mirrors what executor dispatch builds inside a subagent: a live
+    // child of the outer task's root cancel token, tagged with the outer
+    // task's owner id. Cancelling the outer task fires the token, the
+    // cascade watcher translates it onto the nested handle's flag+token,
+    // and the nested run_task returns cooperatively — all event-driven,
+    // no sleep race.
+    #[tokio::test]
+    async fn outer_cancel_stops_nested_background_task() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let task = Task::with_manager(manager.clone());
+        let CooperativeProbe {
+            spawner,
+            observed_cancel,
+        } = CooperativeProbe::new();
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(spawner);
+
+        let outer_id = {
+            let mut mgr = manager.lock().unwrap_or_else(|e| e.into_inner());
+            mgr.insert(TaskHandle {
+                started: Arc::new(AtomicBool::new(true)),
+                ..Default::default()
+            })
+        };
+
+        let mut ctx = ToolContext::with_spawner(spawner);
+        ctx.token = manager
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&outer_id)
+            .unwrap()
+            .cancel_handles()
+            .token
+            .child_token();
+        ctx.task_owner = Some(outer_id.clone());
+
+        let outcome = task
+            .run(
+                &ctx,
+                serde_json::json!({ "prompt": "nested long running", "background": true }),
+            )
+            .await;
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected Success, got {other:?}"),
+        };
+        let nested_id = extract_task_id(&content);
+
+        // WO 38.4: the spawn records its parent for task-tree traceability.
+        {
+            let mgr = manager.lock().unwrap_or_else(|e| e.into_inner());
+            let entry = mgr
+                .list()
+                .into_iter()
+                .find(|e| e.id == nested_id)
+                .expect("nested task listed");
+            assert_eq!(
+                entry.metadata.parent_task_id.as_deref(),
+                Some(outer_id.as_str())
+            );
+        }
+
+        poll_until("nested task reaches Running status", || {
+            matches!(
+                manager
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .status(&nested_id),
+                Some(TaskStatus::Running)
+            )
+            .then_some(())
+        })
+        .await;
+
+        // Cancel the OUTER task — nothing calls cancel() on the nested id.
+        assert!(
+            manager
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .cancel(&outer_id),
+            "outer cancel should succeed"
+        );
+
+        // Bounded event-driven window: the cascade must reach the nested
+        // run_task's cancel pair.
+        poll_until("cascade reached nested run_task", || {
+            observed_cancel.lock().unwrap().is_some().then_some(())
+        })
+        .await;
+        let cancel = observed_cancel.lock().unwrap().take().unwrap();
+        assert!(
+            cancel.flag.load(Ordering::SeqCst),
+            "outer cancel must set the nested task's flag"
+        );
+        assert!(
+            cancel.token.is_cancelled(),
+            "outer cancel must fire the nested task's token"
+        );
+
+        poll_until("nested task reaches terminal state", || {
+            manager
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .status(&nested_id)
+                .as_ref()
+                .is_some_and(|s| s.is_terminal())
+                .then_some(())
+        })
+        .await;
+        assert_eq!(
+            manager
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .status(&nested_id),
+            Some(TaskStatus::Cancelled),
+            "nested task must read as Cancelled after the outer cancel"
+        );
     }
 }

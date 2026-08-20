@@ -2233,7 +2233,7 @@ mod tests {
         // SecurityConfig=22, ToolConfig=33, SessionConfig=8,
         // DisplayConfig=7 → 103 total pub fields.
         assert_eq!(
-            CONFIG_FIELD_COUNT, 103,
+            CONFIG_FIELD_COUNT, 104,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 

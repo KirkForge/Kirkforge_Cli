@@ -678,6 +678,15 @@ mod tests {
         // Start the tool in a background task and cancel the token shortly
         // after. We don't await the tool directly because we want to drive
         // cancellation from outside.
+        //
+        // The 500ms below is a genuine "wait for the child to spawn" race
+        // window — the Bash tool does not expose a readiness signal (no
+        // child pid channel, no "Running" notification), and observing
+        // "child started" from outside would require production changes
+        // (out of scope: test-only WO). Polling `handle.is_finished()` is
+        // useless — the handle is never finished until cancel fires. This
+        // is one of the 3 documented unconvertible race-test delays in
+        // WO 40.4; the 1s descendant-grace below was converted to a poll.
         let token = ctx.token.clone();
         let handle = tokio::spawn(async move { tool.run(&ctx, args).await });
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -692,8 +701,17 @@ mod tests {
             "expected Cancelled error, got {outcome:?}"
         );
 
-        // Give any surviving descendant a short window to touch the marker.
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        // Poll for the marker's absence with a 1s ceiling. A blind 1s sleep
+        // delays failure detection; polling fails fast if a surviving
+        // descendant touches the marker, and bounds the wait otherwise.
+        let grace_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while std::time::Instant::now() < grace_deadline {
+            assert!(
+                !marker.exists(),
+                "cancelled shell left a surviving descendant"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         assert!(
             !marker.exists(),
             "cancelled shell left a surviving descendant"

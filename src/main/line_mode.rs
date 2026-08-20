@@ -811,7 +811,14 @@ mod tests {
             poll_read_line(fd, &shutdown_reader)
         });
 
-        // Let the thread enter its poll loop.
+        // Let the thread enter its poll loop. The 80ms is a genuine
+        // "wait for blocking syscall entry" race — `poll_read_line` sets
+        // no signal before entering `libc::poll()`, and observing "thread
+        // is now in poll()" from outside would require production changes
+        // (out of scope: test-only WO). Polling `!handle.is_finished()` is
+        // useless — the thread is never finished until shutdown fires.
+        // Documented unconvertible race-test delay (WO 40.4). The 3s join
+        // timeout below is the safety net.
         tokio::time::sleep(std::time::Duration::from_millis(80)).await;
         assert!(
             !handle.is_finished(),

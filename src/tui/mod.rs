@@ -1681,12 +1681,11 @@ mod tests {
         let notify_for_task = notify.clone();
         let started = std::time::Instant::now();
 
-        // Fire the notify after a short delay. This mimics the
-        // SIGHUP handler and the kb-reader-thread-EOF path in
-        // `run_tui`, both of which call `notify_one()` from a
-        // background task/thread.
+        // Fire the notify immediately. The 20ms wall-clock sleep this
+        // replaced was artificial — the test proves the `select!` resolves
+        // on the Notify arm, not that there's a delay. The 1s safety net
+        // and 500ms assertion ceiling below still bound the test.
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             notify_for_task.notify_one();
         });
 
@@ -1707,8 +1706,7 @@ mod tests {
                 break;
             }
             // Safety net: bail out if the test would otherwise
-            // hang forever (Notify never fired). 1s is generous
-            // — the real notification fires at 20ms.
+            // hang forever (Notify never fired).
             if started.elapsed() > std::time::Duration::from_secs(1) {
                 panic!("shutdown Notify was never observed");
             }

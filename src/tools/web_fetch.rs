@@ -834,12 +834,14 @@ mod tests {
     fn empty_resolution_passes_guards_unpinned() {
         // The wiremock test seam: Ok(vec![]) means "resolved, nothing
         // internal, nothing to pin" — guards pass and the fetch falls
-        // back to the tool's own (test-pinned) client.
+        // back to the tool's own (test-pinned) client. `reqwest::Client`
+        // does not impl `PartialEq`, so assert the shape without `assert_eq!`.
         let r: ResolverHandle = empty_resolver_handle();
         assert!(!host_resolves_to_internal_ip("http://test.local/", &*r));
-        assert_eq!(
-            resolve_and_pin_dns("http://test.local/", &*r),
-            Ok(None),
+        let pin = resolve_and_pin_dns("http://test.local/", &*r);
+        assert!(pin.is_ok(), "empty resolution must not deny: {pin:?}");
+        assert!(
+            pin.as_ref().unwrap().is_none(),
             "empty resolution must not build a pinned client"
         );
     }

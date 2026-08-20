@@ -155,6 +155,7 @@ impl Drop for WorktreeSession {
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
     use std::sync::Arc;
 
     // Shared setup for the WO 35.2 patch tests: a temp git repo with one

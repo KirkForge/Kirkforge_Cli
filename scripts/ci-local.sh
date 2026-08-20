@@ -44,6 +44,13 @@ run_step "Run unit tests" cargo test --locked --workspace -- --test-threads="$TE
 run_step "Run smoke tests" cargo test --test smoke_test
 run_step "Run Clippy" cargo clippy --all-targets -- -D warnings
 
+# Windows cross-compile clippy (WO 40.2). Linux clippy is blind to cfg(unix)
+# gaps — unix-only imports/consts/test helpers used ungated compile fine here
+# but break the Windows build. This step catches every such gap before push.
+# The 25+ fix(windows) commits in Aug 2026 were all caused by skipping this.
+# Requires the x86_64-pc-windows-gnu rustup target + mingw-w64 (x86_64-w64-mingw32-gcc).
+run_step "Run Clippy (Windows cross-compile)" cargo clippy --target x86_64-pc-windows-gnu --workspace --all-targets -- -D warnings
+
 if [ "$MODE" != "quick" ]; then
     run_step "Build release binary" cargo build --release --locked
 

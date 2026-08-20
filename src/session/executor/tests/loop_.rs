@@ -4,10 +4,13 @@
 
 use super::super::*;
 use super::common::*;
+use crate::adapters::ModelAdapter;
 use crate::shared::metrics::{read_events, MetricEvent, PlanDecisionKind};
 use crate::shared::permission::PermissionAction;
 use crate::shared::test_util::remove_test_file;
-use crate::shared::{FinishReason, StreamEvent, ToolDef, ToolError, ToolOutcome};
+use crate::shared::{
+    FinishReason, Message, ModelInfo, StreamEvent, ToolDef, ToolError, ToolOutcome,
+};
 use crate::tools::{Tool, ToolContext};
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
@@ -1107,6 +1110,152 @@ async fn esc_cancel_aborts_stalled_parent_stream() {
     h.cancel_tx.send(()).unwrap();
 
     wait_turn_complete_within(&mut h.event_rx, 2).await;
+    h.handle.abort();
+}
+
+// ── WO 38.5: executor survives turn errors + Esc epoch window ────────
+
+/// Adapter whose first stream() call fails (provider blip: 401/5xx past
+/// retries, missing key) and whose subsequent calls succeed — the user's
+/// retry must work because the session survived the failed turn.
+struct FailFirstAdapter {
+    calls: Arc<Mutex<usize>>,
+}
+
+#[async_trait::async_trait]
+impl ModelAdapter for FailFirstAdapter {
+    fn model_info(&self) -> ModelInfo {
+        make_info()
+    }
+
+    async fn stream(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDef],
+    ) -> anyhow::Result<mpsc::Receiver<StreamEvent>> {
+        let mut count = self.calls.lock().unwrap();
+        *count += 1;
+        if *count == 1 {
+            return Err(anyhow::anyhow!("401 unauthorized (simulated)"));
+        }
+        let (tx, rx) = mpsc::channel(8);
+        tokio::spawn(async move {
+            let _ = tx.send(StreamEvent::Text("recovered".to_string())).await;
+            let _ = tx
+                .send(StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                    usage: None,
+                })
+                .await;
+        });
+        Ok(rx)
+    }
+}
+
+/// WO 38.5 P0 (TUI audit P1-1): a turn-fatal adapter error must cost one
+/// turn, not the session. The loop emits `Error` + `TurnComplete`, stays
+/// alive, and a retry input produces a normal turn.
+#[tokio::test]
+async fn turn_error_keeps_session_alive_for_retry() {
+    let calls = Arc::new(Mutex::new(0));
+    let exe = make_executor(
+        Box::new(FailFirstAdapter {
+            calls: calls.clone(),
+        }),
+        vec![],
+        make_config(false),
+    )
+    .unwrap();
+    let mut h = spawn_executor_run(exe);
+
+    h.input_tx.send("first".to_string()).unwrap();
+    let mut saw_error = false;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .expect("first turn must resolve within window");
+        let ev = tokio::time::timeout(remaining, h.event_rx.recv())
+            .await
+            .expect("event arrives")
+            .expect("event stream alive");
+        match ev {
+            TurnEvent::Error(ref e) if e.contains("Turn failed") => saw_error = true,
+            TurnEvent::TurnComplete if saw_error => break,
+            _ => {}
+        }
+    }
+    assert!(saw_error, "turn error must surface as an Error event");
+
+    // The session must still accept input; the retry turn completes.
+    h.input_tx.send("retry".to_string()).unwrap();
+    let mut saw_recovered = false;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .expect("retry turn must resolve within window");
+        let ev = tokio::time::timeout(remaining, h.event_rx.recv())
+            .await
+            .expect("event arrives")
+            .expect("event stream alive");
+        match ev {
+            TurnEvent::Token(ref t) if t == "recovered" => saw_recovered = true,
+            TurnEvent::TurnComplete if saw_recovered => break,
+            _ => {}
+        }
+    }
+    assert_eq!(*calls.lock().unwrap(), 2, "adapter streamed exactly twice");
+    h.handle.abort();
+}
+
+/// WO 38.4 #3 / WO 38.5: a stale Esc (queued before the input) must not
+/// kill the fresh turn. Event-driven: Esc first, then input — the turn
+/// completes normally with no cancellation.
+#[tokio::test]
+async fn stale_esc_before_input_does_not_kill_fresh_turn() {
+    let exe = make_executor(
+        Box::new(MockAdapter::new(
+            vec![
+                StreamEvent::Text("fresh".to_string()),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                    usage: None,
+                },
+            ],
+            make_info(),
+        )),
+        vec![],
+        make_config(false),
+    )
+    .unwrap();
+    let mut h = spawn_executor_run(exe);
+
+    // Esc lands while no turn is in flight, immediately followed by new
+    // input. The old independent watcher could process this Esc after the
+    // fresh token install and abort the new turn instantly.
+    h.cancel_tx.send(()).unwrap();
+    h.input_tx.send("hello".to_string()).unwrap();
+
+    let mut saw_token = false;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .expect("turn must resolve within window");
+        let ev = tokio::time::timeout(remaining, h.event_rx.recv())
+            .await
+            .expect("event arrives")
+            .expect("event stream alive");
+        match ev {
+            TurnEvent::Token(ref t) if t == "fresh" => saw_token = true,
+            TurnEvent::Token(ref t) if t.contains("cancelled") => {
+                panic!("stale Esc cancelled the fresh turn")
+            }
+            TurnEvent::TurnComplete if saw_token => break,
+            _ => {}
+        }
+    }
     h.handle.abort();
 }
 

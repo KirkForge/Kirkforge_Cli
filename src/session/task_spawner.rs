@@ -708,6 +708,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(first);
     }
 
+    #[cfg(unix)]
     fn live_dirs_with_prefix(prefix: &str) -> Vec<std::path::PathBuf> {
         std::fs::read_dir(std::env::temp_dir())
             .map(|rd| {

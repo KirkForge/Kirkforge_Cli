@@ -756,3 +756,34 @@ deferred to its own analysis-first series (WO 38 candidate).
 | 37.0 | [Series overview](37.0-wo37-overview.md) | Done | — | — |
 | 37.1 | [BashJobRegistry hardening](37.1-registry-hardening.md) | Pending | P1 | — |
 | 37.2 | [The reducer: make packet real](37.2-reducer.md) | Pending | P2 | — |
+### Series 38 — Stability plumbing (12-audit synthesis)
+
+Driven by twelve read-only audit agents (~120 findings, deduplicated).
+See [WO 38.0](38.0-wo38-overview.md). WO 39 carries the strategic half.
+
+| WO | Title | Status | Priority |
+|----|-------|--------|----------|
+| 38.0 | [Series overview](38.0-wo38-overview.md) | In Progress | — |
+| 38.1 | [Security chokepoints](38.1-security-chokepoints.md) | Pending | P0 |
+| 38.2 | [Panic containment + terminal survival](38.2-panic-containment.md) | Pending | P0 |
+| 38.3 | [Liveness: async I/O discipline](38.3-liveness.md) | Pending | P0 |
+| 38.4 | [Orchestration correctness](38.4-orchestration-correctness.md) | Pending | P0 |
+| 38.5 | [Adapter robustness](38.5-adapter-robustness.md) | Pending | P0 |
+| 38.6 | [Crash-corruption recovery](38.6-crash-recovery.md) | Pending | P1 |
+| 38.7 | [Resource lifecycle + worktree sweep](38.7-resource-lifecycle.md) | Pending | P1 |
+| 38.8 | [Wire the budget guard (thesis)](38.8-budget-guard-wiring.md) | Pending | P1 |
+| 38.9 | [Long-session performance](38.9-session-performance.md) | Pending | P1 |
+| 38.10 | [CLI first-run + scriptability](38.10-cli-first-run.md) | Pending | P1 |
+| 38.11 | [TUI state hygiene](38.11-tui-state-hygiene.md) | Pending | P1 |
+| 38.12 | [Test hygiene completion](38.12-test-hygiene.md) | Pending | P2 |
+| 38.13 | [Docs truth pass + WO reconcile](38.13-docs-truth-pass.md) | Pending | P1 |
+
+### Series 39 — Prove the thesis, borrow the ecosystem
+
+| WO | Title | Status |
+|----|-------|--------|
+| 39.0 | [Series overview](39.0-wo39-overview.md) | In Progress |
+| 39.1 | [Bench repair + first cross-tool run](39.1-bench-cross-tool.md) | Pending |
+| 39.2 | [Claude compat phase 1 (skills/commands/MCP)](39.2-claude-compat-phase1.md) | Pending |
+| 39.3 | [Claude compat phase 2 (agents/aliases)](39.3-claude-compat-phase2.md) | Pending |
+| 39.4 | [Claude compat phase 3 (hooks)](39.4-claude-compat-phase3.md) | Pending (deferrable) |

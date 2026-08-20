@@ -787,3 +787,19 @@ See [WO 38.0](38.0-wo38-overview.md). WO 39 carries the strategic half.
 | 39.2 | [Claude compat phase 1 (skills/commands/MCP)](39.2-claude-compat-phase1.md) | Pending |
 | 39.3 | [Claude compat phase 2 (agents/aliases)](39.3-claude-compat-phase2.md) | Pending |
 | 39.4 | [Claude compat phase 3 (hooks)](39.4-claude-compat-phase3.md) | Pending (deferrable) |
+
+### Series 40 — CI architecture + test infrastructure reset
+
+Driven by the GPT test/CI analysis document (86 findings). The recurring
+`fix(windows)` commit pattern (25+ in 3 weeks) ends here. See
+[WO 40.0](40.0-wo40-overview.md). Success criteria: the user spends less
+than 20 hours next week watching CI operations.
+
+| WO | Title | Status |
+|----|-------|--------|
+| 40.0 | [Series overview](40.0-wo40-overview.md) | In Progress |
+| 40.1 | [CI workflow architecture reset](40.1-ci-workflow-reset.md) | Pending |
+| 40.2 | [Windows cross-compile gate + one-pass fix](40.2-windows-cross-compile-gate.md) | Pending |
+| 40.3 | [Nextest profiles + timeout policy](40.3-nextest-profiles.md) | Pending |
+| 40.4 | [Sleep elimination (30+ tests)](40.4-sleep-elimination.md) | Pending |
+| 40.5 | [Global state isolation](40.5-global-state-isolation.md) | Pending |

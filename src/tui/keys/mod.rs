@@ -45,6 +45,7 @@ pub(crate) struct HandleInputContext<'a> {
     pub persona_tx: &'a mpsc::UnboundedSender<PersonaResult>,
     pub event_tx: &'a mpsc::Sender<TurnEvent>,
     pub plugin_reload_tx: &'a mpsc::UnboundedSender<PluginRegistry>,
+    pub bg_tx: &'a mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
 }
 
 /// Split a `!` command's formatted output into a two-line summary and the
@@ -662,6 +663,7 @@ async fn handle_tab_enter(
                 persona_tx: ctx.persona_tx,
                 event_tx: ctx.event_tx,
                 plugin_reload_tx: ctx.plugin_reload_tx,
+                bg_tx: ctx.bg_tx,
             };
             dispatch_slash_command("/plugins", &format!("toggle {name}"), state, &slash_ctx)
                 .await?;
@@ -681,7 +683,7 @@ async fn handle_tab_enter(
                     ids.get(idx).cloned()
                 });
             let args = job_id.as_deref().unwrap_or("");
-            let msg = crate::tui::commands::handle_jobs_command(args, state).await;
+            let msg = crate::tui::commands::handle_jobs_command(args, state, ctx.bg_tx).await;
             state
                 .conversation
                 .messages
@@ -945,6 +947,7 @@ async fn handle_command_palette_keys(
                         persona_tx: ctx.persona_tx,
                         event_tx: ctx.event_tx,
                         plugin_reload_tx: ctx.plugin_reload_tx,
+                        bg_tx: ctx.bg_tx,
                     };
                     let _ = dispatch_slash_command(cmd, "", state, &slash_ctx).await;
                     state.mark_dirty();
@@ -1493,16 +1496,27 @@ pub(crate) async fn handle_input_key(
                         return Ok(());
                     }
                     crate::shared::permission::PermissionAction::Allow => {
-                        let out = crate::tui::commands::handle_bang_command(&rest, &config).await;
-                        // Split into summary (first line) and full output so the
-                        // collapse UX has something to show by default. The
-                        // summary is "$ <cmd>\n<icon> exit <code>" — two lines.
-                        // Full output is everything.
-                        let (summary, full) = split_bang_summary(&out);
-                        state
-                            .conversation
-                            .messages
-                            .push_back(crate::tui::app::ConversationEntry::tool(summary, full));
+                        // WO 38.3: run the command in a spawned task and
+                        // report via the background-completion channel —
+                        // awaiting it here would freeze the event loop for
+                        // up to the 30s bang timeout.
+                        let display = rest.clone();
+                        let bg = ctx.bg_tx.clone();
+                        tokio::spawn(async move {
+                            let out =
+                                crate::tui::commands::handle_bang_command(&rest, &config).await;
+                            let (summary, full) = split_bang_summary(&out);
+                            let _ = bg.send(crate::tui::commands::BgCmdDone {
+                                entry: crate::tui::app::ConversationEntry::tool(summary, full),
+                                test_finished: false,
+                            });
+                        });
+                        state.conversation.messages.push_back(
+                            crate::tui::app::ConversationEntry::new(
+                                "system",
+                                format!("⏳ `!{display}` running in background…"),
+                            ),
+                        );
                         return Ok(());
                     }
                 }
@@ -1554,6 +1568,7 @@ pub(crate) async fn handle_input_key(
                         persona_tx: ctx.persona_tx,
                         event_tx: ctx.event_tx,
                         plugin_reload_tx: ctx.plugin_reload_tx,
+                        bg_tx: ctx.bg_tx,
                     };
                     let handled = dispatch_slash_command(cmd, args, state, &slash_ctx).await?;
                     if !handled {
@@ -2010,6 +2025,7 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let (plugin_reload_tx, _plugin_reload_rx) =
             mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel::<crate::tui::commands::BgCmdDone>();
 
         let ctx = HandleInputContext {
             input_tx: &input_tx,
@@ -2023,6 +2039,7 @@ mod tests {
             persona_tx: &persona_tx,
             event_tx: &event_tx,
             plugin_reload_tx: &plugin_reload_tx,
+            bg_tx: &bg_tx,
         };
         let result = handle_input_key(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
@@ -2056,6 +2073,7 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let (plugin_reload_tx, _plugin_reload_rx) =
             mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel::<crate::tui::commands::BgCmdDone>();
 
         let ctx = HandleInputContext {
             input_tx: &input_tx,
@@ -2069,6 +2087,7 @@ mod tests {
             persona_tx: &persona_tx,
             event_tx: &event_tx,
             plugin_reload_tx: &plugin_reload_tx,
+            bg_tx: &bg_tx,
         };
 
         async fn send(state: &mut AppState, key: KeyEvent, ctx: &HandleInputContext<'_>) {
@@ -2125,6 +2144,7 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
         let (plugin_reload_tx, _plugin_reload_rx) =
             mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel::<crate::tui::commands::BgCmdDone>();
 
         let ctx = HandleInputContext {
             input_tx: &input_tx,
@@ -2138,6 +2158,7 @@ mod tests {
             persona_tx: &persona_tx,
             event_tx: &event_tx,
             plugin_reload_tx: &plugin_reload_tx,
+            bg_tx: &bg_tx,
         };
         let result = handle_input_key(KeyEvent::from(KeyCode::Enter), &mut state, &ctx).await;
         assert!(result.is_ok(), "{result:?}");
@@ -2414,6 +2435,7 @@ mod tests {
         event_tx: mpsc::Sender<TurnEvent>,
         _plugin_reload_rx: mpsc::UnboundedReceiver<kf_plugin_host::PluginRegistry>,
         plugin_reload_tx: mpsc::UnboundedSender<kf_plugin_host::PluginRegistry>,
+        bg_tx: mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
     }
 
     impl TestCtx {
@@ -2429,6 +2451,7 @@ mod tests {
             let (persona_tx, _persona_rx) = mpsc::unbounded_channel();
             let (event_tx, _event_rx) = mpsc::channel(10_000);
             let (plugin_reload_tx, _plugin_reload_rx) = mpsc::unbounded_channel();
+            let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
             Self {
                 _input_rx,
                 input_tx,
@@ -2452,6 +2475,7 @@ mod tests {
                 event_tx,
                 _plugin_reload_rx,
                 plugin_reload_tx,
+                bg_tx,
             }
         }
 
@@ -2468,6 +2492,7 @@ mod tests {
                 persona_tx: &self.persona_tx,
                 event_tx: &self.event_tx,
                 plugin_reload_tx: &self.plugin_reload_tx,
+                bg_tx: &self.bg_tx,
             }
         }
     }

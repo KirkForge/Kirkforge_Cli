@@ -46,10 +46,15 @@ pub const TEST_MAX_TIMEOUT_SECS: u64 = 3600;
 /// summary string (or an error message) to be pushed into the
 /// chat as a `system` `ConversationEntry`.
 ///
-/// Always async because it `await`s the `Bash::run` call. The
-/// caller in `keys.rs::handle_input_key` is already inside an
-/// `async fn` (`match cmd` block), so this is a plain `.await`.
-pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
+/// WO 38.3: the test run itself (default 5 min, up to 1 h) is spawned;
+/// only the cheap gates run inline. The result arrives via the
+/// background-completion channel with `test_finished` set, which the
+/// event loop uses to clear `test_in_progress`.
+pub async fn handle_test_command(
+    args: &str,
+    state: &mut AppState,
+    bg: &tokio::sync::mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
+) -> String {
     // Concurrency gate: don't stack test runs, and don't fight
     // the model for input.
     if state.generation.is_generating {
@@ -103,17 +108,27 @@ pub async fn handle_test_command(args: &str, state: &mut AppState) -> String {
         return format!("🔒 /test blocked: {reason}");
     }
 
+    // Flag set inline (the "spawn happened" observable); cleared by the
+    // event loop when the completion event lands.
     state.generation.test_in_progress = true;
-    let result = run_shell(cmd, workdir, timeout_secs).await;
-    state.generation.test_in_progress = false;
-
-    let (raw_stdout, raw_stderr, exit_code) = match result {
-        Ok(out) => (out.stdout, out.stderr, out.status.code().unwrap_or(-1)),
-        Err(e) => return format!("❌ /test failed to run: {e}"),
-    };
-
-    let summary = super::test_parse::parse_cargo_test_output(&raw_stdout);
-    super::test_parse::format_test_summary(&summary, cmd, exit_code, &raw_stderr)
+    let workdir = workdir.to_path_buf();
+    let cmd = cmd.to_string();
+    let bg = bg.clone();
+    tokio::spawn(async move {
+        let msg = match run_shell(&cmd, &workdir, timeout_secs).await {
+            Ok(out) => {
+                let exit_code = out.status.code().unwrap_or(-1);
+                let summary = super::test_parse::parse_cargo_test_output(&out.stdout);
+                super::test_parse::format_test_summary(&summary, &cmd, exit_code, &out.stderr)
+            }
+            Err(e) => format!("❌ /test failed to run: {e}"),
+        };
+        let _ = bg.send(crate::tui::commands::BgCmdDone {
+            entry: crate::tui::app::ConversationEntry::new("system", msg),
+            test_finished: true,
+        });
+    });
+    "⏳ Tests running in background…".into()
 }
 
 /// v1: always return `cargo test --no-fail-fast` when a

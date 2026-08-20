@@ -64,8 +64,35 @@ fn parse_commit_args(input: &str) -> CommitArgs {
 /// If no message is supplied, returns a status report and a suggested
 /// message. If a message is supplied, runs sanitation, commits, and
 /// optionally pushes.
-pub async fn handle_commit_command(args: &str, cwd: &Path, config: &Config) -> String {
+///
+/// WO 38.3: `--push` with a message runs the whole pipeline (status →
+/// sanitation → commit → push) in a spawned task and reports via `bg`,
+/// so an unbounded `git push` never blocks the TUI event loop.
+pub async fn handle_commit_command(
+    args: &str,
+    cwd: &Path,
+    config: &Config,
+    bg: &tokio::sync::mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
+) -> String {
     let parsed = parse_commit_args(args);
+
+    if parsed.push && parsed.message.is_some() {
+        let cwd = cwd.to_path_buf();
+        let config = config.clone();
+        let bg = bg.clone();
+        tokio::spawn(async move {
+            let out = run_commit_flow(parsed, &cwd, &config).await;
+            let _ = bg.send(crate::tui::commands::BgCmdDone::system(out));
+        });
+        return "⏳ Commit and push running in background…".into();
+    }
+
+    run_commit_flow(parsed, cwd, config).await
+}
+
+/// The commit pipeline shared by the inline (`/commit "msg"`) and
+/// background (`/commit --push "msg"`) paths.
+async fn run_commit_flow(parsed: CommitArgs, cwd: &Path, config: &Config) -> String {
     let has_message = parsed.message.is_some();
 
     // 1. Gather git status.
@@ -223,9 +250,17 @@ mod tests {
         Config::default()
     }
 
+    fn bg_channel() -> (
+        tokio::sync::mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
+        tokio::sync::mpsc::UnboundedReceiver<crate::tui::commands::BgCmdDone>,
+    ) {
+        tokio::sync::mpsc::unbounded_channel()
+    }
+
     #[tokio::test]
     async fn empty_args_returns_report_and_suggestion() {
-        let out = handle_commit_command("", Path::new("."), &default_config()).await;
+        let (bg, _rx) = bg_channel();
+        let out = handle_commit_command("", Path::new("."), &default_config(), &bg).await;
         // Should mention pre-commit review in any git repo (or git status failure).
         assert!(
             out.contains("Pre-commit review") || out.contains("Cannot run git status"),
@@ -236,11 +271,39 @@ mod tests {
     #[tokio::test]
     async fn commit_without_git_repo_fails_cleanly() {
         let tmp = tempfile::tempdir().unwrap();
-        let out = handle_commit_command("test message", tmp.path(), &default_config()).await;
+        let (bg, _rx) = bg_channel();
+        let out = handle_commit_command("test message", tmp.path(), &default_config(), &bg).await;
         assert!(
             out.contains("Cannot run git status") || out.contains("git status failed"),
             "got: {out}"
         );
+    }
+
+    // WO 38.3: --push returns immediately (spawn observed); the pipeline
+    // outcome — here a non-repo failure — arrives on the background
+    // channel (awaited event-driven, no wall-clock).
+    #[tokio::test]
+    async fn push_with_message_runs_in_background() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (bg, mut bg_rx) = bg_channel();
+        let started = handle_commit_command(
+            "--push \"feat: background push\"",
+            tmp.path(),
+            &default_config(),
+            &bg,
+        )
+        .await;
+        assert!(
+            started.contains("running in background"),
+            "dispatch must return immediately, got: {started}"
+        );
+        let done = bg_rx.recv().await.expect("push completion event");
+        assert!(
+            done.entry.content.contains("Cannot run git status"),
+            "got: {}",
+            done.entry.content
+        );
+        assert!(!done.test_finished);
     }
 
     #[test]

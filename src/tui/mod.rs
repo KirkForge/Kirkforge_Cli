@@ -567,6 +567,7 @@ pub async fn run_tui(
     spawn_plugin_watcher(&shared_config, plugin_reload_tx.clone());
 
     let (persona_tx, mut persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
+    let (bg_tx, mut bg_rx) = mpsc::unbounded_channel::<crate::tui::commands::BgCmdDone>();
     let (kb_tx, mut kb_rx) = mpsc::unbounded_channel::<Event>();
 
     let shutdown = Arc::new(Notify::new());
@@ -638,6 +639,8 @@ pub async fn run_tui(
         &plan_tx,
         &persona_tx,
         &plugin_reload_tx,
+        &bg_tx,
+        &mut bg_rx,
         &mut slow_tick,
         &mut conn_probe_rx,
         &event_tx_for_commands,
@@ -758,6 +761,11 @@ async fn run_event_loop(
     plan_tx: &mpsc::UnboundedSender<bool>,
     persona_tx: &mpsc::UnboundedSender<PersonaResult>,
     plugin_reload_tx: &mpsc::UnboundedSender<kf_plugin_host::PluginRegistry>,
+    // WO 38.3: background slash-command completions (gh / jobs run-now /
+    // commit --push / test / bang). Handlers spawn their work and report
+    // through `bg_tx`; the loop drains `bg_rx` and re-renders.
+    bg_tx: &mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
+    bg_rx: &mut mpsc::UnboundedReceiver<crate::tui::commands::BgCmdDone>,
     slow_tick: &mut tokio::time::Interval,
     conn_probe_rx: &mut mpsc::Receiver<ConnectionState>,
     event_tx_for_commands: &mpsc::Sender<executor::TurnEvent>,
@@ -781,6 +789,7 @@ async fn run_event_loop(
         persona_tx,
         event_tx: event_tx_for_commands,
         plugin_reload_tx,
+        bg_tx,
     };
 
     loop {
@@ -820,6 +829,7 @@ async fn run_event_loop(
         let mut first_executor_event: Option<executor::TurnEvent> = None;
         let mut first_approval_event: Option<ApprovalRequest> = None;
         let mut persona_result: Option<PersonaResult> = None;
+        let mut bg_event: Option<crate::tui::commands::BgCmdDone> = None;
         let mut had_approval_pending =
             state.approval.pending_approval.is_some() || state.approval.pending_bang.is_some();
         let mut dirty_from_tick = false;
@@ -848,6 +858,9 @@ async fn run_event_loop(
                     // borrow across the await point.
                     persona_result = Some(result);
                 }
+            }
+            ev = bg_rx.recv() => {
+                bg_event = ev;
             }
             st = conn_probe_rx.recv() => {
                 if let Some(state) = st {
@@ -889,6 +902,10 @@ async fn run_event_loop(
         }
         if let Some(result) = persona_result {
             handle_persona_complete(result, state, resume_tx, plan_tx).await;
+            state.mark_dirty();
+        }
+        if let Some(done) = bg_event {
+            apply_bg_result(state, done);
             state.mark_dirty();
         }
         if let Some(new_state) = new_connection_state {
@@ -992,7 +1009,7 @@ async fn dispatch_kb_events<'a>(
         // Any keystroke dismisses the "📋 pasted" title indicator (WO 30.0.11).
         state.ui.paste_flash = 0;
         if state.approval.pending_bang.is_some() {
-            approval_keys::handle_bang_approval_key(key, state).await;
+            approval_keys::handle_bang_approval_key(key, state, key_ctx.bg_tx).await;
         } else if state.approval.pending_approval.is_some() {
             approval_keys::handle_approval_key(key, state);
         } else {
@@ -1242,6 +1259,17 @@ pub(crate) fn render_app(f: &mut Frame, state: &mut AppState) {
     crate::tui::widgets::doom_banner::render_if_active(f, size, state);
 }
 
+/// Apply a background slash-command completion (WO 38.3): append the
+/// entry to the conversation and clear the `/test` in-flight flag when
+/// the spawned run was the test suite. Called by the event loop for
+/// every `BgCmdDone` drained off the channel.
+pub(crate) fn apply_bg_result(state: &mut AppState, done: crate::tui::commands::BgCmdDone) {
+    if done.test_finished {
+        state.generation.test_in_progress = false;
+    }
+    state.conversation.messages.push_back(done.entry);
+}
+
 /// Merge a completed persona result back into the parent session.
 ///
 /// 1. Append the persona's final assistant summary as a system message
@@ -1385,6 +1413,10 @@ mod tests {
 
     fn test_state_with_log(log_path: PathBuf) -> AppState {
         app_state_with_log(log_path)
+    }
+
+    fn test_state() -> AppState {
+        crate::shared::test_util::app_state()
     }
 
     // ── Bug 2: kb-reader retry contract ────────────────────────────
@@ -1713,5 +1745,34 @@ mod tests {
         // No resume or plan signals were sent.
         assert!(resume_rx.try_recv().is_err());
         assert!(plan_rx.try_recv().is_err());
+    }
+
+    // WO 38.3: a background-completion event appends its entry and, for
+    // /test completions, clears the in-flight flag the event loop uses
+    // to gate concurrent runs (state flag set at dispatch time).
+    #[tokio::test]
+    async fn apply_bg_result_appends_entry_and_clears_test_flag() {
+        let mut state = test_state();
+
+        state.generation.test_in_progress = true;
+        apply_bg_result(
+            &mut state,
+            crate::tui::commands::BgCmdDone {
+                entry: crate::tui::app::ConversationEntry::new("system", "tests done"),
+                test_finished: true,
+            },
+        );
+        assert!(!state.generation.test_in_progress);
+        assert_eq!(state.conversation.messages.len(), 1);
+        assert_eq!(state.conversation.messages[0].content, "tests done");
+
+        apply_bg_result(
+            &mut state,
+            crate::tui::commands::BgCmdDone::system("gh done"),
+        );
+        // Non-test completions leave the flag alone.
+        assert!(!state.generation.test_in_progress);
+        assert_eq!(state.conversation.messages.len(), 2);
+        assert_eq!(state.conversation.messages[1].role, "system");
     }
 }

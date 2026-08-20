@@ -138,7 +138,11 @@ fn job_store() -> anyhow::Result<JobStore> {
 }
 
 /// Handle `/jobs` command.
-pub async fn handle_jobs_command(args: &str, state: &mut AppState) -> String {
+pub async fn handle_jobs_command(
+    args: &str,
+    state: &mut AppState,
+    bg: &tokio::sync::mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
+) -> String {
     let trimmed = args.trim();
     let first = trimmed
         .split_whitespace()
@@ -149,7 +153,7 @@ pub async fn handle_jobs_command(args: &str, state: &mut AppState) -> String {
     match first.as_str() {
         "schedule" => handle_schedule_command(trimmed, state).await,
         "scheduled" => handle_scheduled_command(trimmed, state).await,
-        "run-now" => handle_run_now_command(trimmed, state).await,
+        "run-now" => handle_run_now_command(trimmed, state, bg).await,
         "logs" => handle_logs_command(trimmed).await,
         _ => handle_background_jobs_command(args).await,
     }
@@ -496,7 +500,11 @@ async fn handle_scheduled_cancel(id: &str) -> String {
     }
 }
 
-async fn handle_run_now_command(args: &str, state: &mut AppState) -> String {
+async fn handle_run_now_command(
+    args: &str,
+    state: &mut AppState,
+    bg: &tokio::sync::mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
+) -> String {
     let without_prefix = args.strip_prefix("run-now").unwrap_or(args).trim();
     let tokens: Vec<&str> = without_prefix.split_whitespace().collect();
     if tokens.is_empty() {
@@ -521,18 +529,27 @@ async fn handle_run_now_command(args: &str, state: &mut AppState) -> String {
         Err(e) => return format!("Failed to load scheduled job {id}: {e:#}"),
     };
 
+    // WO 38.3: the job run (a subprocess with the job's own timeout —
+    // possibly hours) must not be awaited on the TUI event loop. Spawn
+    // it and report the outcome via the background-completion channel.
     let config = crate::shared::read_shared_config(&state.services.config).clone();
-    match run_job(&mut job, &store, &config).await {
-        Ok(run) => format!(
-            "▶️ Scheduled job {id} ran now: {} — {} (exit {:?})\n  stdout: {}\n  stderr: {}",
-            run.status.label(),
-            run.summary,
-            run.exit_code,
-            run.stdout_path.display(),
-            run.stderr_path.display()
-        ),
-        Err(e) => format!("Scheduled job {id} failed to run: {e:#}"),
-    }
+    let id_owned = id.to_string();
+    let bg = bg.clone();
+    tokio::spawn(async move {
+        let msg = match run_job(&mut job, &store, &config).await {
+            Ok(run) => format!(
+                "▶️ Scheduled job {id_owned} ran now: {} — {} (exit {:?})\n  stdout: {}\n  stderr: {}",
+                run.status.label(),
+                run.summary,
+                run.exit_code,
+                run.stdout_path.display(),
+                run.stderr_path.display()
+            ),
+            Err(e) => format!("Scheduled job {id_owned} failed to run: {e:#}"),
+        };
+        let _ = bg.send(crate::tui::commands::BgCmdDone::system(msg));
+    });
+    format!("⏳ Scheduled job {id} running in background…")
 }
 
 async fn handle_logs_command(args: &str) -> String {
@@ -769,15 +786,24 @@ mod tests {
         (dir, store, env)
     }
 
+    fn bg_channel() -> (
+        tokio::sync::mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
+        tokio::sync::mpsc::UnboundedReceiver<crate::tui::commands::BgCmdDone>,
+    ) {
+        tokio::sync::mpsc::unbounded_channel()
+    }
+
     #[tokio::test]
     async fn schedule_bash_job_parses_and_saves() {
         let _guard = scheduled_test_lock().lock().await;
         let (_tmp, store, _env) = tmp_jobs_dir();
         let mut state = state();
+        let (bg, _rx) = bg_channel();
 
         let out = handle_jobs_command(
             "schedule @once 2099-07-20T09:00:00 bash echo hello",
             &mut state,
+            &bg,
         )
         .await;
         assert!(out.starts_with("📅 Scheduled job created:"), "got: {out}");
@@ -793,8 +819,9 @@ mod tests {
         let _guard = scheduled_test_lock().lock().await;
         let (_tmp, store, _env) = tmp_jobs_dir();
         let mut state = state();
+        let (bg, _rx) = bg_channel();
 
-        let out = handle_jobs_command("schedule @hourly bash echo hourly", &mut state).await;
+        let out = handle_jobs_command("schedule @hourly bash echo hourly", &mut state, &bg).await;
         let id = out
             .lines()
             .next()
@@ -804,11 +831,11 @@ mod tests {
             .trim()
             .to_string();
 
-        let list = handle_jobs_command("scheduled list", &mut state).await;
+        let list = handle_jobs_command("scheduled list", &mut state, &bg).await;
         assert!(list.contains(&id), "list missing job: {list}");
         assert!(list.contains("hourly"), "list missing command: {list}");
 
-        let cancel = handle_jobs_command(&format!("scheduled cancel {id}"), &mut state).await;
+        let cancel = handle_jobs_command(&format!("scheduled cancel {id}"), &mut state, &bg).await;
         assert!(cancel.contains("disabled"), "got: {cancel}");
 
         let job = store.load(&id).unwrap().unwrap();
@@ -821,10 +848,12 @@ mod tests {
         let _guard = scheduled_test_lock().lock().await;
         let (_tmp, _store, _env) = tmp_jobs_dir();
         let mut state = state_auto_approve();
+        let (bg, mut bg_rx) = bg_channel();
 
         let out = handle_jobs_command(
             "schedule @once 2099-07-20 bash echo scheduled-hello",
             &mut state,
+            &bg,
         )
         .await;
         let id = out
@@ -836,13 +865,23 @@ mod tests {
             .trim()
             .to_string();
 
-        let run_now = handle_jobs_command(&format!("run-now {id}"), &mut state).await;
+        // WO 38.3: run-now returns immediately (spawn observed) and the
+        // real outcome arrives on the background-completion channel —
+        // awaited here event-driven, no wall-clock polling.
+        let run_now = handle_jobs_command(&format!("run-now {id}"), &mut state, &bg).await;
         assert!(
-            run_now.contains("success") || run_now.contains("Completed"),
-            "got: {run_now}"
+            run_now.contains("running in background"),
+            "run-now must return immediately, got: {run_now}"
+        );
+        let done = bg_rx.recv().await.expect("run-now completion event");
+        let done_msg = done.entry.content.clone();
+        assert!(!done.test_finished, "run-now is not a /test run");
+        assert!(
+            done_msg.contains("ran now") && (done_msg.contains("success")),
+            "got: {done_msg}"
         );
 
-        let logs = handle_jobs_command(&format!("logs {id}"), &mut state).await;
+        let logs = handle_jobs_command(&format!("logs {id}"), &mut state, &bg).await;
         assert!(
             logs.contains("scheduled-hello"),
             "logs missing output: {logs}"
@@ -864,8 +903,9 @@ mod tests {
         let _guard = scheduled_test_lock().lock().await;
         let (_tmp, _store, _env) = tmp_jobs_dir();
         let mut state = state();
+        let (bg, _rx) = bg_channel();
 
-        let out = handle_jobs_command("schedule @daily echo hi", &mut state).await;
+        let out = handle_jobs_command("schedule @daily echo hi", &mut state, &bg).await;
         assert!(out.contains("Usage"), "got: {out}");
     }
 }

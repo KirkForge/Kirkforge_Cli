@@ -746,3 +746,13 @@ deferral, not a new wish). See [WO 36.0](36.0-wo36-overview.md).
 | 36.4 | [Live cancel token for the parent session](36.4-parent-cancel-token.md) | Pending | P2 | 36.3 |
 | 36.5 | [Production-wire the ModelClient seam](36.5-modelclient-production-wiring.md) | Pending | P2 | 36.3, 36.4 |
 | 36.6 | [EventSink → EventBus bridge](36.6-eventsink-bridge.md) | Pending | P3 | folds into 36.5 |
+### Series 37 — Registry hardening + the reducer
+
+Post-WO-36 residuals. See [WO 37.0](37.0-wo37-overview.md). CLI/UX
+deferred to its own analysis-first series (WO 38 candidate).
+
+| WO | Title | Status | Priority | Depends on |
+|----|-------|--------|----------|------------|
+| 37.0 | [Series overview](37.0-wo37-overview.md) | Done | — | — |
+| 37.1 | [BashJobRegistry hardening](37.1-registry-hardening.md) | Pending | P1 | — |
+| 37.2 | [The reducer: make packet real](37.2-reducer.md) | Pending | P2 | — |

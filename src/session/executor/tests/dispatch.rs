@@ -883,7 +883,12 @@ async fn attached_cancel_token_kills_inflight_bash_promptly() {
     let token = tokio_util::sync::CancellationToken::new();
     exe.set_cancel_token(Some(token.clone()));
 
-    // Cancel 300ms in — mid-sleep. Mirrors TaskManager::cancel().
+    // Cancel 300ms in — mid-sleep. Mirrors TaskManager::cancel(). The 300ms
+    // is a genuine "wait for the bash child to spawn" race window — the Bash
+    // tool exposes no readiness signal, and observing "child started" from
+    // outside would require production changes (out of scope: test-only WO).
+    // The 1s descendant-grace below was converted to a bounded poll.
+    // Documented unconvertible race-test delay (WO 40.4).
     {
         let flag = Arc::clone(&flag);
         let token = token.clone();
@@ -907,8 +912,17 @@ async fn attached_cancel_token_kills_inflight_bash_promptly() {
     );
 
     // The process group really died: no descendant survives to touch the
-    // marker (1s grace mirrors the bash tool's own cancel test).
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    // marker. Poll for the marker's absence with a 1s ceiling (mirrors the
+    // bash tool's own cancel test) — fails fast if a descendant touches it,
+    // bounds the wait otherwise.
+    let grace_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while std::time::Instant::now() < grace_deadline {
+        assert!(
+            !marker.exists(),
+            "cancelled bash left a surviving descendant that touched the marker"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     assert!(
         !marker.exists(),
         "cancelled bash left a surviving descendant that touched the marker"

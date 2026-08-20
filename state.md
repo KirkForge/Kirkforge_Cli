@@ -2,6 +2,44 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-20 — WO 36 series: WO 35 remainders closed, orchestration unified
+
+All 6 workorders landed on dev (CI green each push; final head
+`dd883118`). The four debts named at WO 35 session-close are closed:
+
+- **36.1 rusqlite measured**: 16,384 B raw / 5,502 B tar.gz (0.08%) —
+  fat LTO dead-strips the unreached SQLite code. Kept ungated; numbers
+  + re-measure trigger (a binary path calling kf-memory-store's
+  `MemoryStore::open`) in TECHNICAL.md.
+- **36.2 bash-job owner tracking**: `cancel_by_owner` kills exactly a
+  cancelled subagent's background jobs; main-session jobs never
+  touched. Root-cause bonus: the watcher's parked-mutex cancel flaw
+  fixed (flip-first + kill-by-pid). WO 35.3's first deferral resolved.
+- **36.3 stream abort**: in-flight model requests abort on cancel
+  (select against the live token; dropped receiver aborts the
+  request). WO 35.3's second deferral resolved.
+- **36.4 parent live token**: Esc-cancel gets the same prompt
+  cancellation as subagents (per-turn one-shot token + cascading
+  child tokens). WO 35.3 flipped to Done — all three deferrals
+  resolved.
+- **36.5/36.6 unification real**: ParallelOrchestrator roles execute
+  through the `ExecutorAdapter` ModelClient seam (no direct run_task
+  calls left), `delegate()` proven drivable end-to-end with the real
+  adapter (integration test), `EventBusSink` bridges artifact events.
+  The "two orchestration systems / missing production seam" criticism
+  is answered.
+
+### Residual items (small, disclosed — not the old debts)
+
+- Owner ids are per-TaskManager (`task-N`): two managers can mint the
+  same tag; a cancel reaches both (ceiling comment at the call sites).
+- `BashJobRegistry::remove()` on a still-running job keeps the old
+  parked-mutex flaw (out of 36.2's path); phantom-job leak if
+  `proc.spawn` fails after registry insert (lessons.md).
+- Full pipeline reimplementation over `Orchestrator::delegate`
+  (vs the adapter seam) — tracked follow-up in WO 35.6's list.
+- Reducer port + CLI/UX polish — WO 37 candidates.
+
 ## Session 2026-08-20 — WO 36.3 + 36.4: stream abort on cancel + parent live token (worktree `.worktrees/wo36-c`, branch `wo/36.3-4-cancel`)
 
 ### What changed this session

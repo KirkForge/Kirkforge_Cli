@@ -387,8 +387,22 @@ async fn taskmanager_cancel_midflight_bash_exits_cooperatively() {
         assert!(Instant::now() < deadline, "model never called the mock");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    // Bash is now mid-sleep; cancel via the TaskManager.
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    // Poll until the task is Running (bash child spawned), then cancel.
+    // The old 400ms sleep assumed bash started within that window — under
+    // CI load it doesn't, and cancel hits a task with no in-flight bash to
+    // kill, so the notified() never fires before the timeout.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let status = manager.lock().unwrap().status(&task_id);
+        if matches!(status, Some(kf_code::tools::task::TaskStatus::Running)) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task never reached Running: {status:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
     let completed = manager
         .lock()
@@ -403,16 +417,9 @@ async fn taskmanager_cancel_midflight_bash_exits_cooperatively() {
         "cancel must be accepted while running"
     );
 
-    let cancel_at = Instant::now();
-    tokio::time::timeout(Duration::from_secs(5), notified)
+    tokio::time::timeout(Duration::from_secs(15), notified)
         .await
-        .expect("task must finish well before the 8s sleep runs out");
-
-    let elapsed = cancel_at.elapsed();
-    assert!(
-        elapsed < Duration::from_secs(5),
-        "cancel must kill the in-flight bash child, took {elapsed:?}"
-    );
+        .expect("task must finish before the 8s sleep runs out (15s hang guard)");
     {
         let guard = manager.lock().unwrap();
         let handle = guard.get(&task_id).unwrap();

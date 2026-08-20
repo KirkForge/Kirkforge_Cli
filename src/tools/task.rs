@@ -674,7 +674,7 @@ impl Tool for Task {
                             }
                         }
                     }
-                    notify.notify_one();
+                    notify.notify_waiters();
                 }
             });
             ToolOutcome::Success {
@@ -706,7 +706,7 @@ impl Tool for Task {
                 owner: ctx.task_owner.clone(),
             };
             let result = spawner.run_task(request).await;
-            done.notify_one();
+            done.notify_waiters();
             match result {
                 Ok(summary) => ToolOutcome::Success { content: summary },
                 Err(err) => ToolOutcome::Error { message: err },

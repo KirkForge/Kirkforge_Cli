@@ -164,6 +164,12 @@ pub struct ModelConfig {
     /// `None`, the subagent inherits the parent's value.
     #[serde(default)]
     pub subagent_provider: SubagentProvider,
+    /// Config-driven pricing overrides (WO 38.5): model-name prefix →
+    /// per-Mtok USD rates. Longest matching prefix wins over the
+    /// built-in `PRICING_TABLE`, so unmapped/self-hosted models can be
+    /// priced without a code change.
+    #[serde(default)]
+    pub price_overrides: HashMap<String, crate::shared::ModelPrice>,
 }
 
 impl Default for ModelConfig {
@@ -202,6 +208,7 @@ impl Default for ModelConfig {
             max_tokens: default_max_tokens(),
             adapter_routing: HashMap::new(),
             subagent_provider: SubagentProvider::default(),
+            price_overrides: HashMap::new(),
         }
     }
 }

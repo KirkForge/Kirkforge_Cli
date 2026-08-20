@@ -23,6 +23,7 @@ async fn test_basic_text_response() {
                     prompt_tokens: Some(10),
                     completion_tokens: Some(5),
                     cached_tokens: None,
+                    cache_write_tokens: None,
                 }),
             },
         ],

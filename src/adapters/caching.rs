@@ -364,6 +364,7 @@ mod tests {
                     prompt_tokens: Some(1),
                     completion_tokens: Some(1),
                     cached_tokens: None,
+                    cache_write_tokens: None,
                 }),
             },
         ];
@@ -755,6 +756,7 @@ mod tests {
                     prompt_tokens: Some(1),
                     completion_tokens: Some(1),
                     cached_tokens: None,
+                    cache_write_tokens: None,
                 }),
             },
         ];

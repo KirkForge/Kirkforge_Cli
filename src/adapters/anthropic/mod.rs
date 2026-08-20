@@ -666,7 +666,9 @@ mod tests {
     #[tokio::test]
     async fn stream_emits_text_and_done() {
         let events: Vec<Vec<u8>> = vec![
-            line(r#"{"type":"message_start","message":{"role":"assistant","content":[]}}"#),
+            line(
+                r#"{"type":"message_start","message":{"role":"assistant","content":[],"usage":{"input_tokens":25,"output_tokens":1}}}"#,
+            ),
             line(
                 r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
             ),
@@ -695,13 +697,18 @@ mod tests {
             })
             .collect();
         assert_eq!(texts, vec!["Hi", "!"]);
-        assert!(matches!(
-            events.last(),
+        match events.last() {
             Some(StreamEvent::Done {
                 finish_reason: FinishReason::Stop,
-                ..
-            })
-        ));
+                usage,
+            }) => {
+                // Merged across message_start (input) + message_delta (output).
+                let u = usage.as_ref().expect("usage must be captured");
+                assert_eq!(u.prompt_tokens, Some(25));
+                assert_eq!(u.completion_tokens, Some(2));
+            }
+            other => panic!("expected Done(Stop) with usage, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1611,11 +1618,22 @@ mod tests {
         ));
     }
 
+    // WO 38.5: this test previously pinned the MOCK's wrong shape —
+    // usage riding on `message_stop`. The real API puts the input side
+    // (input_tokens / cache_read / cache_creation) on `message_start`'s
+    // `message.usage` and the final `output_tokens` on `message_delta`'s
+    // `usage`; `message_stop` carries neither. Rewritten to the real wire.
     #[tokio::test]
     async fn stream_message_stop_with_usage_emits_usage() {
-        let events: Vec<Vec<u8>> = vec![line(
-            r#"{"type":"message_stop","usage":{"input_tokens":5,"output_tokens":7,"cache_read_input_tokens":2}}"#,
-        )];
+        let events: Vec<Vec<u8>> = vec![
+            line(
+                r#"{"type":"message_start","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":1}}}"#,
+            ),
+            line(
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#,
+            ),
+            line(r#"{"type":"message_stop"}"#),
+        ];
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(async move {
             parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
@@ -1627,6 +1645,32 @@ mod tests {
                 assert_eq!(u.prompt_tokens, Some(5));
                 assert_eq!(u.completion_tokens, Some(7));
                 assert_eq!(u.cached_tokens, Some(2));
+                assert_eq!(u.cache_write_tokens, Some(3));
+            }
+            other => panic!("expected Done with usage, got {other:?}"),
+        }
+    }
+
+    /// message_delta usage alone (no message_start usage) still surfaces —
+    /// e.g. Bedrock frames dropped mid-stream.
+    #[tokio::test]
+    async fn stream_message_delta_usage_alone_surfaces() {
+        let events: Vec<Vec<u8>> = vec![
+            line(
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":11,"output_tokens":13}}"#,
+            ),
+            line(r#"{"type":"message_stop"}"#),
+        ];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
+        });
+        let events = drain(rx, 64).await;
+        match events.last() {
+            Some(StreamEvent::Done { usage, .. }) => {
+                let u = usage.as_ref().unwrap();
+                assert_eq!(u.prompt_tokens, Some(11));
+                assert_eq!(u.completion_tokens, Some(13));
             }
             other => panic!("expected Done with usage, got {other:?}"),
         }
@@ -1957,11 +2001,17 @@ mod tests {
 
     #[test]
     fn parse_usage_extracts_all_token_fields() {
-        let u = json!({"input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 5});
+        let u = json!({
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 5,
+            "cache_creation_input_tokens": 7
+        });
         let t = parse_usage(&u);
         assert_eq!(t.prompt_tokens, Some(10));
         assert_eq!(t.completion_tokens, Some(20));
         assert_eq!(t.cached_tokens, Some(5));
+        assert_eq!(t.cache_write_tokens, Some(7));
     }
 
     #[test]
@@ -1971,6 +2021,7 @@ mod tests {
         assert_eq!(t.prompt_tokens, None);
         assert_eq!(t.completion_tokens, None);
         assert_eq!(t.cached_tokens, None);
+        assert_eq!(t.cache_write_tokens, None);
     }
 
     #[test]

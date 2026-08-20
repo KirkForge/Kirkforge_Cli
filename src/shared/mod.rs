@@ -185,6 +185,11 @@ pub struct TokenUsage {
     /// reported by the server.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cached_tokens: Option<usize>,
+    /// Tokens written to the provider's prompt cache this turn (Anthropic's
+    /// `cache_creation_input_tokens`; billed at the write rate, which is
+    /// higher than the input rate). Absent = not reported (WO 38.5).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cache_write_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -763,6 +768,69 @@ pub struct Pricing {
 }
 
 pub const PRICING_TABLE: &[Pricing] = &[
+    // Real Anthropic model ids (WO 38.5): `claude-sonnet-4-…`,
+    // `claude-opus-4-1`, `claude-3-5-haiku-…`, Vertex
+    // `claude-3-5-sonnet-v2@…`. Bedrock's `anthropic.claude-*` ids are
+    // normalized (prefix stripped) before matching. Longest prefix wins,
+    // so `claude-3-5-sonnet` outranks `claude-3-sonnet`.
+    Pricing {
+        model_prefix: "claude-opus-4",
+        input_per_mtok: 15.00,
+        output_per_mtok: 75.00,
+        cache_write_per_mtok: 18.75,
+        cache_read_per_mtok: 1.50,
+    },
+    Pricing {
+        model_prefix: "claude-sonnet-4",
+        input_per_mtok: 3.00,
+        output_per_mtok: 15.00,
+        cache_write_per_mtok: 3.75,
+        cache_read_per_mtok: 0.30,
+    },
+    Pricing {
+        model_prefix: "claude-haiku-4",
+        input_per_mtok: 0.80,
+        output_per_mtok: 4.00,
+        cache_write_per_mtok: 1.00,
+        cache_read_per_mtok: 0.08,
+    },
+    Pricing {
+        model_prefix: "claude-3-5-sonnet",
+        input_per_mtok: 3.00,
+        output_per_mtok: 15.00,
+        cache_write_per_mtok: 3.75,
+        cache_read_per_mtok: 0.30,
+    },
+    Pricing {
+        model_prefix: "claude-3-5-haiku",
+        input_per_mtok: 0.80,
+        output_per_mtok: 4.00,
+        cache_write_per_mtok: 1.00,
+        cache_read_per_mtok: 0.08,
+    },
+    Pricing {
+        model_prefix: "claude-3-opus",
+        input_per_mtok: 15.00,
+        output_per_mtok: 75.00,
+        cache_write_per_mtok: 18.75,
+        cache_read_per_mtok: 1.50,
+    },
+    Pricing {
+        model_prefix: "claude-3-sonnet",
+        input_per_mtok: 3.00,
+        output_per_mtok: 15.00,
+        cache_write_per_mtok: 3.75,
+        cache_read_per_mtok: 0.30,
+    },
+    Pricing {
+        model_prefix: "claude-3-haiku",
+        input_per_mtok: 0.25,
+        output_per_mtok: 1.25,
+        cache_write_per_mtok: 0.30,
+        cache_read_per_mtok: 0.03,
+    },
+    // Legacy short prefixes (pre-WO 38.5): kept so configs/tests using
+    // bare family names keep resolving.
     Pricing {
         model_prefix: "opus-4",
         input_per_mtok: 15.00,
@@ -807,19 +875,124 @@ pub const PRICING_TABLE: &[Pricing] = &[
     },
 ];
 
+/// Config-driven price override for one model-name prefix (WO 38.5).
+/// `[price_overrides."my-model-"]` → per-Mtok USD rates; the
+/// longest matching prefix wins over the built-in table.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ModelPrice {
+    #[serde(default)]
+    pub input_per_mtok: f64,
+    #[serde(default)]
+    pub output_per_mtok: f64,
+    #[serde(default)]
+    pub cache_write_per_mtok: f64,
+    #[serde(default)]
+    pub cache_read_per_mtok: f64,
+}
+
+/// Resolved per-Mtok rates for one model.
+struct ResolvedRates {
+    input_per_mtok: f64,
+    output_per_mtok: f64,
+    cache_write_per_mtok: f64,
+    cache_read_per_mtok: f64,
+}
+
+impl From<&Pricing> for ResolvedRates {
+    fn from(p: &Pricing) -> Self {
+        Self {
+            input_per_mtok: p.input_per_mtok,
+            output_per_mtok: p.output_per_mtok,
+            cache_write_per_mtok: p.cache_write_per_mtok,
+            cache_read_per_mtok: p.cache_read_per_mtok,
+        }
+    }
+}
+
+impl From<&ModelPrice> for ResolvedRates {
+    fn from(p: &ModelPrice) -> Self {
+        Self {
+            input_per_mtok: p.input_per_mtok,
+            output_per_mtok: p.output_per_mtok,
+            cache_write_per_mtok: p.cache_write_per_mtok,
+            cache_read_per_mtok: p.cache_read_per_mtok,
+        }
+    }
+}
+
+/// Resolve pricing for `model`: config overrides first (longest prefix),
+/// then the built-in table (longest prefix, after stripping Bedrock's
+/// `anthropic.` namespace so `anthropic.claude-3-5-sonnet-…` matches the
+/// `claude-*` rows). Falls back to the $0 sentinel with a once-per-model
+/// WARN — an unmapped model must not silently report $0 (WO 38.5).
+fn resolve_rates(model: &str, overrides: Option<&HashMap<String, ModelPrice>>) -> ResolvedRates {
+    if let Some(table) = overrides {
+        let mut best: Option<(&String, &ModelPrice)> = None;
+        for (prefix, price) in table {
+            if model.starts_with(prefix.as_str())
+                && best.is_none_or(|(bp, _)| prefix.len() > bp.len())
+            {
+                best = Some((prefix, price));
+            }
+        }
+        if let Some((_, price)) = best {
+            return ResolvedRates::from(price);
+        }
+    }
+
+    // Bedrock ids look like `anthropic.claude-3-5-sonnet-…` — match on
+    // the publisher-suffix so the claude-* rows apply unchanged.
+    let normalized = model.strip_prefix("anthropic.").unwrap_or(model);
+    let mut best_len = 0;
+    let mut best: Option<&Pricing> = None;
+    for p in PRICING_TABLE.iter().filter(|p| !p.model_prefix.is_empty()) {
+        if normalized.starts_with(p.model_prefix) && p.model_prefix.len() > best_len {
+            best_len = p.model_prefix.len();
+            best = Some(p);
+        }
+    }
+    if let Some(p) = best {
+        return ResolvedRates::from(p);
+    }
+
+    warn_unmapped_model(model);
+    ResolvedRates::from(
+        PRICING_TABLE
+            .last()
+            .expect("PRICING_TABLE must not be empty"),
+    )
+}
+
+/// One WARN per unmapped model per process — the sentinel means "cost
+/// unknown", not "cost zero", and the operator should add a
+/// `[price_overrides]` entry.
+fn warn_unmapped_model(model: &str) {
+    static WARNED: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    let warned = WARNED.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let mut guard = warned.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.insert(model.to_string()) {
+        tracing::warn!(
+            model,
+            "no pricing row for model; cost reported as $0 — add a [price_overrides] entry"
+        );
+    }
+}
+
 pub fn calculate_cost(model: &str, usage: &TokenUsage) -> f64 {
+    calculate_cost_with_overrides(model, usage, None)
+}
+
+pub fn calculate_cost_with_overrides(
+    model: &str,
+    usage: &TokenUsage,
+    overrides: Option<&HashMap<String, ModelPrice>>,
+) -> f64 {
     let prompt = usage.prompt_tokens.unwrap_or(0);
     let completion = usage.completion_tokens.unwrap_or(0);
     let cached = usage.cached_tokens.unwrap_or(0).min(prompt); // never let cached exceed the prompt itself
+    let cache_write = usage.cache_write_tokens.unwrap_or(0);
 
-    let p = PRICING_TABLE
-        .iter()
-        .find(|p| !p.model_prefix.is_empty() && model.starts_with(p.model_prefix))
-        .unwrap_or_else(|| {
-            PRICING_TABLE
-                .last()
-                .expect("PRICING_TABLE must not be empty")
-        });
+    let r = resolve_rates(model, overrides);
 
     // Cached tokens are billed at the discounted read rate; the rest of
     // the prompt at the regular input rate. Servers that don't
@@ -827,11 +1000,14 @@ pub fn calculate_cost(model: &str, usage: &TokenUsage) -> f64 {
     // and the discount path is a no-op. `cache_read_per_mtok` is
     // `0.0` for non-cached pricing rows (e.g. `gpt-4` in the table),
     // so a stale or wrong `cached_tokens` value still produces a
-    // reasonable upper-bound cost.
-    let cached_cost = (cached as f64 / 1_000_000.0) * p.cache_read_per_mtok;
-    let fresh_input_cost = ((prompt - cached) as f64 / 1_000_000.0) * p.input_per_mtok;
-    let output_cost = (completion as f64 / 1_000_000.0) * p.output_per_mtok;
-    cached_cost + fresh_input_cost + output_cost
+    // reasonable upper-bound cost. Cache writes (Anthropic
+    // `cache_creation_input_tokens`) are billed additively at the
+    // write rate (WO 38.5).
+    let cached_cost = (cached as f64 / 1_000_000.0) * r.cache_read_per_mtok;
+    let cache_write_cost = (cache_write as f64 / 1_000_000.0) * r.cache_write_per_mtok;
+    let fresh_input_cost = ((prompt - cached) as f64 / 1_000_000.0) * r.input_per_mtok;
+    let output_cost = (completion as f64 / 1_000_000.0) * r.output_per_mtok;
+    cached_cost + cache_write_cost + fresh_input_cost + output_cost
 }
 
 #[derive(Debug, Clone, Default)]

@@ -281,6 +281,12 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                                                 .and_then(|v| v.as_u64())
                                         })
                                         .map(|v| v as usize),
+                                    // Anthropic-native field surfaced by some
+                                    // OpenAI-compat proxies (WO 38.5).
+                                    cache_write_tokens: u
+                                        .get("cache_creation_input_tokens")
+                                        .and_then(|v| v.as_u64())
+                                        .map(|v| v as usize),
                                 });
 
                                 if !send_done_once(

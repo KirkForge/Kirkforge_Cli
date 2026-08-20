@@ -13,7 +13,7 @@ use crate::shared::{FinishReason, StreamEvent, TokenUsage};
 use super::content_blocks::{
     handle_content_block_delta, handle_content_block_start, PendingToolUse,
 };
-use super::usage::parse_usage;
+use super::usage::{finalize_usage, merge_usage, parse_usage};
 
 /// Drive an Anthropic Messages API SSE byte stream into `StreamEvent`s.
 pub(crate) async fn parse_anthropic_stream<B, E, S>(
@@ -29,6 +29,16 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
     let mut pending_tool: Option<PendingToolUse> = None;
     let mut done_emitted = false;
     let mut pending_stop_reason: Option<String> = None;
+    // Usage accumulates across frames (WO 38.5): `message_start` carries
+    // the input side, `message_delta` the final output_tokens. The real
+    // API never puts usage on `message_stop`; if a (non-conforming)
+    // server does, that wins at Done time below.
+    let mut usage = TokenUsage {
+        prompt_tokens: None,
+        completion_tokens: None,
+        cached_tokens: None,
+        cache_write_tokens: None,
+    };
 
     while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx, idle_timeout).await
     {
@@ -117,7 +127,13 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
                                 json.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
                             match event_type {
-                                "message_start" => {}
+                                "message_start" => {
+                                    if let Some(u) =
+                                        json.get("message").and_then(|m| m.get("usage"))
+                                    {
+                                        usage = merge_usage(usage, parse_usage(u));
+                                    }
+                                }
                                 "message_delta" => {
                                     // message_delta carries stop_reason and final usage.
                                     // We merge stop_reason into message_stop by remembering it here.
@@ -127,6 +143,9 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
                                         .and_then(|r| r.as_str())
                                     {
                                         pending_stop_reason = Some(r.to_string());
+                                    }
+                                    if let Some(u) = json.get("usage") {
+                                        usage = merge_usage(usage, parse_usage(u));
                                     }
                                 }
                                 "content_block_start" => {
@@ -166,10 +185,15 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
                                         "tool_use" => FinishReason::ToolCalls,
                                         _ => FinishReason::Stop,
                                     };
-                                    // Usage appears on message_delta; if
-                                    // message_stop also has it, prefer that.
-                                    let usage = json.get("usage").map(parse_usage);
-                                    if !send_done(&tx, &mut done_emitted, finish_reason, usage)
+                                    // Usage arrives on message_start/message_delta
+                                    // (merged into `usage`); the real API never
+                                    // carries it on message_stop, but a
+                                    // non-conforming server's value wins.
+                                    let stop_usage = match json.get("usage") {
+                                        Some(u) => Some(parse_usage(u)),
+                                        None => finalize_usage(usage.clone()),
+                                    };
+                                    if !send_done(&tx, &mut done_emitted, finish_reason, stop_usage)
                                         .await
                                     {
                                         return;
@@ -216,7 +240,13 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
             // empty turn (WO 15.11).
             let _ = tx.send(StreamEvent::ToolCall(tool.into_invocation())).await;
         }
-        let _ = send_done(&tx, &mut done_emitted, FinishReason::Stop, None).await;
+        let _ = send_done(
+            &tx,
+            &mut done_emitted,
+            FinishReason::Stop,
+            finalize_usage(usage.clone()),
+        )
+        .await;
     }
 }
 

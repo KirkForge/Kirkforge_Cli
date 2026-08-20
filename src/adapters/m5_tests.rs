@@ -288,6 +288,7 @@ fn calculate_cost_no_cache_matches_legacy_formula() {
         prompt_tokens: Some(1_000_000),
         completion_tokens: Some(1_000_000),
         cached_tokens: None,
+        cache_write_tokens: None,
     };
     // First row in PRICING_TABLE is "opus-4" with input 15.00,
     // output 75.00. 1M tokens of each = 15.0 + 75.0 = 90.0.
@@ -304,6 +305,7 @@ fn calculate_cost_cached_tokens_apply_discount() {
         prompt_tokens: Some(1_000_000),
         completion_tokens: Some(1_000_000),
         cached_tokens: Some(1_000_000),
+        cache_write_tokens: None,
     };
     let cost = crate::shared::calculate_cost("opus-4-anything", &usage);
     assert!(
@@ -321,11 +323,87 @@ fn calculate_cost_capped_at_prompt() {
         prompt_tokens: Some(100),
         completion_tokens: Some(50),
         cached_tokens: Some(500),
+        cache_write_tokens: None,
     };
     let cost = crate::shared::calculate_cost("opus-4-x", &usage);
     // 100 cached @ 1.50/M + 0 fresh + 50 completion @ 75.00/M
     // = 0.00015 + 0 + 0.00375 = 0.00390
     assert!((cost - 0.0039).abs() < 0.0001, "got: {cost}");
+}
+
+// ── WO 38.5: real model ids, overrides, cache-write billing ────────
+
+#[test]
+fn calculate_cost_matches_real_claude_model_ids() {
+    let usage = TokenUsage {
+        prompt_tokens: Some(1_000_000),
+        completion_tokens: Some(1_000_000),
+        cached_tokens: None,
+        cache_write_tokens: None,
+    };
+    // claude-sonnet-4-* → 3.00 in + 15.00 out = 18.00 per 1M+1M.
+    let cost = crate::shared::calculate_cost("claude-sonnet-4-20250514", &usage);
+    assert!((cost - 18.0).abs() < 0.001, "sonnet-4: {cost}");
+    // claude-opus-4-* → 15.00 + 75.00 = 90.00.
+    let cost = crate::shared::calculate_cost("claude-opus-4-1", &usage);
+    assert!((cost - 90.0).abs() < 0.001, "opus-4: {cost}");
+    // Longest prefix wins: 3-5-sonnet row, not the 3-sonnet row.
+    let cost = crate::shared::calculate_cost("claude-3-5-sonnet-20241022", &usage);
+    assert!((cost - 18.0).abs() < 0.001, "claude-3-5-sonnet: {cost}");
+}
+
+#[test]
+fn calculate_cost_bedrock_id_strips_anthropic_namespace() {
+    let usage = TokenUsage {
+        prompt_tokens: Some(1_000_000),
+        completion_tokens: Some(1_000_000),
+        cached_tokens: None,
+        cache_write_tokens: None,
+    };
+    let cost = crate::shared::calculate_cost("anthropic.claude-3-5-sonnet-20240620-v1:0", &usage);
+    assert!((cost - 18.0).abs() < 0.001, "bedrock id: {cost}");
+}
+
+#[test]
+fn calculate_cost_override_wins_over_table() {
+    let usage = TokenUsage {
+        prompt_tokens: Some(1_000_000),
+        completion_tokens: Some(1_000_000),
+        cached_tokens: None,
+        cache_write_tokens: None,
+    };
+    let mut overrides = std::collections::HashMap::new();
+    overrides.insert(
+        "big-pickle".to_string(),
+        crate::shared::ModelPrice {
+            input_per_mtok: 1.0,
+            output_per_mtok: 2.0,
+            cache_write_per_mtok: 1.25,
+            cache_read_per_mtok: 0.1,
+        },
+    );
+    let cost = crate::shared::calculate_cost_with_overrides("big-pickle", &usage, Some(&overrides));
+    assert!((cost - 3.0).abs() < 0.001, "override: {cost}");
+    // Unrelated override must not capture other models.
+    let cost =
+        crate::shared::calculate_cost_with_overrides("claude-sonnet-4", &usage, Some(&overrides));
+    assert!(
+        (cost - 18.0).abs() < 0.001,
+        "override must not leak: {cost}"
+    );
+}
+
+#[test]
+fn calculate_cost_bills_cache_writes_at_write_rate() {
+    let usage = TokenUsage {
+        prompt_tokens: Some(1_000_000),
+        completion_tokens: Some(1_000_000),
+        cached_tokens: None,
+        cache_write_tokens: Some(1_000_000),
+    };
+    // claude-sonnet-4: 3.00 fresh in + 3.75 write + 15.00 out = 21.75.
+    let cost = crate::shared::calculate_cost("claude-sonnet-4", &usage);
+    assert!((cost - 21.75).abs() < 0.001, "cache write: {cost}");
 }
 
 // ── PromptBuilder::attach_pending_image ────────────────────────────

@@ -1189,7 +1189,22 @@ impl Executor {
                         let prompt = u.prompt_tokens.unwrap_or(0);
                         let completion = u.completion_tokens.unwrap_or(0);
                         let cached = u.cached_tokens.unwrap_or(0);
-                        let cost = crate::shared::calculate_cost(&self.model_name, u);
+                        // WO 38.5: config-driven [price_overrides] win over
+                        // the built-in table (longest prefix), so unmapped
+                        // models can be priced without a code change.
+                        let cost = {
+                            let cfg = read_shared_config(&self.config);
+                            let overrides = &cfg.model.price_overrides;
+                            crate::shared::calculate_cost_with_overrides(
+                                &self.model_name,
+                                u,
+                                if overrides.is_empty() {
+                                    None
+                                } else {
+                                    Some(overrides)
+                                },
+                            )
+                        };
                         self.cost.usage.record_turn(prompt, completion, cost);
                         crate::send_or_warn!(
                             event_tx

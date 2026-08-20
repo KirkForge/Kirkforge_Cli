@@ -331,3 +331,38 @@ async fn cancel_token_aborts_stalled_model_stream() {
         "cancelled stream must flush the partial assistant message; got {msgs:?}"
     );
 }
+
+/// WO 38.5: channel close without a Done event mirrors the cancel path —
+/// the partial assistant message is persisted (marked truncated via an
+/// Error event) instead of being discarded and reported as
+/// Finished(Stop).
+#[tokio::test]
+async fn channel_close_without_done_persists_partial_as_truncated() {
+    let mut exe = make_executor(
+        Box::new(MockAdapter::new(
+            vec![StreamEvent::Text("half a reply".into())],
+            make_info(),
+        )),
+        vec![],
+        make_config(false),
+    )
+    .unwrap();
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let events = exe
+        .run_turn_collecting("hello", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, TurnEvent::Error(s) if s.contains("truncated"))),
+        "truncation must surface an Error event; got {events:?}"
+    );
+    let msgs = exe.conversation_log().all().to_vec();
+    assert!(
+        msgs.iter()
+            .any(|m| matches!(m.role, Role::Assistant) && m.content == "half a reply"),
+        "partial assistant message must be persisted; got {msgs:?}"
+    );
+}

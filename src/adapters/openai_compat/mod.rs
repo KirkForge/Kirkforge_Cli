@@ -61,6 +61,14 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
     let mut buffer: Vec<u8> = Vec::new();
     let mut pending_tool_calls = ToolCallAccumulator::new();
     let mut done_emitted = false;
+    // WO 38.5: with `stream_options: {include_usage}` the usage frame
+    // arrives AFTER the finish_reason frame (empty choices), so Done is
+    // held until the [DONE] sentinel, the usage frame's own completion,
+    // or stream end — whichever comes first. Any frame's `usage` merges
+    // field-wise (later frames win), covering servers that put usage on
+    // the finish frame itself.
+    let mut pending_usage: Option<TokenUsage> = None;
+    let mut pending_finish: Option<FinishReason> = None;
 
     while let Some(chunk_result) = next_chunk_or_idle_timeout(&mut stream, &tx, idle_timeout).await
     {
@@ -131,8 +139,10 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                                 &tx,
                                 &mut done_emitted,
                                 StreamEvent::Done {
-                                    finish_reason: FinishReason::Stop,
-                                    usage: None,
+                                    finish_reason: pending_finish
+                                        .clone()
+                                        .unwrap_or(FinishReason::Stop),
+                                    usage: pending_usage.clone(),
                                 },
                                 "SSE [DONE] sentinel",
                             )
@@ -226,7 +236,18 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                                 }
                             }
 
-                            // Finish reason signals end
+                            // Usage can ride on any frame (finish frame on
+                            // most servers; a dedicated post-finish frame
+                            // when stream_options.include_usage is honored)
+                            // — merge field-wise, later frames win.
+                            if let Some(u) = json.get("usage") {
+                                let frame = parse_openai_usage(u);
+                                merge_usage(&mut pending_usage, frame);
+                            }
+
+                            // Finish reason signals end — but Done is HELD
+                            // until [DONE] / stream end so a trailing usage
+                            // frame is not missed (WO 38.5).
                             if let Some(reason) = finish.and_then(|r| r.as_str()) {
                                 if reason == "tool_calls" && pending_tool_calls.is_empty()
                                     && !super::ollama_ndjson::send_or_bail(
@@ -252,56 +273,12 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                                     }
                                 }
 
-                                let finish_reason = match reason {
+                                pending_finish = Some(match reason {
                                     "length" => FinishReason::Length,
                                     "tool_calls" => FinishReason::ToolCalls,
                                     "error" => FinishReason::Error,
                                     _ => FinishReason::Stop,
-                                };
-
-                                let usage = json.get("usage").map(|u| TokenUsage {
-                                    prompt_tokens: u
-                                        .get("prompt_tokens")
-                                        .and_then(|v| v.as_u64())
-                                        .or_else(|| {
-                                            u.get("prompt_eval_count").and_then(|v| v.as_u64())
-                                        })
-                                        .map(|v| v as usize),
-                                    completion_tokens: u
-                                        .get("completion_tokens")
-                                        .and_then(|v| v.as_u64())
-                                        .or_else(|| u.get("eval_count").and_then(|v| v.as_u64()))
-                                        .map(|v| v as usize),
-                                    cached_tokens: u
-                                        .get("cache_read_input_tokens")
-                                        .and_then(|v| v.as_u64())
-                                        .or_else(|| {
-                                            u.get("prompt_tokens_details")
-                                                .and_then(|d| d.get("cached_tokens"))
-                                                .and_then(|v| v.as_u64())
-                                        })
-                                        .map(|v| v as usize),
-                                    // Anthropic-native field surfaced by some
-                                    // OpenAI-compat proxies (WO 38.5).
-                                    cache_write_tokens: u
-                                        .get("cache_creation_input_tokens")
-                                        .and_then(|v| v.as_u64())
-                                        .map(|v| v as usize),
                                 });
-
-                                if !send_done_once(
-                                    &tx,
-                                    &mut done_emitted,
-                                    StreamEvent::Done {
-                                        finish_reason,
-                                        usage,
-                                    },
-                                    "OpenAI-compat done",
-                                )
-                                .await
-                                {
-                                    return;
-                                }
                             }
                         }
                         Err(e) => {
@@ -341,12 +318,98 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
             }
         }
     }
+
+    // Stream ended without [DONE] (WO 38.5). Flush any buffered tool
+    // calls, then emit the held Done: a remembered finish_reason makes
+    // this a normal completion (server skipped the sentinel); otherwise
+    // the channel closed mid-stream, which is truncation — Done{Error}
+    // so the executor mirrors the cancel path instead of laundering a
+    // half-reply into a successful turn.
+    if !done_emitted {
+        for tc in pending_tool_calls.drain() {
+            if !super::ollama_ndjson::send_or_bail(
+                &tx,
+                StreamEvent::ToolCall(tc),
+                "OpenAI-compat EOF buffered tool call",
+            )
+            .await
+            {
+                return;
+            }
+        }
+        let _ = send_done_once(
+            &tx,
+            &mut done_emitted,
+            StreamEvent::Done {
+                finish_reason: pending_finish.unwrap_or(FinishReason::Error),
+                usage: pending_usage.clone(),
+            },
+            "OpenAI-compat stream end",
+        )
+        .await;
+    }
+}
+
+/// Parse one frame's `usage` object (OpenAI field names, Ollama native
+/// fallbacks, Anthropic-native cache fields surfaced by proxies).
+fn parse_openai_usage(u: &serde_json::Value) -> TokenUsage {
+    TokenUsage {
+        prompt_tokens: u
+            .get("prompt_tokens")
+            .and_then(|v| v.as_u64())
+            .or_else(|| u.get("prompt_eval_count").and_then(|v| v.as_u64()))
+            .map(|v| v as usize),
+        completion_tokens: u
+            .get("completion_tokens")
+            .and_then(|v| v.as_u64())
+            .or_else(|| u.get("eval_count").and_then(|v| v.as_u64()))
+            .map(|v| v as usize),
+        cached_tokens: u
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_u64())
+            .or_else(|| {
+                u.get("prompt_tokens_details")
+                    .and_then(|d| d.get("cached_tokens"))
+                    .and_then(|v| v.as_u64())
+            })
+            .map(|v| v as usize),
+        cache_write_tokens: u
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize),
+    }
+}
+
+/// Field-wise merge: `frame`'s `Some` fields override the accumulated
+/// value. Later frames win so the post-finish usage frame (which carries
+/// the final numbers) replaces partial earlier ones.
+fn merge_usage(pending: &mut Option<TokenUsage>, frame: TokenUsage) {
+    match pending {
+        None => *pending = Some(frame),
+        Some(cur) => {
+            if frame.prompt_tokens.is_some() {
+                cur.prompt_tokens = frame.prompt_tokens;
+            }
+            if frame.completion_tokens.is_some() {
+                cur.completion_tokens = frame.completion_tokens;
+            }
+            if frame.cached_tokens.is_some() {
+                cur.cached_tokens = frame.cached_tokens;
+            }
+            if frame.cache_write_tokens.is_some() {
+                cur.cache_write_tokens = frame.cache_write_tokens;
+            }
+        }
+    }
 }
 
 pub struct OpenAiCompatAdapter {
     model: String,
     api_base: String,
-    api_key: String,
+    /// Config-provided key (`[model].openai_api_key` or the Zen key).
+    /// `None` → resolve per request from `OPENAI_API_KEY` env; if that
+    /// is absent too, send no Authorization header (local servers).
+    api_key: Option<String>,
     client: reqwest::Client,
     json_mode: bool,
     response_format: Option<crate::shared::ResponseFormat>,
@@ -362,7 +425,7 @@ impl OpenAiCompatAdapter {
         Self {
             model: model.to_string(),
             api_base,
-            api_key: String::new(),
+            api_key: None,
             client: super::build_reqwest_client(),
             json_mode: false,
             response_format: None,
@@ -371,6 +434,14 @@ impl OpenAiCompatAdapter {
             tool_choice: None,
             stream_idle_timeout: super::STREAM_IDLE_TIMEOUT,
         }
+    }
+
+    /// Set the config-provided API key (WO 38.5). Env fallback
+    /// (`OPENAI_API_KEY`) is still consulted per request when this is
+    /// `None` or empty, mirroring the Anthropic adapter's resolution.
+    pub fn with_api_key(mut self, api_key: Option<String>) -> Self {
+        self.api_key = api_key;
+        self
     }
 
     /// Create an adapter with an explicit base URL and API key.
@@ -385,7 +456,11 @@ impl OpenAiCompatAdapter {
         Self {
             model: model.to_string(),
             api_base: base_url.trim_end_matches('/').to_string(),
-            api_key: api_key.to_string(),
+            api_key: if api_key.is_empty() {
+                None
+            } else {
+                Some(api_key.to_string())
+            },
             client: super::build_reqwest_client(),
             json_mode: false,
             response_format: None,
@@ -468,6 +543,10 @@ impl ModelAdapter for OpenAiCompatAdapter {
             self.tool_choice.as_ref(),
         );
         let url = format!("{}/v1/chat/completions", self.api_base);
+        // Per-request resolution like the Anthropic adapter (WO 38.5):
+        // config key → OPENAI_API_KEY env → no Authorization header
+        // (local Ollama-style servers need none).
+        let api_key = super::auth::resolve_api_key("openai", self.api_key.as_deref());
 
         let response = super::send_with_retry(|| async {
             let req = self
@@ -475,10 +554,9 @@ impl ModelAdapter for OpenAiCompatAdapter {
                 .post(&url)
                 .json(&body)
                 .timeout(std::time::Duration::from_secs(self.timeout_secs));
-            let req = if self.api_key.is_empty() {
-                req
-            } else {
-                req.header("Authorization", format!("Bearer {}", self.api_key))
+            let req = match &api_key {
+                Some(key) => req.header("Authorization", format!("Bearer {key}")),
+                None => req,
             };
             req.send().await
         })
@@ -1073,6 +1151,120 @@ mod tests {
         }
     }
 
+    // ── WO 38.5: held Done, include_usage frame, EOF truncation ──────
+
+    /// With `stream_options: {include_usage}` the usage arrives on a
+    /// dedicated frame AFTER the finish_reason frame (empty choices).
+    /// Done must be held until that frame (or [DONE]) and carry it.
+    #[tokio::test]
+    async fn sse_usage_frame_after_finish_reason_reaches_done() {
+        let events = run_sse(vec![
+            sse_data(json!({"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]})),
+            sse_data(json!({"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 4}})),
+            sse_done(),
+        ])
+        .await;
+        match events.last() {
+            Some(StreamEvent::Done {
+                finish_reason,
+                usage,
+            }) => {
+                assert_eq!(finish_reason, &FinishReason::Stop);
+                let u = usage.as_ref().expect("usage frame must reach Done");
+                assert_eq!(u.prompt_tokens, Some(9));
+                assert_eq!(u.completion_tokens, Some(4));
+            }
+            other => panic!("expected Done with usage, got {other:?}"),
+        }
+    }
+
+    /// Finish_reason without a following [DONE] is a normal completion
+    /// (some servers skip the sentinel): EOF emits Done with the
+    /// remembered reason and usage, not a truncation error.
+    #[tokio::test]
+    async fn sse_finish_reason_without_done_sentinel_completes_at_eof() {
+        let events = run_sse(vec![sse_data(json!({
+            "choices": [{"delta": {"content": "x"}, "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2}
+        }))])
+        .await;
+        match events.last() {
+            Some(StreamEvent::Done {
+                finish_reason,
+                usage,
+            }) => {
+                assert_eq!(finish_reason, &FinishReason::Length);
+                let u = usage.as_ref().expect("usage must reach Done");
+                assert_eq!(u.prompt_tokens, Some(1));
+                assert_eq!(u.completion_tokens, Some(2));
+            }
+            other => panic!("expected Done(Length) at EOF, got {other:?}"),
+        }
+    }
+
+    /// A channel close with NO finish_reason and NO [DONE] is truncation:
+    /// buffered tool calls flush and Done{Error} tells the executor to
+    /// persist the partial instead of reporting a complete turn.
+    #[tokio::test]
+    async fn sse_eof_without_finish_or_done_is_truncation_error() {
+        let events = run_sse(vec![sse_data(json!({
+            "choices": [{"delta": {"tool_calls": [{
+                "index": 0,
+                "id": "call_tr",
+                "function": {"name": "bash", "arguments": "{\"cmd\":\"ls\"}"}
+            }]}}]
+        }))])
+        .await;
+        let tool = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc),
+                _ => None,
+            })
+            .expect("EOF must flush the buffered tool call");
+        assert_eq!(tool.name, "bash");
+        match events.last() {
+            Some(StreamEvent::Done { finish_reason, .. }) => {
+                assert_eq!(finish_reason, &FinishReason::Error);
+            }
+            other => panic!("expected Done{{Error}} at EOF, got {other:?}"),
+        }
+    }
+
+    /// A zero-arg tool call (name present, no argument deltas) must
+    /// produce one `json!({})` invocation at finish, not the
+    /// "no parseable tool calls" error loop.
+    #[tokio::test]
+    async fn sse_zero_arg_tool_call_emits_empty_object_invocation() {
+        let events = run_sse(vec![
+            sse_data(json!({
+                "choices": [{"delta": {"tool_calls": [{
+                    "index": 0,
+                    "id": "call_0",
+                    "function": {"name": "list_dir", "arguments": ""}
+                }]}}]
+            })),
+            sse_data(json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})),
+        ])
+        .await;
+        let tools: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tools.len(), 1, "got {tools:?}");
+        assert_eq!(tools[0].name, "list_dir");
+        assert_eq!(tools[0].arguments, json!({}));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Error(s) if s.contains("no parseable"))),
+            "zero-arg call must not error-loop"
+        );
+    }
+
     #[tokio::test]
     async fn sse_usage_with_ollama_native_field_names() {
         let events = run_sse(vec![sse_data(json!({"choices": [{"delta": {"content": "x"}, "finish_reason": "stop"}], "usage": {"prompt_eval_count": 8, "eval_count": 12}}))]).await;
@@ -1270,7 +1462,7 @@ mod tests {
             30,
         );
         assert_eq!(a.api_base, "https://api.example.com");
-        assert_eq!(a.api_key, "key");
+        assert_eq!(a.api_key.as_deref(), Some("key"));
     }
 
     #[test]
@@ -1293,7 +1485,7 @@ mod tests {
     fn openai_compat_with_base_url_and_key_empty_key() {
         let a =
             OpenAiCompatAdapter::with_base_url_and_key("https://api.example.com", "model", "", 30);
-        assert_eq!(a.api_key, "");
+        assert_eq!(a.api_key, None);
     }
 
     #[test]

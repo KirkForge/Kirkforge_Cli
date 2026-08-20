@@ -161,14 +161,18 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
                                     }
                                 }
                                 "content_block_stop" => {
+                                    // Flush unconditionally (WO 38.5): a
+                                    // tool_use block with no partial_json
+                                    // deltas is a zero-argument call, not a
+                                    // dropped one — into_invocation maps the
+                                    // missing input to an empty object.
                                     if let Some(tool) = pending_tool.take() {
-                                        if tool.input.is_some()
-                                            && !send_or_bail(
-                                                &tx,
-                                                StreamEvent::ToolCall(tool.into_invocation()),
-                                                "Anthropic tool_use stop",
-                                            )
-                                            .await
+                                        if !send_or_bail(
+                                            &tx,
+                                            StreamEvent::ToolCall(tool.into_invocation()),
+                                            "Anthropic tool_use stop",
+                                        )
+                                        .await
                                         {
                                             return;
                                         }
@@ -240,10 +244,14 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
             // empty turn (WO 15.11).
             let _ = tx.send(StreamEvent::ToolCall(tool.into_invocation())).await;
         }
+        // EOF without message_stop/[DONE] is truncation, not success
+        // (WO 38.5): a channel-close mid-stream must not be laundered
+        // into a successful turn. The executor mirrors the cancel path
+        // (persist partial, Done{Error}).
         let _ = send_done(
             &tx,
             &mut done_emitted,
-            FinishReason::Stop,
+            FinishReason::Error,
             finalize_usage(usage.clone()),
         )
         .await;

@@ -1838,6 +1838,59 @@ mod tests {
         assert!(matches!(events.last(), Some(StreamEvent::Done { .. })));
     }
 
+    /// WO 38.5: a tool_use block with NO partial_json deltas is a
+    /// zero-argument call. The old `input.is_some()` gate at
+    /// content_block_stop dropped it entirely.
+    #[tokio::test]
+    async fn stream_zero_arg_tool_call_flushes_at_content_block_stop() {
+        let events: Vec<Vec<u8>> = vec![
+            line(
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_z","name":"list_dir","input":{}}}"#,
+            ),
+            line(r#"{"type":"content_block_stop","index":0}"#),
+            line(r#"{"type":"message_stop"}"#),
+        ];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
+        });
+        let events = drain(rx, 64).await;
+        let tool = events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::ToolCall(tc) => Some(tc),
+                _ => None,
+            })
+            .expect("zero-arg tool call must be flushed");
+        assert_eq!(tool.id, "tu_z");
+        assert_eq!(tool.name, "list_dir");
+        assert_eq!(tool.arguments, json!({}));
+    }
+
+    /// WO 38.5: EOF without message_stop is truncation — Done{Error},
+    /// not a synthesized Done(Stop) that launders a half-reply into a
+    /// complete turn.
+    #[tokio::test]
+    async fn stream_eof_without_done_maps_to_error() {
+        let events: Vec<Vec<u8>> = vec![line(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"half"}}"#,
+        )];
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            parse_anthropic_stream(tx, chunks(events), crate::adapters::STREAM_IDLE_TIMEOUT).await;
+        });
+        let events = drain(rx, 64).await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text(s) if s == "half")));
+        match events.last() {
+            Some(StreamEvent::Done { finish_reason, .. }) => {
+                assert_eq!(finish_reason, &FinishReason::Error);
+            }
+            other => panic!("expected Done{{Error}} at EOF, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn stream_content_block_stop_emits_tool_call() {
         let events: Vec<Vec<u8>> = vec![

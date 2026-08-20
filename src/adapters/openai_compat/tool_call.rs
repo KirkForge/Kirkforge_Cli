@@ -87,7 +87,21 @@ impl ToolCallAccumulator {
         let mut next: usize = 0;
         out.into_iter()
             .flat_map(|(_, (id, name, args_json))| {
-                let args = split_concatenated_json(&args_json);
+                // WO 38.5: a named call with empty arguments is a
+                // zero-argument invocation (`json!({})`), not a dropped
+                // call. Emitting nothing here made a `finish_reason:
+                // "tool_calls"` turn error-loop on "no parseable tool
+                // calls". A call with neither name nor arguments stays
+                // dropped (nothing to invoke).
+                let args = if args_json.trim().is_empty() {
+                    if name.is_empty() {
+                        vec![]
+                    } else {
+                        vec![serde_json::Value::Object(Default::default())]
+                    }
+                } else {
+                    split_concatenated_json(&args_json)
+                };
                 args.into_iter()
                     .map(|arg| {
                         let unique_id = if seen_ids.insert(id.clone()) {
@@ -264,9 +278,23 @@ mod tests {
     }
 
     #[test]
-    fn accumulator_empty_arguments_produces_no_calls() {
+    fn accumulator_empty_arguments_with_name_emits_zero_arg_call() {
+        // WO 38.5: previously this pinned the bug — a named call with no
+        // argument deltas produced ZERO invocations, so a zero-arg tool
+        // call error-looped ("no parseable tool calls"). Now it emits a
+        // single `json!({})` invocation.
         let mut a = ToolCallAccumulator::new();
         a.accumulate(0, "id", Some("bash"), None);
+        let calls = a.drain();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "bash");
+        assert_eq!(calls[0].arguments, json!({}));
+    }
+
+    #[test]
+    fn accumulator_empty_arguments_without_name_stays_dropped() {
+        let mut a = ToolCallAccumulator::new();
+        a.accumulate(0, "id", None, None);
         let calls = a.drain();
         assert!(calls.is_empty());
     }

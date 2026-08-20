@@ -165,6 +165,14 @@ fn openai_json_mode_off_omits_response_format() {
     assert!(body.get("tool_choice").is_none());
 }
 
+/// WO 38.5: every streaming request asks for the dedicated usage
+/// frame so token counts survive streaming.
+#[test]
+fn openai_body_requests_usage_frame() {
+    let body = oai_body(&[user_text("hi")], false);
+    assert_eq!(body["stream_options"], json!({"include_usage": true}));
+}
+
 // WO 27.2-R2: un-ignored after WO 17.5 expanded the cache-marker
 // algorithm — system+tools breakpoint on idx 0 and tail breakpoint
 // on the last user turn were added on top of the last-2-of-prefix

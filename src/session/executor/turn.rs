@@ -1035,54 +1035,14 @@ impl Executor {
                 // The cancel watcher already emitted "Generation
                 // cancelled"; flush any partial assistant message
                 // and finish the turn.
-                if !assistant_content.is_empty()
-                    || !tool_calls_out.is_empty()
-                    || !assistant_thinking.is_empty()
-                {
-                    let msg = Message {
-                        role: Role::Assistant,
-                        content: assistant_content.clone(),
-                        thinking: if assistant_thinking.is_empty() {
-                            None
-                        } else {
-                            Some(assistant_thinking.clone())
-                        },
-                        tool_calls: if tool_calls_out.is_empty() {
-                            None
-                        } else {
-                            Some(tool_calls_out.clone())
-                        },
-                        ..Default::default()
-                    };
-                    self.conversation.append_async(msg).await?;
-                }
-
-                // If the assistant had emitted tool calls before the user
-                // cancelled, append placeholder results so the conversation
-                // history stays balanced and the next turn doesn't see
-                // orphaned tool-call ids.
-                for tc in tool_calls_out.iter() {
-                    let result = format!("Tool call {} cancelled before execution", tc.id);
-                    crate::send_or_warn!(
-                        event_tx
-                            .send(TurnEvent::ToolResult {
-                                name: tc.name.clone(),
-                                output: result.clone(),
-                                success: false,
-                            })
-                            .await,
-                        "TurnEvent receiver dropped; discarding event"
-                    );
-                    self.conversation
-                        .append_async(Message {
-                            role: Role::Tool,
-                            content: result,
-                            tool_call_id: Some(tc.id.clone()),
-                            tool_name: Some(tc.name.clone()),
-                            ..Default::default()
-                        })
-                        .await?;
-                }
+                self.flush_partial_assistant(
+                    event_tx,
+                    &assistant_content,
+                    &assistant_thinking,
+                    tool_calls_out,
+                    "cancelled before execution",
+                )
+                .await?;
 
                 return Ok(IterationOutcome::Finished(
                     crate::shared::FinishReason::Error,
@@ -1259,12 +1219,97 @@ impl Executor {
             }
         }
 
+        // Channel closed without a Done event. WO 38.5: this is
+        // truncation (transport drop mid-stream), not success — mirror
+        // the cancel path: persist the partial assistant message, append
+        // placeholder tool results so the history stays balanced, tell
+        // the user, and finish with Error. Previously the partial was
+        // discarded entirely and the turn laundered into Finished(Stop).
         if had_parse_error {
-            Ok(IterationOutcome::ParseError)
-        } else {
-            Ok(IterationOutcome::Finished(
-                crate::shared::FinishReason::Stop,
-            ))
+            return Ok(IterationOutcome::ParseError);
         }
+        self.flush_partial_assistant(
+            event_tx,
+            &assistant_content,
+            &assistant_thinking,
+            tool_calls_out,
+            "not executed (stream truncated)",
+        )
+        .await?;
+        if !assistant_content.is_empty()
+            || !tool_calls_out.is_empty()
+            || !assistant_thinking.is_empty()
+        {
+            crate::send_or_warn!(
+                event_tx
+                    .send(TurnEvent::Error(
+                        "Model stream ended without completion; partial response saved (truncated)"
+                            .into()
+                    ))
+                    .await,
+                "TurnEvent receiver dropped; discarding event"
+            );
+        }
+        Ok(IterationOutcome::Finished(
+            crate::shared::FinishReason::Error,
+        ))
+    }
+
+    /// Flush a partial (cancelled or truncated) assistant turn: append the
+    /// partial assistant message and placeholder tool results so the
+    /// conversation stays balanced and the next request doesn't see
+    /// orphaned tool-call ids. Shared by the cancel path and the
+    /// channel-close-without-Done truncation path (WO 38.5).
+    async fn flush_partial_assistant(
+        &mut self,
+        event_tx: &mpsc::Sender<TurnEvent>,
+        assistant_content: &str,
+        assistant_thinking: &str,
+        tool_calls: &[ToolInvocation],
+        skip_reason: &str,
+    ) -> anyhow::Result<()> {
+        if !assistant_content.is_empty() || !tool_calls.is_empty() || !assistant_thinking.is_empty()
+        {
+            let msg = Message {
+                role: Role::Assistant,
+                content: assistant_content.to_string(),
+                thinking: if assistant_thinking.is_empty() {
+                    None
+                } else {
+                    Some(assistant_thinking.to_string())
+                },
+                tool_calls: if tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(tool_calls.to_vec())
+                },
+                ..Default::default()
+            };
+            self.conversation.append_async(msg).await?;
+        }
+
+        for tc in tool_calls.iter() {
+            let result = format!("Tool call {} {skip_reason}", tc.id);
+            crate::send_or_warn!(
+                event_tx
+                    .send(TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: result.clone(),
+                        success: false,
+                    })
+                    .await,
+                "TurnEvent receiver dropped; discarding event"
+            );
+            self.conversation
+                .append_async(Message {
+                    role: Role::Tool,
+                    content: result,
+                    tool_call_id: Some(tc.id.clone()),
+                    tool_name: Some(tc.name.clone()),
+                    ..Default::default()
+                })
+                .await?;
+        }
+        Ok(())
     }
 }

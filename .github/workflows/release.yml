@@ -14,6 +14,13 @@ env:
   CARGO_INCREMENTAL: "0"
   RUST_TOOLCHAIN: "1.88.0"
 
+# Tag-triggered: one release build per tag. cancel-in-progress: false —
+# a re-tag must NOT kill an in-flight release build (a superseded tag is
+# a different tag, not a stale ref). See ADR-074.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build release binaries

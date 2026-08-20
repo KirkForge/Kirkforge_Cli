@@ -6,16 +6,16 @@
 //! path safety) lives in `kf-routing`; this crate owns the stateful
 //! orchestration that ties those decisions to model calls + memory writes.
 //!
-//! ## Wiring status (WO 35.6)
+//! ## Wiring status (WO 37.2)
 //! `ModelClient` has a production implementation in the kf-code binary:
 //! `session::executor_adapter::ExecutorAdapter` maps a [`model::TaskBrief`]
 //! onto an isolated subagent session (ADR-075 flattening: final assistant
 //! message + summed usage). Tests use [`model::RecordingClient`].
-//! The deterministic reducer + verifier bus (`orchestrator-verifiers.ts`,
-//! `reducer.ts`) is still NOT ported here; the packet on each
-//! `DelegationResult` is `None` until that ships. The correction loop
-//! still functions: it feeds the (possibly-default) packet into
-//! `kf_routing::correction::decide_correction`.
+//! The reducer ([`reducer`], ADR-076) folds each delegation's verification
+//! state into the `packet` on its `DelegationResult`; the correction loop
+//! feeds that packet into `kf_routing::correction::decide_correction`.
+//! The deterministic verifier bus (lint/types/graph emitters) is still
+//! NOT ported — those packet categories stay at default until it ships.
 
 pub mod correction;
 pub mod correction_loop_helpers;
@@ -23,6 +23,7 @@ pub mod decompose;
 pub mod delegate;
 pub mod model;
 pub mod modes;
+pub mod reducer;
 pub mod sink;
 pub mod types;
 pub mod verifier;
@@ -41,6 +42,7 @@ pub use modes::{
     finalize_hard_prompt, finalize_schema_contract, flush_signals_to_sink, parse_artifacts,
     parse_jsonl_artifacts, persist_code_blocks, ParseResult, ParsedArtifact, PersistOutcome,
 };
+pub use reducer::{changes_from_result, fold_overall, reduce_result};
 pub use sink::{ArtifactEvent, EventSink, NullSink, RecordingSink};
 pub use types::{
     extract_emission_files, extract_written_files, CorrectionLoopConfig, CorrectionLoopOutcome,
@@ -54,4 +56,5 @@ pub use workspace::{IsolatedWorkspace, OverlaySpec, WorkspaceManager};
 // Re-export the upstream kf-routing pieces the orchestrator surface
 // implies so consumers can `use kf_orchestrator::DelegationMode`.
 pub use kf_routing::classifier::DelegationMode;
+pub use kf_routing::correction::OverallVerdict;
 pub use kf_routing::profile::TaskProfile;

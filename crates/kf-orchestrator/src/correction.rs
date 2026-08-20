@@ -3,9 +3,9 @@
 //! The impure counterpart to `kf_routing::correction::decide_correction`:
 //! runs delegate → validator → decide across `0..=max_corrections` turns,
 //! accumulates cost, and writes a memory observation via the orchestrator's
-//! `MemoryStore`. The reducer (TS `StateReducer`) is NOT ported here — the
-//! loop reads `delegate_result.packet` (a default `ReducedStatePacket` until
-//! the reducer ports) and the external validator outcome.
+//! `MemoryStore`. The delegate produces each turn's packet via the reducer
+//! (`crate::reducer`, ADR-076); the loop re-scans the written files (R7)
+//! and feeds the packet into `decide_correction`.
 //!
 //! DEFERRED (per WO 29.7): shell/structured validator execution; the loop
 //! only consults `task.task_pass` for now. Wiring `ValidatorConfig` to a

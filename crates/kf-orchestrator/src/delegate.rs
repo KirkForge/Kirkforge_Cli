@@ -1,12 +1,12 @@
 //! The orchestrator (R2). Port of `orchestrator/src/index.ts` — the
 //! `delegate` pipeline: classify → recall memory → resolve provider →
-//! build brief → dispatch to a mode executor → finalize.
+//! build brief → dispatch to a mode executor → reduce verification state
+//! → finalize.
 //!
-//! The reducer + deterministic verifiers (`orchestrator-verifiers.ts`,
-//! `reducer.ts`) are NOT ported in this WO; the packet attached to each
-//! `DelegationResult` remains `None` until the reducer ships. The
-//! correction loop still works because `decide_correction` operates on
-//! whatever packet it's given (or `Default::default()`).
+//! The reducer ([`crate::reducer`], ADR-076) builds the packet attached to
+//! each `DelegationResult` after mode execution. The deterministic verifier
+//! bus (lint/types/graph emitters, TS `orchestrator-verifiers.ts`) is NOT
+//! ported; those categories stay at default.
 
 use std::sync::{Arc, Mutex};
 
@@ -272,6 +272,17 @@ impl Orchestrator {
                 }
             }
         };
+
+        // WO 37.2 (ADR-076): reduce the delegation's verification state
+        // into the packet — changes from the written-file signals,
+        // security from scanning those files, overall from the fold.
+        result.packet = Some(crate::reducer::reduce_result(
+            &task_id,
+            0,
+            &now_millis().to_string(),
+            &self.cwd,
+            &result,
+        ));
 
         // Finalize: emit signals, write memory observation, bump stats.
         flush_signals_to_sink(&result, self.sink.as_ref()).await;
@@ -539,6 +550,35 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.decision.mode, "hard-prompt");
+    }
+
+    // WO 37.2 (ADR-076): delegate() attaches a reduced packet — clean
+    // written files fold to Pass, changes carry the written paths.
+    #[tokio::test]
+    async fn delegate_attaches_reduced_packet() {
+        let client = Arc::new(RecordingClient::constant(emission(
+            "```python\nprint('x')\n```",
+            "hard-prompt",
+        )));
+        let orch = make_orch(client, None, None);
+        let result = orch
+            .delegate(TaskInput {
+                description: "fix the lint errors".into(),
+                mode_override: Some(DelegationMode::HardPrompt),
+                task_id: Some("task-pkt".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let packet = result.packet.as_ref().expect("packet must be populated");
+        assert_eq!(packet.task_id, "task-pkt");
+        assert_eq!(packet.turn, 0);
+        assert_eq!(packet.changes.files_changed, 1, "one code fence written");
+        assert_eq!(packet.verification.security.findings, 0);
+        assert_eq!(
+            packet.verification.overall,
+            kf_routing::correction::OverallVerdict::Pass
+        );
     }
 
     fn base64_b64(s: &str) -> String {

@@ -101,7 +101,7 @@ impl JobStore {
             serde_json::to_writer_pretty(file, job)
                 .with_context(|| format!("serializing job {}", job.id))?;
         }
-        fs::rename(&temp, &path).with_context(|| {
+        crate::tools::atomic_write::rename_with_retry(&temp, &path).with_context(|| {
             format!(
                 "renaming temporary job file {} to {}",
                 temp.display(),
@@ -206,7 +206,7 @@ impl JobStore {
             serde_json::to_writer_pretty(file, run)
                 .with_context(|| format!("serializing run {}", run.run_id))?;
         }
-        fs::rename(&temp, &summary_path).with_context(|| {
+        crate::tools::atomic_write::rename_with_retry(&temp, &summary_path).with_context(|| {
             format!(
                 "renaming temporary run summary {} to {}",
                 temp.display(),

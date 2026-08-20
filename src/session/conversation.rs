@@ -358,7 +358,7 @@ impl ConversationLog {
             }
             file.sync_all()?;
         }
-        std::fs::rename(&tmp_path, path).with_context(|| {
+        crate::tools::atomic_write::rename_with_retry(&tmp_path, path).with_context(|| {
             format!(
                 "commit conversation log from {} to {}",
                 tmp_path.display(),

@@ -58,7 +58,39 @@ fn write_fsync_rename(tmp: &Path, target: &Path, contents: &[u8]) -> std::io::Re
     file.write_all(contents)?;
     file.sync_all()?;
     drop(file);
-    std::fs::rename(tmp, target)
+    rename_with_retry(tmp, target)
+}
+
+/// Rename with a bounded retry on Windows.
+///
+/// On Windows, `MoveFileEx` fails with ERROR_ACCESS_DENIED (5) or
+/// ERROR_SHARING_VIOLATION (32) when another process briefly holds a
+/// handle on the source or target — most commonly an antivirus
+/// (Defender) scanning a just-closed file. The hold lasts milliseconds;
+/// retrying is the standard remedy. Unix `rename` has no such race:
+/// it is a single call there.
+pub fn rename_with_retry(src: &Path, dst: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        const MAX_ATTEMPTS: usize = 10;
+        for attempt in 0..MAX_ATTEMPTS {
+            match std::fs::rename(src, dst) {
+                Ok(()) => return Ok(()),
+                Err(e)
+                    if matches!(e.raw_os_error(), Some(5) | Some(32))
+                        && attempt + 1 < MAX_ATTEMPTS =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!("retry loop returns or errors before exhausting attempts");
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(src, dst)
+    }
 }
 
 /// Process-local monotonic counter for temp-file names.
@@ -143,6 +175,25 @@ mod tests {
             "only the target file should exist, no leftover .tmp files"
         );
         assert_eq!(entries[0], path);
+    }
+
+    #[test]
+    fn rename_with_retry_replaces_existing_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.txt");
+        let dst = dir.path().join("dst.txt");
+        std::fs::write(&src, "new").unwrap();
+        std::fs::write(&dst, "old").unwrap();
+        rename_with_retry(&src, &dst).unwrap();
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "new");
+        assert!(!src.exists(), "source is gone after a successful rename");
+    }
+
+    #[test]
+    fn rename_with_retry_errors_on_missing_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = rename_with_retry(&dir.path().join("nope"), &dir.path().join("dst")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

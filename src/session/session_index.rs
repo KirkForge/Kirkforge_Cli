@@ -201,7 +201,7 @@ impl SessionIndex {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("recreate index directory {}", parent.display()))?;
         }
-        std::fs::rename(&tmp, &self.path).with_context(|| {
+        crate::tools::atomic_write::rename_with_retry(&tmp, &self.path).with_context(|| {
             format!(
                 "commit session index from {} to {}",
                 tmp.display(),

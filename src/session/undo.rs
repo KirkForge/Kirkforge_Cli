@@ -252,7 +252,7 @@ impl UndoStack {
         let tmp_snap = snap_path.with_extension("snap.tmp");
         std::fs::write(&tmp_snap, prev_bytes)
             .with_context(|| format!("write undo snapshot {}", tmp_snap.display()))?;
-        std::fs::rename(&tmp_snap, &snap_path)
+        crate::tools::atomic_write::rename_with_retry(&tmp_snap, &snap_path)
             .with_context(|| format!("finalize undo snapshot {}", snap_path.display()))?;
 
         // Write the sidecar metadata.
@@ -335,7 +335,7 @@ impl UndoStack {
             std::fs::write(&tmp_target, &bytes).with_context(|| {
                 format!("write undo restore temp file {}", tmp_target.display())
             })?;
-            std::fs::rename(&tmp_target, &op.path)
+            crate::tools::atomic_write::rename_with_retry(&tmp_target, &op.path)
                 .with_context(|| format!("finalize undo restore {}", op.path.display()))?;
         } else {
             // The file was created by the edit — restore means

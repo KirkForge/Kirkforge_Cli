@@ -491,11 +491,24 @@ impl LspClient {
         let _ = self.call("shutdown", serde_json::json!(null)).await;
         let _ = self.notify("exit", serde_json::json!(null)).await;
 
-        // Signal the background tasks to stop.
-        if let Some(tx) = self.reader_shutdown_tx.lock().unwrap().take() {
+        // Signal the background tasks to stop. Poison-tolerant (WO 38.2):
+        // a panic in a task holding one of these locks must not break
+        // shutdown for every other caller — the inner Option is still
+        // perfectly readable.
+        if let Some(tx) = self
+            .reader_shutdown_tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
             let _ = tx.send(());
         }
-        if let Some(tx) = self.stderr_shutdown_tx.lock().unwrap().take() {
+        if let Some(tx) = self
+            .stderr_shutdown_tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
             let _ = tx.send(());
         }
 
@@ -508,8 +521,16 @@ impl LspClient {
         // Wait briefly for the background tasks to finish (best-effort).
         #[allow(unused_must_use)]
         {
-            let reader = self.reader_task.lock().unwrap().take();
-            let stderr = self.stderr_drain.lock().unwrap().take();
+            let reader = self
+                .reader_task
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            let stderr = self
+                .stderr_drain
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
             if let Some(handle) = reader {
                 tokio::time::timeout(Duration::from_secs(2), handle).await;
             }
@@ -522,10 +543,12 @@ impl LspClient {
 
         // Kill + reap the child. The std::sync::Mutex guard must not
         // span an await point, so take the child handle first.
-        let mut child_opt: Option<Child> = None;
-        if let Ok(mut guard) = self.child.lock() {
-            child_opt = guard.take();
-        }
+        // into_inner keeps the kill working even if a task died while
+        // holding the lock.
+        let child_opt: Option<Child> = {
+            let mut guard = self.child.lock().unwrap_or_else(|e| e.into_inner());
+            guard.take()
+        };
         if let Some(mut child) = child_opt {
             kill_process_group(&mut child);
             reap_child(&mut child, Duration::from_secs(2)).await;
@@ -567,13 +590,24 @@ impl Drop for LspClient {
     fn drop(&mut self) {
         // Synchronous Drop cannot await. Signal the background tasks and
         // kill the child; reaping is best-effort via a detached task.
-        if let Some(tx) = self.reader_shutdown_tx.lock().unwrap().take() {
+        if let Some(tx) = self
+            .reader_shutdown_tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
             let _ = tx.send(());
         }
-        if let Some(tx) = self.stderr_shutdown_tx.lock().unwrap().take() {
+        if let Some(tx) = self
+            .stderr_shutdown_tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
             let _ = tx.send(());
         }
-        if let Ok(mut guard) = self.child.lock() {
+        {
+            let mut guard = self.child.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(mut child) = guard.take() {
                 kill_process_group(&mut child);
                 if tokio::runtime::Handle::try_current().is_ok() {

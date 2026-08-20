@@ -185,7 +185,12 @@ impl EventBus {
         let id = NEXT_HANDLER_ID.fetch_add(1, Ordering::Relaxed);
         let kind_owned = kind.to_string();
         {
-            let mut s = self.inner.lock().expect("event bus mutex poisoned");
+            // Poison-tolerant (WO 38.2), matching `read_shared_config`:
+            // recovery is safe because every critical section below is a
+            // trivial map/counter op — a panic between two statements can
+            // leave stale entries or a bumped counter, never a broken
+            // invariant worth killing the bus (and the TUI) over.
+            let mut s = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             s.handlers
                 .entry(kind_owned.clone())
                 .or_default()
@@ -193,7 +198,7 @@ impl EventBus {
         }
         let inner = Arc::clone(&self.inner);
         Box::new(move || {
-            let mut s = inner.lock().expect("event bus mutex poisoned");
+            let mut s = inner.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(vec) = s.handlers.get_mut(&kind_owned) {
                 vec.retain(|(hid, _)| *hid != id);
             }
@@ -208,7 +213,7 @@ impl EventBus {
     /// handler error (if any) is returned as `Ok(Some(err))`.
     pub async fn emit(&self, event: Event) -> Result<Option<HandlerError>, EmitError> {
         let prepared = {
-            let mut s = self.inner.lock().expect("event bus mutex poisoned");
+            let mut s = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if !s.running || s.shutting_down {
                 return Err(EmitError::NotRunning);
             }
@@ -241,7 +246,7 @@ impl EventBus {
             }
         }
 
-        let mut s = self.inner.lock().expect("event bus mutex poisoned");
+        let mut s = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         s.inflight = s.inflight.saturating_sub(1);
         // Remove the first buffer entry equal to this event by sequence+kind.
         if let Some(idx) = s
@@ -263,13 +268,13 @@ impl EventBus {
 
     /// Drop all buffered events without delivering them.
     pub fn drain_buffer(&self) {
-        let mut s = self.inner.lock().expect("event bus mutex poisoned");
+        let mut s = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         s.buffer.clear();
     }
 
     /// Returns whether the bus is still accepting emits.
     pub fn running(&self) -> bool {
-        self.inner.lock().expect("event bus mutex poisoned").running
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).running
     }
 
     /// Number of events currently being dispatched (started but not yet
@@ -277,7 +282,7 @@ impl EventBus {
     pub fn inflight_count(&self) -> usize {
         self.inner
             .lock()
-            .expect("event bus mutex poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .inflight
     }
 
@@ -285,7 +290,7 @@ impl EventBus {
     pub fn buffer_size(&self) -> usize {
         self.inner
             .lock()
-            .expect("event bus mutex poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .buffer
             .len()
     }
@@ -294,14 +299,14 @@ impl EventBus {
     pub fn buffer_capacity(&self) -> usize {
         self.inner
             .lock()
-            .expect("event bus mutex poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .buffer_capacity
     }
 
     /// Stop accepting new emits immediately. Inflight handlers continue
     /// to completion (use [`Self::graceful_shutdown`] to wait for them).
     pub fn shutdown(&self) {
-        let mut s = self.inner.lock().expect("event bus mutex poisoned");
+        let mut s = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         s.running = false;
         s.shutting_down = true;
     }
@@ -310,7 +315,7 @@ impl EventBus {
     /// finish (or `drain_timeout_ms`, default 10 s).
     pub async fn graceful_shutdown(&self, drain_timeout_ms: Option<u64>) {
         let rx = {
-            let mut s = self.inner.lock().expect("event bus mutex poisoned");
+            let mut s = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             s.shutting_down = true;
             if s.inflight == 0 {
                 s.running = false;
@@ -322,7 +327,7 @@ impl EventBus {
         };
         let timeout = drain_timeout_ms.unwrap_or(10_000);
         let _ = tokio::time::timeout(Duration::from_millis(timeout), rx).await;
-        self.inner.lock().expect("event bus mutex poisoned").running = false;
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).running = false;
     }
 }
 

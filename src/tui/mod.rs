@@ -149,6 +149,44 @@ fn force_terminal_reset<W: io::Write>(w: &mut W) {
     let _ = w.flush();
 }
 
+static PANIC_HOOK_ONCE: std::sync::Once = std::sync::Once::new();
+
+/// Install the terminal-restoring panic hook. Must run BEFORE
+/// `enable_raw_mode()` so it is active for every later panic.
+///
+/// Why a hook and not just `TerminalGuard`: the release profile uses
+/// `panic = "abort"`, and a Drop guard never runs on the abort path —
+/// but the panic hook does (the runtime invokes it, then aborts). The
+/// hook mirrors what `TerminalGuard::drop` does: disable raw mode and
+/// write the raw reset sequences, so the user's terminal survives any
+/// panic in the shipped binary.
+pub fn install_panic_hook() {
+    PANIC_HOOK_ONCE.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(panic_hook_with(previous, io::stdout()));
+    });
+}
+
+/// Build the panic hook body over an injectable writer.
+///
+/// Split from `install_panic_hook` so tests can drive it with an
+/// in-memory buffer: reset the terminal FIRST, then chain to the
+/// previous hook so the panic message is printed on a clean screen
+/// (message AFTER reset, not before).
+fn panic_hook_with<W: io::Write + Send + Sync + 'static>(
+    previous: Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync + 'static>,
+    w: W,
+) -> Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync + 'static> {
+    let w = Mutex::new(w);
+    Box::new(move |info| {
+        let _ = disable_raw_mode();
+        // Mutex so the boxed `Fn` can take `&mut` to the writer.
+        let mut w = w.lock().unwrap_or_else(|e| e.into_inner());
+        force_terminal_reset(&mut *w);
+        previous(info);
+    })
+}
+
 /// Show a standalone recent-session picker before the main TUI starts.
 ///
 /// This is used by `main.rs` when the user runs `kf-code run` without
@@ -167,6 +205,7 @@ fn run_session_picker_sync(
 ) -> anyhow::Result<Option<std::path::PathBuf>> {
     use crate::tui::components::session_picker::SessionPicker;
 
+    install_panic_hook();
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -493,6 +532,7 @@ pub async fn run_tui(
     let active_model = adapter.model_info().name.clone();
     let mouse_enabled = cfg_for_startup.display.mouse_enabled;
 
+    install_panic_hook();
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -1519,6 +1559,72 @@ mod tests {
         let mut w = BrokenWriter;
         // Must not panic.
         force_terminal_reset(&mut w);
+    }
+
+    // ── Panic hook (WO 38.2) ────────────────────────────────────────
+    //
+    // The release profile uses panic="abort", so TerminalGuard::drop
+    // never runs on a panic — the hook installed by
+    // `install_panic_hook` is the only thing standing between a panic
+    // and a corrupted terminal. The contract: reset sequences are
+    // written FIRST, then the previous hook reports the panic.
+
+    /// Writer adapter over a shared buffer so the hook's reset output
+    /// and the chained "previous hook" output land in one ordered
+    /// stream we can assert on.
+    struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+    impl io::Write for SharedBuf {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The hook resets the terminal BEFORE the chained hook reports
+    /// the panic — the message must land on a clean cooked-mode
+    /// screen, not inside a corrupted raw-mode alt-screen.
+    #[test]
+    fn panic_hook_resets_terminal_before_reporting() {
+        use std::io::Write as _;
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        // Fake "previous hook" that writes a marker into the shared
+        // buffer; ordering between marker and reset sequences is the
+        // assertion target.
+        let marker_buf = Arc::clone(&buf);
+        let previous: Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync> =
+            Box::new(move |_info| {
+                let mut w = SharedBuf(Arc::clone(&marker_buf));
+                let _ = w.write_all(b"<PANIC-REPORTED>");
+            });
+
+        let prior = std::panic::take_hook();
+        std::panic::set_hook(panic_hook_with(previous, SharedBuf(Arc::clone(&buf))));
+        let caught = std::panic::catch_unwind(|| panic!("hook-test-boom"));
+        std::panic::set_hook(prior);
+
+        assert!(caught.is_err(), "catch_unwind must catch the test panic");
+        let written = String::from_utf8(buf.lock().unwrap().clone())
+            .expect("hook output is valid UTF-8 (ANSI is ASCII)");
+        let report_at = written
+            .find("<PANIC-REPORTED>")
+            .expect("chained previous hook must run");
+        let before_report = &written[..report_at];
+        assert!(
+            before_report.contains("\x1b[?1049l"),
+            "leave-alt-screen must precede the panic report; got: {written:?}"
+        );
+        assert!(
+            before_report.contains("\x1b[?25h"),
+            "show-cursor must precede the panic report; got: {written:?}"
+        );
+        assert!(
+            before_report.contains("\x1b[2J"),
+            "clear-screen must precede the panic report; got: {written:?}"
+        );
     }
 
     // ── Shutdown-signal regression test ────────────────────────

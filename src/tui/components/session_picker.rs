@@ -112,31 +112,22 @@ impl SessionPicker {
 
     /// Render the picker centered over the full terminal area.
     pub fn render(&self, f: &mut Frame, area: Rect) {
-        // Guard against degenerate terminals (e.g. pseudo-terms with zero
-        // height during automated tests, or during an initial resize that
-        // has not settled yet). If the terminal is unusably small, clear
-        // the screen and show a fallback message instead of panicking on
-        // layout constraints.
-        const MIN_WIDTH: u16 = 40;
-        const MIN_HEIGHT: u16 = 8;
-        if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        let Some(dialog_area) = picker_dialog_area(area) else {
+            // Degenerate terminal (zero height in automated tests, an
+            // unsettled initial resize, or below the picker minimum).
+            // Clear and show a fallback message instead of panicking
+            // on layout constraints.
             f.render_widget(Clear, area);
             let msg = Paragraph::new(
                 "Terminal too small for session picker.\n\
-                 Please resize to at least 40×8 or press any key to start fresh.",
+                 Please resize to at least 40×12 or press any key to start fresh.",
             )
             .alignment(Alignment::Center);
             f.render_widget(msg, area);
             return;
-        }
+        };
 
         f.render_widget(Clear, area);
-
-        let dialog_width = area.width.clamp(40, 80);
-        let dialog_height = (area.height * 3 / 4).clamp(12, area.height);
-        let x = (area.width.saturating_sub(dialog_width)) / 2;
-        let y = (area.height.saturating_sub(dialog_height)) / 2;
-        let dialog_area = Rect::new(x, y, dialog_width, dialog_height);
 
         let block = Block::default()
             .title(" Resume a recent session ")
@@ -233,6 +224,38 @@ impl SessionPicker {
     }
 }
 
+/// Compute the picker dialog `Rect` for a given terminal area.
+///
+/// Pure function mirroring `approval_dialog_area` (the safe-clamp
+/// pattern). Returns `None` when the terminal is too small to hold
+/// the picker (width < 40 or height < 12); the caller renders a
+/// fallback message instead. This is the bounds guard for the
+/// height 8-11 panic class: the prior code gated on `MIN_HEIGHT=8`
+/// but clamped with `.clamp(12, h)`, so any height in 8..=11 had
+/// min > max and panicked. The gate and the clamp floor now share
+/// the same constant, and the clamp is expressed as
+/// `.min(area.height).max(MIN_HEIGHT)` so the minimum can never
+/// exceed the maximum.
+fn picker_dialog_area(area: Rect) -> Option<Rect> {
+    const MIN_WIDTH: u16 = 40;
+    const MIN_HEIGHT: u16 = 12;
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        return None;
+    }
+    let dialog_width = area.width.clamp(40, 80);
+    // Safe ordering: area.height >= MIN_HEIGHT here (guarded above),
+    // so max(MIN_HEIGHT) is always <= area.height.
+    let dialog_height = (area.height * 3 / 4).min(area.height).max(MIN_HEIGHT);
+    let x = (area.width.saturating_sub(dialog_width)) / 2;
+    let y = (area.height.saturating_sub(dialog_height)) / 2;
+    let rect = Rect::new(x, y, dialog_width, dialog_height);
+    debug_assert!(
+        rect.x + rect.width <= area.x + area.width && rect.y + rect.height <= area.y + area.height,
+        "picker_dialog_area produced a rect outside the area: rect={rect:?} area={area:?}"
+    );
+    Some(rect)
+}
+
 /// Human-readable byte size, mirrored from `crate::tui::commands::sessions`.
 fn human_size(bytes: u64) -> String {
     if bytes < 1024 {
@@ -246,8 +269,14 @@ fn human_size(bytes: u64) -> String {
 
 /// Shorten an rfc3339 timestamp to "MM-DD HH:MM", mirrored from
 /// `crate::tui::commands::sessions`.
+///
+/// Char-boundary guard: a non-ASCII `started_at` (session id or path
+/// fragments leaking in, corrupted index lines) can have multi-byte
+/// UTF-8 at the slice indices, and byte-slicing mid-char panics.
+/// When any slice boundary does not land on a char boundary, degrade
+/// to the full string instead of risking the slice.
 fn short_ts(rfc3339: &str) -> String {
-    if rfc3339.len() >= 16 {
+    if rfc3339.len() >= 16 && [5, 10, 11, 16].iter().all(|&i| rfc3339.is_char_boundary(i)) {
         format!("{} {}", &rfc3339[5..10], &rfc3339[11..16])
     } else {
         rfc3339.to_string()
@@ -329,5 +358,120 @@ mod tests {
         assert_eq!(human_size(1024 * 1024), "1.0 MB");
         assert_eq!(short_ts("2026-06-20T14:30:00-07:00"), "06-20 14:30");
         assert_eq!(short_ts("nope"), "nope");
+    }
+
+    // ── WO 38.2: picker small-size safety ───────────────────────
+    //
+    // The prior code gated the fallback on MIN_HEIGHT=8 but clamped
+    // dialog height with `.clamp(12, h)` — any terminal height in
+    // 8..=11 had min > max and panicked. The panic was reachable at
+    // startup (standalone picker) and via /resume (overlay render).
+
+    /// Heights 8..=11 (the exact panicking range) return `None`, i.e.
+    /// fall back to the "terminal too small" message instead of
+    /// panicking in the clamp.
+    #[test]
+    fn picker_dialog_area_heights_8_to_11_return_none() {
+        for h in 8u16..=11 {
+            assert!(
+                picker_dialog_area(Rect::new(0, 0, 80, h)).is_none(),
+                "height {h} must fall back, not clamp-panic"
+            );
+        }
+    }
+
+    /// Too-small widths also return `None`.
+    #[test]
+    fn picker_dialog_area_tiny_width_returns_none() {
+        assert!(picker_dialog_area(Rect::new(0, 0, 39, 40)).is_none());
+        assert!(picker_dialog_area(Rect::new(0, 0, 0, 40)).is_none());
+    }
+
+    /// The minimal viable terminal (80x12) produces a full-height
+    /// dialog that fits — the boundary between fallback and render.
+    #[test]
+    fn picker_dialog_area_min_height_12_renders() {
+        let dialog =
+            picker_dialog_area(Rect::new(0, 0, 80, 12)).expect("height=12 should produce a rect");
+        assert_eq!(dialog.height, 12);
+        assert_eq!(dialog.width, 80);
+    }
+
+    /// Fuzz-style guard (mirrors approval_dialog_area's fuzz-fit
+    /// test): for every size in a small-terminal sweep, a produced
+    /// rect always fits inside the area and is never degenerate.
+    #[test]
+    fn picker_dialog_area_rect_always_fits_inside_area() {
+        for h in 0u16..=60 {
+            for w in 0u16..=120 {
+                let area = Rect::new(0, 0, w, h);
+                if let Some(dialog) = picker_dialog_area(area) {
+                    assert!(
+                        dialog.x + dialog.width <= area.x + area.width,
+                        "w={w} h={h}: dialog width overflow"
+                    );
+                    assert!(
+                        dialog.y + dialog.height <= area.y + area.height,
+                        "w={w} h={h}: dialog height overflow"
+                    );
+                    assert!(dialog.width >= 40, "w={w} h={h}: zero-ish width");
+                    assert!(dialog.height >= 12, "w={w} h={h}: zero-ish height");
+                }
+            }
+        }
+    }
+
+    /// The /resume overlay and standalone startup picker share
+    /// `render`; at a height of 10 (the old clamp-panic range) the
+    /// render must be None-safe: fallback message, no panic.
+    #[test]
+    fn render_at_height_10_is_none_safe() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let picker = SessionPicker::new(dummy_sessions(3));
+        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        terminal
+            .draw(|f| picker.render(f, f.area()))
+            .expect("small-terminal render must not panic");
+    }
+
+    /// A viable size renders the full picker (title row present in
+    /// the buffer) — proves the fallback split didn't break the
+    /// normal path.
+    #[test]
+    fn render_at_viable_size_draws_picker() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let picker = SessionPicker::new(dummy_sessions(2));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|f| picker.render(f, f.area()))
+            .expect("viable render must succeed");
+        let buffer = terminal.backend().buffer();
+        let rendered: String = buffer
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            rendered.contains("Resume a recent session"),
+            "picker title missing from render"
+        );
+    }
+
+    /// short_ts must not panic on non-ASCII input where the byte
+    /// indices would split a multi-byte char (WO 38.2 P2). Degrades
+    /// to the full string.
+    #[test]
+    fn short_ts_non_ascii_does_not_panic() {
+        // All multi-byte: every slice index lands mid-char.
+        let cjk = "日期时间戳测试用例字符串继续更长一些";
+        assert_eq!(short_ts(cjk), cjk);
+        // Long enough in bytes, but byte 5 starts mid-emoji.
+        let emoji = "🎉🎉🎉🎉 and more text here";
+        assert_eq!(short_ts(emoji), emoji);
+        // ASCII fast path is unchanged.
+        assert_eq!(short_ts("2026-06-20T14:30:00Z"), "06-20 14:30");
     }
 }

@@ -177,12 +177,19 @@ impl Tool for NotebookEdit {
         };
 
         if let Some(undo) = &self.undo {
-            if let Err(e) = undo
-                .lock()
-                .unwrap()
-                .push(UndoKind::Write, &path, true, &old_bytes)
-            {
-                tracing::warn!("failed to push notebook edit snapshot: {e}");
+            match undo.lock() {
+                Ok(mut s) => {
+                    if let Err(e) = s.push(UndoKind::Write, &path, true, &old_bytes) {
+                        tracing::warn!("failed to push notebook edit snapshot: {e}");
+                    }
+                }
+                Err(e) => {
+                    // Poison-tolerant, matching write_file/edit_file: a
+                    // poisoned undo stack costs undo-ability, not the edit.
+                    tracing::warn!(
+                        "undo stack mutex poisoned: {e}; notebook edit will not be undoable"
+                    );
+                }
             }
         }
 

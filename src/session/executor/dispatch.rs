@@ -742,6 +742,7 @@ fn symlink_swap_denied(resolved: &std::path::Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::symlink_swap_denied;
 
     #[cfg(unix)]

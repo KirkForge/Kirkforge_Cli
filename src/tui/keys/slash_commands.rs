@@ -390,6 +390,7 @@ pub(crate) struct SlashContext<'a> {
     pub persona_tx: &'a mpsc::UnboundedSender<PersonaResult>,
     pub event_tx: &'a mpsc::Sender<crate::session::executor::TurnEvent>,
     pub plugin_reload_tx: &'a mpsc::UnboundedSender<PluginRegistry>,
+    pub bg_tx: &'a mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
 }
 
 /// Dispatch a slash command. Returns `Ok(true)` if the command was handled
@@ -442,7 +443,7 @@ pub(crate) async fn dispatch_slash_command(
             Ok(true)
         }
         "/jobs" => {
-            let msg = crate::tui::commands::handle_jobs_command(args, state).await;
+            let msg = crate::tui::commands::handle_jobs_command(args, state, ctx.bg_tx).await;
             state
                 .conversation
                 .messages
@@ -631,11 +632,30 @@ pub(crate) async fn dispatch_slash_command(
             Ok(true)
         }
         "/gh" => {
-            let msg = crate::tui::commands::handle_gh_command(args);
+            // WO 38.3: /gh shells out to the `gh` CLI synchronously
+            // (std::process). Run the whole handler on a blocking thread
+            // and report via the background-completion channel so a
+            // stalled gh API can no longer freeze the TUI.
+            let owned = args.to_string();
+            let bg = ctx.bg_tx.clone();
+            tokio::spawn(async move {
+                let out = match tokio::task::spawn_blocking(move || {
+                    crate::tui::commands::handle_gh_command(&owned)
+                })
+                .await
+                {
+                    Ok(out) => out,
+                    Err(e) => format!("/gh task failed: {e}"),
+                };
+                let _ = bg.send(crate::tui::commands::BgCmdDone::system(out));
+            });
             state
                 .conversation
                 .messages
-                .push_back(ConversationEntry::new("system", msg));
+                .push_back(ConversationEntry::new(
+                    "system",
+                    format!("⏳ /gh {args} running in background…"),
+                ));
             Ok(true)
         }
         "/init" => {
@@ -650,7 +670,8 @@ pub(crate) async fn dispatch_slash_command(
         "/commit" => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let cfg = crate::shared::read_shared_config(&state.services.config).clone();
-            let msg = crate::tui::commands::handle_commit_command(args, &cwd, &cfg).await;
+            let msg =
+                crate::tui::commands::handle_commit_command(args, &cwd, &cfg, ctx.bg_tx).await;
             state
                 .conversation
                 .messages
@@ -674,7 +695,7 @@ pub(crate) async fn dispatch_slash_command(
             Ok(true)
         }
         "/test" => {
-            let msg = crate::tui::commands::handle_test_command(args, state).await;
+            let msg = crate::tui::commands::handle_test_command(args, state, ctx.bg_tx).await;
             state
                 .conversation
                 .messages

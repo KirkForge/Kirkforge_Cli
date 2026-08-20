@@ -1,5 +1,28 @@
 use std::path::PathBuf;
-use std::process::Command;
+
+/// Run one git command to completion, blocking. Shared by the async
+/// wrapper and `Drop` (which cannot await).
+fn git_output_sync(cwd: &std::path::Path, args: &[&str]) -> std::io::Result<std::process::Output> {
+    std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+}
+
+/// Run one git command on a blocking thread (WO 38.3). The calls are
+/// short one-shots, but a hung hook or a slow NFS mount must not stall
+/// an async worker — session startup awaits this.
+async fn git_output(cwd: &std::path::Path, args: &[&str]) -> anyhow::Result<std::process::Output> {
+    let cwd = cwd.to_path_buf();
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    tokio::task::spawn_blocking(move || {
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        git_output_sync(&cwd, &arg_refs)
+            .map_err(|e| anyhow::anyhow!("failed to spawn git {args:?}: {e}"))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("git task join failed: {e}"))?
+}
 
 /// Manages an isolated git worktree for a session.
 /// Created at session start, removed at session end.
@@ -11,7 +34,7 @@ pub struct WorktreeSession {
 impl WorktreeSession {
     /// Create a new git worktree at a temp path for the given session id.
     /// Returns the worktree path and a guard that removes it on drop.
-    pub fn create(session_id: &str, repo_root: &std::path::Path) -> anyhow::Result<Self> {
+    pub async fn create(session_id: &str, repo_root: &std::path::Path) -> anyhow::Result<Self> {
         if session_id.is_empty()
             || session_id.contains('/')
             || session_id.contains('\\')
@@ -22,33 +45,21 @@ impl WorktreeSession {
             );
         }
         let worktree_path = std::env::temp_dir().join(format!("kf-code-session-{session_id}"));
+        let worktree_str = worktree_path.to_string_lossy().to_string();
 
-        let output = Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                "--detach",
-                &worktree_path.to_string_lossy(),
-                "HEAD",
-            ])
-            .current_dir(repo_root)
-            .output()
-            .map_err(|e| anyhow::anyhow!("failed to spawn git worktree add: {e}"))?;
+        let output = git_output(
+            repo_root,
+            &["worktree", "add", "--detach", &worktree_str, "HEAD"],
+        )
+        .await?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             // A stale worktree from a crashed session occupies this path and
             // makes `git worktree add` fail. Remove it so the next attempt can
             // proceed instead of leaving the user stuck on every resume.
-            let remove = Command::new("git")
-                .args([
-                    "worktree",
-                    "remove",
-                    "--force",
-                    &worktree_path.to_string_lossy(),
-                ])
-                .current_dir(repo_root)
-                .output();
+            let remove =
+                git_output(repo_root, &["worktree", "remove", "--force", &worktree_str]).await;
             match remove {
                 Ok(out) if out.status.success() => {
                     tracing::warn!(
@@ -74,16 +85,11 @@ impl WorktreeSession {
                     anyhow::bail!("git worktree add failed: {stderr}");
                 }
             }
-            let retry = Command::new("git")
-                .args([
-                    "worktree",
-                    "add",
-                    "--detach",
-                    &worktree_path.to_string_lossy(),
-                    "HEAD",
-                ])
-                .current_dir(repo_root)
-                .output();
+            let retry = git_output(
+                repo_root,
+                &["worktree", "add", "--detach", &worktree_str, "HEAD"],
+            )
+            .await;
             let output = retry
                 .map_err(|e| anyhow::anyhow!("failed to spawn git worktree add retry: {e}"))?;
             if !output.status.success() {
@@ -110,36 +116,31 @@ impl WorktreeSession {
     /// appear as new-file diffs; that also covers the `git status
     /// --porcelain` case from the workorder (no separate listing needed).
     /// Returns an empty string when the worktree is clean.
-    pub fn diff_patch(&self) -> String {
-        let git = |args: [&str; 3]| {
-            let out = Command::new("git")
-                .args(args)
-                .current_dir(&self.worktree_path)
-                .output();
-            match out {
-                Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-                _ => String::new(),
-            }
-        };
-        let _ = Command::new("git")
-            .args(["add", "--all", "--intent-to-add"])
-            .current_dir(&self.worktree_path)
-            .output();
-        git(["diff", "HEAD", "--"])
+    pub async fn diff_patch(&self) -> String {
+        let _ = git_output(&self.worktree_path, &["add", "--all", "--intent-to-add"]).await;
+        match git_output(&self.worktree_path, &["diff", "HEAD", "--"]).await {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            _ => String::new(),
+        }
     }
 }
 
 impl Drop for WorktreeSession {
     fn drop(&mut self) {
-        let result = Command::new("git")
-            .args([
+        // ceiling: Drop cannot await, so the removal stays a blocking
+        // call on the dropping thread (tests also assert synchronous
+        // removal). A crash mid-remove is already recovered by create()'s
+        // stale-worktree path. Upgrade path: fire-and-forget blocking
+        // spawn if a dropped-from-async context ever measurably stalls.
+        let result = git_output_sync(
+            &self.original_path,
+            &[
                 "worktree",
                 "remove",
                 "--force",
                 &self.worktree_path.to_string_lossy(),
-            ])
-            .current_dir(&self.original_path)
-            .output();
+            ],
+        );
         if let Err(e) = result {
             tracing::warn!(
                 path = %self.worktree_path.display(),
@@ -154,6 +155,7 @@ impl Drop for WorktreeSession {
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
     use std::sync::Arc;
 
     // Shared setup for the WO 35.2 patch tests: a temp git repo with one
@@ -211,22 +213,26 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).to_string()
     }
 
-    #[test]
-    fn worktree_diff_patch_covers_tracked_and_untracked_changes() {
+    #[tokio::test]
+    async fn worktree_diff_patch_covers_tracked_and_untracked_changes() {
         let repo = init_test_repo("single");
-        let wt = WorktreeSession::create(&wt_id("patch-single"), &repo).unwrap();
+        let wt = WorktreeSession::create(&wt_id("patch-single"), &repo)
+            .await
+            .unwrap();
         // Tracked edit + untracked new file.
         fs::write(wt.path().join("tracked.txt"), "base\nedited by coder\n").unwrap();
         fs::write(wt.path().join("new_file.txt"), "brand new\n").unwrap();
 
-        let patch = wt.diff_patch();
+        let patch = wt.diff_patch().await;
         assert!(patch.contains("--- a/tracked.txt"), "patch:\n{patch}");
         assert!(patch.contains("+++ b/tracked.txt"), "patch:\n{patch}");
         assert!(patch.contains("+++ b/new_file.txt"), "patch:\n{patch}");
         assert!(patch.contains("brand new"), "patch:\n{patch}");
 
         // The patch applies cleanly to a fresh checkout at the same HEAD.
-        let clean = WorktreeSession::create(&wt_id("patch-clean"), &repo).unwrap();
+        let clean = WorktreeSession::create(&wt_id("patch-clean"), &repo)
+            .await
+            .unwrap();
         let patch_file = repo.join("single.patch");
         fs::write(&patch_file, &patch).unwrap();
         git_run(
@@ -244,8 +250,10 @@ mod tests {
 
         // A clean worktree produces an empty patch.
         assert!(WorktreeSession::create(&wt_id("patch-empty"), &repo)
+            .await
             .unwrap()
             .diff_patch()
+            .await
             .trim()
             .is_empty());
         // Drop the worktree guards BEFORE deleting the repo: Drop runs
@@ -268,20 +276,24 @@ mod tests {
             let repo = repo.clone();
             let barrier = barrier.clone();
             tokio::spawn(async move {
-                let wt = WorktreeSession::create(&wt_id("coder-a"), &repo).unwrap();
+                let wt = WorktreeSession::create(&wt_id("coder-a"), &repo)
+                    .await
+                    .unwrap();
                 barrier.wait().await;
                 fs::write(wt.path().join("tracked.txt"), "base\ncoder A edit\n").unwrap();
-                (wt.diff_patch(), wt.path().clone())
+                (wt.diff_patch().await, wt.path().clone())
             })
         };
         let edit_b = {
             let repo = repo.clone();
             let barrier = barrier.clone();
             tokio::spawn(async move {
-                let wt = WorktreeSession::create(&wt_id("coder-b"), &repo).unwrap();
+                let wt = WorktreeSession::create(&wt_id("coder-b"), &repo)
+                    .await
+                    .unwrap();
                 barrier.wait().await;
                 fs::write(wt.path().join("other.txt"), "other base\ncoder B edit\n").unwrap();
-                (wt.diff_patch(), wt.path().clone())
+                (wt.diff_patch().await, wt.path().clone())
             })
         };
         // Both worktrees exist concurrently (isolation is the point).
@@ -301,7 +313,9 @@ mod tests {
 
         // Sequentially applied to a fresh checkout at the same HEAD: both
         // apply cleanly (disjoint files → no conflict).
-        let clean = WorktreeSession::create(&wt_id("coder-clean"), &repo).unwrap();
+        let clean = WorktreeSession::create(&wt_id("coder-clean"), &repo)
+            .await
+            .unwrap();
         let file_a = repo.join("a.patch");
         let file_b = repo.join("b.patch");
         fs::write(&file_a, &patch_a).unwrap();
@@ -329,8 +343,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn worktree_create_write_file_drop_cleanup() {
+    #[tokio::test]
+    async fn worktree_create_write_file_drop_cleanup() {
         // Create a temp git repo
         let tmp = std::env::temp_dir().join(format!("kf-code-wt-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
@@ -371,7 +385,7 @@ mod tests {
 
         // Create worktree
         let session_id = "test-session";
-        let wt = WorktreeSession::create(session_id, &tmp).unwrap();
+        let wt = WorktreeSession::create(session_id, &tmp).await.unwrap();
         let wt_path = wt.path().clone();
 
         // Verify worktree exists in git worktree list
@@ -423,8 +437,8 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn worktree_create_recovers_from_stale_worktree() {
+    #[tokio::test]
+    async fn worktree_create_recovers_from_stale_worktree() {
         // Simulate a crashed session: a worktree is registered in git's
         // worktree registry at the session path, but its directory was lost.
         // A naive `git worktree add` fails because the path is already
@@ -502,7 +516,7 @@ mod tests {
         );
 
         // create() should clean up the stale entry and succeed.
-        let wt = WorktreeSession::create(session_id, &tmp);
+        let wt = WorktreeSession::create(session_id, &tmp).await;
         assert!(wt.is_ok(), "create should recover from stale worktree");
         let wt = wt.unwrap();
         assert!(wt_path.exists(), "worktree should exist after recovery");
@@ -512,12 +526,12 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn worktree_create_rejects_path_traversal_session_id() {
+    #[tokio::test]
+    async fn worktree_create_rejects_path_traversal_session_id() {
         // Validation runs before any git spawn, so a dummy repo root is fine.
         let dummy = std::path::Path::new("/nonexistent-repo");
         for bad in ["", "..", "../escape", "a/b", "a\\b"] {
-            let err = WorktreeSession::create(bad, dummy);
+            let err = WorktreeSession::create(bad, dummy).await;
             assert!(
                 err.is_err(),
                 "session id `{bad}` should be rejected as a path-traversal risk"

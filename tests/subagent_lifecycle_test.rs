@@ -223,6 +223,7 @@ async fn coder_subagent_writes_own_worktree_and_returns_applicable_patch() {
         &format!("wo355-apply-{}", std::process::id()),
         parent.path(),
     )
+    .await
     .expect("clean worktree");
     let patch_file = parent.path().join("wo355.patch");
     // trim_start only: the diff's trailing newline is part of the format

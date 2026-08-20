@@ -766,7 +766,7 @@ See [WO 38.0](38.0-wo38-overview.md). WO 39 carries the strategic half.
 | 38.0 | [Series overview](38.0-wo38-overview.md) | In Progress | — |
 | 38.1 | [Security chokepoints](38.1-security-chokepoints.md) | Pending | P0 |
 | 38.2 | [Panic containment + terminal survival](38.2-panic-containment.md) | Pending | P0 |
-| 38.3 | [Liveness: async I/O discipline](38.3-liveness.md) | Pending | P0 |
+| 38.3 | [Liveness: async I/O discipline](38.3-liveness.md) | Done | P0 |
 | 38.4 | [Orchestration correctness](38.4-orchestration-correctness.md) | Pending | P0 |
 | 38.5 | [Adapter robustness](38.5-adapter-robustness.md) | Pending | P0 |
 | 38.6 | [Crash-corruption recovery](38.6-crash-recovery.md) | Pending | P1 |

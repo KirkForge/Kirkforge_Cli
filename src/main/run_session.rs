@@ -131,7 +131,8 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // The worktree is removed when `_worktree` is dropped.
     let _worktree: Option<session::worktree::WorktreeSession> = if config.session.worktree_enabled {
         let repo_root = std::env::current_dir()?;
-        let wt = session::worktree::WorktreeSession::create(&session_id.to_string(), &repo_root)?;
+        let wt =
+            session::worktree::WorktreeSession::create(&session_id.to_string(), &repo_root).await?;
         // Redirect sandbox to the worktree path
         config.security.sandbox_dir = Some(wt.path().to_string_lossy().to_string());
         // Also redirect the log path into the worktree

@@ -32,10 +32,16 @@ const APPROVAL_PAGE_SIZE: usize = 10;
 /// args-preview scroll state (shared with the regular approval flow
 /// — same dialog, same renderer).
 ///
-/// This is async so that approving a bang command yields the TUI
-/// event loop while the shell command runs, instead of freezing the
-/// UI with `block_in_place`/`block_on`.
-pub async fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
+/// WO 38.3: on Y the command is spawned and its formatted output
+/// arrives via the background-completion channel. Awaiting the runner
+/// here would hold the TUI event loop for up to the 30s bang timeout —
+/// no render, no Esc, no other keys — because this handler runs on
+/// the loop's task, not beside it.
+pub async fn handle_bang_approval_key(
+    key: KeyEvent,
+    state: &mut AppState,
+    bg: &tokio::sync::mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
+) {
     match key.code {
         KeyCode::PageUp => {
             state.approval.approval_scroll = state
@@ -92,22 +98,30 @@ pub async fn handle_bang_approval_key(key: KeyEvent, state: &mut AppState) {
     state.approval.approval_max_scroll = 0;
 
     if approved {
-        // The `!` runner is async; await it here so the TUI event
-        // loop keeps draining executor events, spinner ticks, and
-        // shutdown signals while the shell command runs. The prior
-        // `block_in_place` + `Handle::block_on` froze the UI for the
-        // duration of the command (up to the 30s bang timeout).
+        // WO 38.3: spawn the runner — awaiting it here would freeze the
+        // whole event loop for the duration of the command (up to the
+        // 30s bang timeout). The formatted tool entry lands via the
+        // background-completion channel with the same collapse UX
+        // (summary/full split) as the direct `!` path.
         let cmd = bang.cmd;
+        let display = cmd.clone();
         let config = crate::shared::read_shared_config(&state.services.config).clone();
-        let result = crate::tui::commands::handle_bang_command(&cmd, &config).await;
-        // Split into summary / full for the collapse UX, using the
-        // same helper as the direct (non-approval) `!` path so the
-        // collapse behaviour is identical.
-        let (summary, full) = crate::tui::keys::split_bang_summary(&result);
+        let bg = bg.clone();
+        tokio::spawn(async move {
+            let result = crate::tui::commands::handle_bang_command(&cmd, &config).await;
+            let (summary, full) = crate::tui::keys::split_bang_summary(&result);
+            let _ = bg.send(crate::tui::commands::BgCmdDone {
+                entry: ConversationEntry::tool(summary, full),
+                test_finished: false,
+            });
+        });
         state
             .conversation
             .messages
-            .push_back(ConversationEntry::tool(summary, full));
+            .push_back(ConversationEntry::new(
+                "system",
+                format!("⏳ `!{display}` running in background…"),
+            ));
     } else {
         state
             .conversation
@@ -551,29 +565,38 @@ mod tests {
         s
     }
 
-    /// Y on a bang approval runs the command and pushes a tool
-    /// entry into the chat. This is the "approve" path — the same
-    /// path the user took when the gate was off, but now through
-    /// the explicit Y keystroke.
-    ///
-    /// We use `echo hi` so the test is fast and deterministic.
-    /// `handle_bang_approval_key` is async, so this test runs on the
-    /// Tokio runtime via `#[tokio::test]`.
+    fn bg_channel() -> (
+        tokio::sync::mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
+        tokio::sync::mpsc::UnboundedReceiver<crate::tui::commands::BgCmdDone>,
+    ) {
+        tokio::sync::mpsc::unbounded_channel()
+    }
+
+    /// Y on a bang approval spawns the command; the formatted tool
+    /// entry arrives on the background-completion channel (WO 38.3).
+    /// `echo hi` keeps the run fast and deterministic; the channel
+    /// recv is event-driven, no wall-clock.
     #[tokio::test]
     async fn test_bang_y_runs_command_and_pushes_tool_entry() {
         let mut s = make_state_with_bang("echo hi");
-        handle_bang_approval_key(key(KeyCode::Char('y')), &mut s).await;
+        let (bg, mut bg_rx) = bg_channel();
+        handle_bang_approval_key(key(KeyCode::Char('y')), &mut s, &bg).await;
 
-        // The gate is consumed.
+        // The gate is consumed and the "running" notice was pushed
+        // inline — dispatch returned before the command finished.
         assert!(s.approval.pending_bang.is_none());
-        // A tool entry was pushed.
         assert_eq!(s.conversation.messages.len(), 1);
-        let entry = &s.conversation.messages[0];
-        assert_eq!(entry.role, "tool");
-        // The full output is stored in the sidecar; the summary
-        // is the first ~2 lines.
-        assert!(entry.tool_output.is_some());
-        let full = entry.tool_output.as_ref().unwrap();
+        assert_eq!(s.conversation.messages[0].role, "system");
+        assert!(s.conversation.messages[0]
+            .content
+            .contains("running in background"));
+
+        // The tool entry with the real output lands via the channel.
+        let done = bg_rx.recv().await.expect("bang completion event");
+        assert!(!done.test_finished);
+        assert_eq!(done.entry.role, "tool");
+        assert!(done.entry.tool_output.is_some());
+        let full = done.entry.tool_output.as_ref().unwrap();
         assert!(full.contains("hi"), "echo output missing: {full}");
     }
 
@@ -582,12 +605,13 @@ mod tests {
     #[tokio::test]
     async fn test_bang_n_clears_gate_without_running() {
         let mut s = make_state_with_bang("touch /tmp/should-not-exist");
+        let (bg, _rx) = bg_channel();
         // The path we're testing for is whether the command ran.
         // We can't easily prove a non-event in a unit test, so the
         // strongest assertion is: gate is cleared, system message
         // is pushed, and the run-method is never called (we'd see
         // a tool entry with a "touch" output, which we don't).
-        handle_bang_approval_key(key(KeyCode::Char('n')), &mut s).await;
+        handle_bang_approval_key(key(KeyCode::Char('n')), &mut s, &bg).await;
         assert!(s.approval.pending_bang.is_none());
         assert_eq!(s.conversation.messages.len(), 1);
         assert_eq!(s.conversation.messages[0].role, "system");
@@ -598,7 +622,8 @@ mod tests {
     #[tokio::test]
     async fn test_bang_esc_clears_gate() {
         let mut s = make_state_with_bang("rm -rf /");
-        handle_bang_approval_key(key(KeyCode::Esc), &mut s).await;
+        let (bg, _rx) = bg_channel();
+        handle_bang_approval_key(key(KeyCode::Esc), &mut s, &bg).await;
         assert!(s.approval.pending_bang.is_none());
         assert_eq!(s.conversation.messages.len(), 1);
         assert!(s.conversation.messages[0].content.contains("Cancelled"));
@@ -610,7 +635,8 @@ mod tests {
     #[tokio::test]
     async fn test_bang_unknown_key_preserves_gate() {
         let mut s = make_state_with_bang("echo hi");
-        handle_bang_approval_key(key(KeyCode::Char('z')), &mut s).await;
+        let (bg, _rx) = bg_channel();
+        handle_bang_approval_key(key(KeyCode::Char('z')), &mut s, &bg).await;
         assert!(s.approval.pending_bang.is_some());
         assert!(s.conversation.messages.is_empty());
     }
@@ -622,12 +648,13 @@ mod tests {
     #[tokio::test]
     async fn test_bang_scroll_keys_share_state() {
         let mut s = make_state_with_bang("echo hi");
+        let (bg, _rx) = bg_channel();
         s.approval.approval_max_scroll = 50;
-        handle_bang_approval_key(key(KeyCode::PageDown), &mut s).await;
+        handle_bang_approval_key(key(KeyCode::PageDown), &mut s, &bg).await;
         assert_eq!(s.approval.approval_scroll, 10);
-        handle_bang_approval_key(key(KeyCode::End), &mut s).await;
+        handle_bang_approval_key(key(KeyCode::End), &mut s, &bg).await;
         assert_eq!(s.approval.approval_scroll, 50);
-        handle_bang_approval_key(key(KeyCode::Home), &mut s).await;
+        handle_bang_approval_key(key(KeyCode::Home), &mut s, &bg).await;
         assert_eq!(s.approval.approval_scroll, 0);
     }
 }

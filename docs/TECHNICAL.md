@@ -323,12 +323,34 @@ model-supplied `cmd` through `check_bash_command_str` — the Docker
 branch previously skipped the deny-list / dangerous-pattern gate that
 the foreground path runs.
 
+WO 38.3 hardened `web_fetch`'s async + SSRF posture: DNS resolution
+runs on `spawn_blocking` (a wedged `getaddrinfo` no longer blocks a
+runtime worker); resolver errors for non-literal hosts now fail CLOSED
+(was fail-open, which existed only so tests could pin DNS inside the
+reqwest client — tests now inject an `EmptyResolver` returning
+`Ok(vec![])`); and `is_internal_addr`'s V6 arm checks `to_ipv4_mapped()`
+so `http://[::ffff:169.254.169.254]/` is denied instead of sailing past
+the V6-only checks. The update client and `web_fetch`'s fallback clients
+set builder timeouts (30s) so a stalled GitHub connection cannot hang
+`/update` or a fetch fallback forever.
+
 ### `tui/` — interactive UI
 
 A ratatui-based terminal UI with chat, input, status, search, slash commands,
 plugin management, persona switching, session forking/resume, and approval
-gates. Drains three event sources (user input, model stream, approval queue) in
-a single loop.
+gates. Drains four event sources (user input, model stream, approval queue,
+background-completion channel) in a single loop.
+
+**Async I/O discipline** (WO 38.3): slash-command handlers that do
+subprocess/network I/O (`/gh`, `/jobs run-now`, `/commit --push`, `/test`,
+`!` direct + approval-Y) never await that work on the event-loop task. Each
+dispatch spawns its work (`tokio::spawn`; `/gh`'s sync `gh` CLI calls run on
+`spawn_blocking`) and reports the formatted result through a
+`BgCmdDone` channel the loop drains alongside the other sources — the
+`/workflow run` background pattern applied to slash commands. `test_in_progress`
+is set inline at dispatch and cleared when the completion lands. A stalled
+`gh api`, a 1-hour job run, `git push`, or a 5-minute `cargo test` leaves the
+TUI live (render, Esc, spinner) instead of freezing it.
 
 The `/help` text is generated from the `COMMANDS` table in
 `src/tui/keys/slash_commands.rs` and grouped into sections (Session, Model,
@@ -433,6 +455,10 @@ worktree (deferred — bash keeps its existing landlock/sandbox posture). The su
 dir (`kf-code-task-*`, conversation log + checkpoints) is removed by a Drop guard, so error
 returns and cancellation no longer leak it. Note: the executor's spawner is threaded into the dispatch
 `ToolContext` via `PreparedCall` (the parent `task` tool reaches it through `ctx.task_spawner`).
+WO 38.3: worktree git ops (`create`, `diff_patch`) run via `spawn_blocking` — a hung hook
+or slow NFS can no longer stall an async worker (session startup awaits `create`). `Drop`
+keeps the sync call (Drop cannot await; the stale-worktree recovery path covers a crash
+mid-remove).
 
 Personas currently route through Anthropic-direct only. Bedrock/Vertex-configured users should use Anthropic API keys for persona invocation.
 
@@ -644,6 +670,15 @@ After a tool execution event, the correction loop (up to 3 iterations):
    the model as a tool result.
 4. `Unfixable` → report to the model.
 5. Re-verify after each auto-fix to catch cascading issues.
+
+WO 38.3 bounds every subprocess wait in this path. The formatter
+(`apply_command_fix`) gets the hooks treatment — `kill_on_drop`, null stdin,
+own process group, 5s `tokio::time::timeout` with group kill — so a hung
+formatter cannot stall the turn (this wait sits outside the per-tool timeout).
+The plugin verifier (`kf-plugin-host::PluginVerifier::run`, invoked under the
+verifier-bus mutex on every file write) gets a watchdog thread that kills its
+process group after 5s and fails closed (`VerifierError::TimedOut`); a hung
+verifier script can no longer hold the bus lock.
 
 ---
 

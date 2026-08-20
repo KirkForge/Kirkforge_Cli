@@ -733,6 +733,7 @@ mod key_scenarios {
         persona_tx: mpsc::UnboundedSender<PersonaResult>,
         event_tx: mpsc::Sender<TurnEvent>,
         plugin_reload_tx: mpsc::UnboundedSender<PluginRegistry>,
+        bg_tx: mpsc::UnboundedSender<crate::tui::commands::BgCmdDone>,
     }
 
     impl KeyHarness {
@@ -748,6 +749,7 @@ mod key_scenarios {
             let (persona_tx, _persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
             let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
             let (plugin_reload_tx, _plugin_reload_rx) = mpsc::unbounded_channel::<PluginRegistry>();
+            let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
             Self {
                 state: app_state(),
                 input_tx,
@@ -763,6 +765,7 @@ mod key_scenarios {
                 persona_tx,
                 event_tx,
                 plugin_reload_tx,
+                bg_tx,
             }
         }
 
@@ -787,6 +790,7 @@ mod key_scenarios {
                 persona_tx: &self.persona_tx,
                 event_tx: &self.event_tx,
                 plugin_reload_tx: &self.plugin_reload_tx,
+                bg_tx: &self.bg_tx,
             };
             handle_input_key(KeyEvent::new(code, mods), &mut self.state, &ctx)
                 .await

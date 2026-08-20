@@ -426,7 +426,9 @@ mod tests {
         let (out2, end2) = extract_payload(&env[end1..]).expect("second frame");
         let v2: serde_json::Value = serde_json::from_str(&out2).unwrap();
         assert_eq!(v2["delta"]["text"], "B");
-        assert_eq!(end2, frame2.len());
+        // end2 is the offset within env[end1..], which starts at the
+        // \xff\xff separator — so it covers the 2 separator bytes + frame2.
+        assert_eq!(end2, 2 + frame2.len());
     }
 
     // WO 15.6 / 2.1: a chunk carrying multiple event-stream frames must not

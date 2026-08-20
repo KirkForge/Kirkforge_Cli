@@ -1170,7 +1170,11 @@ async fn turn_error_keeps_session_alive_for_retry() {
 
     h.input_tx.send("first".to_string()).unwrap();
     let mut saw_error = false;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    // 15s ceiling: the failing adapter errors instantly, but under heavy
+    // parallel test load (568 tests) the executor task can be scheduled
+    // late enough that a 5s window flakes. The assertion is about
+    // correctness (Error + TurnComplete, session alive), not speed.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
         let remaining = deadline
             .checked_duration_since(tokio::time::Instant::now())
@@ -1190,7 +1194,7 @@ async fn turn_error_keeps_session_alive_for_retry() {
     // The session must still accept input; the retry turn completes.
     h.input_tx.send("retry".to_string()).unwrap();
     let mut saw_recovered = false;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
         let remaining = deadline
             .checked_duration_since(tokio::time::Instant::now())
@@ -1238,7 +1242,12 @@ async fn stale_esc_before_input_does_not_kill_fresh_turn() {
     h.input_tx.send("hello".to_string()).unwrap();
 
     let mut saw_token = false;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    // 15s ceiling: the turn resolves in ~3s when uncontended, but under
+    // heavy parallel test load (568 tests) the executor task can be
+    // scheduled late enough that a 5s window flakes. The assertion is
+    // about correctness (stale Esc must not kill the fresh turn), not
+    // speed.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
         let remaining = deadline
             .checked_duration_since(tokio::time::Instant::now())

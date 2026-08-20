@@ -186,7 +186,50 @@ non-empty value from: (1) the config field (`[model].anthropic_api_key`, etc.),
 (2) the standard env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.), (3)
 keychain (stubbed to `None`; Series 18). The Anthropic adapter sends the key as
 `x-api-key` and returns a clear error before any HTTP request if no key is
-available. Keychain/OAuth expansion is planned for Series 18.
+available. The OpenAI-compat adapter threads `[model].openai_api_key` the same
+way (WO 38.5) — hosted endpoints authenticate per request; local servers keep
+working keyless (no `Authorization` header). Keychain/OAuth expansion is
+planned for Series 18.
+
+**Stream semantics** (WO 38.5): the Anthropic SSE parser accumulates usage
+across frames — `message_start` carries the input side, `message_delta` the
+final `output_tokens`; `message_stop` prefers its own (non-conforming) value if
+present. `TokenUsage` gained `cache_write_tokens` (Anthropic
+`cache_creation_input_tokens`), billed additively at the write rate. The
+OpenAI-compat body now sends `stream_options: {include_usage}` and the parser
+holds `Done` until the post-finish usage frame or `[DONE]` so the trailing
+usage is not dropped. A channel close without a terminal event is truncation,
+not success, on every adapter: the parser emits `Done{Error}` and the executor
+mirrors the cancel path (persist the partial assistant message + placeholder
+tool results) instead of laundering a half-reply into a completed turn.
+
+**Pricing** (`shared::PRICING_TABLE`, WO 38.5): rows for real Anthropic model
+ids (`claude-sonnet-4`, `claude-opus-4`, `claude-3-5-*`, `claude-3-*`); Bedrock
+ids (`anthropic.claude-*`) are matched after stripping the `anthropic.`
+namespace; longest-prefix wins; legacy short prefixes (`opus-4`…) kept for
+back-compat. Config-driven `[price_overrides."<prefix>"]` override the table
+(longest prefix wins) so self-hosted models can be priced without a code
+change. An unmapped model falls to the $0 sentinel with a once-per-model WARN
+instead of a silent $0.
+
+**Response cache** (`adapters/caching.rs`, WO 38.5): a stream carrying any
+`Error` event — or ending in `Done{Error}` — is never cached, so a transport
+blip can't poison the cache and replay the error forever. Replay zeroes the
+`Done` usage so a cache hit does not re-bill the original turn's tokens in
+`CostStats`.
+
+**Zero-arg tool calls** (WO 38.5): the Anthropic `content_block_stop` handler
+flushes a pending `tool_use` unconditionally — a block with no `partial_json`
+deltas is a zero-argument call, not a dropped one (`into_invocation` maps the
+missing input to `json!({})`). The OpenAI-compat accumulator emits a named
+call with empty argument deltas as a single `json!({})` invocation instead of
+error-looping on "no parseable tool calls".
+
+**Bedrock envelope** (`adapters/anthropic_bedrock.rs`, WO 38.5): the
+event-stream payload extraction operates on raw bytes — `serde_json`'s
+`Deserializer::from_slice` finds the first `{` and reports `byte_offset()` in
+byte space, so non-UTF8 preludes (binary event-stream headers, CRCs) cannot
+shift offsets and corrupt frame boundaries.
 
 ### `tools/` — built-in tools
 
@@ -670,7 +713,12 @@ approached or exceeded:
 
 The orchestrator (`SlicingOrchestrator`) classifies tool outputs, slices
 oversized ones with head/tail markers, and offloads the full content to a store.
-Cost reporting tracks per-turn usage. The budget guard ships as a compiled-in module
+Cost reporting tracks per-turn usage. Usage capture is provider-correct as of
+WO 38.5: the Anthropic family reads usage from `message_start`/`message_delta`
+(the real wire shape) instead of the never-sent `message_stop`; the OpenAI-compat
+adapter sends `stream_options: {include_usage}` and merges the post-finish usage
+frame. `TokenUsage` carries `cache_write_tokens` billed at the write rate. The
+budget guard ships as a compiled-in module
 (when the `budget` feature is on, ADR-047) or as a standalone `kf-budget` binary
 (feature off, shell fallback).
 

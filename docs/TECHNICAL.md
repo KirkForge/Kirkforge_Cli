@@ -884,6 +884,42 @@ landlock/CWD confinement and WO 30.6 approval forwarding. The brief's
 persona marks it caller-framed: the pipeline's role prompt is the
 complete prompt (one wrapper, never two — the WO 35.1 rule).
 
+WO 38.4 (orchestration correctness, adversarial review) closed four
+holes in this pipeline. (1) `/workflow cancel` on the parallel path is
+real: the TUI stores the live `Arc<ParallelOrchestrator>` in
+`GenerationState.workflow_orchestrator` at `handle_run` time, and
+`handle_cancel` calls `cancel_all()` on it — previously a lying no-op
+(the shared flag was only read by the sequential DAG runner and
+`cancel_all` had zero production callers). `cancel_all` also arms a
+pipeline-level `Arc<AtomicBool>` that `run_pipeline` checks before each
+phase, closing the window where a cancel during scout could not reach
+the not-yet-registered reviewer handle. A prior-phase *error*
+short-circuits the same way: a failed scout is never stringified into
+the coder's context and a dead provider does not burn two more full
+sessions — `ParallelResult.aborted` names the reason and the summary
+renders `ABORTED` (no lying success UI). (2) Identities mint from the
+process-global `NEXT_TASK_ID` counter (WO 37.1), not `pid+millis`: two
+`task` calls in one assistant message no longer collide on the temp dir
+(two subagents sharing one `conversation.ndjson` — first finisher
+deleting it under the other) or the worktree path (stale recovery
+force-removing a LIVE sibling worktree); a pre-existing temp dir is a
+hard error, not silent sharing. (3) Handoffs are bounded (8KB char
+limit) and fenced as untrusted data (`<<<BEGIN UNTRUSTED HANDOFF>>>`
+delimiters + an instruction to ignore embedded directives) — a scout
+summary is model output shaped by repo file contents, so injecting it
+raw into the coder's prompt was trusted-position prompt injection
+(strictly worse than tool-result injection). `extract_patch` splits at
+the LAST `SUBAGENT_PATCH_MARKER` so a marker the model echoes earlier
+in its text cannot shadow the real appended patch. (4) Cancel is
+transitive to nested subagents: `TaskMetadata.parent_task_id` records
+the spawning task, and `cascade_parent_cancel` links the parent
+executor's live cancel token to the nested task's cancel pair (flag +
+token) — an outer cancel fires the child's pair and the nested `run_task`
+exits cooperatively. Both background and foreground nested tasks derive
+their cancel from `ctx.token`. (The WO 38.4 Esc-then-input window fix
+was assigned to the WO 38.5 adapter agent and landed there in
+`src/session/executor/loop_.rs` — it is not part of this branch.)
+
 ### Orchestrator ModelClient wiring (WO 35.6 / 36.5, ADR-075)
 
 `kf-orchestrator`'s `ModelClient` trait has a production implementation in

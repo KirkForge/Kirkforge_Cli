@@ -112,10 +112,26 @@ fn handle_status(state: &AppState) -> String {
 }
 
 fn handle_cancel(state: &mut AppState) -> String {
+    // WO 38.4: the parallel path needs a real cancel — the shared flag
+    // below is only ever read by the sequential DAG runner. Reach the
+    // live orchestrator: cancel_all() stops in-flight roles and arms the
+    // pipeline flag so phases that never registered a handle (reviewer
+    // while scout runs) never start.
+    let cancelled_parallel = state
+        .generation
+        .workflow_orchestrator
+        .take()
+        .map(|orch| orch.cancel_all())
+        .is_some();
     if let Some(cancel) = state.generation.workflow_cancel.take() {
         cancel.store(true, Ordering::SeqCst);
         state.generation.workflow_in_progress = None;
         state.generation.workflow_cancel = None;
+        state.generation.workflow_orchestrator = None;
+        "⛔ Workflow cancelled.".into()
+    } else if cancelled_parallel {
+        state.generation.workflow_in_progress = None;
+        state.generation.workflow_orchestrator = None;
         "⛔ Workflow cancelled.".into()
     } else {
         "No workflow is running.".into()
@@ -219,28 +235,39 @@ async fn handle_run(
             let c = crate::shared::read_shared_config(&shared_cfg);
             c.session.worktree_enabled
         };
-        tokio::spawn(async move {
-            let orchestrator = crate::session::parallel_orchestrator::ParallelOrchestrator::new(
+        // WO 38.4: constructed here (not inside the spawn) so the TUI
+        // state keeps an Arc for `/workflow cancel` to reach.
+        let orchestrator = Arc::new(
+            crate::session::parallel_orchestrator::ParallelOrchestrator::new(
                 shared_cfg,
                 model_name,
                 ollama_host,
                 undo_stack,
                 supports_images,
-            );
+            ),
+        );
+        state.generation.workflow_orchestrator = Some(orchestrator.clone());
+        tokio::spawn(async move {
             let result = if worktree_enabled {
                 orchestrator.run_parallel(&task_description).await
             } else {
                 tracing::info!("worktree disabled; coder runs without an isolated worktree");
                 orchestrator.run_sequential(&task_description).await
             };
+            // WO 38.4: an aborted pipeline (prior-phase error or cancel)
+            // is a failure — the summary names the reason; no lying UI.
+            let (success, error) = match &result.aborted {
+                None => (true, None),
+                Some(reason) => (false, Some(reason.clone())),
+            };
             let summary = result.summary();
             crate::send_or_warn!(
                 completion_tx.send(PersonaResult {
                     kind: crate::tui::commands::PersonaKind::Coder,
                     task: format!("workflow {name_for_spawn} (parallel)"),
-                    success: true,
+                    success,
                     summary,
-                    error: None,
+                    error,
                 }),
                 "parallel workflow completion channel receiver dropped"
             );
@@ -521,6 +548,50 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel::<PersonaResult>();
         let out = handle_run("--parallel", &mut state, tx).await;
         assert!(out.contains("Usage"));
+    }
+
+    // WO 38.4 gap test: /workflow cancel on the parallel path must reach
+    // the live orchestrator (previously a lying no-op — the flag was
+    // never read by the parallel branch and cancel_all had zero
+    // production callers).
+    #[tokio::test]
+    async fn parallel_workflow_cancel_reaches_orchestrator() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wf_dir = tmp.path().join(".kf-code/workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        std::fs::write(
+            wf_dir.join("par.json"),
+            r#"{"name":"par","steps":[{"name":"a","prompt":"do the thing","persona":"explore"}]}"#,
+        )
+        .unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let mut state = empty_state();
+        let (tx, _rx) = mpsc::unbounded_channel::<PersonaResult>();
+        let out = handle_run("par --parallel", &mut state, tx).await;
+        assert!(out.contains("scout/coder/reviewer"), "got: {out}");
+
+        // Clone the Arc (not take) so the state slot stays populated for
+        // handle_cancel to act on, while staying observable afterwards.
+        let orch = state
+            .generation
+            .workflow_orchestrator
+            .as_ref()
+            .map(std::sync::Arc::clone)
+            .expect("parallel run must store the orchestrator for cancel");
+        assert!(!orch.cancel_requested());
+
+        let out = handle_cancel(&mut state);
+        assert!(out.contains("cancelled"), "got: {out}");
+        assert!(
+            orch.cancel_requested(),
+            "cancel_all must arm the pipeline flag on the live orchestrator"
+        );
+        assert!(state.generation.workflow_orchestrator.is_none());
+        assert!(state.generation.workflow_in_progress.is_none());
+
+        std::env::set_current_dir(cwd).unwrap();
     }
 
     #[test]

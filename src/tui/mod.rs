@@ -1264,6 +1264,7 @@ async fn handle_persona_complete(
     if result.task.starts_with("workflow ") {
         state.generation.workflow_in_progress = None;
         state.generation.workflow_cancel = None;
+        state.generation.workflow_orchestrator = None;
         let msg = if result.success {
             result.summary
         } else {

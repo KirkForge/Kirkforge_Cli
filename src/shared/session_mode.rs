@@ -40,8 +40,16 @@ pub fn set_session_mode(mode: Mode) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // #[serial] — SESSION_MODE is a process-global OnceLock<Mutex<Mode>>
+    // that cannot be dependency-injected (it is read by production code
+    // via current_session_mode() across module boundaries). Multiple test
+    // modules (session_mode, stratum, budget) mutate it; #[serial]
+    // serializes all #[serial] tests process-wide so the set/assert
+    // sequences don't interleave.
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn session_mode_round_trip() {
         set_session_mode(Mode::Lite);
         assert_eq!(current_session_mode(), Mode::Lite);

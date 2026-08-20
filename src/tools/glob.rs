@@ -383,12 +383,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "x").unwrap();
 
-        let cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&dir).unwrap();
+        let _cwd = crate::shared::test_util::CwdGuard::set(&dir).await;
         let glob = Glob::new(PathGuard::default());
         let args = serde_json::json!({ "pattern": "*.txt" });
         let outcome = glob.run(&ToolContext::default(), args).await;
-        std::env::set_current_dir(cwd).unwrap();
         assert!(
             matches!(outcome, ToolOutcome::Success { .. }),
             "got {outcome:?}"

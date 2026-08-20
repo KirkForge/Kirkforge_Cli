@@ -801,12 +801,8 @@ mod tests {
 
     #[test]
     fn test_session_index_roundtrip() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -823,12 +819,8 @@ mod tests {
 
     #[test]
     fn test_search_sessions_filters_by_id_and_date() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -880,12 +872,8 @@ mod tests {
     /// Search should match message content, not just metadata.
     #[test]
     fn test_search_sessions_matches_content() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -913,12 +901,8 @@ mod tests {
     /// the first with one child, the second with none.
     #[test]
     fn test_build_fork_tree_nests_children() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -969,12 +953,8 @@ mod tests {
     /// the session set) as roots so the user still sees them.
     #[test]
     fn test_build_fork_tree_orphan_fork_is_a_root() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -1005,12 +985,8 @@ mod tests {
     /// and no forks exist.
     #[test]
     fn test_build_fork_tree_empty() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
 
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
@@ -1162,12 +1138,8 @@ mod tests {
 
     #[test]
     fn test_delete_session_returns_false_when_missing() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let deleted = delete_session("does-not-exist-12345").unwrap();
@@ -1176,12 +1148,8 @@ mod tests {
 
     #[test]
     fn test_delete_session_removes_file_when_present() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let path = sessions_dir.join("to-delete.conv.ndjson");
@@ -1193,12 +1161,8 @@ mod tests {
 
     #[test]
     fn test_resolve_session_id_returns_none_when_no_match() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let resolved = resolve_session_id("missing").unwrap();
@@ -1207,12 +1171,8 @@ mod tests {
 
     #[test]
     fn test_resolve_session_id_matches_exact_id() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let path = sessions_dir.join("exact-id.conv.ndjson");
@@ -1223,12 +1183,8 @@ mod tests {
 
     #[test]
     fn test_resolve_session_id_matches_id_prefix() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let path = sessions_dir.join("2026-06-10-long-session.conv.ndjson");
@@ -1239,12 +1195,8 @@ mod tests {
 
     #[test]
     fn test_resolve_session_id_prefers_exact_match_over_prefix() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let prefix_path = sessions_dir.join("2026-prefix-id.conv.ndjson");
@@ -1257,12 +1209,8 @@ mod tests {
 
     #[test]
     fn test_open_resolved_returns_none_when_no_match() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let opened = open_resolved("not-present").unwrap();
@@ -1271,12 +1219,8 @@ mod tests {
 
     #[test]
     fn test_open_resolved_opens_conversation_log() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
         let sessions_dir = dir.path().join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
         let path = sessions_dir.join("resume-target.conv.ndjson");
@@ -1290,12 +1234,8 @@ mod tests {
 
     #[test]
     fn test_append_alert_writes_ndjson() {
-        let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = tempfile::tempdir().unwrap();
-        let _env = crate::shared::test_util::EnvGuard::set(
-            "KF_CODE_DATA_DIR",
-            dir.path().to_str().unwrap(),
-        );
+        let _dd = crate::session::DataDirGuard::set(dir.path().to_path_buf());
 
         // append_alert writes to <data_dir>/sessions/.alerts.ndjson, so the
         // sessions subdir must exist (OpenOptions::create makes the file, not

@@ -895,6 +895,9 @@ pub fn budget_hooks(budget: &SharedBudget) -> Vec<Box<dyn PostHook>> {
 mod tests {
     use super::*;
     use crate::session::hooks::PostHook;
+    // #[serial] on tests that mutate SESSION_MODE — see session_mode.rs
+    // for why this OnceLock registry cannot be injected.
+    use serial_test::serial;
 
     fn test_stratum_store() -> Arc<kf_compress_core::store::InMemoryOffloadStore> {
         Arc::new(kf_compress_core::store::InMemoryOffloadStore::new())
@@ -1681,6 +1684,7 @@ mod tests {
     /// escalation target lives in the stratum module.
     #[cfg(feature = "stratum")]
     #[tokio::test]
+    #[serial]
     async fn test_apply_budget_slice_auto_escalates_lite_to_full_on_approaching() {
         use crate::session::stratum::{current_session_mode, set_session_mode};
         use kf_compress_core::mode::Mode;
@@ -1715,6 +1719,7 @@ mod tests {
     /// mode is already `Full` is a no-op.
     #[cfg(feature = "stratum")]
     #[tokio::test]
+    #[serial]
     async fn test_pre_compact_hook_runs_stratum_compression() {
         use crate::session::stratum::{current_session_mode, set_session_mode};
         use kf_compress_core::mode::Mode;

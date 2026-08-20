@@ -99,3 +99,52 @@ impl Drop for EnvGuard {
         }
     }
 }
+
+// ── CwdGuard (WO 40.5) ──────────────────────────────────────────────
+// Process-global serializing mutex for tests that mutate the CWD via
+// `std::env::set_current_dir`. CWD is process-global, so two CWD-mutating
+// tests running in parallel race and flake. The guard holds the shared
+// lock for its lifetime and restores the original CWD on drop — including
+// when the test panics (RAII). `tokio::sync::Mutex` because some CWD-
+// sensitive code paths run inside `.await` calls and must observe the
+// test's CWD across the await boundary.
+
+#[cfg(test)]
+static CWD_GUARD: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+/// RAII guard that sets the process CWD to `dir` and restores the
+/// previous CWD on drop. Serializes all CWD-mutating tests via a shared
+/// process-global mutex so they cannot run concurrently.
+///
+/// Acquire the lock *before* mutating the CWD so concurrent tests block
+/// until the holder drops. The guard restores the original CWD even if
+/// the test panics.
+#[cfg(test)]
+pub struct CwdGuard {
+    old: std::path::PathBuf,
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl CwdGuard {
+    /// Set the CWD to `dir` and return a guard that restores it on drop.
+    /// Holds the shared CWD serializing lock for the guard's lifetime.
+    pub async fn set(dir: impl AsRef<std::path::Path>) -> Self {
+        let lock = CWD_GUARD
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let old = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        std::env::set_current_dir(dir).expect("CwdGuard: set_current_dir failed");
+        Self { old, _lock: lock }
+    }
+}
+
+#[cfg(test)]
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        if let Err(e) = std::env::set_current_dir(&self.old) {
+            tracing::warn!(error = %e, path = %self.old.display(), "CwdGuard: failed to restore CWD");
+        }
+    }
+}

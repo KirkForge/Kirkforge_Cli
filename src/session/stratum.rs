@@ -614,6 +614,9 @@ mod tests {
     use crate::session::hooks::{HookContext, HookDecision, PostHook};
     use crate::shared::test_util::EnvGuard;
     use crate::tools::ToolContext;
+    // #[serial] on tests that mutate SESSION_MODE — see session_mode.rs
+    // for why this OnceLock registry cannot be injected.
+    use serial_test::serial;
 
     #[tokio::test]
     async fn test_stratum_rules_returns_output() {
@@ -768,6 +771,7 @@ mod tests {
     // ── WO 8.6 coordination tests ──────────────────────────────────────
 
     #[test]
+    #[serial]
     fn session_mode_round_trip() {
         set_session_mode(Mode::Lite);
         assert_eq!(current_session_mode(), Mode::Lite);
@@ -792,6 +796,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn default_budget_sliced_listener_returns_some() {
         set_session_mode(Mode::Full);
         let store = Arc::new(InMemoryOffloadStore::new());

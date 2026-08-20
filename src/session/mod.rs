@@ -89,6 +89,13 @@ fn ensure_private_data_dir(dir: &std::path::Path) {
 }
 
 pub fn data_dir() -> anyhow::Result<PathBuf> {
+    // Test-only thread-local override (WO 40.5): when set, takes
+    // precedence over both the env var and the XDG default. This lets
+    // tests inject a temp data dir without mutating KF_CODE_DATA_DIR
+    // (process-global env) — keeping parallel tests isolated.
+    if let Some(dir) = test_data_dir_override() {
+        return Ok(dir);
+    }
     // Allow tests and advanced deployments to override the canonical data
     // directory location without changing XDG variables.
     if let Ok(dir) = std::env::var("KF_CODE_DATA_DIR") {
@@ -99,6 +106,53 @@ pub fn data_dir() -> anyhow::Result<PathBuf> {
     let dir = project.data_dir().to_path_buf();
     ensure_private_data_dir(&dir);
     Ok(dir)
+}
+
+// ── DataDirGuard (WO 40.5) ───────────────────────────────────────────
+// Thread-local data-dir override for tests. When set, data_dir() returns
+// this path instead of reading KF_CODE_DATA_DIR. Scoping the override to
+// the calling thread means parallel tests in other threads are unaffected
+// — no env mutation, no lock needed. In non-test builds the override is
+// a constant None, so data_dir() skips straight to the env/XDG path.
+
+#[cfg(not(test))]
+fn test_data_dir_override() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_DATA_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn test_data_dir_override() -> Option<PathBuf> {
+    TEST_DATA_DIR.with(|d| d.borrow().clone())
+}
+
+/// RAII guard that sets a thread-local data-dir override for tests
+/// (WO 40.5). While alive, `data_dir()` returns `dir` instead of
+/// reading `KF_CODE_DATA_DIR`. Restores the prior override on drop.
+#[cfg(test)]
+pub struct DataDirGuard {
+    old: Option<PathBuf>,
+}
+
+#[cfg(test)]
+impl DataDirGuard {
+    /// Set the thread-local data-dir override to `dir`.
+    pub fn set(dir: PathBuf) -> Self {
+        let old = test_data_dir_override();
+        TEST_DATA_DIR.with(|d| *d.borrow_mut() = Some(dir));
+        Self { old }
+    }
+}
+
+#[cfg(test)]
+impl Drop for DataDirGuard {
+    fn drop(&mut self) {
+        TEST_DATA_DIR.with(|d| *d.borrow_mut() = self.old.clone());
+    }
 }
 
 pub fn jobs_dir() -> anyhow::Result<PathBuf> {
@@ -164,6 +218,11 @@ mod session_tests {
     use crate::shared::test_util::remove_test_dir;
     use crate::shared::test_util::EnvGuard;
 
+    // data_dir_respects_env_override tests the KF_CODE_DATA_DIR env-var
+    // path specifically, so it keeps EnvGuard + the shared lock. The
+    // other tests use DataDirGuard (thread-local, no lock, no env
+    // mutation) so they run parallel-safe.
+
     #[tokio::test]
     async fn data_dir_respects_env_override() {
         let _lock = test_data_dir_lock().lock().await;
@@ -183,7 +242,6 @@ mod session_tests {
 
     #[tokio::test]
     async fn new_session_id_picks_max_seq_plus_one() {
-        let _lock = test_data_dir_lock().lock().await;
         let temp = std::env::temp_dir().join(format!(
             "kf-code-session-id-test-{}-{}",
             std::process::id(),
@@ -199,7 +257,7 @@ mod session_tests {
         std::fs::write(sessions_dir.join(format!("{date}-session-1.ndjson")), "").unwrap();
         std::fs::write(sessions_dir.join(format!("{date}-session-7.ndjson")), "").unwrap();
         std::fs::write(sessions_dir.join(format!("{date}-session-3.ndjson")), "").unwrap();
-        let _env = EnvGuard::set("KF_CODE_DATA_DIR", &temp);
+        let _dd = DataDirGuard::set(temp.clone());
         let id = new_session_id();
         assert_eq!(id.date, date);
         assert_eq!(id.seq, 8, "should pick max(1,3,7) + 1 = 8");
@@ -208,7 +266,6 @@ mod session_tests {
 
     #[tokio::test]
     async fn new_session_id_returns_1_for_empty_dir() {
-        let _lock = test_data_dir_lock().lock().await;
         let temp = std::env::temp_dir().join(format!(
             "kf-code-session-empty-test-{}-{}",
             std::process::id(),
@@ -219,7 +276,7 @@ mod session_tests {
         ));
         let sessions_dir = temp.join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
-        let _env = EnvGuard::set("KF_CODE_DATA_DIR", &temp);
+        let _dd = DataDirGuard::set(temp.clone());
         let id = new_session_id();
         assert_eq!(id.seq, 1, "empty sessions dir should return seq=1");
         remove_test_dir(&temp);
@@ -227,7 +284,6 @@ mod session_tests {
 
     #[tokio::test]
     async fn new_session_id_returns_1_when_no_sessions_dir() {
-        let _lock = test_data_dir_lock().lock().await;
         let temp = std::env::temp_dir().join(format!(
             "kf-code-no-sessions-test-{}-{}",
             std::process::id(),
@@ -238,7 +294,7 @@ mod session_tests {
         ));
         std::fs::create_dir_all(&temp).unwrap();
         // No "sessions" subdirectory
-        let _env = EnvGuard::set("KF_CODE_DATA_DIR", &temp);
+        let _dd = DataDirGuard::set(temp.clone());
         let id = new_session_id();
         assert_eq!(id.seq, 1, "no sessions dir should return seq=1");
         remove_test_dir(&temp);
@@ -246,7 +302,6 @@ mod session_tests {
 
     #[tokio::test]
     async fn jobs_dir_respects_env_override() {
-        let _lock = test_data_dir_lock().lock().await;
         let temp = std::env::temp_dir().join(format!(
             "kf-code-jobs-dir-test-{}-{}",
             std::process::id(),
@@ -255,7 +310,7 @@ mod session_tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let _env = EnvGuard::set("KF_CODE_DATA_DIR", &temp);
+        let _dd = DataDirGuard::set(temp.clone());
         let dir = jobs_dir().expect("jobs_dir should succeed");
         assert!(dir.ends_with("jobs"));
         remove_test_dir(&temp);

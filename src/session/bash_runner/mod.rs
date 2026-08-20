@@ -803,7 +803,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn run_shell_child_env_scrubs_secret_vars() {
-        std::env::set_var("KF_WO38_TEST_API_KEY", "sk-should-never-leak");
+        let _env =
+            crate::shared::test_util::EnvGuard::set("KF_WO38_TEST_API_KEY", "sk-should-never-leak");
         let out = run_shell(
             "echo \"[$KF_WO38_TEST_API_KEY]\"",
             &std::env::temp_dir(),
@@ -811,7 +812,6 @@ mod tests {
         )
         .await
         .expect("run_shell should succeed");
-        std::env::remove_var("KF_WO38_TEST_API_KEY");
         assert!(out.status.success(), "stderr: {}", out.stderr);
         assert_eq!(out.stdout.trim(), "[]");
     }

@@ -65,6 +65,7 @@ Decision tree:
 - Lessons from `lessons.md` that are permanent conventions get folded into this `AGENTS.md` file — so the next worker reads them automatically.
 
 ## 4. Verification
+- Run `scripts/ci-local.sh` before EVERY commit — it includes the Windows cross-compile check (`cargo clippy --target x86_64-pc-windows-gnu`). Never push without it. The 25+ `fix(windows)` commits in Aug 2026 were all caused by skipping this step.
 - Run the gates before every commit. Paste the actual output (not paraphrased). A green claim requires the pasted output + the head SHA. "It passed" is not evidence.
 - **Local gate (fast)** — run before every commit:
   - `scripts/test-fast.sh` (unit/lib/bins only, skips integration tests)

@@ -53,6 +53,8 @@ jobs:
 
   # Real-model integration tests against a live Ollama instance. Network,
   # model download, GPU variance — wrong shape for PR/merge CI (ADR-074).
+  # nightly profile (WO 40.3): 600s slow-timeout, --run-ignored all so
+  # #[ignore] tests (real-network JWKS smoke etc.) are included.
   ollama:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -69,6 +71,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: nightly-ollama
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
 
       - name: Cache Ollama models
         uses: actions/cache@v4
@@ -102,15 +109,17 @@ jobs:
             echo "Test model ${TEST_MODEL} already cached"
           fi
 
-      - name: Run integration tests against Ollama
-        run: cargo test --test integration_test -- --include-ignored
+      - name: Run integration tests against Ollama (nightly profile, include ignored)
+        # nightly profile: 600s slow-timeout, --run-ignored all so
+        # #[ignore] tests run. -p kf-code scopes to the integration tests.
+        run: cargo nextest run --profile nightly --run-ignored all --no-fail-fast --locked -p kf-code
 
-      - name: Run smoke tests
-        run: cargo test --test smoke_test
+      - name: Run smoke tests (nightly profile)
+        run: cargo nextest run --profile nightly --no-fail-fast --locked -p kf-code --test smoke_test
 
   # Full e2e suite. Same as ci-merge.yml `e2e`; runs nightly so a flaky e2e
   # failure does not block merge but is still observed. e2e profile
-  # (binary(e2e), 600s slow-timeout) declaratively.
+  # (binary(e2e), 300s slow-timeout) declaratively.
   e2e-exhaustive:
     runs-on: ubuntu-latest
     timeout-minutes: 30

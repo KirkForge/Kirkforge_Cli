@@ -37,11 +37,27 @@ run_step() {
 # Core checks always run.
 # Cap test threads: the workspace fans out ~38 integration test binaries;
 # uncapped `cargo test --workspace` OOMs the host (killed a prior session).
+# nextest manages its own thread pool, but the cargo-test fallback below
+# still needs the cap (WO 40.3: test steps now use nextest profiles).
 TEST_THREADS="${KF_TEST_THREADS:-$(nproc)}"
 if [ "$TEST_THREADS" -gt 8 ]; then TEST_THREADS=8; fi
 run_step "Check formatting" cargo fmt --check
-run_step "Run unit tests" cargo test --locked --workspace -- --test-threads="$TEST_THREADS"
-run_step "Run smoke tests" cargo test --test smoke_test
+
+# Test steps use nextest profiles (WO 40.3): ci-fast for the quick gate,
+# ci-full for the full gate. Fall back to `cargo test` if nextest is absent
+# so ci-local.sh still works on a bare toolchain.
+NEXTEST_AVAILABLE=0
+if command -v cargo-nextest >/dev/null 2>&1; then
+    NEXTEST_AVAILABLE=1
+fi
+
+if [ "$NEXTEST_AVAILABLE" = "1" ]; then
+    run_step "Run unit tests (ci-fast)" cargo nextest run --profile ci-fast --workspace --lib --bins --locked
+    run_step "Run smoke tests" cargo nextest run --profile ci-fast --locked --test smoke_test
+else
+    run_step "Run unit tests" cargo test --locked --workspace -- --test-threads="$TEST_THREADS"
+    run_step "Run smoke tests" cargo test --test smoke_test
+fi
 run_step "Run Clippy" cargo clippy --all-targets -- -D warnings
 
 if [ "$MODE" != "quick" ]; then
@@ -75,11 +91,21 @@ if [ "$MODE" = "full" ]; then
 
     # The e2e integration suite is feature-gated behind `e2e-tests`
     # (WO 28.10); only `full` mode pulls it in for local reproduction.
-    if cargo test --test e2e --features e2e-tests --no-run --locked >/dev/null 2>&1; then
-        run_step "e2e suite" cargo test --test e2e --features e2e-tests --locked -- --test-threads="$TEST_THREADS"
+    # Uses the e2e nextest profile (300s slow-timeout) when available.
+    if [ "$NEXTEST_AVAILABLE" = "1" ]; then
+        if cargo test --test e2e --features e2e-tests --no-run --locked >/dev/null 2>&1; then
+            run_step "e2e suite" cargo nextest run --profile e2e --features e2e-tests --no-fail-fast --locked
+        else
+            echo
+            echo -e "${YELLOW}WARNING${NC}: e2e crate did not build locally; skipping e2e suite."
+        fi
     else
-        echo
-        echo -e "${YELLOW}WARNING${NC}: e2e crate did not build locally; skipping e2e suite."
+        if cargo test --test e2e --features e2e-tests --no-run --locked >/dev/null 2>&1; then
+            run_step "e2e suite" cargo test --test e2e --features e2e-tests --locked -- --test-threads="$TEST_THREADS"
+        else
+            echo
+            echo -e "${YELLOW}WARNING${NC}: e2e crate did not build locally; skipping e2e suite."
+        fi
     fi
 
     if command -v cargo-tarpaulin >/dev/null 2>&1; then

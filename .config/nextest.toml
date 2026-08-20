@@ -1,33 +1,54 @@
 # nextest repository config — see https://nexte.st/docs/configuration/reference/
-# Profiles map onto the CI matrix in scripts/ci-local.sh:
-#   ci-fast     -> PR fast feedback (lib tests only, fail fast, 60s slow-timeout)
-#   ci-full     -> post-merge (all tests, collect all failures, 120s slow-timeout)
+# Profiles map onto the CI matrix (ADR-074):
+#   ci-fast     -> PR fast feedback (lib tests, fail fast, 30s slow-timeout
+#                  terminate-after=1, grace-period 10s, skip #[ignore])
+#   ci-full     -> post-merge (all tests, collect all failures, 60s
+#                  slow-timeout, grace-period 15s, skip #[ignore])
 #   integration -> root tests/ integration suite (kind(test) excluding the
-#                  feature-gated e2e binary), 300s slow-timeout
+#                  feature-gated e2e binary), 120s slow-timeout
 #   e2e         -> tests/e2e (gated behind --features e2e-tests, WO 28.10),
-#                  600s slow-timeout
+#                  300s slow-timeout
+#   nightly     -> exhaustive: 600s slow-timeout, no #[ignore] skip
+#                  (run with --run-ignored all)
+#
+# Timeout policy (WO 40.3):
+#   slow-timeout = { period = "Xs", terminate-after = 1, grace-period = "Ys" }
+#   period          = when a test is flagged SLOW and (with terminate-after=1)
+#                     terminated at that boundary
+#   grace-period    = time the test gets to shut down cleanly after SIGTERM
+#                     before nextest sends SIGKILL
+#   default-filter  = "not test(#ignore)" — skip #[ignore] tests by default;
+#                     nightly overrides with all() and CI passes --run-ignored all
 
 [profile.ci-fast]
-# PR fast feedback: lib tests only, fail fast, tight timeout.
+# PR fast feedback: fail fast, tight timeout, skip ignored tests.
 fail-fast = true
-default-filter = "kind(lib)"
-slow-timeout = "60s"
+default-filter = "not test(#ignore)"
+slow-timeout = { period = "30s", terminate-after = 1, grace-period = "10s" }
 
 [profile.ci-full]
-# Post-merge: all tests, collect all failures.
+# Post-merge: collect all failures, skip ignored tests.
 fail-fast = false
-slow-timeout = "120s"
+default-filter = "not test(#ignore)"
+slow-timeout = { period = "60s", terminate-after = 1, grace-period = "15s" }
 
 [profile.integration]
 # Integration tests (cargo integration targets under tests/ and crates/*/tests/),
 # excluding the feature-gated e2e binary (built separately with --features e2e-tests).
 fail-fast = false
 default-filter = "kind(test) - binary(e2e)"
-slow-timeout = "300s"
+slow-timeout = { period = "120s", terminate-after = 1, grace-period = "15s" }
 
 [profile.e2e]
 # E2E: very long timeout. The e2e binary only builds with --features e2e-tests
 # (WO 28.10); run as: cargo nextest run --profile e2e --features e2e-tests.
 fail-fast = false
 default-filter = "binary(e2e)"
-slow-timeout = "600s"
+slow-timeout = { period = "300s", terminate-after = 1, grace-period = "30s" }
+
+[profile.nightly]
+# Nightly: exhaustive — runs everything including #[ignore] tests.
+# CI runs with --run-ignored all so #[ignore] tests are not skipped.
+# no default-filter (all()), 600s slow-timeout, no fail-fast.
+fail-fast = false
+slow-timeout = { period = "600s", terminate-after = 1, grace-period = "30s" }

@@ -138,8 +138,9 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --lib --bins --features e2e-tests --locked -- -D warnings
 
-  # Fast tests: nextest ci-fast profile (kind(lib), fail-fast=true, 60s
-  # slow-timeout) on changed packages only. Skipped on docs-only changes.
+  # Fast tests: nextest ci-fast profile (fail-fast=true, 30s slow-timeout
+  # terminate-after=1, grace-period 10s, skip #[ignore]) on changed packages
+  # only. Skipped on docs-only changes. Includes a slow-test warning (WO 40.3).
   fast-tests:
     runs-on: ubuntu-latest
     needs: changes
@@ -163,10 +164,36 @@ jobs:
           tool: cargo-nextest
 
       - name: Run fast test suite (changed packages only, lib only, fail-fast)
+        # ci-fast profile: fail-fast=true, 30s slow-timeout (terminate-after=1),
+        # grace-period 10s, skip #[ignore]. Output tee'd to a log for the
+        # slow-test warning step below (WO 40.3).
         env:
           PKGS: ${{ needs.changes.outputs.packages }}
         run: |
           set -euo pipefail
           args=()
           for p in $PKGS; do args+=("-p" "$p"); done
-          cargo nextest run --profile ci-fast --lib --locked "${args[@]}"
+          cargo nextest run --profile ci-fast --lib --locked "${args[@]}" 2>&1 | tee nextest-fast.log
+
+      - name: Warn on slow tests (>10s in ci-fast)
+        # WO 40.3: in the PR fast profile (30s timeout), any test over 10s
+        # is a budget concern. Emit a warning annotation so it's visible
+        # in the PR check UI without failing the job.
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f nextest-fast.log ]; then
+            exit 0
+          fi
+          # Strip ANSI, extract PASS/SLOW lines with duration > 10s.
+          # nextest lines: "PASS [   1.234s] crate::binary tests::name"
+          sed 's/\x1b\[[0-9;]*m//g' nextest-fast.log \
+            | grep -E '^\s*(PASS|FAIL|SLOW|TIMEOUT|LEAK)\s+\[' \
+            | awk -F'[][]' '{ gsub(/[[:space:]]/, "", $2); dur=$2; sub(/s$/, "", dur); if (dur+0 > 10) print $0 }' \
+            > slow-warn.txt || true
+          if [ -s slow-warn.txt ]; then
+            echo "::warning::Tests in ci-fast exceeded 10s budget (30s timeout):"
+            cat slow-warn.txt
+          else
+            echo "No tests exceeded 10s in ci-fast profile."
+          fi

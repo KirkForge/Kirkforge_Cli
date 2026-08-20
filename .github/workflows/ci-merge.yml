@@ -107,9 +107,10 @@ jobs:
       - name: Run Clippy (all targets)
         run: cargo clippy --all-targets --features e2e-tests --locked -- -D warnings
 
-  # Full tests: ci-full profile (fail-fast=false, 120s slow-timeout),
-  # --no-fail-fast to collect all failures. Sibling of clippy (both depend
-  # on static only), not a dependent of clippy.
+  # Full tests: ci-full profile (fail-fast=false, 60s slow-timeout
+  # terminate-after=1, grace-period 15s, skip #[ignore]), --no-fail-fast to
+  # collect all failures. Sibling of clippy (both depend on static only),
+  # not a dependent of clippy. Includes a slow-test report (WO 40.3).
   full-tests:
     runs-on: ubuntu-latest
     needs: static
@@ -132,10 +133,51 @@ jobs:
           tool: cargo-nextest
 
       - name: Run full test suite (no-fail-fast)
-        # ci-full profile: fail-fast=false, 120s slow-timeout. --workspace
-        # does not pick up the e2e crate (gated behind required-features
-        # e2e-tests); the dedicated `e2e` job below runs it with the feature.
-        run: cargo nextest run --profile ci-full --workspace --no-fail-fast --locked
+        # ci-full profile: fail-fast=false, 60s slow-timeout (terminate-after=1),
+        # skip #[ignore]. --workspace does not pick up the e2e crate (gated
+        # behind required-features e2e-tests); the dedicated `e2e` job below
+        # runs it with the feature. Output is tee'd to a log for the slow-test
+        # report step below (WO 40.3).
+        run: |
+          set -euo pipefail
+          cargo nextest run --profile ci-full --workspace --no-fail-fast --locked 2>&1 | tee nextest-full.log
+
+      - name: Slow-test report (top 20)
+        # WO 40.3: extract the top-20 slowest tests from the run log and post
+        # as a CI summary. nextest prints lines like:
+        #   PASS [   1.234s] crate::binary tests::test_name
+        # We sort by the duration field descending and take the top 20.
+        # Uses awk to parse the bracket duration; sed strips ANSI color.
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f nextest-full.log ]; then
+            echo "No nextest log found; skipping slow-test report."
+            exit 0
+          fi
+          # Strip ANSI codes, extract duration + test name, sort desc, top 20.
+          # nextest lines: "PASS [   1.234s] crate::binary tests::name"
+          sed 's/\x1b\[[0-9;]*m//g' nextest-full.log \
+            | grep -E '^\s*(PASS|FAIL|SLOW|TIMEOUT|LEAK)\s+\[' \
+            | awk -F'[][]' '{ print $2 "\t" $0 }' \
+            | sort -t$'\t' -k1 -r \
+            | head -20 \
+            | cut -f2- > slowest-20.txt || true
+          echo "::group::Top 20 slowest tests (ci-full)"
+          if [ -s slowest-20.txt ]; then
+            cat slowest-20.txt
+          else
+            echo "(no test duration lines parsed)"
+          fi
+          echo "::endgroup::"
+          # Post as a job summary (GitHub Actions markdown).
+          {
+            echo "## Top 20 slowest tests (ci-full profile)"
+            echo ""
+            echo '```'
+            cat slowest-20.txt 2>/dev/null || echo "(none)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run doctests
         # Doctests are not collected by nextest by default. Run them under
@@ -145,7 +187,7 @@ jobs:
 
   # Windows tests only — NO release build. Release compile validation lives
   # in the nightly release-build job / tag-triggered release.yml (ADR-074).
-  # ci-full profile (fail-fast=false, 120s slow-timeout) declaratively;
+  # ci-full profile (fail-fast=false, 60s slow-timeout) declaratively;
   # no inline --config flags.
   windows:
     runs-on: windows-latest
@@ -181,7 +223,7 @@ jobs:
   # (required-features = e2e-tests) so --workspace runs above skip it. This
   # job turns the feature on so the full e2e suite runs on every push to
   # dev/main without making every other job pay the compile + run cost.
-  # e2e profile (binary(e2e), 600s slow-timeout) declaratively.
+  # e2e profile (binary(e2e), 300s slow-timeout) declaratively.
   e2e:
     runs-on: ubuntu-latest
     needs: static

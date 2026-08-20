@@ -102,6 +102,9 @@ fn run_replay_tui(records: Vec<kf_code::session::replay::TurnRecord>) -> anyhow:
     use kf_code::tui::replay::ReplayApp;
     use ratatui::{backend::CrosstermBackend, Terminal};
 
+    // Same panic-containment contract as the main TUI (WO 38.2): the
+    // hook must be in place before raw mode is enabled.
+    kf_code::tui::install_panic_hook();
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen)?;

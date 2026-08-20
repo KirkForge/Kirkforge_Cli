@@ -259,14 +259,16 @@ impl Tool for ComputerUse {
                         message: format!("open failed: {e:#}"),
                     });
                 }
-                let mut guard = self.session.lock().unwrap();
+                // Poison-tolerant (WO 38.2): a panic elsewhere must not
+                // brick the browser-session lock — recover the inner state.
+                let mut guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
                 *guard = Some(BrowserSession::new(session_tab, self.config.max_steps));
                 ToolOutcome::Success {
                     content: format!("Opened session and navigated to {url}"),
                 }
             }
             "close" => {
-                let mut guard = self.session.lock().unwrap();
+                let mut guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
                 guard.take();
                 ToolOutcome::Success {
                     content: "Browser session closed".into(),
@@ -284,7 +286,7 @@ impl Tool for ComputerUse {
                 // std::sync::MutexGuard is not Send and would make the
                 // future non-Send across the await).
                 let outcome = {
-                    let mut guard = self.session.lock().unwrap();
+                    let mut guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
                     match guard.as_mut() {
                         Some(session) => {
                             if let Err(e) = session.step() {

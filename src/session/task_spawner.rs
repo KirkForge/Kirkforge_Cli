@@ -729,6 +729,7 @@ mod tests {
     // this is a real-concurrency test and the production runtime is
     // multi-threaded; on current_thread the two long-lived spawned tasks
     // starve behind the main task's poll loop.
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn same_ms_double_spawn_gets_distinct_temp_dirs() {
         let _tmp_lock = RUN_TASK_TMP_LOCK.lock().await;
@@ -785,6 +786,7 @@ mod tests {
     // clock tag they collided and stale recovery force-removed the LIVE
     // sibling. Both are cleaned up on error return. multi_thread flavor:
     // real-concurrency test (see the temp-dir variant above).
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn same_ms_double_spawn_gets_distinct_worktrees() {
         let _tmp_lock = RUN_TASK_TMP_LOCK.lock().await;

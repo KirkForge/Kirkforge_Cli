@@ -264,3 +264,35 @@
   decompose/Cargo.toml, executor_adapter, parallel_orchestrator,
   event_sink_bridge [new], session/mod.rs [module reg], TECHNICAL, 3
   workorder statuses, CHANGELOG, lessons, Cargo.lock).
+
+# lessons.md — WO 37.1 session (worktree wo37-a)
+
+## What I learned
+- The WO 36.2 phantom-job note was real but had TWO trigger paths, not
+  one: unresolvable workdir (canonicalize `?` at old :215) fails after
+  insert too, not just `proc.spawn()?`. Insert-after-spawn fixes both;
+  test both (nonexistent dir vs regular-file workdir — a file resolves
+  but chdir fails, exercising the true `proc.spawn()` error branch).
+- `check_bash_command_str` only rejects unresolvable workdirs when
+  `bash_sandbox_workdir=true` with a scoped PathGuard; with
+  `PathGuard::default()`/false the gate passes them through, so the
+  registry's own canonicalize is the real check.
+- Insert-after-spawn also let pid be set on the job BEFORE insert,
+  deleting the post-insert pid-update lock round-trip — reordering for
+  correctness sometimes pays for itself.
+- Global-counter ids broke one test's absolute-literal expectations
+  (`task-1..task-12`); rank-based ordering assertions are the durable
+  shape. `task_id_rank("task-2") < task_id_rank("task-10")` pins the
+  lexicographic trap directly.
+- gitnexus impact on common method names (`remove`, `spawn`) reports
+  name-collision noise (CRITICAL, 17 modules) — the real caller set is
+  the file-scoped resolution (jobs/runner.rs:171,183 for remove). Trust
+  the `Function:file:path` target line, not the risk badge, for common
+  names.
+- Clippy over the shared CARGO_TARGET_DIR across worktrees can exceed
+  10min (lock waits); it does finish in the background — a fast
+  "Finished 1.29s" rerun is the honest gate, exit code included.
+
+## Scope deviations
+- state.md + TECHNICAL.md beyond the WO file list: AGENTS §task-mgmt 4/9
+  mandates both on registry-behavior changes — disclosed, not creep.

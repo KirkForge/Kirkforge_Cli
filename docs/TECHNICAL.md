@@ -473,9 +473,14 @@ cancellation (WO 36.4): `Executor::run` installs a fresh per-turn live token
 at each input (tokens are one-shot), the TUI's Esc cancel watcher fires the
 flag and the token together, and per-tool child tokens derive from it (tool
 timeouts stay independently triggerable while parent cancel cascades).
-Known ceiling (disclosed): owner ids are per-`TaskManager` strings, so two
-managers can mint the same `task-N` tag and a cancel reaches both
-(cascade-like). `status` and `list` expose the state for
+Task ids are minted from a process-global atomic counter shared by every
+`TaskManager` (WO 37.1), so owner tags are unique across managers — the
+old per-manager-counter ceiling (two managers minting the same `task-N`
+tag, a cancel reaching both) is resolved. Same WO: `BashJobRegistry::
+remove()` kills a still-running child by pid on mutex contention instead
+of parking behind the watcher, and a failed spawn leaves no registry
+entry (the record is inserted only after `proc.spawn()` succeeds).
+`status` and `list` expose the state for
 the `/jobs` view (WO 30.2).
 
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`

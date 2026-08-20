@@ -157,7 +157,9 @@ impl BashJobRegistry {
         // ── Job cap: evict oldest completed jobs if at limit ──
         // The cap check, eviction, and insertion must happen under one lock
         // hold to avoid a TOCTOU race where two spawns both see a free slot
-        // and exceed MAX_JOBS.
+        // and exceed MAX_JOBS. The insertion itself happens after the spawn
+        // below (same lock discipline for the re-check + insert) so a failed
+        // spawn cannot leave a Running record with no child behind.
         let to_remove: Vec<u64> = {
             let mut jobs = self.jobs.lock().await;
             if jobs.len() >= MAX_JOBS {
@@ -184,15 +186,6 @@ impl BashJobRegistry {
                     kill_process_group(&mut child);
                 }
             }
-        }
-
-        let job = BashJob::new(id, command.to_string(), owner);
-        {
-            let mut jobs = self.jobs.lock().await;
-            // Re-check under the same lock before inserting; if another task
-            // grabbed the last slot while we cleaned up child handles, reject.
-            check_job_cap(jobs.len()).map_err(anyhow::Error::msg)?;
-            jobs.insert(id, job);
         }
 
         let mut proc = tokio::process::Command::new(shell_program());
@@ -237,22 +230,36 @@ impl BashJobRegistry {
             setup_rlimits(&mut proc, cfg, lp);
         }
 
-        let child = proc.spawn()?;
+        // Spawn BEFORE inserting the registry record (WO 37.1): any earlier
+        // failure (command build, workdir resolution, `?` above) must leave
+        // no entry — the old insert-first order leaked a phantom Running
+        // job with no child and no watcher that /jobs listed and the cap
+        // counted.
+        let mut child = proc.spawn()?;
+
+        let pid = child.id();
+        let mut job = BashJob::new(id, command.to_string(), owner);
+        job.pid = pid;
+        {
+            let mut jobs = self.jobs.lock().await;
+            // Re-check under the same lock before inserting; if another task
+            // grabbed the last slot while we spawned, kill the just-spawned
+            // child (never leak it) and reject.
+            if let Err(e) = check_job_cap(jobs.len()) {
+                kill_process_group(&mut child);
+                reap_child(&mut child, Duration::from_secs(2)).await;
+                return Err(anyhow::anyhow!(e));
+            }
+            jobs.insert(id, job);
+        }
 
         // Store child handle for cancel(), wrapped so the watcher and
         // cancel()/clean()/remove() can share it. The job's pid is
-        // recorded so cancel can kill the process group without this
+        // recorded above so cancel can kill the process group without this
         // mutex when the watcher is parked on it (see cancel).
-        let pid = child.id();
         {
             let mut children = self.children.lock().await;
             children.insert(id, Arc::new(Mutex::new(child)));
-        }
-        {
-            let mut jobs = self.jobs.lock().await;
-            if let Some(job) = jobs.get_mut(&id) {
-                job.pid = pid;
-            }
         }
 
         // Spawn watcher: wait for output, update job record, remove child
@@ -270,8 +277,10 @@ impl BashJobRegistry {
             };
 
             let Some(child) = child else {
-                // No child was ever stored (spawn failed after insert or the
-                // child is not in the map) — nothing to reap.
+                // No child handle in the map — a racing cancel()/remove()
+                // already took it and is killing/reaping the child itself
+                // (spawn failure no longer reaches the watcher: the record
+                // is inserted only after a successful spawn, WO 37.1).
                 return;
             };
 
@@ -481,13 +490,9 @@ impl BashJobRegistry {
     /// kill/reap/flip path, reused per id) and returns how many jobs were
     /// flipped to `Cancelled`. Jobs with a different owner — including
     /// main-session jobs (`owner: None`) — are never touched; an unknown
-    /// owner cancels nothing and returns 0.
-    ///
-    /// ponytail: ceiling — owner ids are per-TaskManager strings, so two
-    /// managers can mint the same "task-N" tag and a cancel then reaches
-    /// both (behaves as cascade-cancel of the task's descendants). Upgrade
-    /// path: globally-unique owner ids if nested background subagents
-    /// become common.
+    /// owner cancels nothing and returns 0. Owner tags are unique
+    /// process-wide (WO 37.1: TaskManager ids come from one global
+    /// counter), so a cancel never crosses managers.
     pub async fn cancel_by_owner(&self, owner: &str) -> usize {
         let ids: Vec<u64> = {
             let jobs = self.jobs.lock().await;
@@ -507,18 +512,41 @@ impl BashJobRegistry {
         cancelled
     }
 
-    /// Remove a job from the registry (also cleans up the child handle).
+    /// Remove a job from the registry, killing a still-running child first.
+    ///
+    /// Semantics: remove KILLS the child (as it always has) — detaching
+    /// would leave a live process with no registry entry: invisible to the
+    /// cap, unreachable by cancel, identical to the phantom-job leak.
+    ///
+    /// Like `cancel`, the kill never waits on the child mutex: the watcher
+    /// parks on it inside `wait().await` for the job's whole lifetime, so a
+    /// lock-based kill would block remove() until the process exits
+    /// naturally. On contention the group is killed by pid instead and the
+    /// watcher reaps when `wait()` returns (WO 37.1).
     pub async fn remove(&self, id: u64) -> bool {
-        // Kill child if still alive
         {
             let child = {
                 let mut children = self.children.lock().await;
                 children.remove(&id)
             };
             if let Some(child) = child {
-                let mut child = child.lock().await;
-                kill_process_group(&mut child);
-                reap_child(&mut child, Duration::from_secs(2)).await;
+                match child.try_lock() {
+                    Ok(mut child) => {
+                        kill_process_group(&mut child);
+                        reap_child(&mut child, Duration::from_secs(2)).await;
+                    }
+                    Err(_) => {
+                        // Watcher holds the mutex in wait().await: kill by
+                        // pid; the watcher's wait() then returns and reaps.
+                        let pid = {
+                            let jobs = self.jobs.lock().await;
+                            jobs.get(&id).and_then(|j| j.pid)
+                        };
+                        if let Some(pid) = pid {
+                            kill_process_group_by_pid(pid);
+                        }
+                    }
+                }
             }
         }
 
@@ -1206,5 +1234,119 @@ mod tests {
             "unknown owner must not disturb the job"
         );
         assert!(reg.cancel(id).await);
+    }
+
+    // ── WO 37.1: bounded remove(), no phantom jobs ──
+
+    /// Gate (b): remove() on a still-running job returns promptly (bounded,
+    /// never parked behind the watcher's child mutex) with kill semantics:
+    /// the record is gone and the child dies — the watcher only removes the
+    /// children-map entry after reaping the killed process.
+    #[tokio::test]
+    async fn test_remove_running_job_is_bounded_and_kills() {
+        let reg = BashJobRegistry::new();
+        let id = reg
+            .spawn(
+                "sleep 30",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Bounded: the mutex-contention path kills by pid (the watcher is
+        // parked on the child mutex inside wait().await); the uncontended
+        // path still kills + reaps within its 2s reap bound. 3s covers both.
+        let removed = tokio::time::timeout(Duration::from_secs(3), reg.remove(id))
+            .await
+            .expect("remove() on a running job must be bounded, not parked");
+        assert!(removed, "remove should return true for a live job");
+        assert!(reg.get(id).await.is_none(), "entry must be gone");
+
+        // Kill semantics: poll (bounded) until the watcher has reaped the
+        // killed child and dropped its handle — a detached child would keep
+        // the children-map entry alive only until natural exit (30s here).
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let has_child = {
+                let children = reg.children.lock().await;
+                children.contains_key(&id)
+            };
+            if !has_child {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "child was not killed+reaped within 5s — remove() detached it"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Gate (c), workdir-resolution failure: an unresolvable workdir errors
+    /// AFTER the safety gate but must leave no registry entry (the old
+    /// insert-before-spawn order left a phantom Running job).
+    #[tokio::test]
+    async fn test_spawn_failure_unresolvable_workdir_leaves_no_entry() {
+        let reg = BashJobRegistry::new();
+        let result = reg
+            .spawn(
+                "echo hi",
+                Some("/nonexistent/kf-wo37-no-such-dir"),
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                None,
+            )
+            .await;
+        let err = result.expect_err("unresolvable workdir must fail");
+        assert!(
+            err.to_string().contains("cannot resolve working directory"),
+            "expected the canonicalize error, got: {err}"
+        );
+        assert!(
+            reg.list().await.is_empty(),
+            "failed spawn must leave no phantom job"
+        );
+        assert_eq!(reg.running_count().await, 0);
+    }
+
+    /// Gate (c), proc.spawn() failure: a workdir that resolves but cannot
+    /// be chdir'd into (a regular file) makes the spawn itself fail — no
+    /// registry entry survives.
+    #[tokio::test]
+    async fn test_spawn_failure_bad_workdir_leaves_no_entry() {
+        let file = std::env::temp_dir().join(format!("kf-wo37-file-{}", std::process::id()));
+        std::fs::write(&file, b"not a directory").unwrap();
+        let reg = BashJobRegistry::new();
+        let result = reg
+            .spawn(
+                "echo hi",
+                Some(file.to_str().unwrap()),
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                None,
+            )
+            .await;
+        std::fs::remove_file(&file).ok();
+        assert!(
+            result.is_err(),
+            "spawn into a regular-file workdir must fail, got {result:?}"
+        );
+        assert!(
+            reg.list().await.is_empty(),
+            "failed spawn must leave no phantom job"
+        );
+        assert_eq!(reg.running_count().await, 0);
     }
 }

@@ -2,6 +2,22 @@
 
 *Current-state-only. Resolved-issue archaeology lives in `git log`.*
 
+## Session 2026-08-20 — WO 37.1: registry hardening (worktree `.worktrees/wo37-a`, branch `wo/37.1-registry`)
+
+- **WO 37.1 (Done)** — three BashJobRegistry fixes: (1) task ids minted
+  from a process-global `AtomicU64` (all `TaskManager`s share it), so
+  owner tags can't collide across managers and `cancel_by_owner` reaches
+  exactly one manager's jobs — the 36.2 ceiling is resolved (ceiling
+  comments removed at both call sites, TECHNICAL.md updated); (2)
+  `remove()` mirrors `cancel()`'s bounded pattern (try_lock + kill-by-pid
+  on contention) — decided semantics: remove KILLS the running child
+  (detach would leak a process invisible to the cap/`/jobs`); (3) spawn
+  inserts the job record only AFTER `proc.spawn()` succeeds (cap
+  re-check + insert still one lock hold; pid recorded at insert), so a
+  failed spawn leaves no phantom Running entry. 5 new tests (disjoint
+  owners, bounded remove + kill, two spawn-failure paths), 5× green.
+- Remaining WO 37 candidates: reducer port + CLI/UX polish (WO 37.2+).
+
 ## Session 2026-08-20 — WO 36 series: WO 35 remainders closed, orchestration unified
 
 All 6 workorders landed on dev (CI green each push; final head
@@ -31,11 +47,10 @@ All 6 workorders landed on dev (CI green each push; final head
 
 ### Residual items (small, disclosed — not the old debts)
 
-- Owner ids are per-TaskManager (`task-N`): two managers can mint the
-  same tag; a cancel reaches both (ceiling comment at the call sites).
-- `BashJobRegistry::remove()` on a still-running job keeps the old
-  parked-mutex flaw (out of 36.2's path); phantom-job leak if
-  `proc.spawn` fails after registry insert (lessons.md).
+- ~~Owner ids are per-TaskManager~~ — RESOLVED by WO 37.1 (global id
+  counter).
+- ~~`BashJobRegistry::remove()` parked-mutex + phantom-job leak~~ —
+  RESOLVED by WO 37.1 (bounded remove, insert-after-spawn).
 - Full pipeline reimplementation over `Orchestrator::delegate`
   (vs the adapter seam) — tracked follow-up in WO 35.6's list.
 - Reducer port + CLI/UX polish — WO 37 candidates.

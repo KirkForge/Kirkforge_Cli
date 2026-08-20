@@ -1,10 +1,17 @@
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
+
+/// Process-global task id counter shared by every TaskManager (WO 37.1):
+/// the task tool, the orchestrator, and each subagent executor each own a
+/// manager, so per-manager counters could mint colliding `task-N` owner
+/// tags and a cancel reached another manager's jobs. One counter makes
+/// collisions impossible by construction.
+static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Request to spawn a subagent task.
 #[derive(Debug, Clone)]
@@ -263,23 +270,22 @@ pub(crate) fn build_task_prompt(persona: &str, task: &str) -> String {
     }
 }
 
-/// Per-session background task manager.
+/// Per-session background task manager. Task ids come from the
+/// process-global [`NEXT_TASK_ID`] counter, so ids (and the owner tags
+/// derived from them) are unique across all managers (WO 37.1).
 pub struct TaskManager {
-    next_id: usize,
     tasks: HashMap<String, TaskHandle>,
 }
 
 impl TaskManager {
     pub fn new() -> Self {
         Self {
-            next_id: 1,
             tasks: HashMap::new(),
         }
     }
 
     pub fn insert(&mut self, handle: TaskHandle) -> String {
-        let id = format!("task-{}", self.next_id);
-        self.next_id += 1;
+        let id = format!("task-{}", NEXT_TASK_ID.fetch_add(1, Ordering::SeqCst));
         self.tasks.insert(id.clone(), handle);
         id
     }
@@ -321,10 +327,9 @@ impl TaskManager {
     ///
     /// ceiling: the in-flight *model stream* is not aborted mid-request —
     /// it ends at the next stream event or the adapter timeout.
-    /// ponytail: ceiling — owner tags are per-manager strings, so two
-    /// TaskManagers can mint the same "task-N" id and a cancel reaches
-    /// both tasks' jobs (cascade-like). Upgrade path: globally-unique
-    /// owner ids if nested background subagents become common.
+    /// (WO 37.1 resolved the old owner-tag collision ceiling: ids are
+    /// minted from a process-global counter, so a cancel reaches exactly
+    /// this manager's jobs.)
     pub fn cancel(&self, id: &str) -> bool {
         let Some(handle) = self.tasks.get(id) else {
             return false;
@@ -1381,15 +1386,76 @@ mod tests {
             mgr.insert(TaskHandle::default());
         }
         let entries = mgr.list();
-        let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
-        // task-2 must precede task-10 (numeric, not lexicographic).
+        // Ids come from the process-global counter (WO 37.1), so the test
+        // asserts numeric ordering by rank rather than absolute "task-N"
+        // literals (other tests in the same process may have minted first).
+        let ranks: Vec<usize> = entries.iter().map(|e| task_id_rank(&e.id)).collect();
+        let mut sorted = ranks.clone();
+        sorted.sort_unstable();
+        assert_eq!(ranks, sorted, "list must be in numeric id order");
+        // The lexicographic trap is pinned directly: task-2 < task-10.
+        assert!(task_id_rank("task-2") < task_id_rank("task-10"));
+    }
+
+    // WO 37.1 gate (a): two managers minting in the same sequence produce
+    // disjoint owner tags, so cancel_by_owner reaches only its own
+    // manager's jobs — never the other manager's same-sequence-number id.
+    #[tokio::test]
+    async fn two_managers_mint_disjoint_owner_tags() {
+        use crate::session::access::{DenyList, PathGuard};
+        use crate::session::bash_jobs::{global_registry, JobStatus};
+
+        let registry = global_registry();
+        let mut mgr_a = TaskManager::new();
+        let mut mgr_b = TaskManager::new();
+        let id_a = mgr_a.insert(TaskHandle {
+            started: Arc::new(AtomicBool::new(true)),
+            ..Default::default()
+        });
+        let id_b = mgr_b.insert(TaskHandle {
+            started: Arc::new(AtomicBool::new(true)),
+            ..Default::default()
+        });
+        assert_ne!(id_a, id_b, "same-sequence ids from two managers collided");
+
+        async fn spawn_sleep(
+            registry: &crate::session::bash_jobs::BashJobRegistry,
+            owner: &str,
+        ) -> u64 {
+            registry
+                .spawn(
+                    "sleep 30",
+                    None,
+                    None,
+                    &DenyList::default(),
+                    &PathGuard::default(),
+                    false,
+                    None,
+                    Some(owner),
+                )
+                .await
+                .unwrap()
+        }
+        let job_a = spawn_sleep(&registry, &id_a).await;
+        let job_b = spawn_sleep(&registry, &id_b).await;
+
         assert_eq!(
-            ids,
-            vec![
-                "task-1", "task-2", "task-3", "task-4", "task-5", "task-6", "task-7", "task-8",
-                "task-9", "task-10", "task-11", "task-12"
-            ]
+            registry.cancel_by_owner(&id_a).await,
+            1,
+            "cancel reaches exactly manager A's job"
         );
+        assert_eq!(
+            registry.get(job_a).await.unwrap().status,
+            JobStatus::Cancelled
+        );
+        assert_eq!(
+            registry.get(job_b).await.unwrap().status,
+            JobStatus::Running,
+            "manager B's same-sequence job must survive A's cancel"
+        );
+
+        // Cleanup: kill the survivor so the test leaves no 30s child.
+        registry.cancel(job_b).await;
     }
 
     #[test]

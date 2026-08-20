@@ -232,9 +232,24 @@ impl Executor {
         for (idx, tc) in tcs.iter().enumerate() {
             match self.pre_run_verdict(tc, approval_sender).await? {
                 PreRunVerdict::Spawn(tool, resolved) => {
+                    let mut invocation = tc.clone();
+                    // WO 38.1 TOCTOU: run the tool body against the Phase-1
+                    // resolved (canonical) path, not the raw model argument.
+                    // Previously the resolved path only surfaced at record
+                    // time (turn.rs), so the body opened the ORIGINAL path —
+                    // a same-batch bash call could swap a checked dir/file
+                    // for a symlink between the guard check and the open.
+                    if let Some(resolved) = &resolved {
+                        if let Some(obj) = invocation.arguments.as_object_mut() {
+                            obj.insert(
+                                "path".into(),
+                                serde_json::Value::String(resolved.to_string_lossy().into_owned()),
+                            );
+                        }
+                    }
                     prepared.push(PreparedCall {
                         idx,
-                        invocation: tc.clone(),
+                        invocation,
                         tool,
                         // WO 35.3: when a root cancel token is attached
                         // (subagent executors), per-call tokens are LIVE
@@ -421,6 +436,32 @@ impl Executor {
                     .check_edit(std::path::Path::new(path_arg), &path)
                 {
                     let denied = format!("🔒 Access denied: {msg}");
+                    // WO 38.1: re-verify no component of the resolved path became a
+                    // symlink after Phase-1 canonicalization — a same-batch bash call
+                    // can swap a dir or file for a symlink in the check-to-open
+                    // window. Walking the components right before the body closes
+                    // the final-component and parent-swap cases for reads and writes.
+                    // ponytail: the stat-walk is not atomic with the body's open — a
+                    // swap inside that micro-window still slips through. The upgrade
+                    // path is openat2(RESOLVE_NO_SYMLINKS) (or per-component openat
+                    // with O_NOFOLLOW) at the tool-body open site.
+                    if let Some(msg) = symlink_swap_denied(&path) {
+                        let denied = format!("🔒 Access denied: {msg}");
+                        let invocation = prep.invocation.clone();
+                        results.insert(
+                            idx,
+                            (
+                                invocation,
+                                ToolOutcome::Failure(crate::shared::ToolError::AccessDenied {
+                                    message: denied,
+                                }),
+                                Some(path.clone()),
+                                0,
+                            ),
+                        );
+                        continue;
+                    }
+
                     let invocation = prep.invocation.clone();
                     results.insert(
                         idx,
@@ -677,4 +718,102 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
     };
     let duration_ms = start.elapsed().as_millis() as u64;
     Some((prep.invocation, outcome, duration_ms))
+}
+
+/// Return `Some(reason)` if any component of `resolved` is a symlink.
+/// `resolved` is the Phase-1 canonical path — its components were real
+/// directories when canonicalized, so any symlink found now was swapped
+/// in after validation (WO 38.1 symlink TOCTOU).
+fn symlink_swap_denied(resolved: &std::path::Path) -> Option<String> {
+    let mut acc = std::path::PathBuf::new();
+    for comp in resolved.components() {
+        acc.push(comp.as_os_str());
+        if let Ok(md) = std::fs::symlink_metadata(&acc) {
+            if md.file_type().is_symlink() {
+                return Some(format!(
+                    "path component '{}' was replaced by a symlink after validation",
+                    acc.display()
+                ));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::symlink_swap_denied;
+
+    #[cfg(unix)]
+    fn temp_root() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("kf_wo38_symlink_walk_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_swap_denied_allows_real_path() {
+        let dir = temp_root();
+        let file = dir.join("real.txt");
+        std::fs::write(&file, "x").unwrap();
+        assert!(symlink_swap_denied(&file.canonicalize().unwrap()).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Final component swapped for a symlink after validation → deny.
+    /// This is the read-side `.ssh` swap case from the audit.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_swap_denied_blocks_swapped_file() {
+        let dir = temp_root();
+        let target = dir.join("secret.txt");
+        let file = dir.join("victim.txt");
+        std::fs::write(&target, "secret").unwrap();
+        std::fs::write(&file, "harmless").unwrap();
+        let resolved = file.canonicalize().unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::os::unix::fs::symlink(&target, &file).unwrap();
+        let verdict = symlink_swap_denied(&resolved);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            verdict.as_ref().is_some_and(|m| m.contains("symlink")),
+            "swapped final component must be denied, got {verdict:?}"
+        );
+    }
+
+    /// Parent component swapped for a symlink after validation → deny.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_swap_denied_blocks_swapped_parent_dir() {
+        let dir = temp_root();
+        let outside = dir.join("outside");
+        let inside = dir.join("sandbox");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::create_dir(&inside).unwrap();
+        std::fs::create_dir(inside.join("sub")).unwrap();
+        let file = inside.join("sub").join("f.txt");
+        std::fs::write(&file, "x").unwrap();
+        let resolved = file.canonicalize().unwrap();
+        std::fs::remove_dir_all(inside.join("sub")).unwrap();
+        std::os::unix::fs::symlink(&outside, inside.join("sub")).unwrap();
+        let verdict = symlink_swap_denied(&resolved);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            verdict.as_ref().is_some_and(|m| m.contains("symlink")),
+            "swapped parent dir must be denied, got {verdict:?}"
+        );
+    }
+
+    /// Write case: new file whose final component does not exist yet —
+    /// NotFound is not a symlink, so the walk passes.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_swap_denied_allows_nonexistent_new_file() {
+        let dir = temp_root();
+        let resolved = dir.join("brand_new.txt");
+        assert!(symlink_swap_denied(&resolved).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

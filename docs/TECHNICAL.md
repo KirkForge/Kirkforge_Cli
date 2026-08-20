@@ -232,6 +232,25 @@ allowlist (`bash.require_allowlist`, WO 28.17 R2 — deferred pending operator
 input on glob/prefix/regex semantics); an allowlist is the only
 blocklist-shape that isn't theater.
 
+**WO 38.1 chokepoint hardening:** three classification holes and one env leak
+are closed at the shared chokepoints. (1) `is_read_only_bash`
+(`executor/helpers`) rejects any command with an embedded `\n`/`\r` — a
+newline is a command separator, so nothing multi-line is read-only (plan mode
+and explore personas inherit this). (2) Permission rules
+(`shared/permission.rs`) evaluate bash `command` rules per compound clause
+(`;`/`&&`/`||`/`|`/newline): an Allow/Ask rule matches only when EVERY clause
+matches (a `cargo test*` rule no longer authorizes `cargo test; curl …`), and
+a Deny rule trips when ANY clause matches (a deny still fires when the payload
+hides after a newline). (3) `env`/`printenv` are no longer auto-approved
+read-only commands (`ps`/`lsof`/`dmesg` stay), and the bash runner scrubs
+credential-shaped vars (`*_API_KEY`/`*_TOKEN`/`*_SECRET`, case-insensitive)
+from every child shell env — the `!` passthrough and `/test` share this
+runner and are scrubbed too. (4) File-tool bodies open the Phase-1 RESOLVED
+path (injected in `executor/dispatch.rs` before the body runs) and a
+component symlink-walk re-checks it immediately before the open; the residual
+walk-to-open micro-window is documented at the call site (upgrade path:
+`openat2(RESOLVE_NO_SYMLINKS)`).
+
 **Operator guidance for unattended runs (WO 27.5 R3):** for headless / CI /
 scheduled-job execution, run with `--harden --no-network`. `--no-network` is
 the only thing that blocks data exfiltration like

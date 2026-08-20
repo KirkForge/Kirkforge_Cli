@@ -331,13 +331,18 @@ fn check_bash_allowlist(cmd: &str, deny_list: &DenyList) -> Option<String> {
     None
 }
 
-/// Split a normalized command string into clauses on `&&`, `||`, `;`, and `|`.
+/// Split a command string into clauses on `&&`, `||`, `;`, `|`, `\n`, and `\r`.
 /// Each returned clause is trimmed; empty clauses are dropped.
-fn split_compound_clauses(cmd: &str) -> Vec<String> {
+///
+/// WO 38.1: newlines/CRs are separators to the shell, so they split clauses
+/// here too. Existing callers pass `normalize_for_safety` output (whitespace
+/// already collapsed), so this only changes behavior for raw-command callers
+/// (permission rules).
+pub(crate) fn split_compound_clauses(cmd: &str) -> Vec<String> {
     // The normalized command has collapsed whitespace, so separators are
     // always single-token. Replace each with a sentinel, then split.
     let mut s = cmd.to_string();
-    for sep in ["&&", "||", ";", "|"] {
+    for sep in ["&&", "||", ";", "|", "\n", "\r"] {
         s = s.replace(sep, "\u{0}");
     }
     s.split('\u{0}')

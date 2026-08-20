@@ -489,6 +489,30 @@ pub struct ShellOutput {
     pub stderr: String,
 }
 
+/// True if an env-var name is credential-shaped (WO 38.1): ends with
+/// `_API_KEY`/`_TOKEN`/`_SECRET` (case-insensitive) or is exactly one of
+/// `API_KEY`/`TOKEN`/`SECRET`.
+fn is_secret_env_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    ["_API_KEY", "_TOKEN", "_SECRET"]
+        .iter()
+        .any(|s| upper.ends_with(s))
+        || ["API_KEY", "TOKEN", "SECRET"].contains(&upper.as_str())
+}
+
+/// Scrub credential-shaped env vars from the child shell's environment.
+/// The model's bash tool must not be able to read provider/session
+/// secrets (`ANTHROPIC_API_KEY`, `*_TOKEN`, ...) even with approval —
+/// approval covers running the command, not exfiltrating credentials.
+/// The child still inherits everything else (HOME, LANG, cargo env, ...).
+fn scrub_secrets_from_child_env(proc: &mut Command) {
+    for (name, _) in std::env::vars() {
+        if is_secret_env_name(&name) {
+            proc.env_remove(&name);
+        }
+    }
+}
+
 /// Run a shell command in the foreground with kill_on_drop and timeout.
 ///
 /// We can't use `Command::output()` directly because that buffers both
@@ -534,6 +558,7 @@ pub async fn run_shell_with_token(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("PATH", model_command_path());
+    scrub_secrets_from_child_env(&mut proc);
 
     setup_process_group(&mut proc);
     if let Some(cfg) = sandbox {
@@ -756,6 +781,39 @@ mod tests {
         let s = cap_to_string(b"abc".to_vec(), 4096);
         assert!(s.starts_with("abc"));
         assert!(s.contains("[...truncated: 4096 bytes omitted"));
+    }
+
+    #[test]
+    fn is_secret_env_name_matches_credential_shapes() {
+        assert!(is_secret_env_name("ANTHROPIC_API_KEY"));
+        assert!(is_secret_env_name("OPENAI_API_KEY"));
+        assert!(is_secret_env_name("GITHUB_TOKEN"));
+        assert!(is_secret_env_name("HF_TOKEN"));
+        assert!(is_secret_env_name("DB_PASSWORD_SECRET"));
+        assert!(is_secret_env_name("my_api_key"));
+        assert!(is_secret_env_name("TOKEN"));
+        assert!(!is_secret_env_name("PATH"));
+        assert!(!is_secret_env_name("HOME"));
+        assert!(!is_secret_env_name("CARGO_TARGET_DIR"));
+        assert!(!is_secret_env_name("TOKENS"));
+    }
+
+    /// WO 38.1: a secret-shaped var set in the parent must NOT be visible
+    /// inside the child shell spawned by `run_shell`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_shell_child_env_scrubs_secret_vars() {
+        std::env::set_var("KF_WO38_TEST_API_KEY", "sk-should-never-leak");
+        let out = run_shell(
+            "echo \"[$KF_WO38_TEST_API_KEY]\"",
+            &std::env::temp_dir(),
+            10,
+        )
+        .await
+        .expect("run_shell should succeed");
+        std::env::remove_var("KF_WO38_TEST_API_KEY");
+        assert!(out.status.success(), "stderr: {}", out.stderr);
+        assert_eq!(out.stdout.trim(), "[]");
     }
 
     /// `drain_capped` keeps at most `cap` bytes from the inner reader and

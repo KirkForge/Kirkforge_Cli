@@ -914,3 +914,77 @@ async fn attached_cancel_token_kills_inflight_bash_promptly() {
     );
     remove_test_file(&marker);
 }
+
+/// WO 38.1 TOCTOU: the tool body must receive the Phase-1 RESOLVED
+/// (canonical) path, not the raw model argument — the body's open must
+/// target exactly what the path guard checked.
+#[tokio::test]
+async fn test_file_tool_receives_resolved_path() {
+    let dir = std::env::temp_dir().join(format!("kf_wo38_resolved_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    let file = dir.join("note.txt");
+    std::fs::write(&file, "contents").unwrap();
+
+    let captured = Arc::new(Mutex::new(None));
+    let tool = MockTool {
+        def: ToolDef {
+            name: "read_file",
+            description: "read a file",
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}}
+            }),
+        },
+        captured_args: captured.clone(),
+        outcome: ToolOutcome::Success {
+            content: "contents".into(),
+        },
+    };
+
+    // Non-canonical argument (`sub/../note.txt`) — Phase 1 canonicalizes it.
+    let raw_arg = dir
+        .join("sub")
+        .join("..")
+        .join("note.txt")
+        .to_string_lossy()
+        .into_owned();
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": raw_arg}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
+
+    let _events = exe
+        .run_turn_collecting("read it", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let canonical = file.canonicalize().unwrap().to_string_lossy().into_owned();
+    let got = captured
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|a| a.get("path"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        got.as_deref(),
+        Some(canonical.as_str()),
+        "tool body must receive the canonical resolved path"
+    );
+}

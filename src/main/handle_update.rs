@@ -107,13 +107,24 @@ fn parse_sha256sums_line(sums: &str, file: &str) -> Option<String> {
     None
 }
 
+/// Network timeout for update checks and downloads (WO 38.3: the
+/// update client previously had no bound — a stalled GitHub connection
+/// hung the /update command forever).
+const UPDATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Build a reqwest client with the GitHub-required User-Agent header.
 fn build_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(format!("kf-code/{}", current_version()))
         .tcp_nodelay(true)
+        .timeout(UPDATE_TIMEOUT)
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .unwrap_or_else(|_| {
+            reqwest::Client::builder()
+                .timeout(UPDATE_TIMEOUT)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        })
 }
 
 async fn fetch_latest_tag() -> Result<String> {

@@ -2,6 +2,13 @@ use super::handler::VerifierHandler;
 use super::types::BusEvent;
 use super::types::{FixSuggestion, Verdict};
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Hard bound on formatter subprocesses (WO 38.3). Matches the hook
+/// runner's 5s: formatters run on a single file and should finish in
+/// well under a second; anything longer is a hang, not slowness.
+const FORMATTER_TIMEOUT_SECS: u64 = 5;
+const FORMATTER_TIMEOUT: Duration = Duration::from_secs(FORMATTER_TIMEOUT_SECS);
 
 // ── Correction Loop ─────────────────────────────────────────────────────
 
@@ -264,11 +271,17 @@ async fn apply_command_fix(
         return false;
     }
     let (cmd, args) = (parts[0], &parts[1..]);
-    let mut child = match tokio::process::Command::new(cmd)
-        .args(args)
+    // WO 38.3: mirror the hooks discipline — own process group, null
+    // stdin, kill on drop, and a hard timeout so a hung formatter
+    // cannot stall the turn (this wait sits outside the per-tool
+    // timeout). Same 5s bound the hook runner uses.
+    let mut proc = tokio::process::Command::new(cmd);
+    proc.args(args)
         .arg(path.as_os_str())
-        .spawn()
-    {
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::null());
+    crate::session::process_group::setup_process_group(&mut proc);
+    let mut child = match proc.spawn() {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(
@@ -281,7 +294,20 @@ async fn apply_command_fix(
         }
     };
 
-    match child.wait().await {
+    let status = match tokio::time::timeout(FORMATTER_TIMEOUT, child.wait()).await {
+        Ok(res) => res,
+        Err(_) => {
+            crate::session::process_group::kill_process_group(&mut child);
+            tracing::warn!(
+                command = %command,
+                file = %path.display(),
+                timeout_secs = FORMATTER_TIMEOUT_SECS,
+                "formatter timed out; killed process group"
+            );
+            return false;
+        }
+    };
+    match status {
         Ok(status) => status.success(),
         Err(e) => {
             tracing::warn!(
@@ -454,6 +480,70 @@ mod tests {
             "path-guard denial must block command fix"
         );
         remove_test_file(&path);
+    }
+
+    // WO 38.3: a hung formatter is killed at the internal deadline and
+    // the whole process group (script + its sleep child) is gone.
+    // Event-driven: the child writes its own pid first, then sleeps;
+    // after apply_command_fix returns we poll kill(pid, 0) until the
+    // kernel reports ESRCH — no fixed sleep, bounded window.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_apply_command_fix_kills_hung_formatter() {
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let script = tmp.path().join("hung-fmt.sh");
+        let pidfile = tmp.path().join("fmt.pid");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho $$ > {}\nsleep 60\n", pidfile.display()),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms).unwrap();
+        }
+        let target = tmp.path().join("target.rs");
+        std::fs::write(&target, "fn main() {}\n").unwrap();
+
+        let start = std::time::Instant::now();
+        let ok = apply_command_fix(
+            &script.to_string_lossy(),
+            &target,
+            &crate::session::access::PathGuard::default(),
+        )
+        .await;
+        assert!(!ok, "hung formatter must report failure");
+        // Internal 5s deadline + kill margin; far below the 60s sleep.
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(30),
+            "kill took {:?}",
+            start.elapsed()
+        );
+
+        // Structural: the script's pid (group leader) is gone.
+        let pid: i32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let rc = unsafe { kill(pid, 0) };
+            let gone = rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(3); // ESRCH
+            if gone {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "hung formatter pid {pid} still alive after kill"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
     }
 
     #[test]

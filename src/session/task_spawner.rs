@@ -194,6 +194,7 @@ impl InProcessTaskSpawner {
             let root = subagent_worktree_root(&cfg);
             Some(
                 WorktreeSession::create(&tag, &root)
+                    .await
                     .map_err(|e| format!("subagent worktree creation failed: {e}"))?,
             )
         } else {
@@ -497,7 +498,7 @@ impl InProcessTaskSpawner {
         // executor's tool-result slicing already bounds context growth.
         let mut result = summary;
         if let Some(wt) = &worktree {
-            let patch = wt.diff_patch();
+            let patch = wt.diff_patch().await;
             if !patch.trim().is_empty() {
                 result = format!("{result}\n\n{SUBAGENT_PATCH_MARKER}\n{patch}");
             }

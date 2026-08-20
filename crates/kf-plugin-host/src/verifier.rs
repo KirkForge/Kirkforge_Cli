@@ -14,9 +14,13 @@ use kf_plugin_sdk::Capability;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(unix)]
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 /// Hard bound on a verifier script's runtime, mirroring the binary's
 /// 5s hook timeout. Verifiers are quick checks (grep-style scripts);

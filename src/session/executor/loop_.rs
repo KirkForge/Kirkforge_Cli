@@ -158,41 +158,14 @@ impl Executor {
         let cancelled = Arc::new(AtomicBool::new(false));
 
         // WO 36.4: the parent session's live cancel token. The slot holds
-        // the CURRENT turn's token; the watcher cancels it alongside the
-        // flag so an Esc aborts in-flight streams (WO 36.3) and cascades
-        // into live per-tool child tokens, instead of the flag-only
-        // snapshot-at-dispatch semantics (WO 15.7). Tokens are one-shot,
-        // so every new turn installs a fresh one below.
+        // the CURRENT turn's token; cancelled alongside the flag so an Esc
+        // aborts in-flight streams (WO 36.3) and cascades into live per-tool
+        // child tokens, instead of the flag-only snapshot-at-dispatch
+        // semantics (WO 15.7). Tokens are one-shot, so every new turn
+        // installs a fresh one below.
         let turn_cancel = Arc::new(std::sync::Mutex::new(
             tokio_util::sync::CancellationToken::new(),
         ));
-
-        // Cancel watcher: drains the cancel channel and sets the
-        // shared flag so that an in-flight turn can observe
-        // cancellation without waiting for the outer `select!` to
-        // poll `cancel_rx`. Previously `run_turn(...).await` was
-        // awaited directly in the `input_rx` arm, so `cancel_rx` was
-        // not polled while a turn streamed.
-        let cancel_event_tx = event_tx.clone();
-        let cancel_watcher_cancelled = cancelled.clone();
-        let cancel_watcher_token = turn_cancel.clone();
-        tokio::spawn(async move {
-            while cancel_rx.recv().await.is_some() {
-                cancel_watcher_cancelled.store(true, Ordering::SeqCst);
-                cancel_watcher_token
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .cancel();
-                if cancel_event_tx
-                    .send(TurnEvent::Token("\n⚠️ Generation cancelled\n".into()))
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!("TUI event receiver dropped; cancel watcher exiting");
-                    break;
-                }
-            }
-        });
 
         // Fire session-start hook (fire-and-forget, best-effort)
         self.run_hook("session-start", None, None);
@@ -514,15 +487,23 @@ impl Executor {
                     }
                 }
                 Some(input) = input_rx.recv() => {
+                    // WO 38.5 / WO 38.4 #3 (drain-before-install): an Esc
+                    // queued before this input can only refer to a turn
+                    // that no longer exists. The old independent watcher
+                    // could process it after the fresh token install and
+                    // kill the new turn instantly; draining here makes
+                    // stale Escs deterministic no-ops. Only Escs arriving
+                    // while the turn is live (the select below) cancel.
+                    while cancel_rx.try_recv().is_ok() {}
                     cancelled.store(false, Ordering::SeqCst);
                     // WO 36.4: install a fresh per-turn token (one-shot,
                     // so the previous turn's cancel must not leak into
                     // this one). Attached via `set_cancel_token`, the
                     // stream-await race (WO 36.3) and per-tool child
                     // tokens are live for this turn. An Esc racing this
-                    // swap still exits promptly: the watcher re-sets the
-                    // flag, and the turn-loop's iteration-start flag
-                    // check catches it.
+                    // swap still exits promptly: the select below polls
+                    // `cancel_rx` while the turn streams, sets the flag,
+                    // and cancels the slot token.
                     let turn_token = {
                         let mut slot =
                             turn_cancel.lock().unwrap_or_else(|e| e.into_inner());
@@ -531,19 +512,61 @@ impl Executor {
                     };
                     self.set_cancel_token(Some(turn_token));
                     // Events stream live into `event_tx` during the turn;
-                    // no batch to forward afterwards. A send failure inside
-                    // the turn means the TUI dropped its receiver — flush
-                    // and exit (the run loop's `input_rx.recv()` arm would
-                    // otherwise spin on a closed channel anyway).
-                    let result = self.run_turn(&input, &approval_tx, &cancelled, &event_tx).await;
+                    // no batch to forward afterwards. The turn is raced
+                    // against `cancel_rx` so a mid-stream Esc aborts
+                    // in-flight work (WO 36.3/36.4) without an independent
+                    // watcher task. `biased` toward the turn arm: when the
+                    // turn has ALREADY completed, a queued Esc belongs to
+                    // the next turn's drain, not to a spurious
+                    // "Generation cancelled" message.
+                    let result = {
+                        let mut turn = std::pin::pin!(self.run_turn(
+                            &input,
+                            &approval_tx,
+                            &cancelled,
+                            &event_tx
+                        ));
+                        loop {
+                            tokio::select! {
+                                biased;
+                                r = &mut turn => break r,
+                                Some(()) = cancel_rx.recv() => {
+                                    cancelled.store(true, Ordering::SeqCst);
+                                    turn_cancel
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .cancel();
+                                    crate::send_or_warn!(
+                                        event_tx
+                                            .send(TurnEvent::Token(
+                                                "\n⚠️ Generation cancelled\n".into()
+                                            ))
+                                            .await,
+                                        "TurnEvent receiver dropped; discarding event"
+                                    );
+                                }
+                            }
+                        }
+                    };
+                    self.set_cancel_token(None);
                     if let Err(e) = result {
-                        crate::send_or_warn!(event_tx.send(TurnEvent::Error(format!("Turn failed: {e}"))).await, "TurnEvent receiver dropped; discarding event");
-                        tracing::warn!(
-                            error = %e,
-                            "TUI event receiver may be dropped while reporting turn-failure event"
+                        // WO 38.5 P0 (also TUI audit P1-1): a turn-fatal
+                        // error (429/5xx past retries, 401/403/404, missing
+                        // key, checkpoint IO) costs ONE turn, not the
+                        // session. Emit the error, let the TUI clear its
+                        // busy state, and keep the loop alive so the user
+                        // can retry. Exit is reserved for channel closure
+                        // (the `else => break` arm below).
+                        crate::send_or_warn!(
+                            event_tx
+                                .send(TurnEvent::Error(format!("Turn failed: {e}")))
+                                .await,
+                            "TurnEvent receiver dropped; discarding event"
                         );
-                        self.flush_carryover();
-                        return Ok(());
+                        crate::send_or_warn!(
+                            event_tx.send(TurnEvent::TurnComplete).await,
+                            "TurnEvent receiver dropped; discarding event"
+                        );
                     }
                 }
                 else => break,

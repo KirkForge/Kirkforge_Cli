@@ -499,6 +499,8 @@ fn parse_token_usage(u: &serde_json::Value) -> TokenUsage {
         prompt_tokens,
         completion_tokens,
         cached_tokens,
+        // Ollama has no cache-write concept; nothing to report.
+        cache_write_tokens: None,
     }
 }
 

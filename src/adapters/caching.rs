@@ -101,11 +101,12 @@ impl ResponseCache {
         }
         let key = CacheKey::new(model, messages, tools, response_format);
 
-        // Skip empty or error-only streams.
-        if events.is_empty() {
-            return;
-        }
-        if events.iter().all(|e| matches!(e, StreamEvent::Error(_))) {
+        // Never cache error-carrying or empty streams (WO 38.5). A
+        // single Error event anywhere means the stream is replayable
+        // poison — previously only all-Error streams were skipped while
+        // mixed streams (error + a synthesized Done) were cached and
+        // replayed forever.
+        if events.is_empty() || events.iter().any(|e| matches!(e, StreamEvent::Error(_))) {
             return;
         }
 
@@ -264,9 +265,28 @@ impl ModelAdapter for CachingAdapter {
             tools,
             self.response_format.as_ref(),
         ) {
+            tracing::info!(
+                model = %model_info.name,
+                events = events.len(),
+                "response cache hit; replaying without billing"
+            );
             let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(events.len().max(1));
             tokio::spawn(async move {
                 for ev in events {
+                    // WO 38.5: zero the usage on replay — a cache hit
+                    // costs nothing, and re-billing the ORIGINAL turn's
+                    // tokens every replay double-counts in CostStats.
+                    // Usage=None means no CostStats event fires at all.
+                    let ev = match ev {
+                        StreamEvent::Done {
+                            finish_reason,
+                            usage: Some(_),
+                        } => StreamEvent::Done {
+                            finish_reason,
+                            usage: None,
+                        },
+                        other => other,
+                    };
                     if tx.send(ev).await.is_err() {
                         break;
                     }
@@ -299,11 +319,17 @@ impl ModelAdapter for CachingAdapter {
                     }
                 }
             }
-            // Only cache complete streams — the final event must be Done.
-            // A dropped consumer, a cancelled turn, or an adapter that exits
-            // without a terminal event would otherwise poison the cache with
-            // a truncated response.
-            let complete = matches!(events.last(), Some(StreamEvent::Done { .. }));
+            // Only cache complete, clean streams (WO 38.5): the final
+            // event must be Done with a non-Error reason AND no Error
+            // event anywhere. A dropped consumer, a cancelled turn, an
+            // adapter that exits without a terminal event, or a
+            // truncated stream (which now ends Done{Error}) would
+            // otherwise poison the cache.
+            let complete = matches!(
+                events.last(),
+                Some(StreamEvent::Done { finish_reason, .. })
+                    if finish_reason != &crate::shared::FinishReason::Error
+            ) && !events.iter().any(|e| matches!(e, StreamEvent::Error(_)));
             if complete {
                 cache.put(
                     &model_name,
@@ -364,6 +390,7 @@ mod tests {
                     prompt_tokens: Some(1),
                     completion_tokens: Some(1),
                     cached_tokens: None,
+                    cache_write_tokens: None,
                 }),
             },
         ];
@@ -449,6 +476,33 @@ mod tests {
             &[
                 StreamEvent::Error("boom".into()),
                 StreamEvent::Error("boom2".into()),
+            ],
+        );
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(entries.is_empty());
+    }
+
+    /// WO 38.5: one Error event anywhere disqualifies the stream, even
+    /// when a Done follows (mixed streams used to be cached).
+    #[test]
+    fn cache_skips_streams_containing_any_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(dir.path().into()));
+        cache.put(
+            "test-model",
+            &[message(crate::shared::Role::User, "hi")],
+            &[],
+            None,
+            &[
+                StreamEvent::Text("partial".into()),
+                StreamEvent::Error("reset".into()),
+                StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                    usage: None,
+                },
             ],
         );
         let entries: Vec<_> = std::fs::read_dir(dir.path())
@@ -755,6 +809,7 @@ mod tests {
                     prompt_tokens: Some(1),
                     completion_tokens: Some(1),
                     cached_tokens: None,
+                    cache_write_tokens: None,
                 }),
             },
         ];
@@ -772,13 +827,85 @@ mod tests {
         }
         assert_eq!(got, events);
 
-        // Second call with identical inputs replays from cache.
+        // WO 38.5: replay zeroes the usage — a cache hit must not
+        // re-bill the original turn's tokens in CostStats. This test
+        // previously pinned the re-billing behavior verbatim.
         let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
         let mut got = Vec::new();
         while let Some(ev) = rx.recv().await {
             got.push(ev);
         }
-        assert_eq!(got, events);
+        assert_eq!(got.len(), events.len());
+        match got.last() {
+            Some(StreamEvent::Done { usage, .. }) => {
+                assert_eq!(usage, &None, "replay must not re-bill usage");
+            }
+            other => panic!("expected Done on replay, got {other:?}"),
+        }
+        assert_eq!(got[0], events[0]);
+    }
+
+    /// WO 38.5: a stream that contains an Error event but ends with a
+    /// synthesized Done must not be cached — replaying it would replay
+    /// the error forever. (Anthropic used to always synthesize Done,
+    /// so mixed error streams passed the old last-is-Done check.)
+    #[tokio::test]
+    async fn caching_adapter_skips_stream_containing_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(tmp.path().into()));
+        let events = vec![
+            StreamEvent::Text("partial".into()),
+            StreamEvent::Error("transport reset".into()),
+            StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                usage: None,
+            },
+        ];
+        let inner = adapter(events.clone());
+        let wrapped = CachingAdapter::new(inner, cache.clone(), false);
+        let messages: Vec<Message> = vec![];
+        let tools: Vec<ToolDef> = vec![];
+        let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
+        while let Some(_ev) = rx.recv().await {}
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            cache
+                .get(&wrapped.model_info().name, &messages, &tools, None)
+                .is_none(),
+            "error-carrying stream must not be cached"
+        );
+    }
+
+    /// WO 38.5: Done{Error} (the truncation terminal since WO 38.5) is
+    /// not a complete stream — it must not be cached.
+    #[tokio::test]
+    async fn caching_adapter_skips_done_with_error_reason() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(tmp.path().into()));
+        let events = vec![
+            StreamEvent::Text("half a reply".into()),
+            StreamEvent::Done {
+                finish_reason: FinishReason::Error,
+                usage: None,
+            },
+        ];
+        let inner = adapter(events.clone());
+        let wrapped = CachingAdapter::new(inner, cache.clone(), false);
+        let messages: Vec<Message> = vec![];
+        let tools: Vec<ToolDef> = vec![];
+        let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
+        while let Some(_ev) = rx.recv().await {}
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            cache
+                .get(&wrapped.model_info().name, &messages, &tools, None)
+                .is_none(),
+            "Done{{Error}} stream must not be cached"
+        );
     }
 
     #[tokio::test]

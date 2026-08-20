@@ -511,11 +511,15 @@ pub fn adapter_for_with_provider(
                 ))
             }
         }
-        AdapterKind::OpenAiCompat => Box::new(openai_compat::OpenAiCompatAdapter::new(
-            ollama_host,
-            model_name,
-            timeout_secs,
-        )),
+        AdapterKind::OpenAiCompat => {
+            // WO 38.5: thread the config/env-resolved OpenAI key so
+            // hosted OpenAI-compat endpoints don't 401 into a dead
+            // session. Local servers keep working keyless (no header).
+            Box::new(
+                openai_compat::OpenAiCompatAdapter::new(ollama_host, model_name, timeout_secs)
+                    .with_api_key(api_keys.openai.clone()),
+            )
+        }
         AdapterKind::Anthropic => Box::new(anthropic::AnthropicAdapter::new(
             ollama_host,
             model_name,
@@ -813,6 +817,10 @@ fn build_openai_compat_body(
         "model": model,
         "messages": oai_messages,
         "stream": true,
+        // WO 38.5: ask for a dedicated usage frame. Without it most
+        // servers drop token counts on streaming requests entirely; the
+        // parser holds Done until the usage frame or [DONE] either way.
+        "stream_options": {"include_usage": true},
     });
 
     if !tools.is_empty() {

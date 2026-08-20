@@ -210,20 +210,28 @@ const MAX_ENVELOPE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 /// Returns the raw JSON string (without `data:` prefix) and the byte offset in
 /// `envelope` immediately after the parsed object, so the caller can drain the
 /// consumed bytes and continue parsing the next frame in the same chunk.
+///
+/// WO 38.5: operates on RAW BYTES. The previous implementation computed
+/// offsets on `from_utf8_lossy` output but the caller drained the raw
+/// buffer — any non-UTF8 prelude (binary event-stream headers, CRCs)
+/// made the replacement characters shift the offsets and corrupt every
+/// subsequent frame boundary. JSON payloads are UTF-8 by definition, so
+/// only the extracted slice is lossily decoded; offsets stay in byte
+/// space.
 fn extract_payload(envelope: &[u8]) -> Option<(String, usize)> {
-    let text = String::from_utf8_lossy(envelope);
-    for (start, ch) in text.char_indices() {
-        if ch != '{' {
-            continue;
-        }
-        let mut de =
-            serde_json::Deserializer::from_str(&text[start..]).into_iter::<serde_json::Value>();
+    let mut search_from = 0usize;
+    while let Some(rel) = envelope[search_from..].iter().position(|&b| b == b'{') {
+        let start = search_from + rel;
+        let mut de = serde_json::Deserializer::from_slice(&envelope[start..])
+            .into_iter::<serde_json::Value>();
         if let Some(Ok(v)) = de.next() {
             if v.is_object() && v.get("type").is_some() {
                 let end = start + de.byte_offset();
-                return Some((text[start..end].to_string(), end));
+                let payload = String::from_utf8_lossy(&envelope[start..end]).into_owned();
+                return Some((payload, end));
             }
         }
+        search_from = start + 1;
     }
     None
 }
@@ -382,6 +390,45 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["type"], "message_start");
         assert_eq!(end, env.len() - b"tail".len());
+    }
+
+    /// WO 38.5: non-UTF8 prelude bytes (binary event-stream headers /
+    /// CRCs) must not corrupt the frame boundary. The old lossy-string
+    /// implementation misaligned offsets because each invalid byte
+    /// became a 3-byte replacement character in the string it measured
+    /// but not in the raw buffer it drained.
+    #[test]
+    fn extract_payload_offsets_stay_in_byte_space_with_non_utf8_prelude() {
+        let env = b"\xff\xfe\x00{\"type\":\"message_start\",\"message\":{}}\x01\x02crc";
+        let (out, end) = extract_payload(env).expect("payload present");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["type"], "message_start");
+        // end must point exactly past the `}` — in RAW byte space, so the
+        // caller's drain leaves only the trailing 5 bytes.
+        assert_eq!(end, env.len() - b"\x01\x02crc".len());
+    }
+
+    /// WO 38.5: consecutive frames split by non-UTF8 separators both
+    /// extract with correct byte offsets (regression for the drain loop).
+    #[test]
+    fn extract_payload_handles_two_frames_with_binary_separator() {
+        let frame1 = b"{\"type\":\"content_block_delta\",\"delta\":{\"text\":\"A\"}}";
+        let frame2 = b"{\"type\":\"content_block_delta\",\"delta\":{\"text\":\"B\"}}";
+        let mut env = Vec::new();
+        env.extend_from_slice(b"\xff");
+        env.extend_from_slice(frame1);
+        env.extend_from_slice(b"\xff\xff");
+        env.extend_from_slice(frame2);
+        let (out1, end1) = extract_payload(&env).expect("first frame");
+        let v1: serde_json::Value = serde_json::from_str(&out1).unwrap();
+        assert_eq!(v1["delta"]["text"], "A");
+        assert_eq!(&env[end1..end1 + 2], b"\xff\xff");
+        let (out2, end2) = extract_payload(&env[end1..]).expect("second frame");
+        let v2: serde_json::Value = serde_json::from_str(&out2).unwrap();
+        assert_eq!(v2["delta"]["text"], "B");
+        // end2 is the offset within env[end1..], which starts at the
+        // \xff\xff separator — so it covers the 2 separator bytes + frame2.
+        assert_eq!(end2, 2 + frame2.len());
     }
 
     // WO 15.6 / 2.1: a chunk carrying multiple event-stream frames must not

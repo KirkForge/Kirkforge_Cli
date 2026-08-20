@@ -626,6 +626,25 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
         cfg.model.kimi_api_key = if v.is_empty() { None } else { Some(v.clone()) };
     }
 
+    // Config-driven pricing overrides (WO 38.5):
+    // [price_overrides."<prefix>"] with input_per_mtok /
+    // output_per_mtok / cache_write_per_mtok / cache_read_per_mtok.
+    if let Some(Value::Table(v)) = table.get("price_overrides") {
+        for (prefix, entry) in v {
+            let Some(t) = entry.as_table() else { continue };
+            let rate = |key: &str| t.get(key).and_then(|x| x.as_float()).unwrap_or(0.0);
+            cfg.model.price_overrides.insert(
+                prefix.clone(),
+                crate::shared::ModelPrice {
+                    input_per_mtok: rate("input_per_mtok"),
+                    output_per_mtok: rate("output_per_mtok"),
+                    cache_write_per_mtok: rate("cache_write_per_mtok"),
+                    cache_read_per_mtok: rate("cache_read_per_mtok"),
+                },
+            );
+        }
+    }
+
     // Computer-use tool config
     if let Some(Value::Table(v)) = table.get("computer_use") {
         if let Some(Value::Boolean(b)) = v.get("enabled") {
@@ -2604,5 +2623,31 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&new_dir);
         let _ = std::fs::remove_dir_all(&legacy_dir);
+    }
+
+    // WO 38.5: [price_overrides."<prefix>"] parses into
+    // ModelConfig.price_overrides.
+    #[test]
+    fn price_overrides_table_parses() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            [price_overrides."big-pickle"]
+            input_per_mtok = 1.0
+            output_per_mtok = 2.0
+            cache_write_per_mtok = 1.25
+            cache_read_per_mtok = 0.1
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        let p = cfg
+            .model
+            .price_overrides
+            .get("big-pickle")
+            .expect("override present");
+        assert!((p.input_per_mtok - 1.0).abs() < 1e-9);
+        assert!((p.output_per_mtok - 2.0).abs() < 1e-9);
+        assert!((p.cache_write_per_mtok - 1.25).abs() < 1e-9);
+        assert!((p.cache_read_per_mtok - 0.1).abs() < 1e-9);
     }
 }

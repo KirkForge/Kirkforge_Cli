@@ -3,6 +3,7 @@
 // for session-internal and tui/main callers; tools/ repoints to shared directly.
 pub use crate::shared::access;
 pub mod adapter_swap;
+pub mod agents;
 pub mod bash_jobs;
 pub mod bash_runner;
 pub mod bench;

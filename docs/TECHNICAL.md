@@ -579,6 +579,43 @@ Session daemon (background process tracking recent sessions), scheduled-job
 daemon (cron-style, Unix-only), non-interactive line mode, and the binary entry
 point.
 
+**CLI first-run + scriptability (WO 38.10):**
+
+- *Exit codes* (stable, pinned by `KirkForgeError` in `src/main/error.rs`):
+  0 success, 1 general, 2 bad args (clap), 3 model unreachable, 4
+  permission/sandbox denied, 5 config parse error. The dispatcher
+  (`cli_dispatch::main`) classifies the `anyhow::Error` from each subcommand
+  via `KirkForgeError::from` (typed downcasts first, then string probes) and
+  prints `kf-code: {e}` + a category hint on stderr before `exit(code)`.
+- *First-run banner → stderr*: `load_or_create_config` prints the onboarding
+  banner to stderr, so `--output stream-json` on a fresh data dir keeps
+  stdout byte-clean (every stdout line parses as JSON).
+- *Empty-model guard*: `run_session` bails with `ModelUnreachable` (exit 3)
+  before the adapter is built when `default_model` is empty and no `-m` is
+  given — previously fell through to an OpenAI-compat fallback and surfaced
+  a raw 400.
+- *`-p`/`--prompt` one-shot*: `Command::Run` takes an optional prompt that
+  `LineReader::prime` queues as the first turn before the stdin loop. A `-p`
+  value is a single turn even with internal blank lines (the heredoc
+  terminator that ends piped stdin on a blank line does not split the arg
+  form). Setting `-p` forces line mode (no TUI) so the one-shot runs
+  unattended.
+- *TUI degradation*: `use_tui` is true only when stdout is a TTY, not
+  `--no-tui`/`--non-interactive`/`-p`, and `TERM != "dumb"`. `NO_COLOR` is
+  decoupled from this decision — it suppresses colour/emoji in rendering
+  (`line_mode::symbol`, etc.) but no longer forces line mode.
+- *Strict config load*: `load_or_create_config_strict()` (used by `run` and
+  `bench run`) returns `Err` on a hard TOML parse failure in an existing
+  config.toml → exit 5; the lenient `load_or_create_config()` (plugin,
+  legacy callers) keeps the warn+defaults behaviour. Unknown-key soft-merge
+  warnings are never errors.
+- *Bench exit code*: `bench run` bails non-zero when tasks ran and none
+  passed (0% success), after writing the report — previously exited 0
+  unconditionally.
+- *Metrics data dir*: `shared::metrics::metrics_path()` honors
+  `KF_CODE_DATA_DIR` (mirroring `session::data_dir()`) so `kf-code
+  metrics`/`verify` read the same installation `run` writes to.
+
 ---
 
 ## Verification

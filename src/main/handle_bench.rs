@@ -39,7 +39,7 @@ async fn handle_bench_run(
     summary: Option<std::path::PathBuf>,
     timeout: u64,
 ) -> anyhow::Result<()> {
-    let config = kf_code::session::config::load_or_create_config();
+    let config = kf_code::session::config::load_or_create_config_strict()?;
     let model_name = model.unwrap_or_else(|| config.model.default_model.clone());
     let bench_tasks = kf_bench::load_tasks(&tasks)?;
     if bench_tasks.is_empty() {
@@ -70,6 +70,18 @@ async fn handle_bench_run(
         kf_bench::write_markdown_summary(&report, &md_path)?;
         eprintln!("summary written to {}", md_path.display());
     }
+    // WO 38.10: bench run must reflect success in its exit code. A 0%
+    // pass rate is a failure for CI gates; previously the command exited
+    // 0 unconditionally. We bail only when tasks actually ran and none
+    // passed — a run with 0 tasks already bailed above. Bailing (rather
+    // than `process::exit`) routes through the error classifier
+    // (General → exit 1) and still prints the report first.
+    if report.summary.tasks_run > 0 && report.summary.tasks_passed == 0 {
+        anyhow::bail!(
+            "bench run: 0/{} tasks passed (0%)",
+            report.summary.tasks_run
+        );
+    }
     Ok(())
 }
 
@@ -83,7 +95,7 @@ async fn handle_bench_run_models(
     if models.is_empty() {
         anyhow::bail!("--models requires at least one model name");
     }
-    let config = kf_code::session::config::load_or_create_config();
+    let config = kf_code::session::config::load_or_create_config_strict()?;
     let bench_tasks = kf_bench::load_tasks(&tasks)?;
     if bench_tasks.is_empty() {
         anyhow::bail!("no task files found in {}", tasks.display());

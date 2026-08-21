@@ -30,6 +30,12 @@ pub(crate) struct RunArgs {
     pub(crate) block_edits: bool,
     pub(crate) i_accept_unsandboxed: bool,
     pub(crate) no_trace: bool,
+    /// One-shot prompt from `--prompt`/`-p` (WO 38.10). When set, it is
+    /// fed to the line-mode loop as the first turn before reading stdin,
+    /// so `kf-code run -p "hello"` works without piping. Also fixes the
+    /// multi-paragraph pipe problem for the arg form: a `-p` value is a
+    /// single turn regardless of internal blank lines.
+    pub(crate) prompt: Option<String>,
 }
 
 pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
@@ -56,14 +62,38 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         block_edits,
         i_accept_unsandboxed,
         no_trace,
+        prompt,
     } = args;
 
-    let mut config = session::config::load_or_create_config();
+    // Strict config load (WO 38.10): a hard TOML parse failure in an
+    // existing config.toml exits 5 (ConfigParse) instead of silently
+    // running with defaults. First-run (no file) and unknown-key
+    // soft-merge warnings are not errors. The error message already
+    // contains "Failed to parse config", so the dispatcher's classifier
+    // routes it to ConfigParse (exit 5).
+    let mut config = session::config::load_or_create_config_strict()?;
 
     if let Some(host) = &host {
         config.model.ollama_host = host.clone();
     }
     let model = model.unwrap_or_else(|| config.model.default_model.clone());
+
+    // Empty-model guard (WO 38.10): with no model configured, the adapter
+    // fell through to an OpenAI-compat fallback against Ollama and surfaced
+    // a raw 400 with no hint. Catch it here, before the adapter is built,
+    // and exit 3 (ModelUnreachable class) with actionable guidance. The
+    // message is the whole user-facing hint — the dispatcher prints it to
+    // stderr via `kf-code: {e}`. "model unreachable" routes the classifier
+    // to ModelUnreachable (exit 3).
+    if model.trim().is_empty() {
+        anyhow::bail!(
+            "model unreachable: no model configured. Set one with \
+             `kf-code run -m <model>` or edit `default_model` in {}. Try \
+             `kf-code run -m qwen2.5:0.5b` with a local Ollama, or see \
+             config.toml.example for cloud-provider options.",
+            session::config_path().display()
+        );
+    }
     if auto_approve {
         config.security.auto_approve = true;
     }
@@ -665,7 +695,19 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // the TUI cannot render. Fall back to the same line-mode loop that
     // --non-interactive uses, but read from stdin instead of a pre-baked
     // prompt list so the user can still chat.
-    let use_tui = !no_tui && !non_interactive && !no_color && std::io::stdout().is_terminal();
+    //
+    // TUI degradation criteria (WO 38.10): only `--no-tui`,
+    // `--non-interactive`, `--prompt`/`-p` (a one-shot must not launch the
+    // full-screen UI), a non-tty stdout, or `TERM=dumb` degrade to line
+    // mode. `NO_COLOR` is decoupled from this decision — it suppresses
+    // colour/emoji in rendering but no longer kills the TUI, matching the
+    // spec (previously `NO_COLOR` forced line mode, a spec violation).
+    let term_dumb = std::env::var("TERM").is_ok_and(|t| t == "dumb");
+    let use_tui = !no_tui
+        && !non_interactive
+        && prompt.is_none()
+        && !term_dumb
+        && std::io::stdout().is_terminal();
     if use_tui {
         tui::run_tui(
             shared_config,
@@ -696,6 +738,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             context_index,
             trace_recorder,
             mcp_manager,
+            prompt,
         )
         .await
     }

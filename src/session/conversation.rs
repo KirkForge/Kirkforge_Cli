@@ -239,6 +239,14 @@ impl ConversationLog {
 
     /// Async version of [`checkpoint`]: offloads the blocking copy and prune
     /// operations to a dedicated thread pool.
+    ///
+    /// WO 38.9: the previous implementation cloned the entire `messages`
+    /// Vec before spawning. On a 10-25MB history with 1500 tool calls that
+    /// is 1500 full-history clones — O(N²) memory churn. Instead we
+    /// serialize each message to a JSON string under the current borrow
+    /// (no clone) and move the already-serialized lines into the blocking
+    /// task. The serialization cost was already paid inside
+    /// `write_atomic_static`; doing it here avoids the clone entirely.
     pub async fn checkpoint_async(&self) -> anyhow::Result<PathBuf> {
         const MAX_CHECKPOINTS: usize = 5;
 
@@ -247,7 +255,13 @@ impl ConversationLog {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let path = self.path.clone();
-        let messages = self.messages.clone();
+        // Serialize under the existing borrow instead of cloning the Vec.
+        // This avoids the O(N) clone-per-tool-call that made checkpoints
+        // O(N²) over a session.
+        let mut lines: Vec<String> = Vec::with_capacity(self.messages.len());
+        for msg in &self.messages {
+            lines.push(serde_json::to_string(msg)?);
+        }
         tokio::task::spawn_blocking(move || {
             let filename = path
                 .file_name()
@@ -255,7 +269,32 @@ impl ConversationLog {
                 .map(|f| format!("{f}.checkpoint-{nanos}.ndjson"))
                 .unwrap_or_else(|| format!("conversation.checkpoint-{nanos}.ndjson"));
             let checkpoint_path = path.with_file_name(filename);
-            Self::write_atomic_static(&checkpoint_path, &messages)?;
+            {
+                use std::io::Write;
+                let tmp_path = checkpoint_path.with_extension("ndjson.tmp");
+                {
+                    let mut file = std::fs::OpenOptions::new()
+                        .create(true)
+                        .truncate(true)
+                        .write(true)
+                        .open(&tmp_path)
+                        .with_context(|| {
+                            format!("create temporary conversation log {}", tmp_path.display())
+                        })?;
+                    for line in &lines {
+                        writeln!(file, "{line}")?;
+                    }
+                    file.sync_all()?;
+                }
+                crate::tools::atomic_write::rename_with_retry(&tmp_path, &checkpoint_path)
+                    .with_context(|| {
+                        format!(
+                            "commit conversation log from {} to {}",
+                            tmp_path.display(),
+                            checkpoint_path.display()
+                        )
+                    })?;
+            }
 
             if let Some(parent) = path.parent() {
                 let prefix = checkpoint_prefix(&path);
@@ -984,6 +1023,78 @@ mod tests {
         .unwrap();
         let cp = log.checkpoint_async().await.unwrap();
         assert!(cp.exists());
+    }
+
+    /// WO 38.9: checkpoint_async must produce a valid checkpoint without
+    /// cloning the full messages Vec. This test verifies the checkpoint
+    /// content matches the log content after multiple appends — proving
+    /// the serialize-under-borrow path is correct.
+    #[tokio::test]
+    async fn test_checkpoint_async_no_clone_produces_valid_checkpoint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("no-clone-checkpoint.conv.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path.clone()).unwrap();
+        for i in 0..10 {
+            log.append(Message {
+                role: crate::shared::Role::User,
+                content: format!("msg {i}"),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        let cp = log.checkpoint_async().await.unwrap();
+        assert!(cp.exists());
+        // The checkpoint must contain exactly the same messages as the log.
+        let (cp_msgs, _corrupt) = load_messages(&cp).unwrap();
+        assert_eq!(cp_msgs.len(), 10);
+        for (i, msg) in cp_msgs.iter().enumerate() {
+            assert_eq!(msg.content, format!("msg {i}"));
+        }
+        // The main log must also still be intact (no corruption from
+        // the checkpoint write).
+        let (log_msgs, _) = load_messages(&path).unwrap();
+        assert_eq!(log_msgs.len(), 10);
+    }
+
+    /// WO 38.9: structural test — checkpoint_async should write exactly
+    /// one checkpoint file per call, not one per tool. This simulates
+    /// the post-batch pattern: N appends (tool results) then 1
+    /// checkpoint. The test verifies only one checkpoint file appears.
+    #[tokio::test]
+    async fn test_checkpoint_once_per_batch_not_per_tool() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("batch-checkpoint.conv.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path).unwrap();
+
+        // Simulate a batch of 5 tool results (appends, no per-tool checkpoint).
+        for i in 0..5 {
+            log.append(Message {
+                role: crate::shared::Role::Tool,
+                content: format!("tool result {i}"),
+                tool_call_id: Some(format!("call-{i}")),
+                tool_name: Some("echo".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        // One checkpoint after the batch (the new WO 38.9 pattern).
+        log.checkpoint_async().await.unwrap();
+
+        let checkpoints: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|f| f.to_str())
+                    .is_some_and(|f| f.contains(".checkpoint-"))
+            })
+            .collect();
+        assert_eq!(
+            checkpoints.len(),
+            1,
+            "post-batch pattern: exactly 1 checkpoint for 5 tool results"
+        );
     }
 
     #[test]

@@ -42,6 +42,13 @@ pub struct ParallelResult {
     /// errored or the workflow was cancelled, so remaining roles were
     /// never started. `None` = all three roles ran.
     pub aborted: Option<String>,
+    /// WO 41.4: the verdict coverage scope. The pipeline does not run the
+    /// reducer, so the honest default for a completed (non-aborted) run is
+    /// `"PASS (security-only coverage)"` — mirroring `plugin_verify`
+    /// (`native.rs` `render_verify`), since lint/types/graph emitters are
+    /// not ported. `None` for aborted runs (no verdict reached). Set by
+    /// `run_pipeline`; surfaced by `summary()` so a PASS states its scope.
+    pub verdict_label: Option<String>,
 }
 
 /// One subagent's outcome: its TaskManager id and final summary.
@@ -94,6 +101,11 @@ impl ParallelResult {
             "  Reviewer [{}] — {}",
             self.reviewer.task_id, self.reviewer.summary
         ));
+        // WO 41.4: state the verdict coverage scope. A completed run's
+        // verdict is security-only until lint/types/graph emitters ship.
+        if let Some(label) = &self.verdict_label {
+            lines.push(format!("  Verdict: {label}"));
+        }
         lines.join("\n")
     }
 }
@@ -217,6 +229,15 @@ impl ParallelOrchestrator {
             scout,
             coder,
             reviewer,
+            // WO 41.4: the pipeline does not run the reducer; a completed
+            // run's verdict is security-only (lint/types/graph emitters are
+            // not ported — same honest disclosure as `plugin_verify`).
+            // Aborted runs reached no verdict.
+            verdict_label: if aborted.is_none() {
+                Some("PASS (security-only coverage)".to_string())
+            } else {
+                None
+            },
             aborted,
         }
     }
@@ -408,6 +429,7 @@ mod tests {
                 failed: false,
             },
             aborted: None,
+            verdict_label: Some("PASS (security-only coverage)".into()),
         };
         let s = r.summary();
         assert!(s.contains("Scout") && s.contains("task-1") && s.contains("found 3 files"));
@@ -415,6 +437,11 @@ mod tests {
         assert!(s.contains("Reviewer") && s.contains("task-3") && s.contains("looks good"));
         assert!(!s.contains("patch:"), "no patch line without a patch");
         assert!(!s.contains("ABORTED"), "clean run must not claim abort");
+        // WO 41.4: a completed run states its security-only coverage scope.
+        assert!(
+            s.contains("Verdict: PASS (security-only coverage)"),
+            "summary must distinguish PASS (security-only): {s}"
+        );
     }
 
     #[test]
@@ -437,9 +464,34 @@ mod tests {
                 failed: false,
             },
             aborted: None,
+            verdict_label: Some("PASS (security-only coverage)".into()),
         };
         let s = r.summary();
         assert!(s.contains("Coder patch: 2 lines"), "got: {s}");
+    }
+
+    // WO 41.4: an aborted run reached no verdict — the summary must NOT
+    // claim a PASS coverage scope it did not earn.
+    #[test]
+    fn parallel_result_summary_aborted_run_has_no_verdict_label() {
+        let r = ParallelResult {
+            scout: SubagentResult {
+                task_id: "task-1".into(),
+                summary: "found 3 files".into(),
+                failed: false,
+            },
+            coder: SubagentResult::skipped("scout failed"),
+            coder_patch: None,
+            reviewer: SubagentResult::skipped("pipeline aborted before reviewer"),
+            aborted: Some("scout failed: provider down".into()),
+            verdict_label: None,
+        };
+        let s = r.summary();
+        assert!(s.contains("ABORTED"), "aborted run must say so: {s}");
+        assert!(
+            !s.contains("Verdict:"),
+            "aborted run must not claim a verdict: {s}"
+        );
     }
 
     #[test]

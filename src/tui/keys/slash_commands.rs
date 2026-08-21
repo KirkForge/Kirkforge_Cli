@@ -188,6 +188,12 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
         group: "Advanced",
     },
     SlashCommand {
+        triggers: &["/verify-capabilities"],
+        description: "List verifier categories and their status (active/stub/external)",
+        usage: "/verify-capabilities shows which verifiers are real vs stub",
+        group: "Advanced",
+    },
+    SlashCommand {
         triggers: &["/memory"],
         description: "Memory commands",
         usage: "/memory add <fact> | list | search <query> | rm <name>",
@@ -521,6 +527,16 @@ pub(crate) async fn dispatch_slash_command(
         "/verify" => {
             // WO 11.7: show recent verifier verdicts from the metrics log.
             let msg = crate::shared::metrics::format_verifier_report(20);
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new("system", msg));
+            Ok(true)
+        }
+        "/verify-capabilities" => {
+            // WO 41.4: forward-looking capability map — which verifier
+            // categories are active vs stub vs external.
+            let msg = crate::session::verifier::bus::verifier_capability_report();
             state
                 .conversation
                 .messages
@@ -968,6 +984,7 @@ mod tests {
             "/memory",
             "/metrics",
             "/verify",
+            "/verify-capabilities",
             "/gh",
             "/init",
             "/plugins",

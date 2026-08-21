@@ -30,7 +30,7 @@ verifies the table and the file headers agree.
 | [0003](./0003-output-split.md) | SlicingTransform + LocalSummaryCompactor | Accepted | Plugin3 |
 | [003](./003-model-abstraction-layer.md) | Model Abstraction — Single Stream, Per-Model Adapters | Accepted | CLI |
 | [0004](./0004-offload-store.md) | OffloadStore reuse from Stratum | Accepted | Plugin3 |
-| [004](./004-tool-use-and-execution-sandbox.md) | Tool Use — Client-Side Tool Dispatch with Approval Gates | Accepted | CLI |
+| [004](./004-tool-use-and-execution-sandbox.md) | Tool Use — Client-Side Tool Dispatch with Approval Gates | Accepted (amended) | CLI |
 | [0005](./0005-token-budget.md) | Three-state token budget guard | Accepted | Plugin3 |
 | [005](./005-session-management-and-prompt-construction.md) | Session Management and Prompt Construction | Accepted | CLI |
 | [0006](./0006-tool-output-detector.md) | Tool output detection | Accepted | Plugin3 |

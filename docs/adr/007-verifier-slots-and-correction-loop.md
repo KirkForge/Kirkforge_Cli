@@ -155,3 +155,19 @@ documented honestly here.
 - `state.changes` is emitted by `ChangesEmitter` in the same file; it now computes real `insertions`/`deletions` via `git diff --numstat -- <paths>` and falls back to file count when git is unavailable.
 - 24 unit tests across all verifiers and the correction loop
 - `VerifierSlots` with configurable max (default 5)
+
+## Amendment (2026-08-22, WO 41.3) — TypeScript tree deleted
+
+The "Seam: Rust verifier bus vs. TS plugin verifier bus" section above and
+the Implementation section reference `npm/kf-plugin/packages/orchestrator/src/reducer.ts`,
+`packages/correction-core/src/types.ts`, and
+`npm/kf-plugin/packages/orchestrator/src/emitter-factory.ts`. The entire
+`npm/` tree was deleted in WO 29.9 (the TS→Rust migration). Those references
+are retained as history of the original two-bus seam; they do not describe
+live code. The Rust verifier bus (`src/session/verifier/`) is now the sole
+implementation: the 14 security rules live in
+`src/session/verifier/security_emitter.rs`, and the former
+`TsOrchestratorBridgeVerifier` is a thin `BusVerifier` wrapper that calls
+`security_emitter::emit_security_findings` directly — no subprocess, no
+NDJSON round-trip (see ADR-028 amendment and `docs/TECHNICAL.md` §
+Verification).

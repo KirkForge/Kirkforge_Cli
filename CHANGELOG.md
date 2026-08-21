@@ -10,6 +10,7 @@ why, and the gate evidence.
 ## [Unreleased]
 
 ### Fixed
+- WO 41.3: permission docs fix + ADR audit — accurate permission engine description, stale ADR amendments — [41.3](docs/workorders/41.3-permission-docs.md)
 - WO 38.1: security chokepoints — [38.1](docs/workorders/38.1-security-chokepoints.md)
 - WO 38.2: panic containment + terminal survival — [38.2](docs/workorders/38.2-panic-containment.md)
 - WO 38.3: liveness — unblock TUI event loop, bound subprocesses — [38.3](docs/workorders/38.3-liveness.md)

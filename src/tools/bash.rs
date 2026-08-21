@@ -659,8 +659,11 @@ mod tests {
     async fn bash_tool_respects_cancellation_token() {
         let tmp = std::env::temp_dir();
         let marker = tmp.join(format!("kf_code_bash_cancel_marker_{}", std::process::id()));
+        let ready = tmp.join(format!("kf_code_bash_cancel_ready_{}", std::process::id()));
         let marker_str = marker.to_string_lossy().to_string();
+        let ready_str = ready.to_string_lossy().to_string();
         remove_test_file(&marker);
+        remove_test_file(&ready);
 
         let tool = Bash::new(
             DenyList::default(),
@@ -671,25 +674,29 @@ mod tests {
         );
         let ctx = crate::tools::ToolContext::new();
         let args = serde_json::json!({
-            "command": format!("sleep 30; touch {marker_str}"),
+            "command": format!("touch {ready_str}; sleep 30; touch {marker_str}"),
             "timeout": 60,
         });
 
-        // Start the tool in a background task and cancel the token shortly
-        // after. We don't await the tool directly because we want to drive
-        // cancellation from outside.
-        //
-        // The 500ms below is a genuine "wait for the child to spawn" race
-        // window — the Bash tool does not expose a readiness signal (no
-        // child pid channel, no "Running" notification), and observing
-        // "child started" from outside would require production changes
-        // (out of scope: test-only WO). Polling `handle.is_finished()` is
-        // useless — the handle is never finished until cancel fires. This
-        // is one of the 3 documented unconvertible race-test delays in
-        // WO 40.4; the 1s descendant-grace below was converted to a poll.
+        // WO 38.12: gated-start — poll for the readiness file before
+        // firing cancel. The shell touches `ready` immediately on start,
+        // so we know the child is running when the file appears. No
+        // production readiness signal exists; the readiness file is a
+        // test-only technique that avoids the wall-clock race.
         let token = ctx.token.clone();
         let handle = tokio::spawn(async move { tool.run(&ctx, args).await });
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let ready_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < ready_deadline {
+            if ready.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            ready.exists(),
+            "bash child did not signal readiness within 5s"
+        );
         token.cancel();
 
         let outcome = handle.await.expect("tool task should not panic");
@@ -716,6 +723,7 @@ mod tests {
             !marker.exists(),
             "cancelled shell left a surviving descendant"
         );
+        remove_test_file(&ready);
     }
 
     /// The Bash tool surfaces internal timeouts as a structured

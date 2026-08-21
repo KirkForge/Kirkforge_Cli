@@ -846,8 +846,11 @@ async fn attached_cancel_token_kills_inflight_bash_promptly() {
 
     let tmp = std::env::temp_dir();
     let marker = tmp.join(format!("kf_code_exec_cancel_marker_{}", std::process::id()));
+    let ready = tmp.join(format!("kf_code_exec_cancel_ready_{}", std::process::id()));
     let marker_str = marker.to_string_lossy().to_string();
+    let ready_str = ready.to_string_lossy().to_string();
     remove_test_file(&marker);
+    remove_test_file(&ready);
 
     let bash = Arc::new(Bash::new(
         crate::shared::access::DenyList::default(),
@@ -862,7 +865,7 @@ async fn attached_cancel_token_kills_inflight_bash_promptly() {
                 id: "call-cancel-1".into(),
                 name: "bash".into(),
                 arguments: serde_json::json!({
-                    "command": format!("sleep 30; touch {marker_str}"),
+                    "command": format!("touch {ready_str}; sleep 30; touch {marker_str}"),
                     "timeout": 60,
                 }),
             }),
@@ -883,19 +886,26 @@ async fn attached_cancel_token_kills_inflight_bash_promptly() {
     let token = tokio_util::sync::CancellationToken::new();
     exe.set_cancel_token(Some(token.clone()));
 
-    // Cancel 300ms in — mid-sleep. Mirrors TaskManager::cancel(). The 300ms
-    // is a genuine "wait for the bash child to spawn" race window — the Bash
-    // tool exposes no readiness signal, and observing "child started" from
-    // outside would require production changes (out of scope: test-only WO).
-    // The 1s descendant-grace below was converted to a bounded poll.
-    // Documented unconvertible race-test delay (WO 40.4).
+    // WO 38.12: gated-start — poll for the readiness file before firing
+    // cancel. The shell touches `ready` immediately on start, so we know
+    // the child is running when the file appears. No production readiness
+    // signal exists; the readiness file is a test-only technique.
+    // Replaces the fixed 300ms sleep-then-cancel race. The readiness poll
+    // runs in a spawned task so the main task can drive the turn.
     {
-        let flag = Arc::clone(&flag);
-        let token = token.clone();
+        let ready_clone = ready.clone();
+        let flag_clone = Arc::clone(&flag);
+        let token_clone = token.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            flag.store(true, std::sync::atomic::Ordering::SeqCst);
-            token.cancel();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while std::time::Instant::now() < deadline {
+                if ready_clone.exists() {
+                    flag_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                    token_clone.cancel();
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
         });
     }
 
@@ -928,6 +938,7 @@ async fn attached_cancel_token_kills_inflight_bash_promptly() {
         "cancelled bash left a surviving descendant that touched the marker"
     );
     remove_test_file(&marker);
+    remove_test_file(&ready);
 }
 
 /// WO 38.1 TOCTOU: the tool body must receive the Phase-1 RESOLVED

@@ -783,9 +783,9 @@ See [WO 38.0](38.0-wo38-overview.md). WO 39 carries the strategic half.
 | WO | Title | Status |
 |----|-------|--------|
 | 39.0 | [Series overview](39.0-wo39-overview.md) | In Progress |
-| 39.1 | [Bench repair + first cross-tool run](39.1-bench-cross-tool.md) | Pending |
-| 39.2 | [Claude compat phase 1 (skills/commands/MCP)](39.2-claude-compat-phase1.md) | Pending |
-| 39.3 | [Claude compat phase 2 (agents/aliases)](39.3-claude-compat-phase2.md) | Pending |
+| 39.1 | [Bench repair + first cross-tool run](39.1-bench-cross-tool.md) | Phase 1-2 Done |
+| 39.2 | [Claude compat phase 1 (skills/commands/MCP)](39.2-claude-compat-phase1.md) | Done |
+| 39.3 | [Claude compat phase 2 (agents/aliases)](39.3-claude-compat-phase2.md) | Done |
 | 39.4 | [Claude compat phase 3 (hooks)](39.4-claude-compat-phase3.md) | Pending (deferrable) |
 
 ### Series 40 — CI architecture + test infrastructure reset

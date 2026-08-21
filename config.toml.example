@@ -192,8 +192,9 @@
 
 # When true, read_file wraps minified source in a `<minified lang="...">`
 # envelope and write_file/edit_file expand that envelope back to readable
-# source before writing. Default: false (will flip to true after shake-out).
-# minify_write_side = false
+# source before writing. Default: true (read_file auto-minify round-trips
+# through edit_file without breaking string-match).
+# minify_write_side = true
 
 # read_file auto-minifies (strips comments, collapses blank lines) when
 # the file content exceeds this many bytes and the caller did not pass an
@@ -251,14 +252,14 @@
 # preserve_recent_messages = 2
 
 # Maximum model↔tool iterations within a single turn. Prevents runaway loops
-# during large codebase analysis. Default: 100.
-# max_tool_calls_per_turn = 100
+# during large codebase analysis. Default: 200.
+# max_tool_calls_per_turn = 200
 
 # Maximum consecutive FinishReason::Length continuations per turn. When the
 # model hits max_tokens, the executor injects a continuation message and loops.
 # This cap limits how many times that can happen. 0 disables continuation
-# entirely (treats Length as Stop). Default: 5, max: 50.
-# max_continuation_rounds = 5
+# entirely (treats Length as Stop). Default: 20, max: 50.
+# max_continuation_rounds = 20
 
 # ---------------------------------------------------------------------------
 # Summarization (optional LLM-based compaction)
@@ -368,8 +369,8 @@
 # ---------------------------------------------------------------------------
 
 # Per-tool hard timeout in seconds. Individual tools may apply shorter
-# internal timeouts. Clamped to [1, 3600]. Default: 30.
-# tool_timeout_secs = 30
+# internal timeouts. Clamped to [1, 3600]. Default: 120.
+# tool_timeout_secs = 120
 
 # Optional path for the append-only JSONL audit log. Set to an empty string
 # to disable auditing. Default: <data_dir>/audit.ndjson.
@@ -400,6 +401,22 @@
 # mouse_enabled = true
 
 # ---------------------------------------------------------------------------
+# Subagent worktree isolation (WO 35.2)
+# ---------------------------------------------------------------------------
+
+# When true, a `coder` subagent spawned by the `task` tool gets its own
+# `git worktree` (branched from the parent sandbox when that is itself a
+# worktree, else the process CWD). The cloned config's `sandbox_dir` is
+# pointed at the worktree before `access_from_config`, so the path guard,
+# landlock extra paths, and the subagent executor's guard tower all center
+# on the worktree. Before the worktree is dropped, uncommitted edits are
+# captured with `git diff HEAD` and returned as an appliable patch appended
+# to the task summary. Default: false (subagents share the parent
+# workspace). Env: KF_CODE_WORKTREE_ENABLED.
+# [session]
+# worktree_enabled = false
+
+# ---------------------------------------------------------------------------
 # Workspace plugin sources
 # ---------------------------------------------------------------------------
 #
@@ -428,7 +445,13 @@
 # [plugin_sources]
 # my-custom-plugin = "path/to/plugin-dir"
 #
-enabled_plugins = ["kf-plugin"]
+# enabled_plugins gates which compiled-in plugins register their tools/hooks
+# on the next `kf-code run`. The default (unset) enables all three built-ins
+# (kf-plugin, stratum, kf-budget). Listing only a subset silently disables
+# the unlisted ones — e.g. `enabled_plugins = ["kf-plugin"]` disables
+# stratum and budget tools/hooks even though their cargo features are on.
+# Disable at runtime with `/plugins toggle <name>`.
+# enabled_plugins = ["kf-plugin", "stratum", "kf-budget"]
 
 # ---------------------------------------------------------------------------
 # Stratum compression and token budget

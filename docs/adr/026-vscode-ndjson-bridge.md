@@ -98,3 +98,13 @@ compatibility).
 - If the NDJSON contract later needs fields not in v1, bump to v2 and
   gate extension features on the version advertised in the `turn_start`
   event.
+
+## Amendment (2026-08-21, WO 38.13)
+
+The VS Code extension this ADR targets was **archived**. The
+`editors/vscode/` directory no longer exists in the repo — the extension
+scaffold was removed when the TS→Rust migration (WO 29.9) deleted every
+TypeScript tree. The NDJSON protocol design is retained as history; it
+does not describe a live capability. A future editor integration would
+start from the current Rust-only architecture and would need to re-derive
+the stream contract from the live `StreamEvent` shape.

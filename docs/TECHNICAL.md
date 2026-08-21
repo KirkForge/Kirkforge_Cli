@@ -53,9 +53,9 @@ kf-code (root bin)          ← the CLI the user runs
 └── docs/adr/                  ← 93 Architecture Decision Records
 ```
 
-The workspace has ~3,300 `#[test]` functions (~2,400 under `src/`,
-~860 under `crates/`). The `crates/` count is pinned by the
-`readme_drift` test (`crates/kf-budget-core/README.md` State table).
+ The workspace has ~4,550 test functions (~3,600 under `src/`,
+ ~960 under `crates/`). The `crates/` count is pinned by the
+ `readme_drift` test (`crates/kf-budget-core/README.md` State table).
 
 ### Compiled-in vs satellite
 
@@ -72,12 +72,13 @@ The root `kf-code` binary directly depends on eight crates:
 | `kf-testdoctor` | Test-coverage diagnostics behind `kf-code doctor` (WO 12.4) |
 | `kf-orchestrator` | Delegation/decompose/correction pipeline; `ModelClient` impl + security verifier (WO 35.6) |
 
-The remaining five crates are **satellites**: they build as support
-libraries. `kf-compress-core` and `kf-budget-core` compile in behind the
-`stratum` / `budget` features (ADR-046/047) and retain shell-plugin fallbacks
-for feature-off builds (ADR-050). `kf-routing`, `kf-rbac`, and
-`kf-memory-store` are foundation libraries (WO 29.3–29.7 ports) with no
-shell fallback — they exist only as Rust.
+ The remaining five crates are **satellites**: they build as support
+ libraries. `kf-compress-core` and `kf-budget-core` compile in behind the
+ `stratum` / `budget` features (ADR-046/047); the feature-off path
+ registers no Stratum/Budget tools or hooks (no shell fallback exists —
+ the former shell-plugin trees were deleted in WO 29.9). `kf-routing`,
+ `kf-rbac`, and `kf-memory-store` are foundation libraries (WO 29.3–29.7
+ ports) with no shell fallback — they exist only as Rust.
 
 **Release-binary cost of the orchestrator chain (WO 36.1, 2026-08-19).**
 Measured in one worktree (`cargo build --release -p kf-code`, packaged
@@ -152,9 +153,6 @@ The largest module (~30 submodules). It owns:
   system instructions, tool definitions, and retrieved context. Includes
   microcompaction (ADR-0027) for stale turns.
 - **Router** (`router.rs`): routes tool calls to built-in tools or plugin tools.
-- **Hooks** (`hooks.rs`): fires plugin hook scripts on lifecycle events
-  (`session-start`, `post-turn`, `pre-tool-bash`, `post-tool-bash`,
-  `post-tool-write_file`, `pre-compact`).
 - **Skills** (`skills.rs`): slash-command prompts backed by plugins or built-in
   personas (`/explore`, `/plan`, `/coder`).
 - **Config** (`config/`): TOML config parsing, env overrides, live-reload diff.
@@ -269,11 +267,12 @@ evades via encoding (base64/hex + eval) or variable indirection — no
 substring/regex blocklist can resolve runtime state. The **boundary** is
 landlock filesystem confinement (caps the blast radius to allow-listed
 paths) plus `--no-network` (`unshare(CLONE_NEWNET)`, blocks exfiltration).
-Do not mistake the deny-list for a boundary: it raises the bar for trivial
-payloads, it does not confine. The only non-theatrical command gate is an
-allowlist (`bash.require_allowlist`, WO 28.17 R2 — deferred pending operator
-input on glob/prefix/regex semantics); an allowlist is the only
-blocklist-shape that isn't theater.
+ Do not mistake the deny-list for a boundary: it raises the bar for trivial
+ payloads, it does not confine. The non-theatrical command gate is an
+ allowlist (`bash.require_allowlist`, WO 32.18 — shipped, default-off): when
+ enabled, bash commands must match `bash_allowlist` (prefix-match on the
+ command head; compound commands require every clause to match) or be
+ denied. An allowlist is the only blocklist-shape that isn't theater.
 
 **WO 38.1 chokepoint hardening:** three classification holes and one env leak
 are closed at the shared chokepoints. (1) `is_read_only_bash`
@@ -477,7 +476,11 @@ or slow NFS can no longer stall an async worker (session startup awaits `create`
 keeps the sync call (Drop cannot await; the stale-worktree recovery path covers a crash
 mid-remove).
 
-Personas currently route through Anthropic-direct only. Bedrock/Vertex-configured users should use Anthropic API keys for persona invocation.
+Personas route through the same provider resolution as the main session
+(config `provider`, model-name prefix heuristics, `[subagent_provider]`
+override). WO 26.6 closed the Anthropic-only gap: Bedrock/Vertex-configured
+users invoke personas through their configured provider without needing a
+separate Anthropic API key.
 
 **Per-subagent provider override** (WO 30.0.6 brain+brawn): the optional
 `[subagent_provider]` config block (TOML) or `KF_CODE_SUBAGENT_*` env vars
@@ -793,11 +796,12 @@ content and applies size-based truncation with optional offload storage.
 // still deferred.
 // Upgrade path: query-based relevance scoring, per-content-type stages.
 
-Stratum ships as a compiled-in module (when the `stratum` feature is on,
-ADR-046) or as a shell fallback (feature off).
-The `session-start` hook emits the active ruleset so the model knows the
-compression contract; the `pre-tool-bash` hook validates config to surface
-drift early. Both hooks are in-process Rust handlers when compiled in.
+ Stratum ships as a compiled-in module (when the `stratum` feature is on,
+ ADR-046); feature-off registers no Stratum tools or hooks (no shell fallback
+ exists — the former shell-plugin tree was deleted in WO 29.9).
+ The `session-start` hook emits the active ruleset so the model knows the
+ compression contract; the `pre-tool-bash` hook validates config to surface
+ drift early. Both hooks are in-process Rust handlers when compiled in.
 
 Stratum also coordinates with the budget guard (`kf-budget-core`, Workorder 8.6,
 ADR-051): when the budget slices a tool result, a registered Stratum listener
@@ -836,9 +840,11 @@ WO 38.5: the Anthropic family reads usage from `message_start`/`message_delta`
 (the real wire shape) instead of the never-sent `message_stop`; the OpenAI-compat
 adapter sends `stream_options: {include_usage}` and merges the post-finish usage
 frame. `TokenUsage` carries `cache_write_tokens` billed at the write rate. The
-budget guard ships as a compiled-in module
-(when the `budget` feature is on, ADR-047) or as a standalone `kf-budget` binary
-(feature off, shell fallback).
+ budget guard ships as a compiled-in module
+ (when the `budget` feature is on, ADR-047). WO 38.8 wired the budget guard
+ into the production session path via `attach_session_stores` (see below);
+ there is no standalone `kf-budget` binary — the feature-off path registers
+ no budget tools/hooks.
 
 The 4 in-process hooks receive full `HookContext` with real tool result content
  and compact metadata — the lossy canned-JSON shim that existed when the budget
@@ -870,10 +876,10 @@ dispatch paths (ADR-050):
    `main/mod.rs`; hooks register as `InProcessHook` handlers in the executor.
    The shell plugin dir is skipped by the loader, so only the in-process
    version registers — no duplicate tool registrations.
-2. **External** (feature off): the shell plugin dir loads via
-   `PluginToolWrapper` shell-outs. This is graceful degradation — a user who
-   builds without a feature still gets the plugin via the shell plugin if its
-   dir and satellite binary are available, at the cost of subprocess overhead.
+2. **Feature-off** (no shell fallback): when a folded plugin's feature is off,
+   its tools and hooks are not registered. The former shell-plugin trees that
+   provided graceful degradation were deleted in WO 29.9 — building without a
+   feature means the plugin's capabilities are absent, not shell-backed.
 
 The folded plugins (Stratum, Budget, kf-plugin) use this two-path
 dispatch. A single toggle — `enabled_plugins` in `ToolConfig` — controls both
@@ -967,7 +973,7 @@ downgraded. Optional minisign detached-signature verification (`.kf-code.sig`).
 
 | Plugin | Trust | Skills | Tools | Hooks | Source |
 |---|---|---|---|---|---|
-| `kf-plugin` | shell | `/kf-code` | 6 | 0 | Compiled-in (`kf-plugin-tools` feature) — verify tools stub pending WO 29.7 model client |
+| `kf-plugin` | shell | `/kf-code` | 6 | 0 | Compiled-in (`kf-plugin-tools` feature) — `verify` runs the security emitter (WO 35.6); `verify_workspace` reports not-implemented (reducer pending wiring) |
 | `stratum` | shell | `/stratum` | 5 | 2 | Compiled-in (`stratum` feature) — no shell manifest |
 | `kf-budget` | shell | `/budget` | 7 | 4 | Compiled-in (`budget` feature) — no shell manifest |
 
@@ -1322,10 +1328,11 @@ differentiator vs Claude Code / Vix / opencode.
   `cfg.tools.budget_ceiling`; `init_from_config` applies it to the shared
   `TokenBudget`. No new budget code — reuses ADR-0005 / WO 7.5 / WO 8.6.
 
-A `bench` workflow runs all tasks on Ollama with `qwen2.5:0.5b` on push to main.
-It posts a delta summary as a PR comment comparing against the `main` baseline
-(ADR-045). The bench-baseline workflow file was deleted in the CI
-architecture reset (ADR-074) as an obsolete artifact.
+A `bench` workflow ran all tasks on Ollama with `qwen2.5:0.5b` on push to main
+and posted a delta summary as a PR comment comparing against the `main`
+baseline (ADR-045). The bench-baseline workflow file was deleted in the CI
+architecture reset (ADR-074) as an obsolete artifact — the bench CI loop
+(see "Bench CI loop" below) is no longer active.
 
 ### Bench CI loop (WO 10.9) — *deleted* (ADR-074 CI reset)
 
@@ -1541,12 +1548,12 @@ The root `Cargo.toml` exposes these features:
   crate (pure-Rust BPF compiler, no C deps).
 - `otel` (non-default) — OpenTelemetry span/metric export.
 
-Three plugins are feature-gated compiled-in modules, served as direct Rust
-calls when their feature is on. `stratum` and `kf-budget` retain shell-plugin
-fallback sources for feature-off builds; `kf-plugin` does not (its shell tree
-was deleted in WO 29.9). ADR-050 pins the two-path dispatch consolidation
-design. The `dep:` optional-dependency pattern is what makes per-plugin
-opt-in possible.
+ Three plugins are feature-gated compiled-in modules, served as direct Rust
+ calls when their feature is on. `stratum` and `kf-budget` have no shell-plugin
+ fallback (the shell trees were deleted in WO 29.9; feature-off registers
+ nothing); `kf-plugin` likewise (its shell tree was deleted in WO 29.9).
+ ADR-050 pins the two-path dispatch consolidation design. The `dep:`
+ optional-dependency pattern is what makes per-plugin opt-in possible.
 
 ADR-0017's "no `[features]` section" rule is scoped to `crates/kf-budget-core/`,
 not the root binary.

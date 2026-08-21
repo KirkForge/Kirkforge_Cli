@@ -273,11 +273,12 @@ budget = ["dep:kf-budget-core"]
 # --features e2e-tests.
 e2e-tests = []
 # kf-plugin-tools: register the six `kf-plugin` tools as compiled-in Rust
-# impls (WO 29.1). doctor/health/tools run natively; verify/verify-workspace/
-# audit-verify emit a "not yet implemented" message pending a real model
-# client in the orchestrator crate (WO 29.7). The shell/Node fallback that
-# lived under plugins/kf-plugin/ was removed in WO 29.9 when the TS tree was
-# deleted; with the feature off, no kf-plugin tools are registered.
+# impls (WO 29.1). doctor/health/tools run natively; verify runs the
+# security emitter (WO 35.6); audit_verify walks the hash chain (WO 35.6);
+# verify_workspace reports not-implemented (reducer pending wiring). The
+# shell/Node fallback that lived under plugins/kf-plugin/ was removed in
+# WO 29.9 when the TS tree was deleted; with the feature off, no kf-plugin
+# tools are registered.
  kf-plugin-tools = []
   pty = ["portable-pty"]
 # computer_use: Anthropic hosted computer_use beta (coordinate-vision model).

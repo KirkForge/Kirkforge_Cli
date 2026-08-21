@@ -34,3 +34,12 @@ Promote the VS Code extension to a shippable state with:
 - Positive: 13 tests pass (6 protocol, 5 format, 2 bridge NDJSON format). All are pure-function tests with no vscode dependency.
 - Negative: TypeScript dependency in a Rust project. CI time +1-2 min for the vscode job.
 - Negative: `.vsix` maintenance burden — version bumps, dependency updates, compatibility testing.
+
+## Amendment (2026-08-21, WO 38.13)
+
+The VS Code extension this ADR promoted was **archived**. The
+`editors/vscode/` directory no longer exists in the repo — the extension
+scaffold (TypeScript sources, `.vsix` packaging, CI `vscode` job) was
+removed when the TS→Rust migration (WO 29.9) deleted every TypeScript
+tree. The decision record is retained as history; it does not describe a
+live capability.

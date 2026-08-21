@@ -120,11 +120,14 @@ impl VerifierBus {
     ///
     /// `ceiling:` duplicate names are allowed and COEXIST — every
     /// registered verifier runs on each `run()` and contributes verdicts.
-    /// This is intentional: the built-in slot stubs (`SecurityBusVerifier`,
-    /// `GitBusVerifier`) share their slot name (`"security"`, `"git"`) with
-    /// plugin verifiers that augment the same slot, so a plugin-declared
-    /// `security` verifier runs alongside the built-in stub (which returns
-    /// no verdicts) rather than replacing it. (bucketlist 3.41)
+    /// This is intentional: a plugin-declared verifier whose name matches
+    /// a built-in slot (`"security"`, `"git"`) augments the same slot
+    /// rather than replacing it. The built-in slot stubs
+    /// (`SecurityBusVerifier`, `GitBusVerifier`) were removed — the bus
+    /// starts empty and contains only what the host explicitly registers
+    /// (plugin verifiers, the TS orchestrator bridge). Async verifiers
+    /// continue to operate through the event-driven `Verifier` trait path.
+    /// (bucketlist 3.41)
     pub fn register(&mut self, verifier: Box<dyn BusVerifier>) {
         self.verifiers.push(verifier);
     }
@@ -138,8 +141,8 @@ impl VerifierBus {
     /// tagged `VerifierSource::Plugin(name)`.
     ///
     /// See [`register`](Self::register): a plugin verifier whose declared
-    /// name matches a built-in slot stub (e.g. `"security"`) coexists with
-    /// the stub rather than replacing it.
+    /// name matches a built-in slot (`"security"`) coexists with any
+    /// same-named verifier rather than replacing it.
     pub fn add_plugin_verifier(
         &mut self,
         name: String,

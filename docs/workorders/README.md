@@ -803,3 +803,18 @@ than 20 hours next week watching CI operations.
 | 40.3 | [Nextest profiles + timeout policy](40.3-nextest-profiles.md) | Done |
 | 40.4 | [Sleep elimination (30+ tests)](40.4-sleep-elimination.md) | Pending |
 | 40.5 | [Global state isolation](40.5-global-state-isolation.md) | Done |
+
+### Series 41 — Agent runtime acceptance (verified from external review)
+
+Driven by the Dev(7) external review — 10 claims verified, 5 genuinely
+open, permissions claim refuted (third time — root cause: our docs
+undersell the engine). See [WO 41.0](41.0-wo41-overview.md).
+
+| WO | Title | Status |
+|----|-------|--------|
+| 41.0 | [Series overview](41.0-wo41-overview.md) | In Progress |
+| 41.1 | [Apply coder patch + rename ParallelOrchestrator](41.1-patch-application.md) | Pending |
+| 41.2 | [Handoff delimiter spoof test + escaping](41.2-handoff-delimiter-spoof.md) | Pending |
+| 41.3 | [Permission docs fix (undersell → accurate)](41.3-permission-docs.md) | Pending |
+| 41.4 | [Verifier capability discovery UI](41.4-verifier-capability-discovery.md) | Pending |
+| 41.5 | [Persistent subagent lifecycle](41.5-persistent-subagent.md) | Pending |

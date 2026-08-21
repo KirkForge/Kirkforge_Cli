@@ -60,7 +60,7 @@ async fn run_prompt_flag_round_trips() {
     );
     let body = &log[0].body;
     assert!(
-        body.contains("Say hello"),
+        body.to_string().contains("Say hello"),
         "run_prompt_flag_round_trips: model request body must contain the -p prompt, got: {body}"
     );
 }
@@ -115,7 +115,8 @@ async fn run_prompt_flag_multi_paragraph_is_one_turn() {
     );
     let body = &log[0].body;
     assert!(
-        body.contains("first paragraph") && body.contains("second paragraph"),
+        body.to_string().contains("first paragraph")
+            && body.to_string().contains("second paragraph"),
         "run_prompt_flag_multi_paragraph: both paragraphs must be in the request body, got: {body}"
     );
 }

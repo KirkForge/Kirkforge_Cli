@@ -290,9 +290,11 @@ impl Executor {
     /// testing; the model's output content may still vary by provider.
     ///
     /// Returns the results map (keyed by input index) and the set of indices
-    /// already recorded + checkpointed via `record_tool_result` (the mid-batch
-    /// checkpoint guarantee — a crash while a later, slower tool is still
-    /// in-flight does not lose results that already finished).
+    /// already recorded via `record_tool_result` (the mid-batch persistence
+    /// guarantee — each tool result is appended + sync_all'd to the NDJSON
+    /// log before the next handle is awaited, so a crash while a later,
+    /// slower tool is still in-flight does not lose results that already
+    /// finished).
     pub(super) async fn spawn_batch(
         &mut self,
         tcs: &mut [ToolInvocation],
@@ -335,14 +337,13 @@ impl Executor {
         // Collect completed non-file results and record them incrementally.
         //
         // Recording is interleaved with collection (not deferred to Phase 3):
-        // each completed tool result is appended to the conversation and
-        // checkpointed before the next handle is awaited. This is the
-        // "mid-batch checkpoint" guarantee — a crash or cancellation while a
-        // later, slower tool is still in-flight does not lose the results
-        // that already finished. Without this, a turn aborted while the
-        // collect loop is blocked on a slow tool would persist nothing,
-        // because Phase 3 (which appends to the conversation) only runs
-        // after the whole collect loop completes.
+        // each completed tool result is appended to the conversation log
+        // (NDJSON append + sync_all) before the next handle is awaited. This
+        // is the "mid-batch persistence" guarantee — a crash or cancellation
+        // while a later, slower tool is still in-flight does not lose the
+        // results that already finished. WO 38.9: the per-tool full-file
+        // checkpoint rewrite was removed (O(N²)); the NDJSON append is
+        // already crash-safe, and post-batch/post-turn checkpoints remain.
         //
         // Handles are awaited in input order so the conversation still
         // records tool results in the order the model requested them.
@@ -383,15 +384,12 @@ impl Executor {
                 event_tx,
             )
             .await?;
-            if let Err(e) = self.conversation.checkpoint_async().await {
-                tracing::warn!(error = %e, "mid-batch checkpoint failed after tool {}", tc.id);
-                crate::send_or_warn!(
-                    event_tx
-                        .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
-                        .await,
-                    "TurnEvent receiver dropped; discarding event"
-                );
-            }
+            // WO 38.9: per-tool checkpoint removed. The NDJSON append
+            // in record_tool_result already persists each tool result
+            // with sync_all — crash-safe. The full-file checkpoint
+            // rewrite was O(N²) (clone + rewrite per tool call). Post-
+            // batch (turn.rs) and post-turn checkpoints remain for
+            // crash recovery.
             recorded.insert(idx);
             // Stop awaiting further handles once cancelled; the in-flight
             // task we just awaited is recorded, later ones get placeholders.
@@ -516,7 +514,7 @@ impl Executor {
     ) -> anyhow::Result<usize> {
         for (idx, tc) in tcs.iter_mut().enumerate() {
             if recorded.contains(&idx) {
-                // Already recorded and checkpointed in the collect loop.
+                // Already recorded and appended in the collect loop.
                 continue;
             }
             let has_result = results.contains_key(&idx);
@@ -607,15 +605,7 @@ impl Executor {
                         ..Default::default()
                     })
                     .await?;
-                if let Err(e) = self.conversation.checkpoint_async().await {
-                    tracing::warn!(error = %e, "mid-batch checkpoint failed after tool {}", tc.id);
-                    crate::send_or_warn!(
-                        event_tx
-                            .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
-                            .await,
-                        "TurnEvent receiver dropped; discarding event"
-                    );
-                }
+                // WO 38.9: per-tool checkpoint removed — see spawn_batch.
                 continue;
             }
 
@@ -631,17 +621,7 @@ impl Executor {
             )
             .await?;
 
-            // Persist after each recorded result so a crash before the next
-            // tool starts does not lose in-flight progress.
-            if let Err(e) = self.conversation.checkpoint_async().await {
-                tracing::warn!(error = %e, "mid-batch checkpoint failed after tool {}", tc.id);
-                crate::send_or_warn!(
-                    event_tx
-                        .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
-                        .await,
-                    "TurnEvent receiver dropped; discarding event"
-                );
-            }
+            // WO 38.9: per-tool checkpoint removed — see spawn_batch.
         }
 
         Ok(tcs.len())

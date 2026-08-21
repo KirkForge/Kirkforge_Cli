@@ -1023,6 +1023,37 @@ Both systems coexist. MCP does not replace hooks, verifiers, or skills —
 it replaces the `tool` capability kind for new tools. Existing bespoke
 plugins that expose tools continue to work unchanged.
 
+### Claude compatibility layer (WO 39.2)
+
+kf-code reads three Claude-ecosystem markdown surfaces so a Claude
+plugin's skills, commands, and `.mcp.json` dropped into a project are
+picked up on the next start:
+
+- **Skill trigger derivation**: `.claude/skills/*/SKILL.md` was already
+  scanned, but a skill without a `trigger` field was unreachable (dispatch
+  is `get_by_trigger` only). `parse_frontmatter` now derives `/<name>`
+  when `trigger` is empty, so every stock Claude skill becomes an
+  invocable slash command.
+- **Commands loader**: `.claude/commands/**/*.md` (+ optional
+  `~/.claude/commands`) files register as skills. The filename stem is
+  the trigger (`review.md` → `/review`); `$ARGUMENTS` and `$1`..`$9`
+  placeholders are rewritten to `{{args}}` for the prompt renderer. An
+  optional YAML frontmatter block is parsed for `name`/`description`/
+  `model`; absent frontmatter falls back to the stem.
+- **`.mcp.json` discovery**: a project-root `.mcp.json` with an
+  `mcpServers` object is parsed into `McpServerConfig` entries (`command`/
+  `args`/`env` → stdio; `url`/`token` → http) and merged into the MCP config
+  before `McpClientManager::new`. The gate is
+  `tools.load_project_mcp_json` (config flag, default on) plus a
+  first-load-per-project approval prompt: a cloned repo's `.mcp.json` is
+  attacker-controllable spawn config, so the approval is persisted in the
+  data dir (`approved_mcp_projects.json`) and only approved projects load
+  silently on subsequent launches. `resolve_project_mcp` is a pure
+  function over `(config_flag, doc, already_approved)` so the gate logic
+  is testable without a terminal; the prompt UI is the caller's job
+  (run_session prints to stderr; a TUI modal is deferred — see Deferrals
+  in the WO).
+
 ---
 
 ## Specialized runtimes

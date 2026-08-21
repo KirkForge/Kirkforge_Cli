@@ -156,6 +156,11 @@ impl SkillRegistry {
             }
             count += self.load_from_dir(base)?;
         }
+        // WO 39.2: Claude-style `.claude/commands/**/*.md` slash commands.
+        count += self.load_commands(Path::new(".claude/commands"))?;
+        if let Some(home) = home_claude_commands_dir() {
+            count += self.load_commands(&home)?;
+        }
         count += self.load_plugins(cfg)?;
         count += self.register_folded_skills(cfg);
         Ok(count)
@@ -398,6 +403,52 @@ impl SkillRegistry {
         Ok(count)
     }
 
+    // WO 39.2: Claude-style `.claude/commands/**/*.md` slash commands.
+    // Each `.md` file becomes a skill whose trigger is `/<filename-stem>`
+    // and whose body is the markdown content with `$ARGUMENTS`/`$1..$9`
+    // rewritten to the `{{args}}` placeholder the prompt renderer expects.
+    fn load_commands(&mut self, dir: &Path) -> anyhow::Result<usize> {
+        if !dir.is_dir() {
+            return Ok(0);
+        }
+        let mut count = 0;
+        let mut walker = ignore::WalkBuilder::new(dir)
+            .max_depth(Some(5))
+            .standard_filters(false)
+            .build();
+        let mut entries = Vec::new();
+        for result in walker.by_ref() {
+            match result {
+                Ok(entry) => {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                        entries.push(path.to_path_buf());
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to walk commands directory");
+                }
+            }
+        }
+        entries.sort();
+        for path in entries {
+            match load_command_from_file(&path) {
+                Ok(skill) => {
+                    let name = skill.meta.name.clone();
+                    self.skills.insert(name.clone(), skill.clone());
+                    if !skill.meta.trigger.is_empty() {
+                        self.triggers.insert(skill.meta.trigger.clone(), name);
+                    }
+                    count += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "failed to load command .md");
+                }
+            }
+        }
+        Ok(count)
+    }
+
     /// Register a skill programmatically (without a SKILL.md file).
     pub fn register(&mut self, skill: Skill) {
         let name = skill.meta.name.clone();
@@ -481,6 +532,80 @@ pub fn load_skill_from_file(path: &Path) -> anyhow::Result<Skill> {
     )
 }
 
+// WO 39.2: Load a Claude-style command `.md` file as a skill. The
+// filename stem becomes the slash trigger (`foo.md` → `/foo`); the file
+// body is the prompt. `$ARGUMENTS` and `$1`..`$9` are rewritten to the
+// `{{args}}` placeholder that `render_prompt` substitutes. An optional
+// YAML frontmatter block (same `---`-delimited format as SKILL.md) is
+// parsed for `name`/`description`/`model`; absent frontmatter falls back
+// to the filename stem.
+pub fn load_command_from_file(path: &Path) -> anyhow::Result<Skill> {
+    let content = std::fs::read_to_string(path)?;
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("command")
+        .to_string();
+
+    let (meta, body) = if content.trim_start().starts_with("---") {
+        let parsed = parse_skill(
+            &content,
+            path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+        )?;
+        let mut meta = parsed.meta;
+        if meta.trigger.is_empty() {
+            meta.trigger = format!("/{stem}");
+        }
+        if meta.name.is_empty() {
+            meta.name = stem.clone();
+        }
+        (meta, parsed.prompt_body)
+    } else {
+        (
+            SkillMeta {
+                name: stem.clone(),
+                description: String::new(),
+                trigger: format!("/{stem}"),
+                model: None,
+                plugin_name: None,
+            },
+            content.trim().to_string(),
+        )
+    };
+
+    Ok(Skill {
+        meta,
+        prompt_body: rewrite_command_placeholders(&body),
+        source_dir: path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+    })
+}
+
+// Rewrite Claude command placeholders (`$ARGUMENTS`, `$1`..`$9`) to the
+// `{{args}}` placeholder the skill prompt renderer substitutes. `$1`..`$9`
+// are positional; kf-code's `{{args}}` is the whole raw user input, which
+// is the closest single-substitution equivalent.
+pub fn rewrite_command_placeholders(body: &str) -> String {
+    let mut out = body.to_string();
+    for n in 1..=9u8 {
+        let pat = format!("${n}");
+        out = out.replace(&pat, "{{args}}");
+    }
+    out = out.replace("$ARGUMENTS", "{{args}}");
+    out
+}
+
+// `~/.claude/commands` — the user-global commands directory. Cross-
+// platform via shellexpand (same helper config.toml uses for `~` paths).
+fn home_claude_commands_dir() -> Option<PathBuf> {
+    let expanded = shellexpand::tilde("~/.claude/commands").into_owned();
+    let path = PathBuf::from(expanded);
+    if path.is_dir() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
 /// Parse SKILL.md content from a string.
 pub fn parse_skill(content: &str, source_dir: PathBuf) -> anyhow::Result<Skill> {
     let content = content.trim();
@@ -540,6 +665,14 @@ fn parse_frontmatter(content: &str) -> anyhow::Result<SkillMeta> {
 
     if meta.name.is_empty() {
         anyhow::bail!("SKILL.md missing required 'name' field in frontmatter");
+    }
+
+    // Claude compat (WO 39.2): a skill without an explicit `trigger` is
+    // unreachable — dispatch is `get_by_trigger` only. Derive `/<name>`
+    // so every stock `.claude/skills/*/SKILL.md` becomes an invocable
+    // slash command.
+    if meta.trigger.is_empty() {
+        meta.trigger = format!("/{}", meta.name);
     }
 
     Ok(meta)
@@ -700,7 +833,7 @@ Body."#;
     }
 
     #[test]
-    fn test_missing_trigger_is_optional() {
+    fn test_missing_trigger_derives_from_name() {
         let content = r#"---
 name: test
 description: No trigger
@@ -709,7 +842,7 @@ Body."#;
 
         let skill = parse_skill(content, PathBuf::from(".")).unwrap();
         assert_eq!(skill.meta.name, "test");
-        assert_eq!(skill.meta.trigger, "");
+        assert_eq!(skill.meta.trigger, "/test");
         assert_eq!(skill.meta.description, "No trigger");
     }
 
@@ -821,6 +954,27 @@ Body."#;
         let skill = parse_skill(content, PathBuf::from(".")).unwrap();
         assert_eq!(skill.meta.name, "explain");
         assert_eq!(skill.meta.trigger, "/explain");
+    }
+
+    // WO 39.2: a real Claude-format SKILL.md (the repo's own
+    // .claude/skills/gitnexus/gitnexus-cli/SKILL.md shape) has name +
+    // description but no `trigger` field. Trigger derivation must make
+    // it invocable as `/gitnexus-cli`.
+    #[test]
+    fn test_real_claude_skill_md_derives_trigger() {
+        let content = r#"---
+name: gitnexus-cli
+description: "Use when the user needs to run GitNexus CLI commands like analyze/index a repo, check status, clean the index, generate a wiki, or list indexed repos."
+---
+
+# GitNexus CLI Commands
+
+Run `node .gitnexus/run.cjs analyze` from the project root."#;
+
+        let skill = parse_skill(content, PathBuf::from(".")).unwrap();
+        assert_eq!(skill.meta.name, "gitnexus-cli");
+        assert_eq!(skill.meta.trigger, "/gitnexus-cli");
+        assert!(skill.prompt_body.contains("GitNexus CLI Commands"));
     }
 
     #[test]
@@ -1153,6 +1307,90 @@ Body."#;
         assert_eq!(skill.meta.name, "file_skill");
         assert_eq!(skill.meta.trigger, "/fs");
         assert!(skill.prompt_body.contains("Body from file"));
+    }
+
+    // WO 39.2: a Claude-style command `.md` file without frontmatter
+    // gets its filename stem as the trigger and the body as the prompt.
+    #[test]
+    fn test_load_command_from_file_no_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("summarize.md");
+        std::fs::write(&path, "Summarize the following: $ARGUMENTS").unwrap();
+        let skill = load_command_from_file(&path).unwrap();
+        assert_eq!(skill.meta.name, "summarize");
+        assert_eq!(skill.meta.trigger, "/summarize");
+        assert_eq!(skill.prompt_body, "Summarize the following: {{args}}");
+    }
+
+    #[test]
+    fn test_load_command_from_file_with_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("review.md");
+        std::fs::write(
+            &path,
+            "---\nname: review\ndescription: Review code\nmodel: fast\n---\nReview $1 carefully.",
+        )
+        .unwrap();
+        let skill = load_command_from_file(&path).unwrap();
+        assert_eq!(skill.meta.name, "review");
+        assert_eq!(skill.meta.trigger, "/review");
+        assert_eq!(skill.meta.model, Some("fast".into()));
+        assert_eq!(skill.prompt_body, "Review {{args}} carefully.");
+    }
+
+    #[test]
+    fn test_load_command_from_file_positional_placeholders() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("greet.md");
+        std::fs::write(&path, "Hello $1 from $2 — args: $ARGUMENTS").unwrap();
+        let skill = load_command_from_file(&path).unwrap();
+        assert_eq!(
+            skill.prompt_body,
+            "Hello {{args}} from {{args}} — args: {{args}}"
+        );
+    }
+
+    #[test]
+    fn test_load_command_from_file_renders_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("echo.md");
+        std::fs::write(&path, "Echo: $ARGUMENTS").unwrap();
+        let skill = load_command_from_file(&path).unwrap();
+        let rendered = skill.render_prompt("hello world");
+        assert!(rendered.contains("Echo: hello world"));
+        assert!(!rendered.contains("$ARGUMENTS"));
+    }
+
+    #[test]
+    fn test_rewrite_command_placeholders_all_forms() {
+        assert_eq!(rewrite_command_placeholders("$ARGUMENTS"), "{{args}}");
+        assert_eq!(rewrite_command_placeholders("$1"), "{{args}}");
+        assert_eq!(rewrite_command_placeholders("$9"), "{{args}}");
+        assert_eq!(
+            rewrite_command_placeholders("pre $1 mid $ARGUMENTS post $3"),
+            "pre {{args}} mid {{args}} post {{args}}"
+        );
+        // `$10` is not a recognized positional; `$1` portion rewrites but `0` stays.
+        assert_eq!(rewrite_command_placeholders("$10"), "{{args}}0");
+    }
+
+    #[test]
+    fn test_load_commands_from_dir_registers_md_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let commands = dir.path().join("commands");
+        std::fs::create_dir_all(commands.join("sub")).unwrap();
+        std::fs::write(commands.join("foo.md"), "Foo: $ARGUMENTS").unwrap();
+        std::fs::write(commands.join("sub/bar.md"), "Bar body").unwrap();
+        std::fs::write(commands.join("readme.txt"), "not a command").unwrap();
+
+        let mut reg = SkillRegistry::new();
+        let count = reg.load_commands(&commands).unwrap();
+        assert_eq!(count, 2);
+        assert!(reg.has_trigger("/foo"));
+        assert!(reg.has_trigger("/bar"));
+        assert!(!reg.has_trigger("/readme"));
+        let foo = reg.get_by_trigger("/foo").unwrap();
+        assert_eq!(foo.prompt_body, "Foo: {{args}}");
     }
 
     #[test]

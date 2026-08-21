@@ -103,11 +103,15 @@ pub fn default_budget_sliced_listener(store: Arc<InMemoryOffloadStore>) -> Budge
 }
 
 /// Register the default Stratum compression listener on the budget
-/// guard. Idempotent: repeated calls append another listener. Tests
-/// that want a clean slate should call
-/// `crate::session::budget::clear_sliced_listeners` first.
-pub fn register_default_budget_listener(store: Arc<InMemoryOffloadStore>) {
-    crate::session::budget::register_sliced_listener(default_budget_sliced_listener(store));
+/// guard for `session_id`. On `/plugins` reload, the caller clears the
+/// session's listeners first (see
+/// `crate::session::budget::clear_session_sliced_listeners`) then
+/// re-registers so stale listeners don't accumulate.
+pub fn register_default_budget_listener(session_id: &str, store: Arc<InMemoryOffloadStore>) {
+    crate::session::budget::register_sliced_listener(
+        session_id,
+        default_budget_sliced_listener(store),
+    );
 }
 
 fn json_get_string(args: &Value, key: &str) -> Option<String> {
@@ -815,10 +819,13 @@ mod tests {
     fn register_default_budget_listener_appends_to_dispatcher() {
         let store = Arc::new(InMemoryOffloadStore::new());
         crate::session::budget::clear_sliced_listeners();
-        assert_eq!(crate::session::budget::sliced_listener_count(), 0);
-        register_default_budget_listener(store);
+        assert_eq!(
+            crate::session::budget::sliced_listener_count("test-stratum"),
+            0
+        );
+        register_default_budget_listener("test-stratum", store);
         assert!(
-            crate::session::budget::sliced_listener_count() >= 1,
+            crate::session::budget::sliced_listener_count("test-stratum") >= 1,
             "register_default_budget_listener must add at least one listener"
         );
         crate::session::budget::clear_sliced_listeners();

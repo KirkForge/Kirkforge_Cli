@@ -524,6 +524,7 @@ pub async fn run_tui(
     context_index: Option<kf_context_index::ContextIndex>,
     trace_recorder: Option<crate::session::replay::TraceRecorder>,
     mcp_manager: Option<std::sync::Arc<crate::session::mcp_client::McpClientManager>>,
+    session_stores: crate::session::SessionStores,
 ) -> anyhow::Result<()> {
     // ── Terminal setup ──
     // Read the startup config before terminal init so the mouse-capture
@@ -635,6 +636,7 @@ pub async fn run_tui(
         system,
         context_index,
         trace_recorder,
+        session_stores,
         input_rx,
         event_tx,
         approval_tx,
@@ -722,6 +724,7 @@ fn spawn_executor(
     system: Option<String>,
     context_index: Option<kf_context_index::ContextIndex>,
     trace_recorder: Option<crate::session::replay::TraceRecorder>,
+    session_stores: crate::session::SessionStores,
     input_rx: mpsc::UnboundedReceiver<String>,
     event_tx: mpsc::Sender<executor::TurnEvent>,
     approval_tx: mpsc::UnboundedSender<ApprovalRequest>,
@@ -750,6 +753,10 @@ fn spawn_executor(
     // change spawn_executor to return Result<JoinHandle<()>> and propagate
     // through run_tui (the audit's X1/X4 sandbox refusal surface).
     exe.set_session_id(state.session.session_id.clone());
+    // WO 38.8: attach the per-session budget/stratum stores to the executor
+    // so the budget guard runs in production. Must come after set_session_id
+    // because the stratum listener is keyed by session_id.
+    exe.attach_session_stores(session_stores);
     exe.set_system_override(system);
     if let Some(idx) = context_index {
         exe.set_context_index(idx);

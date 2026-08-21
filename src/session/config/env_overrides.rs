@@ -262,6 +262,13 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // KF_CODE_LOAD_PROJECT_MCP_JSON (WO 39.2)
+    if let Ok(val) = std::env::var("KF_CODE_LOAD_PROJECT_MCP_JSON") {
+        if let Some(b) = parse_bool_env(&val) {
+            cfg.tools.load_project_mcp_json = b;
+        }
+    }
+
     // KF_CODE_MAX_BACKGROUND_TASKS
     if let Ok(val) = std::env::var("KF_CODE_MAX_BACKGROUND_TASKS") {
         if let Ok(n) = val.parse::<usize>() {

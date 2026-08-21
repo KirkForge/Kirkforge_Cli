@@ -550,6 +550,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::String(v)) = table.get("doom_loop_action") {
         cfg.tools.doom_loop_action = v.clone();
     }
+    if let Some(Value::Boolean(v)) = table.get("load_project_mcp_json") {
+        cfg.tools.load_project_mcp_json = *v;
+    }
     if let Some(Value::Integer(v)) = table.get("max_background_tasks") {
         cfg.tools.max_background_tasks = (*v as usize).clamp(1, 64);
     }
@@ -2396,10 +2399,10 @@ mod tests {
 
         // ── 1. Total struct-level fields ──────────────────────────
         // ModelConfig=33 (32 direct + subagent_provider sub-struct handle),
-        // SecurityConfig=22, ToolConfig=33, SessionConfig=8,
-        // DisplayConfig=7 → 103 total pub fields.
+        // SecurityConfig=22, ToolConfig=34, SessionConfig=8,
+        // DisplayConfig=7 → 105 total pub fields.
         assert_eq!(
-            CONFIG_FIELD_COUNT, 104,
+            CONFIG_FIELD_COUNT, 105,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2453,6 +2456,7 @@ mod tests {
             task_concurrency_mode = "queue"
             doom_loop_max_hits = 3
             doom_loop_action = "x"
+            load_project_mcp_json = false
             tool_timeout_secs = 999
             audit_log_path = "x"
             diff_review = false
@@ -2522,7 +2526,8 @@ mod tests {
         }
         // 70 top-level leaf keys + 9 array keys + 3 single-key inline
         // tables + 8 computer_use sub-keys + 7 subagent_provider sub-keys = 97
-        const MERGE_TOML_EXPECTED: usize = 97;
+        // WO 39.2: +1 (load_project_mcp_json) = 98
+        const MERGE_TOML_EXPECTED: usize = 98;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2543,7 +2548,8 @@ mod tests {
         // 88 KF_CODE_* literals (77 base + 7 KF_CODE_SUBAGENT_* + 2 bash
         // allowlist + 1 streaming_timeout_secs + 1 computer_use_hosted)
         // + 5 API-key literals = 93
-        const ENV_OVERRIDE_EXPECTED: usize = 93;
+        // WO 39.2: +1 (KF_CODE_LOAD_PROJECT_MCP_JSON) = 94
+        const ENV_OVERRIDE_EXPECTED: usize = 94;
         assert_eq!(
             env_var_count, ENV_OVERRIDE_EXPECTED,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"

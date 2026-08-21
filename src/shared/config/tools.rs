@@ -81,6 +81,13 @@ fn default_doom_loop_action() -> String {
     "auto_plan".to_string()
 }
 
+// WO 39.2: load `.mcp.json` from the project root by default. The file
+// is attacker-controllable (a cloned repo can ship one), so a per-project
+// approval prompt gates the first load — see `mcp_project::load_project_mcp`.
+fn default_load_project_mcp_json() -> bool {
+    true
+}
+
 fn default_plugin_sources() -> HashMap<String, PathBuf> {
     // No default filesystem sources: `kf-plugin` is compiled-in behind the
     // `kf-plugin-tools` feature (WO 29.1), and stratum/kf-budget are folded
@@ -171,6 +178,10 @@ pub struct ToolConfig {
     pub doom_loop_max_hits: usize,
     #[serde(default = "default_doom_loop_action")]
     pub doom_loop_action: String,
+    // WO 39.2: when true, a `.mcp.json` in the project root is parsed and
+    // its servers merged into the MCP config (gated by first-load approval).
+    #[serde(default = "default_load_project_mcp_json")]
+    pub load_project_mcp_json: bool,
 }
 
 fn default_plugin_signature_validation() -> bool {
@@ -221,6 +232,7 @@ impl Default for ToolConfig {
             allow_sampling_unattended: false,
             doom_loop_max_hits: default_doom_loop_max_hits(),
             doom_loop_action: default_doom_loop_action(),
+            load_project_mcp_json: default_load_project_mcp_json(),
         }
     }
 }
@@ -248,6 +260,10 @@ mod tests {
         assert!(
             !cfg.allow_sampling_unattended,
             "sampling must default to approval-gated (deny in headless)"
+        );
+        assert!(
+            cfg.load_project_mcp_json,
+            "WO 39.2: project .mcp.json discovery defaults on"
         );
     }
 

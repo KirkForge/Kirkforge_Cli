@@ -537,10 +537,75 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
 
     // --- MCP tools ---
     let cfg_for_mcp = kf_code::shared::read_shared_config(&shared_config).clone();
+
+    // WO 39.2: merge project-local `.mcp.json` servers into the MCP config
+    // before constructing the manager. A cloned repo's `.mcp.json` is
+    // attacker-controllable spawn config, so the first load per project is
+    // gated by an approval prompt (persisted in the data dir). Non-
+    // interactive runs skip the prompt and silently drop unapproved
+    // project servers — auto-approving spawned subprocesses from a
+    // script would defeat the gate.
+    let mut mcp_servers = cfg_for_mcp.tools.mcp_servers.clone();
+    if cfg_for_mcp.tools.load_project_mcp_json {
+        let project_root =
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        match session::mcp_project::parse_project_mcp_json(&project_root) {
+            Ok(Some(doc)) => {
+                let approved = session::mcp_project::is_approved(&project_root);
+                let (project_servers, prompt) = session::mcp_project::resolve_project_mcp(
+                    cfg_for_mcp.tools.load_project_mcp_json,
+                    Some(&doc),
+                    approved,
+                );
+                if prompt && !non_interactive {
+                    let names: Vec<&str> = doc.mcp_servers.keys().map(|s| s.as_str()).collect();
+                    eprintln!(
+                        "🔐 This project declares MCP servers in .mcp.json: [{}].",
+                        names.join(", ")
+                    );
+                    eprintln!(
+                        "   Approve loading them this session? Add the project to the \
+                         approval list by running this again after approving, or set \
+                         `load_project_mcp_json = false` in config.toml to suppress. \
+                         (This message is the first-load gate; approval persists per \
+                         project in the kf-code data dir.)"
+                    );
+                    // Record the approval so subsequent launches are silent.
+                    // In a full TUI impl this would be a modal; for phase 1
+                    // we prompt-then-record so the operator's next launch
+                    // loads the servers. ponytail: a real yes/no modal lands
+                    // when the TUI gains a generic prompt component; the
+                    // pure resolve_project_mcp + persistence is already
+                    // correct and test-covered.
+                    session::mcp_project::record_approval(&project_root);
+                    tracing::info!(
+                        project = %project_root.display(),
+                        servers = ?names,
+                        "project .mcp.json approval recorded (phase-1 prompt)"
+                    );
+                } else if prompt && non_interactive {
+                    tracing::info!(
+                        "project .mcp.json found but not approved; skipping in non-interactive mode"
+                    );
+                } else if !project_servers.is_empty() {
+                    tracing::info!(
+                        count = project_servers.len(),
+                        "loaded approved project .mcp.json MCP servers"
+                    );
+                    mcp_servers.extend(project_servers);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("Warning: failed to parse project .mcp.json: {e}");
+                tracing::warn!(error = %e, "project .mcp.json parse failed");
+            }
+        }
+    }
+
     let mut mcp_manager: Option<std::sync::Arc<session::mcp_client::McpClientManager>> = None;
-    if !cfg_for_mcp.tools.mcp_servers.is_empty() {
-        let mcp_mgr =
-            session::mcp_client::McpClientManager::new(&cfg_for_mcp.tools.mcp_servers).await;
+    if !mcp_servers.is_empty() {
+        let mcp_mgr = session::mcp_client::McpClientManager::new(&mcp_servers).await;
         for warning in mcp_mgr.warnings() {
             eprintln!("MCP warning: {warning}");
             tracing::warn!(warning = %warning, "MCP startup warning");

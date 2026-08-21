@@ -566,6 +566,24 @@ async fn test_mid_batch_checkpoint_persists_partial_results() {
     turn_handle.abort();
     let _ = turn_handle.await;
 
+    // The checkpoint may not have landed yet (WO 38.9 removed per-tool
+    // checkpoints; the post-batch checkpoint can race the abort). Poll
+    // for the checkpoint file to appear before asserting on restored
+    // messages — this is structural (wait for the event we assert on),
+    // not a wall-clock margin.
+    let ckpt_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let (restored, _) = ConversationLog::open(log_path.clone()).unwrap();
+        let has_done = restored
+            .all()
+            .iter()
+            .any(|m| m.role == Role::Tool && m.content == "done");
+        if has_done || std::time::Instant::now() > ckpt_deadline {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
     let (restored, _outcome) = ConversationLog::open(log_path.clone()).unwrap();
 
     let msgs = restored.all();

@@ -621,6 +621,15 @@ pub async fn run_tui(
 
     // Spawn the executor on a background task
     let (conversation_log, open_outcome) = conversation;
+    // WO 38.6: surface StartedEmpty in the TUI with a banner naming the
+    // corrupt original path, mirroring the Restored banner emitted via
+    // TurnEvent::Recovered. The pre-TUI eprintln from run_session is lost
+    // when the alternate screen takes over, so the TUI needs its own notice.
+    let started_empty_banner = matches!(
+        open_outcome,
+        crate::session::conversation::OpenOutcome::StartedEmpty
+    )
+    .then(|| state.session.log_path.clone());
     let event_tx_for_commands = event_tx.clone();
     let mut handle = spawn_executor(
         adapter,
@@ -647,6 +656,16 @@ pub async fn run_tui(
         plan_rx,
         plugin_reload_rx,
     );
+
+    if let Some(path) = started_empty_banner {
+        let display = path
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(path unknown)".to_string());
+        state.conversation.messages.push_back(ConversationEntry::new(
+            "system",
+            format!("⚠️ Session log was corrupt and had no usable checkpoint; started a new empty session. The corrupt original was left in place at {display} for manual recovery."),
+        ));
+    }
 
     // Slow-tick: drives time-based UI elements (spinner, 8Hz status bar).
     let mut slow_tick = tokio::time::interval(std::time::Duration::from_millis(125));

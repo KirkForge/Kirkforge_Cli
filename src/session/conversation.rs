@@ -57,8 +57,19 @@ impl ConversationLog {
                 if corrupt {
                     tracing::warn!(
                         path = %path.display(),
-                        "conversation log contained corrupt lines; keeping valid messages"
+                        "conversation log contained corrupt lines; healing file from valid messages"
                     );
+                    // Heal: atomically rewrite the log from the valid messages
+                    // so the torn tail is gone before any append can fuse onto
+                    // it. A crash here leaves the original corrupt log intact
+                    // (write_atomic uses temp + rename).
+                    if let Err(e) = Self::write_atomic_static(&path, &loaded) {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "failed to heal corrupt conversation log; leaving original in place"
+                        );
+                    }
                 }
                 (loaded, OpenOutcome::Loaded)
             } else if corrupt {
@@ -728,6 +739,61 @@ mod tests {
         assert_eq!(outcome, OpenOutcome::Loaded);
         assert_eq!(restored.len(), 1);
         assert_eq!(restored.last().unwrap().content, "first");
+    }
+
+    /// WO 38.6: opening a log with a torn final line must HEAL the file on
+    /// disk — atomically rewrite it from the valid messages so the torn
+    /// fragment is gone. Without the heal, the next `append` (O_APPEND, no
+    /// leading newline) would fuse onto the fragment and permanently
+    /// corrupt both the crashed message and the next one.
+    #[test]
+    fn test_open_heals_torn_final_line_on_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("heal-test.conv.ndjson");
+
+        let first = r#"{"role":"user","content":"first"}"#;
+        let second = r#"{"role":"assistant","content":"second"}"#;
+        // Torn tail: a partial JSON fragment with no terminating newline.
+        let torn = r#"{"role":"user","content":"partia"#;
+        std::fs::write(&path, format!("{first}\n{second}\n{torn}")).unwrap();
+
+        let (log, outcome) = ConversationLog::open(path.clone()).unwrap();
+        assert_eq!(outcome, OpenOutcome::Loaded);
+        assert_eq!(log.len(), 2, "two valid messages must survive the heal");
+
+        // The file on disk must now contain exactly the two valid lines,
+        // each terminated by a newline, with the torn fragment gone.
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            on_disk.lines().count(),
+            2,
+            "torn tail must be gone from disk"
+        );
+        assert!(on_disk.contains("first"));
+        assert!(on_disk.contains("second"));
+        assert!(
+            !on_disk.contains("partia"),
+            "torn fragment must not survive heal"
+        );
+        assert!(
+            on_disk.ends_with('\n'),
+            "healed file must end with a newline"
+        );
+
+        // Critical regression guard: a subsequent append must NOT fuse onto a
+        // residual fragment. If the heal had left the torn tail in place, the
+        // next append would write `{new}\n` starting mid-line and the new
+        // message would be permanently unparseable on reload.
+        let (mut log, _) = ConversationLog::open(path.clone()).unwrap();
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "third".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let (reopened, _) = ConversationLog::open(path).unwrap();
+        assert_eq!(reopened.len(), 3, "append after heal must parse cleanly");
+        assert_eq!(reopened.all()[2].content, "third");
     }
 
     /// Edge case: a log file containing only whitespace is treated as empty

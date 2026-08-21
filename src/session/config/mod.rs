@@ -54,6 +54,7 @@
 /// `false`/`0`/`no` for false. Unrecognized values leave the prior layer
 /// unchanged.
 use crate::shared::Config;
+use anyhow::Context;
 use std::path::PathBuf;
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -249,13 +250,32 @@ pub fn load_or_create_config() -> Config {
 }
 
 /// Save config to disk.
+///
+/// Atomic: writes to a temp file, fsyncs, then renames over the target
+/// (WO 38.6). A crash mid-write leaves the original config intact instead
+/// of a truncated file that would load as all defaults and permanently
+/// erase the user's config on the next save.
 pub fn save_config(config: &Config) -> anyhow::Result<()> {
     let path = super::config_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let content = toml::to_string_pretty(config)?;
-    std::fs::write(&path, content)?;
+    let tmp = path.with_extension("toml.tmp");
+    {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&tmp)
+            .with_context(|| format!("create temporary config {}", tmp.display()))?;
+        file.write_all(content.as_bytes())
+            .with_context(|| format!("write temporary config {}", tmp.display()))?;
+        file.sync_all()?;
+    }
+    crate::tools::atomic_write::rename_with_retry(&tmp, &path)
+        .with_context(|| format!("commit config from {} to {}", tmp.display(), path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -2649,5 +2669,71 @@ mod tests {
         assert!((p.output_per_mtok - 2.0).abs() < 1e-9);
         assert!((p.cache_write_per_mtok - 1.25).abs() < 1e-9);
         assert!((p.cache_read_per_mtok - 0.1).abs() < 1e-9);
+    }
+
+    /// WO 38.6: `save_config` must be atomic — write to a temp file, fsync,
+    /// then rename over the target. A crash mid-write leaves the original
+    /// intact. This test verifies (a) a successful save produces complete
+    /// content at the target with no `.toml.tmp` leftover, and (b) a stale
+    /// `.toml.tmp` from a previously crashed save is cleaned up (truncated +
+    /// rewritten) rather than corrupting the new save.
+    #[test]
+    fn save_config_atomic_leaves_no_temp_and_cleans_stale_tmp() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = std::env::temp_dir().join(format!(
+            "kf_code_atomic_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let _env =
+            crate::shared::test_util::EnvGuard::set("KF_CODE_DATA_DIR", dir.to_str().unwrap());
+        let path = super::super::config_path();
+
+        // Seed an original config so we can prove a successful save replaces it
+        // atomically (not by truncating it mid-write).
+        let original = "ollama_host = \"http://original:1111\"\n";
+        std::fs::write(&path, original).unwrap();
+
+        // Simulate a previously-crashed save that left a stale partial temp.
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, "PARTIAL TORN WRITE").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.model.ollama_host = "http://new-host:2222".into();
+        save_config(&cfg).unwrap();
+
+        // The target must now hold the new complete content.
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("http://new-host:2222"),
+            "save_config must write the new config, got:\n{on_disk}"
+        );
+        assert!(
+            !on_disk.contains("PARTIAL TORN WRITE"),
+            "stale temp content must not leak into the target"
+        );
+
+        // No temp file must linger after a successful save.
+        assert!(
+            !tmp.exists(),
+            "save_config must remove the temp file after rename"
+        );
+
+        // The original content is gone (replaced atomically), confirming the
+        // rename happened — if save had used std::fs::write directly, a crash
+        // between truncate and write would have left an empty/partial file.
+        assert!(
+            !on_disk.contains("http://original:1111"),
+            "original content must be replaced, got:\n{on_disk}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

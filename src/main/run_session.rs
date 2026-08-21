@@ -228,6 +228,13 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         let warn_icon = line_mode::symbol(no_color, "⚠️");
         let warn_sep = if warn_icon.is_empty() { "" } else { " " };
         eprintln!("{warn_icon}{warn_sep}Session log was corrupt; restored {messages} message(s) from checkpoint.");
+    } else if let session::conversation::OpenOutcome::StartedEmpty = open_outcome {
+        let warn_icon = line_mode::symbol(no_color, "⚠️");
+        let warn_sep = if warn_icon.is_empty() { "" } else { " " };
+        eprintln!(
+            "{warn_icon}{warn_sep}Session log was corrupt and had no usable checkpoint; started a new empty session. The corrupt original was left in place at {} for manual recovery.",
+            log_path.display()
+        );
     }
 
     // ── Turn trace recorder ──

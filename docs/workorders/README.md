@@ -774,8 +774,8 @@ See [WO 38.0](38.0-wo38-overview.md). WO 39 carries the strategic half.
 | 38.8 | [Wire the budget guard (thesis)](38.8-budget-guard-wiring.md) | Done | P1 |
 | 38.9 | [Long-session performance](38.9-session-performance.md) | Pending | P1 |
 | 38.10 | [CLI first-run + scriptability](38.10-cli-first-run.md) | Done (P0 + P1 core; P2 deferred) | P1 |
-| 38.11 | [TUI state hygiene](38.11-tui-state-hygiene.md) | Pending | P1 |
-| 38.12 | [Test hygiene completion](38.12-test-hygiene.md) | Pending | P2 |
+| 38.11 | [TUI state hygiene](38.11-tui-state-hygiene.md) | Done | P1 |
+| 38.12 | [Test hygiene completion](38.12-test-hygiene.md) | Done | P2 |
 | 38.13 | [Docs truth pass + WO reconcile](38.13-docs-truth-pass.md) | Done | P1 |
 
 ### Series 39 — Prove the thesis, borrow the ecosystem

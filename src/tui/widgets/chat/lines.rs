@@ -276,7 +276,10 @@ pub(super) fn tool_card_lines(
         .tool_output
         .as_deref()
         .unwrap_or(entry.content.as_str());
-    let body_width = content_width.saturating_sub(4);
+    // `.max(1)`: textwrap with width 0 returns an empty string and
+    // silently drops the body; a tiny pane can drive the
+    // saturating_sub(4) to 0 (WO 38.11).
+    let body_width = content_width.saturating_sub(4).max(1);
     let border_style = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::DIM);
@@ -382,7 +385,10 @@ pub(super) fn render_entry_lines(
             lines.push(Line::from(padded));
         }
     } else {
-        let wrapped = textwrap::fill(&entry.content, content_width);
+        // `.max(1)`: textwrap with width 0 returns an empty string and
+        // silently drops the message body; a tiny pane can drive the
+        // content_width to 0 (WO 38.11).
+        let wrapped = textwrap::fill(&entry.content, content_width.max(1));
         for content_line in wrapped.lines() {
             let mut spans = vec![Span::raw(" ")];
             spans.extend(highlight_line_spans(
@@ -521,7 +527,10 @@ pub(super) fn build_chat_lines(
 
     // Inline thinking block.
     if state.generation.thinking_panel_visible && !state.generation.thinking_buffer.is_empty() {
-        let thinking_width = content_width.saturating_sub(4);
+        // `.max(1)`: textwrap with width 0 returns an empty string and
+        // silently drops the thinking text; a tiny pane can drive the
+        // saturating_sub(4) to 0 (WO 38.11).
+        let thinking_width = content_width.saturating_sub(4).max(1);
         let border_style = Style::default()
             .fg(Color::Magenta)
             .add_modifier(Modifier::DIM);

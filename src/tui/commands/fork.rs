@@ -180,6 +180,12 @@ pub async fn resume_conversation_log(
     state.generation.thinking_buffer.clear();
     state.approval.pending_approval = None;
     state.conversation.expanded_tools.clear();
+    // The message list was just swapped to a different session's
+    // history. Render-cache slots are keyed on (idx, version); the
+    // new entries have version=0 and the slots still hold the prior
+    // session's renders. Drop the cache so the chat panel shows the
+    // resumed history, not the stale pre-swap lines (WO 38.11).
+    state.conversation.chat_render_cache.clear_entries();
     state.session.notified_jobs.clear();
     state.session.notified_scheduled_runs.clear();
     state.budget.last_turn_prompt_tokens = 0;

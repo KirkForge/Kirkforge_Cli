@@ -260,8 +260,11 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
             // Join all thinking tokens into one string before wrapping —
             // the buffer is Vec<String> of individual streaming tokens, not
             // paragraphs. Without joining, each token gets its own line.
+            // `.max(1)`: textwrap with width 0 returns an empty string,
+            // silently dropping the content; a tiny pane can drive the
+            // saturating_sub to 0 (WO 38.11).
             let joined = state.generation.thinking_buffer.join("");
-            for line in textwrap::fill(&joined, content_width).lines() {
+            for line in textwrap::fill(&joined, content_width.max(1)).lines() {
                 lines.push(Line::from(vec![
                     Span::styled("    │ ", border_style),
                     Span::styled(line.to_string(), body_style),
@@ -348,10 +351,20 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Blue));
 
+    // ponytail: ratatui 0.30's `Paragraph::scroll` takes a `u16` offset.
+    // A conversation with >65_535 wrapped lines silently wraps the view
+    // back to the top while the "↓ N more lines below" indicator keeps
+    // claiming there's content below. Clamp to u16::MAX so the view
+    // pins to the bottom (the common case for auto-scroll) instead of
+    // wrapping; the user loses the ability to scroll above 65_535 but
+    // that's a degenerate pane state. Ceiling: u16::MAX ≈ 65_535 rows.
+    // Upgrade path: ratatui 0.31+ exposes `scroll((u32, u32))`; bump
+    // when we move off 0.30. Tracked in WO 38.11.
+    let scroll_u16 = state.conversation.scroll_offset.min(u16::MAX as usize) as u16;
     let paragraph = Paragraph::new(text)
         .block(block)
         .wrap(Wrap { trim: false })
-        .scroll((state.conversation.scroll_offset as u16, 0));
+        .scroll((scroll_u16, 0));
 
     f.render_widget(paragraph, area);
 }

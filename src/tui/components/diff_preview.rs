@@ -121,7 +121,7 @@ fn format_write_file_diff(
 }
 
 /// Line-level statistics for a file edit preview.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Clone)]
 pub struct DiffStats {
     /// Lines that will be added.
     pub added: usize,

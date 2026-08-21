@@ -105,14 +105,88 @@ pub fn render_approval_dialog(
     // lines are plain white. We pack both into a single
     // `Vec<Line>` so the existing scroll/clamp code works
     // unchanged.
-    let args_lines = format_args_preview(approval, dialog_width as usize);
-    let mut visible_lines: Vec<Line> = args_lines
-        .iter()
-        .map(|s| Line::from(Span::styled(s.as_str(), Style::default().fg(Color::White))))
-        .collect();
+    //
+    // WO 38.11: memoize the computation. The dialog re-reads +
+    // re-diffs the target file every frame at 8 Hz otherwise; for a
+    // large edit on a slow disk that's a visible CPU spike. The
+    // cache is keyed on `(tool_name, args JSON, side_by_side,
+    // dialog_width, file mtime)` and stores the flattened
+    // visible-line strings + diff stats + is_outside_cwd. The
+    // styling is re-applied on a hit (cheap prefix checks), so the
+    // cache only needs the strings.
+    let args_json = serde_json::to_string(&approval.args).unwrap_or_default();
+    let path = approval
+        .args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|d| d.canonicalize().ok());
+    // Probe the file mtime for the cache key. `None` when the path
+    // isn't a file field or the stat fails — the cache still works,
+    // it just invalidates on every render for that case (no worse
+    // than the prior behavior).
+    let file_mtime = approval
+        .args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .and_then(|p| {
+            let permitted = cwd.as_ref().is_some_and(|base| {
+                std::path::Path::new(p)
+                    .canonicalize()
+                    .map(|canon| canon.starts_with(base))
+                    .unwrap_or(false)
+            });
+            if permitted {
+                std::fs::metadata(p).ok().and_then(|m| m.modified().ok())
+            } else {
+                None
+            }
+        });
 
-    // Try to add a diff section. The reader callback resolves the
-    // file path to its current bytes; we only attach a diff if the
+    if state.approval.approval_diff_cache.matches(
+        &approval.tool_name,
+        &args_json,
+        use_side_by_side,
+        dialog_width,
+        file_mtime,
+    ) {
+        // Cache hit — rebuild the styled lines from the cached
+        // strings. The coloring is a pure function of the line
+        // prefix, so we re-apply it here (cheap) instead of caching
+        // ratatui `Line` types (which would couple the cache to the
+        // render backend). Clone the cache data out of state so the
+        // mutable borrow for the render call doesn't conflict.
+        let cache = state.approval.approval_diff_cache.clone();
+        let visible_lines: Vec<Line> = cache
+            .visible_lines
+            .iter()
+            .map(|s| {
+                let color = line_color(s);
+                Line::from(Span::styled(s.clone(), Style::default().fg(color)))
+            })
+            .collect();
+        render_approval_dialog_from_lines(
+            f,
+            dialog_area,
+            block,
+            inner,
+            area,
+            approval,
+            path,
+            visible_lines,
+            cache.diff_stats,
+            cache.is_outside_cwd,
+            state,
+            use_side_by_side,
+            args_window_height,
+        );
+        return;
+    }
+
+    // Cache miss — compute the full diff. The reader callback resolves
+    // the file path to its current bytes; we only attach a diff if the
     // tool is `edit_file` / `write_file` (other tools return
     // `Vec::new()` from the formatter).
     // Only read files inside the working directory; a malicious model could
@@ -127,9 +201,6 @@ pub fn render_approval_dialog(
     // every in-CWD edit as DANGEROUS and suppress the diff preview.
     // Canonicalizing the base gives both sides the same prefix on Windows;
     // on Unix it is a no-op for an already-absolute path.
-    let cwd = std::env::current_dir()
-        .ok()
-        .and_then(|d| d.canonicalize().ok());
     let reader = |p: &str| {
         let permitted = cwd.as_ref().is_some_and(|base| {
             std::path::Path::new(p)
@@ -143,11 +214,6 @@ pub fn render_approval_dialog(
             None
         }
     };
-    let path = approval
-        .args
-        .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("-");
     let diff_stats = crate::tui::components::diff_preview::diff_stats(approval, &reader);
     let is_outside_cwd = match approval.tool_name.as_str() {
         "edit_file" | "write_file" => cwd.as_ref().is_some_and(|base| {
@@ -158,6 +224,13 @@ pub fn render_approval_dialog(
         }),
         _ => false,
     };
+
+    let args_lines = format_args_preview(approval, dialog_width as usize);
+    let mut visible_lines: Vec<Line> = args_lines
+        .iter()
+        .map(|s| Line::from(Span::styled(s.clone(), Style::default().fg(Color::White))))
+        .collect();
+    let mut flat_lines: Vec<String> = args_lines.clone();
 
     let diff_lines = crate::tui::components::diff_preview::format_edit_diff_preview(
         approval,
@@ -177,7 +250,12 @@ pub fn render_approval_dialog(
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )));
-            visible_lines.extend(side_lines);
+            flat_lines.push(" ── Side-by-side diff ──".to_string());
+            for dl in &side_lines {
+                let flat: String = dl.spans.iter().map(|s| s.content.as_ref()).collect();
+                visible_lines.push(dl.clone());
+                flat_lines.push(flat);
+            }
         }
     } else if !diff_lines.is_empty() {
         // Separator between args and diff.
@@ -187,24 +265,83 @@ pub fn render_approval_dialog(
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )));
+        flat_lines.push(" ── Diff preview ──".to_string());
         for dl in &diff_lines {
-            let color = if dl.starts_with("+ ") && !dl.starts_with("+++") {
-                Color::Green
-            } else if dl.starts_with("- ") && !dl.starts_with("---") {
-                Color::Red
-            } else if dl.starts_with("+++") {
-                Color::Green
-            } else if dl.starts_with("---") {
-                Color::Red
-            } else {
-                Color::White
-            };
+            let color = line_color(dl);
             visible_lines.push(Line::from(Span::styled(
-                dl.as_str(),
+                dl.clone(),
                 Style::default().fg(color),
             )));
+            flat_lines.push(dl.clone());
         }
     }
+
+    // Store the cache for next frame.
+    state.approval.approval_diff_cache = crate::tui::app::ApprovalDiffCache {
+        key_tool: approval.tool_name.clone(),
+        key_args_json: args_json,
+        key_side_by_side: use_side_by_side,
+        key_dialog_width: dialog_width,
+        key_mtime: file_mtime,
+        visible_lines: flat_lines,
+        diff_stats: diff_stats.clone(),
+        is_outside_cwd,
+    };
+
+    render_approval_dialog_from_lines(
+        f,
+        dialog_area,
+        block,
+        inner,
+        area,
+        approval,
+        path,
+        visible_lines,
+        diff_stats,
+        is_outside_cwd,
+        state,
+        use_side_by_side,
+        args_window_height,
+    );
+}
+
+/// Color a flat diff line by its prefix. Extracted so the cache-hit
+/// path can re-apply styling without re-running the diff.
+fn line_color(s: &str) -> Color {
+    if s.starts_with("+ ") && !s.starts_with("+++") {
+        Color::Green
+    } else if s.starts_with("- ") && !s.starts_with("---") {
+        Color::Red
+    } else if s.starts_with("+++") {
+        Color::Green
+    } else if s.starts_with("---") {
+        Color::Red
+    } else {
+        Color::White
+    }
+}
+
+/// Render the approval dialog from a pre-computed `visible_lines`
+/// list. Split out of `render_approval_dialog` so the cache-hit path
+/// and the cache-miss path share the layout/scroll/indicator logic.
+#[allow(clippy::too_many_arguments)]
+fn render_approval_dialog_from_lines(
+    f: &mut Frame,
+    dialog_area: Rect,
+    block: Block<'static>,
+    inner: Rect,
+    area: Rect,
+    approval: &PendingApproval,
+    path: &str,
+    visible_lines: Vec<Line<'static>>,
+    diff_stats: Option<crate::tui::components::diff_preview::DiffStats>,
+    is_outside_cwd: bool,
+    state: &mut AppState,
+    _use_side_by_side: bool,
+    args_window_height: usize,
+) {
+    let dialog_width = dialog_area.width;
+    let _ = dialog_width;
     let all_lines: Vec<String> = visible_lines
         .iter()
         .map(|l| {

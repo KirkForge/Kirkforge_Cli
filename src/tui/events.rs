@@ -173,6 +173,13 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
         }
         TurnEvent::Thinking(t) => {
             state.generation.thinking_buffer.push(t);
+            // Bound the buffer: long reasoning-model sessions emit
+            // thousands of chunks and the render path joins + re-wraps
+            // the whole thing every frame. Drop the oldest chunks
+            // until the joined byte length is under the tail budget.
+            // The latest reasoning is what the user wants visible;
+            // the head is stale context (WO 38.11).
+            trim_thinking_buffer_tail(&mut state.generation.thinking_buffer);
         }
         TurnEvent::ToolStart { name, args: _ } => {
             state.generation.is_generating = false; // turn ended (tool call)
@@ -225,7 +232,23 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 ));
         }
         TurnEvent::Error(e) => {
+            // A transport/parse failure ends the turn just like
+            // TurnComplete, but the prior arm only cleared
+            // `is_generating`. That left `continuation` stuck in the
+            // status bar ("⟳ 3/5" after the round that errored) and
+            // the `streaming` flag lit on the partial assistant
+            // entry, so the card kept rendering a spinner forever.
+            // Mirror TurnComplete's cleanup so the UI reflects the
+            // real terminal state (WO 38.11).
             state.generation.is_generating = false;
+            state.generation.turn_tool_calls = 0;
+            state.generation.continuation = None;
+            for msg in &mut state.conversation.messages {
+                if msg.role == "assistant" {
+                    msg.streaming = false;
+                    msg.bump_version();
+                }
+            }
             state
                 .conversation
                 .messages
@@ -361,6 +384,13 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             ));
             state.conversation.messages = rebuilt;
             state.conversation.expanded_tools.clear();
+            // The render cache is keyed on (idx, entry.version). The
+            // rebuild above replaced every entry with a fresh
+            // `ConversationEntry` (version=0); cache slots still hold
+            // the OLD (version, lines) for the slot's position. Without
+            // invalidation, the chat panel serves pre-compaction lines
+            // at the new indices (WO 38.11).
+            state.conversation.chat_render_cache.clear_entries();
             // Search match indices are also tied to the old message
             // list; clear them so a committed search doesn't jump to
             // a stale or non-existent index after compaction.
@@ -429,7 +459,31 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             if let Some(last) = state.conversation.messages.back_mut() {
                 if last.role == "tool" {
                     last.streaming = true;
+                    // Bound the streaming card: a `watch`/`top`/long
+                    // ping balloons `content` and the render path
+                    // re-wraps the whole string every frame. Keep the
+                    // tail under 64 KiB and surface a byte-count
+                    // marker so the user sees `… [N bytes total,
+                    // showing last 64K]` instead of silent loss. The
+                    // full output still lands in `tool_output` when
+                    // `ToolResult` finalizes the entry (WO 38.11).
+                    const PTY_TAIL_BYTES: usize = 64 * 1024;
                     last.content.push_str(&chunk);
+                    if last.content.len() > PTY_TAIL_BYTES {
+                        let total = last.content.len();
+                        let start = total - PTY_TAIL_BYTES;
+                        // Cut on a char boundary so we don't split a
+                        // multi-byte UTF-8 sequence.
+                        let start = last.content[start..]
+                            .char_indices()
+                            .next()
+                            .map(|(i, _)| start + i)
+                            .unwrap_or(start);
+                        let tail = last.content[start..].to_string();
+                        last.content = format!(
+                            "… [{total} bytes total, showing last {PTY_TAIL_BYTES}]\n{tail}"
+                        );
+                    }
                     last.bump_version();
                     state.mark_dirty();
                 }
@@ -494,6 +548,43 @@ fn estimate_messages_tokens(messages: &[crate::shared::Message]) -> usize {
 const MAX_DISPLAY_MESSAGES: usize = 2000;
 /// How many messages to retain after a prune (keeps the most recent ones).
 const KEEP_DISPLAY_MESSAGES: usize = 1500;
+/// Tail byte budget for the thinking buffer. The render path joins +
+/// re-wraps the whole buffer every frame; an unbounded buffer on a
+/// long reasoning-model session is both a memory leak and an O(total)
+/// per-frame cost. 32 KiB keeps the latest reasoning visible without
+/// blowing up. Ponytail: ceiling — if users want full reasoning
+/// history, surface it via a sidecar file instead of holding it in
+/// the live TUI state.
+const THINKING_TAIL_BYTES: usize = 32 * 1024;
+
+/// Trim the thinking buffer from the front until the joined byte
+/// length fits under `THINKING_TAIL_BYTES`. Keeps the most recent
+/// chunks (the reasoning the user is currently watching) and drops
+/// the oldest. Cheap: only runs when the budget is exceeded, and the
+/// joined length is recomputed via a single pass.
+fn trim_thinking_buffer_tail(buf: &mut Vec<String>) {
+    if buf.is_empty() {
+        return;
+    }
+    let total: usize = buf.iter().map(|s| s.len()).sum();
+    if total <= THINKING_TAIL_BYTES {
+        return;
+    }
+    // Drop from the front until we're under budget. We keep at least
+    // one chunk so the panel never shows an empty buffer mid-stream.
+    let mut kept_bytes = total;
+    let mut drop_to = 0;
+    for (i, s) in buf.iter().enumerate() {
+        if kept_bytes <= THINKING_TAIL_BYTES || i + 1 == buf.len() {
+            break;
+        }
+        kept_bytes -= s.len();
+        drop_to = i + 1;
+    }
+    if drop_to > 0 {
+        buf.drain(0..drop_to);
+    }
+}
 
 pub fn drain_turn_events(
     state: &mut AppState,
@@ -554,6 +645,13 @@ fn prune_display_messages(state: &mut AppState) {
         .iter()
         .filter_map(|&i| remap(i))
         .collect();
+    // The drain above re-indexed every kept entry to a lower slot.
+    // Cache slots still hold the OLD (version, lines) for the
+    // pre-prune positions; the (idx, version) guard can match by
+    // coincidence when a shifted-down entry happens to share a
+    // version with the slot's prior occupant. Drop the cache so the
+    // next render repopulates from the new indices (WO 38.11).
+    state.conversation.chat_render_cache.clear_entries();
     // Search indices reference old message positions — clear and let next search recompute.
     state.search.matches.clear();
     state.search.match_idx = 0;
@@ -920,6 +1018,161 @@ mod tests {
             .unwrap()
             .content
             .contains("timeout"));
+    }
+
+    /// WO 38.11: `TurnEvent::Error` must clear stale `continuation`
+    /// and `streaming` flags, mirroring `TurnComplete`. Otherwise a
+    /// continuation round that errored leaves "⟳ 3/5" stuck in the
+    /// status bar and the partial assistant entry keeps rendering a
+    /// spinner forever.
+    #[test]
+    fn error_clears_continuation_and_streaming_flags() {
+        let mut s = app_state();
+        // Simulate a streaming turn mid-continuation.
+        dispatch_turn_event(&mut s, TurnEvent::Token("partial".into()));
+        s.generation.continuation = Some((3, 5));
+        s.generation.turn_tool_calls = 4;
+        assert!(s.conversation.messages[0].streaming);
+        assert!(s.generation.is_generating);
+        // The error ends the turn.
+        dispatch_turn_event(&mut s, TurnEvent::Error("transport".into()));
+        assert!(!s.generation.is_generating);
+        assert!(
+            s.generation.continuation.is_none(),
+            "continuation must clear"
+        );
+        assert_eq!(
+            s.generation.turn_tool_calls, 0,
+            "tool-call counter must reset"
+        );
+        assert!(
+            !s.conversation.messages[0].streaming,
+            "streaming flag on the partial assistant must clear"
+        );
+    }
+
+    /// WO 38.11: the thinking buffer is bounded to a tail byte
+    /// budget. Long reasoning-model sessions emit thousands of
+    /// chunks; without trimming the buffer grows unbounded and the
+    /// render path re-wraps the whole thing every frame. After the
+    /// budget is exceeded, the oldest chunks are dropped and the
+    /// most recent (what the user is watching) are kept.
+    #[test]
+    fn thinking_buffer_is_bounded_to_tail_budget() {
+        let mut s = app_state();
+        // Push 100 chunks of 1 KiB each = 100 KiB total, well over
+        // the 32 KiB budget.
+        let chunk = "x".repeat(1024);
+        for _ in 0..100 {
+            dispatch_turn_event(&mut s, TurnEvent::Thinking(chunk.clone()));
+        }
+        let total: usize = s.generation.thinking_buffer.iter().map(|s| s.len()).sum();
+        assert!(
+            total <= super::THINKING_TAIL_BYTES + 1024,
+            "buffer should be bounded to ~{} bytes, got {total}",
+            super::THINKING_TAIL_BYTES
+        );
+        // The buffer must still hold the most recent chunks (the
+        // tail), not be empty.
+        assert!(
+            !s.generation.thinking_buffer.is_empty(),
+            "buffer must retain the tail, not be emptied"
+        );
+        // The last chunk should be the most recent one we pushed.
+        let last = s.generation.thinking_buffer.last().unwrap();
+        assert_eq!(last.len(), 1024);
+    }
+
+    /// WO 38.11: a streaming PTY tool card is capped to a tail byte
+    /// budget with a byte-count marker. A `watch`/`top`-style command
+    /// balloons `entry.content` without limit otherwise; the render
+    /// path re-wraps the full string every frame. After the cap, the
+    /// content shows a truncation marker + the tail.
+    #[test]
+    fn bash_partial_output_caps_streaming_card_to_tail_budget() {
+        let mut s = app_state();
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({"cmd": "top"}),
+            },
+        );
+        // Push 100 KiB of output — well over the 64 KiB cap.
+        let chunk = "y".repeat(1024);
+        for _ in 0..100 {
+            dispatch_turn_event(&mut s, TurnEvent::BashPartialOutput(chunk.clone()));
+        }
+        let entry = &s.conversation.messages[0];
+        assert!(entry.streaming, "entry must stay streaming");
+        assert!(
+            entry.content.contains("bytes total, showing last"),
+            "capped content should show the byte-count marker, got: {}...",
+            &entry.content[..200.min(entry.content.len())]
+        );
+        // The content should be roughly the cap + marker, not 100 KiB.
+        assert!(
+            entry.content.len() < 70_000,
+            "capped content should be under ~70 KiB, got {}",
+            entry.content.len()
+        );
+    }
+
+    /// WO 38.11: `CompactionReport` clears the chat render cache.
+    /// Without invalidation, the cache slots hold the pre-compaction
+    /// renders and the chat panel serves stale lines at the new
+    /// indices.
+    #[test]
+    fn compaction_clears_chat_render_cache() {
+        let mut s = app_state();
+        // Populate the cache with a dummy entry so we can detect
+        // the clear.
+        s.conversation
+            .chat_render_cache
+            .entries
+            .push(Some((42, Vec::new())));
+        assert_eq!(s.conversation.chat_render_cache.entries.len(), 1);
+        let new_messages = vec![msg(Role::User, "hi"), msg(Role::Assistant, "hello")];
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::CompactionReport {
+                new_messages,
+                dropped_tool_results: 0,
+                condensed_assistant_turns: 0,
+                original_count: 10,
+                compacted_count: 2,
+                tokens_before: 100,
+                tokens_after: 2,
+            },
+        );
+        assert!(
+            s.conversation.chat_render_cache.entries.is_empty(),
+            "CompactionReport must clear the render cache"
+        );
+    }
+
+    /// WO 38.11: `prune_display_messages` clears the chat render
+    /// cache. The drain re-indexes kept entries to lower slots; cache
+    /// slots still hold the pre-prune renders and can match by
+    /// coincidence.
+    #[test]
+    fn prune_clears_chat_render_cache() {
+        let mut s = app_state();
+        // Overfill past MAX_DISPLAY_MESSAGES so prune runs.
+        for i in 0..(super::MAX_DISPLAY_MESSAGES + 50) {
+            s.conversation
+                .messages
+                .push_back(ConversationEntry::new("user", format!("msg {i}")));
+        }
+        // Populate the cache so we can detect the clear.
+        s.conversation.chat_render_cache.entries =
+            vec![Some((1, Vec::new())); s.conversation.messages.len()];
+        assert!(!s.conversation.chat_render_cache.entries.is_empty());
+        super::prune_display_messages(&mut s);
+        assert!(
+            s.conversation.chat_render_cache.entries.is_empty(),
+            "prune_display_messages must clear the render cache"
+        );
     }
 
     /// `CostStats` accumulates the **cumulative** token counters

@@ -368,6 +368,23 @@ resets the tracker so the next failure starts a fresh run. The TUI is purely
 reactive: the executor owns the detector and emits a `TurnEvent::DoomLoopDetected`
 that the TUI's `dispatch_turn_event` translates into banner state.
 
+**TUI state hygiene** (WO 38.11): the chat render cache
+(`ChatRenderCache` on `ConversationState`) is invalidated at every
+message-list mutation site — `CompactionReport`, `prune_display_messages`,
+and fork-swap (`resume_conversation_log`) — so the panel never serves
+stale lines at re-indexed positions. The `thinking_buffer` is bounded
+to a 32 KiB tail budget (`trim_thinking_buffer_tail`); the render path
+joins + re-wraps only the tail each frame. Streaming PTY tool cards
+are capped to a 64 KiB tail with a byte-count marker. Chat scroll
+offset is clamped to `u16::MAX` (`ponytail:` ceiling — ratatui 0.30's
+`Paragraph::scroll` takes u16). The doom-loop banner captures keys
+above the approval dialog when unacknowledged, matching its z-order.
+`TurnEvent::Error` clears stale `continuation`/`streaming` flags. The
+approval dialog memoizes its diff on `(tool_name, args JSON,
+side_by_side, dialog_width, file mtime)` so it doesn't re-read +
+re-diff the file at 8 Hz. `textwrap::fill` width-0 is guarded with
+`.max(1)` at all render sites.
+
 **Doom-loop circuit breaker** (WO 23.8): after N cumulative doom-loop hits
 (default 1, configured via `doom_loop_max_hits` / `KF_CODE_DOOM_LOOP_MAX_HITS`),
 the executor auto-switches to plan mode (emitting `TurnEvent::DoomLoopRemediation`

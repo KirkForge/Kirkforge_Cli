@@ -1074,6 +1074,19 @@ async fn dispatch_kb_events<'a>(
     ) -> anyhow::Result<()> {
         // Any keystroke dismisses the "📋 pasted" title indicator (WO 30.0.11).
         state.ui.paste_flash = 0;
+        // Doom-loop banner takes key precedence over the approval
+        // dialog when unacknowledged. The banner is rendered ON TOP of
+        // the approval dialog (z-order: doom last in `render_app`), so
+        // keys must route to the banner too — otherwise Esc dismisses
+        // the approval (denying the tool call) instead of the banner,
+        // and arrow keys scroll the approval preview instead of moving
+        // the banner highlight. The banner handler no-ops when the
+        // banner is acknowledged or absent, so this is safe to run
+        // unconditionally (WO 38.11).
+        if doom_banner_is_active(state) {
+            keys::handle_input_key(key, state, key_ctx).await?;
+            return Ok(());
+        }
         if state.approval.pending_bang.is_some() {
             approval_keys::handle_bang_approval_key(key, state, key_ctx.bg_tx).await;
         } else if state.approval.pending_approval.is_some() {
@@ -1144,6 +1157,16 @@ fn drain_daemon_flags(state: &mut AppState) {
 
 #[cfg(not(unix))]
 fn drain_daemon_flags(_state: &mut AppState) {}
+
+/// True when the doom-loop banner is both present and unacknowledged —
+/// i.e. it is the topmost overlay and should capture keys. Mirrors the
+/// render predicate in `doom_banner::render_if_active` so key routing
+/// and z-order agree (WO 38.11).
+fn doom_banner_is_active(state: &AppState) -> bool {
+    state.doom.doom_loop.as_ref().is_some_and(|dl| {
+        dl.count >= crate::session::executor::DoomLoopTracker::THRESHOLD && !dl.acknowledged
+    })
+}
 
 fn render_frame(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,

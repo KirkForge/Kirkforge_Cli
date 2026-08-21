@@ -507,6 +507,55 @@ pub struct ApprovalState {
     pub approval_max_scroll: usize,
     /// Toggle between unified diff and side-by-side diff in the approval dialog.
     pub approval_diff_side_by_side: bool,
+    /// Memoized approval-dialog render (WO 38.11). The dialog
+    /// re-reads + re-diffs the target file every frame at 8 Hz
+    /// otherwise; for a large edit on a slow disk that's a visible
+    /// CPU spike. The cache is keyed on `(tool_name, args JSON,
+    /// side_by_side, dialog_width, file mtime)` and stores the
+    /// flattened visible-line list + diff stats. Invalidated
+    /// automatically when any key input changes.
+    pub approval_diff_cache: ApprovalDiffCache,
+}
+
+/// Cache for the approval dialog's diff/args render output.
+///
+/// The key fields are the inputs that, if unchanged, guarantee the
+/// rendered output is identical: the approval identity, the diff
+/// mode, the dialog width, and the on-disk mtime of the file the
+/// diff is computed against. `mtime` is `None` when the approval
+/// doesn't touch a file (e.g. `bash`), or `Some(0)` on Windows
+/// where `modified()` may be unavailable.
+#[derive(Default, Clone)]
+pub struct ApprovalDiffCache {
+    pub key_tool: String,
+    pub key_args_json: String,
+    pub key_side_by_side: bool,
+    pub key_dialog_width: u16,
+    pub key_mtime: Option<std::time::SystemTime>,
+    /// Cached flattened visible lines (args + diff), as strings.
+    pub visible_lines: Vec<String>,
+    /// Cached diff stats (added/deleted) if the approval is a file edit.
+    pub diff_stats: Option<crate::tui::components::diff_preview::DiffStats>,
+    /// Cached `is_outside_cwd` flag for the risk-tier coloring.
+    pub is_outside_cwd: bool,
+}
+
+impl ApprovalDiffCache {
+    /// True if the cache is valid for the given key inputs.
+    pub fn matches(
+        &self,
+        tool: &str,
+        args_json: &str,
+        side_by_side: bool,
+        dialog_width: u16,
+        mtime: Option<std::time::SystemTime>,
+    ) -> bool {
+        self.key_tool == tool
+            && self.key_args_json == args_json
+            && self.key_side_by_side == side_by_side
+            && self.key_dialog_width == dialog_width
+            && self.key_mtime == mtime
+    }
 }
 
 /// Tab UI state (WO 26.8).

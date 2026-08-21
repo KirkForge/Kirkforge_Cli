@@ -443,6 +443,20 @@ pub enum BenchCommand {
         #[arg(long, default_value = "benches/tasks")]
         tasks: PathBuf,
     },
+    /// Materialize task setup files into a workspace dir so external
+    /// agents (Codex, Claude Code, opencode) can run against them. One
+    /// subdir per task, each with `PROMPT.txt` + the setup files. Skips
+    /// kf-only tasks unless `--include-kf-only` is set. See WO 39.1.
+    ExportTasks {
+        /// Directory containing TOML task definitions.
+        #[arg(long, default_value = "benches/tasks")]
+        tasks: PathBuf,
+        /// Output directory to materialize task subdirs into.
+        dir: PathBuf,
+        /// Include kf-only tasks (excluded by default for cross-tool).
+        #[arg(long)]
+        include_kf_only: bool,
+    },
     /// Verify task definitions without running LLM.
     VerifyOnly {
         /// Directory containing TOML task definitions.
@@ -723,6 +737,18 @@ mod tests {
             cli.command,
             Command::Bench {
                 command: BenchCommand::VerifyOnly { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn bench_export_tasks_parses() {
+        let cli =
+            Cli::try_parse_from(["kf-code", "bench", "export-tasks", "/tmp/out"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Command::Bench {
+                command: BenchCommand::ExportTasks { .. }
             }
         ));
     }

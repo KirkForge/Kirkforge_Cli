@@ -1,6 +1,7 @@
 name = "use_lsp_query"
 difficulty = "medium"
 requires_model = true
+kf_only = true
 
 prompt = "The file src/lib.rs contains a Rust function `greet` that takes a name and returns a String. Use the lsp_query tool with operation=document_symbols on src/lib.rs to discover the symbol. Then write the symbol name to symbols.txt."
 

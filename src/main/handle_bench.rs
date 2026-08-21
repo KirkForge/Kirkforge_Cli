@@ -21,6 +21,11 @@ pub(super) async fn handle_bench_command(
             fail_on_regression,
         } => handle_bench_compare(baseline, current, summary, fail_on_regression),
         BenchCommand::List { tasks } => handle_bench_list(tasks),
+        BenchCommand::ExportTasks {
+            tasks,
+            dir,
+            include_kf_only,
+        } => handle_bench_export_tasks(tasks, dir, include_kf_only),
         BenchCommand::VerifyOnly { tasks, task } => handle_bench_verify_only(tasks, task),
         BenchCommand::RunModels {
             tasks,
@@ -206,15 +211,24 @@ fn handle_bench_list(tasks: std::path::PathBuf) -> anyhow::Result<()> {
         println!("No tasks found in {}", tasks.display());
         return Ok(());
     }
-    println!("{:<30} {:<12} Verify", "Name", "Difficulty");
-    println!("{}", "-".repeat(55));
+    println!(
+        "{:<30} {:<12} {:<8} Verify",
+        "Name", "Difficulty", "KF-only"
+    );
+    println!("{}", "-".repeat(65));
     for t in &task_infos {
         let diff_str = match t.difficulty {
             kf_bench::Difficulty::Easy => "easy",
             kf_bench::Difficulty::Medium => "medium",
             kf_bench::Difficulty::Hard => "hard",
         };
-        println!("{:<30} {:<12} {}", t.name, diff_str, t.verify_type);
+        println!(
+            "{:<30} {:<12} {:<8} {}",
+            t.name,
+            diff_str,
+            if t.kf_only { "yes" } else { "no" },
+            t.verify_type
+        );
     }
     println!("\n{} task(s)", task_infos.len());
     Ok(())
@@ -269,6 +283,26 @@ fn handle_bench_verify_only(tasks: std::path::PathBuf, task: Option<String>) -> 
         passed,
         filtered.len(),
         skipped
+    );
+    Ok(())
+}
+
+fn handle_bench_export_tasks(
+    tasks: std::path::PathBuf,
+    dir: std::path::PathBuf,
+    include_kf_only: bool,
+) -> anyhow::Result<()> {
+    let count = kf_bench::export_tasks(&tasks, &dir, include_kf_only)?;
+    println!(
+        "exported {} task{} to {} (kf_only: {})",
+        count,
+        if count == 1 { "" } else { "s" },
+        dir.display(),
+        if include_kf_only {
+            "included"
+        } else {
+            "excluded"
+        }
     );
     Ok(())
 }

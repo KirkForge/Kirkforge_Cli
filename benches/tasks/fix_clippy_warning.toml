@@ -30,12 +30,6 @@ impl Holder {
         self.items.len()
     }
 }
-
-impl Default for Holder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 """
 
 [verify]

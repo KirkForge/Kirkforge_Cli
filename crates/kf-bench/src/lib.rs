@@ -68,6 +68,12 @@ pub struct BenchTask {
     /// ceilings (128k/64k/32k/16k/8k). See ADR-0066.
     #[serde(default)]
     pub budget_ceiling: Option<usize>,
+    /// When true, the task exercises a kf-code-only tool (workflow_run,
+    /// lsp_query, stratum_run, budget_status) that no external agent can
+    /// invoke. The cross-tool subset excludes these; `bench run` still
+    /// runs them. See WO 39.1.
+    #[serde(default)]
+    pub kf_only: bool,
 }
 
 impl BenchTask {
@@ -270,6 +276,9 @@ pub struct TaskInfo {
     pub name: String,
     pub difficulty: Difficulty,
     pub verify_type: String,
+    /// Whether the task uses a kf-code-only tool (excluded from
+    /// cross-tool subsets). See WO 39.1.
+    pub kf_only: bool,
 }
 
 // ── Comparison ──
@@ -470,8 +479,38 @@ pub fn list_tasks(dir: &Path) -> Result<Vec<TaskInfo>> {
                 VerifySpec::FileContains { .. } => "file_contains".to_string(),
                 VerifySpec::CommandExitsZero { .. } => "command_exits_zero".to_string(),
             },
+            kf_only: t.kf_only,
         })
         .collect())
+}
+
+/// Materialize each task's setup files into a subdirectory of `out_dir`
+/// so an external agent (Codex, Claude Code, opencode) can run against
+/// the same starting state as kf-code. One subdirectory per task, named
+/// after the task. The prompt is written to `PROMPT.txt` inside each
+/// subdir. Skips `kf_only` tasks when `include_kf_only` is false (the
+/// cross-tool subset). Returns the count of exported task dirs. See
+/// WO 39.1.
+pub fn export_tasks(dir: &Path, out_dir: &Path, include_kf_only: bool) -> Result<usize> {
+    let tasks = load_tasks(dir)?;
+    let mut count = 0;
+    for task in &tasks {
+        if task.kf_only && !include_kf_only {
+            continue;
+        }
+        let task_dir = out_dir.join(&task.name);
+        std::fs::create_dir_all(&task_dir)?;
+        for (rel_path, content) in &task.setup {
+            let file_path = task_dir.join(rel_path);
+            if let Some(parent) = file_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&file_path, content)?;
+        }
+        std::fs::write(task_dir.join("PROMPT.txt"), &task.prompt)?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 /// Run verification only (no LLM) for a task. Returns the TaskResult.
@@ -907,6 +946,7 @@ mod tests {
         assert_eq!(infos[0].name, "test_task");
         assert_eq!(infos[0].difficulty, Difficulty::Easy);
         assert_eq!(infos[0].verify_type, "command_exits_zero");
+        assert!(!infos[0].kf_only);
     }
 
     #[test]
@@ -922,6 +962,7 @@ mod tests {
             },
             requires_model: false,
             budget_ceiling: None,
+            kf_only: false,
         };
         let result = verify_only(&task, dir.path());
         assert!(result.success);
@@ -990,6 +1031,7 @@ mod tests {
             },
             requires_model: false,
             budget_ceiling: None,
+            kf_only: false,
         };
         let result = verify_only(&task, dir.path());
         assert!(!result.success);
@@ -1012,6 +1054,7 @@ mod tests {
             },
             requires_model: true,
             budget_ceiling: None,
+            kf_only: false,
         };
         let result = verify_only(&task, dir.path());
         // SKIP counts as success (the task is not broken, just not
@@ -1136,6 +1179,7 @@ mod tests {
             },
             requires_model: true,
             budget_ceiling: Some(32_768),
+            kf_only: false,
         };
         let toml = toml::to_string(&task).expect("serialize BenchTask");
         assert!(
@@ -1173,6 +1217,7 @@ mod tests {
             },
             requires_model: true,
             budget_ceiling: Some(16_384),
+            kf_only: false,
         };
         let env = task.budget_env().expect("Some ceiling → Some env");
         assert_eq!(env.0, BUDGET_CEILING_ENV);
@@ -1191,6 +1236,7 @@ mod tests {
             },
             requires_model: true,
             budget_ceiling: None,
+            kf_only: false,
         };
         assert!(task.budget_env().is_none());
     }

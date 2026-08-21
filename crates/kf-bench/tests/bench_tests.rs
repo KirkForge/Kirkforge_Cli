@@ -148,6 +148,7 @@ fn verify_command_exits_zero() {
         },
         requires_model: false,
         budget_ceiling: None,
+        kf_only: false,
     };
     assert!(verify_task(&task, dir.path()).unwrap());
 }
@@ -165,6 +166,7 @@ fn verify_command_fails() {
         },
         requires_model: false,
         budget_ceiling: None,
+        kf_only: false,
     };
     assert!(!verify_task(&task, dir.path()).unwrap());
 }
@@ -184,6 +186,7 @@ fn verify_file_contains() {
         },
         requires_model: false,
         budget_ceiling: None,
+        kf_only: false,
     };
     assert!(verify_task(&task, dir.path()).unwrap());
 }
@@ -202,6 +205,7 @@ fn verify_file_contains_missing_file() {
         },
         requires_model: false,
         budget_ceiling: None,
+        kf_only: false,
     };
     assert!(!verify_task(&task, dir.path()).unwrap());
 }
@@ -224,6 +228,7 @@ fn verify_task_inherits_curated_budget_env() {
         },
         requires_model: false,
         budget_ceiling: Some(4096),
+        kf_only: false,
     };
     assert!(
         verify_task(&task, dir.path()).unwrap(),

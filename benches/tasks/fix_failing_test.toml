@@ -27,5 +27,6 @@ mod tests {
 """
 
 [verify]
-type = "command_exits_zero"
-command = "grep -q 'pub fn add' src/lib.rs"
+type = "file_contains"
+path = "src/lib.rs"
+contains = "add(2, 2), 4"

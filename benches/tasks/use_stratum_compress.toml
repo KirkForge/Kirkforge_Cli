@@ -1,6 +1,7 @@
 name = "use_stratum_compress"
 difficulty = "medium"
 requires_model = true
+kf_only = true
 
 prompt = "The file data/big.txt contains a large tool output (~22KB). Use the stratum_run tool with mode=full to compress it inline. Write the compressed output to data/compressed.txt."
 

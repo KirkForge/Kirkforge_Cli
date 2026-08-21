@@ -1,6 +1,7 @@
 name = "use_workflow_run"
 difficulty = "medium"
 requires_model = true
+kf_only = true
 
 prompt = "A workflow template lives at .kf-code/workflows/feature.json (already in the sandbox). Use the workflow_run tool with template='feature' and vars={feature: 'auth'} to run it. The tool should return JSON with a 'steps' array; each step has a 'summary' field. After running, write the step summaries to workflow_output.txt, one per line."
 
@@ -20,5 +21,6 @@ edition = "2021"
 """
 
 [verify]
-type = "output_contains"
-pattern = "steps"
+type = "file_contains"
+path = "workflow_output.txt"
+contains = "\n"

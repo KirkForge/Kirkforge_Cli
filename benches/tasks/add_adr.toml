@@ -12,11 +12,9 @@ Index of all ADRs in this repo.
 |--------|-------|--------|
 | 060 | Foo | Accepted |
 | 061 | Bar | Accepted |
-| 062 | Benchmark Delta Comparison | Accepted |
 """
 "docs/adr/060-foo.md" = "# ADR-060: Foo\n\nStatus: Accepted\n\n## Context\n\nFoo.\n\n## Decision\n\nFoo.\n\n## Consequences\n\nFoo.\n"
 "docs/adr/061-bar.md" = "# ADR-061: Bar\n\nStatus: Accepted\n\n## Context\n\nBar.\n\n## Decision\n\nBar.\n\n## Consequences\n\nBar.\n"
-"docs/adr/062-benchmark-delta-comparison.md" = "# ADR-062: Benchmark Delta Comparison\n\nStatus: Accepted\n\n## Context\n\nWe need to compare benchmark runs across commits so that performance regressions and improvements are visible in CI and PR review.\n\n## Decision\n\nAdd delta comparison to bench reports with pairwise success-rate diff, token diff, and cost diff.\n\n## Consequences\n\nCI can surface regressions automatically and PRs can post a delta comment.\n"
 
 [verify]
 type = "file_contains"

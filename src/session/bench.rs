@@ -399,6 +399,7 @@ mod tests {
             verify,
             requires_model: false,
             budget_ceiling: None,
+            kf_only: false,
         }
     }
 
@@ -523,6 +524,7 @@ mod tests {
             },
             requires_model: false,
             budget_ceiling: None,
+            kf_only: false,
         };
         let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
         assert!(result.success);
@@ -542,6 +544,7 @@ mod tests {
             },
             requires_model: false,
             budget_ceiling: None,
+            kf_only: false,
         };
         let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
         assert!(!result.success);
@@ -674,6 +677,7 @@ mod tests {
             },
             requires_model: false,
             budget_ceiling: None,
+            kf_only: false,
         };
         let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
         assert_eq!(result.task_name, "named-task");
@@ -812,6 +816,7 @@ mod tests {
             },
             requires_model: true,
             budget_ceiling: None,
+            kf_only: false,
         };
         for ceiling in BUDGET_CHALLENGE_CEILINGS {
             let mut run = base.clone();

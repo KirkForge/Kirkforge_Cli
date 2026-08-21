@@ -1,6 +1,7 @@
 name = "use_budget_check"
 difficulty = "medium"
 requires_model = true
+kf_only = true
 
 prompt = "This project uses a token budget guard. A config.toml at the repo root pins the token budget ceiling to 1000 tokens (low for testing). Use the budget_status tool to check the current usage, then write the result to budget_report.txt."
 

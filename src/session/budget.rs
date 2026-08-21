@@ -102,39 +102,53 @@ pub struct BudgetSlicedEvent {
 /// replacement; `None` leaves it unchanged.
 pub type BudgetSlicedListener = Arc<dyn Fn(BudgetSlicedEvent) -> Option<String> + Send + Sync>;
 
-// ceiling: append-only, no bounded eviction. Safe because dispatch
-// uses "first-returns-Some wins" semantics — stale listeners after a
-// plugin reload are unreachable dead code, not duplicate dispatches.
-// Upgrade path: if reload-heavy sessions leak meaningful memory, scope
-// into SessionStores or add a generation counter that invalidates stale
-// entries on the next push.
-static SLICED_LISTENERS: OnceLock<Mutex<Vec<BudgetSlicedListener>>> = OnceLock::new();
+// WO 38.8: keyed by session_id so concurrent executors (personas,
+// subagents, /plugins reload) dispatch slices to their own listeners,
+// not session #1's. The old append-only Vec had an inverted premise
+// (oldest listener wins — post-reload listeners were dead, not
+// pre-reload ones). clear_session_sliced_listeners on teardown
+// prevents cross-session leaks. Upgrade path: scope into SessionStores
+// if a process hosts many long-lived sessions and the map grows.
+static SLICED_LISTENERS: OnceLock<
+    Mutex<std::collections::HashMap<String, Vec<BudgetSlicedListener>>>,
+> = OnceLock::new();
 
-fn sliced_listeners() -> &'static Mutex<Vec<BudgetSlicedListener>> {
-    SLICED_LISTENERS.get_or_init(|| Mutex::new(Vec::new()))
+fn sliced_listeners() -> &'static Mutex<std::collections::HashMap<String, Vec<BudgetSlicedListener>>>
+{
+    SLICED_LISTENERS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
-/// Register a listener that fires on every successful slice. Intended
-/// for the Stratum compression hook. The listener is invoked
-/// synchronously from `apply_budget_slice` after the slice decision
-/// is made but before the post-coordination `used` adjustment.
+/// Register a listener for `session_id` that fires on every successful
+/// slice. Intended for the Stratum compression hook. The listener is
+/// invoked synchronously from `apply_budget_slice` after the slice
+/// decision is made but before the post-coordination `used` adjustment.
 ///
-/// Listeners accumulate across plugin reloads (append-only). The
-/// dispatch loop short-circuits on the first `Some` return, so
-/// earlier listeners shadow later ones — duplicate registrations
-/// are harmless but waste an `Arc` allocation per reload.
-pub fn register_sliced_listener(listener: BudgetSlicedListener) {
+/// Within a session, listeners accumulate and dispatch short-circuits
+/// on the first `Some` return. On `/plugins` reload, the caller clears
+/// the session's listeners first (see `clear_session_sliced_listeners`)
+/// then re-registers, so stale listeners don't accumulate.
+pub fn register_sliced_listener(session_id: &str, listener: BudgetSlicedListener) {
     let mut guard = sliced_listeners().lock().unwrap_or_else(|e| e.into_inner());
-    guard.push(listener);
+    guard
+        .entry(session_id.to_string())
+        .or_default()
+        .push(listener);
 }
 
-/// Number of registered sliced listeners — for tests.
-#[cfg(test)]
-pub fn sliced_listener_count() -> usize {
+/// Clear all sliced listeners for `session_id`. Called on executor
+/// teardown and on `/plugins` reload (before re-registering).
+pub fn clear_session_sliced_listeners(session_id: &str) {
+    let mut guard = sliced_listeners().lock().unwrap_or_else(|e| e.into_inner());
+    guard.remove(session_id);
+}
+
+/// Number of listeners registered for `session_id` — for tests.
+pub fn sliced_listener_count(session_id: &str) -> usize {
     let guard = sliced_listeners().lock().unwrap_or_else(|e| e.into_inner());
-    guard.len()
+    guard.get(session_id).map_or(0, |v| v.len())
 }
 
+/// Clear ALL sliced listeners across all sessions — for tests only.
 #[cfg(test)]
 pub fn clear_sliced_listeners() {
     let mut guard = sliced_listeners().lock().unwrap_or_else(|e| e.into_inner());
@@ -233,6 +247,7 @@ pub fn apply_budget_slice(
     outcome: ToolOutcome,
     budget: &SharedBudget,
     store: &SharedStore,
+    session_id: &str,
 ) -> ToolOutcome {
     let state = {
         let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
@@ -253,12 +268,15 @@ pub fn apply_budget_slice(
             match action {
                 BudgetAction::Keep(kept) => ToolOutcome::Success { content: kept },
                 BudgetAction::Sliced { display, key } => {
-                    let replacement = dispatch_sliced(BudgetSlicedEvent {
-                        original_size,
-                        sliced_size: display.len(),
-                        key: key.clone(),
-                        sliced_display: display.clone(),
-                    });
+                    let replacement = dispatch_sliced(
+                        session_id,
+                        BudgetSlicedEvent {
+                            original_size,
+                            sliced_size: display.len(),
+                            key: key.clone(),
+                            sliced_display: display.clone(),
+                        },
+                    );
                     if let Some(new_display) = replacement {
                         let before = display.len();
                         let after = new_display.len();
@@ -293,12 +311,15 @@ pub fn apply_budget_slice(
                     truncated,
                 },
                 BudgetAction::Sliced { display, key } => {
-                    let replacement = dispatch_sliced(BudgetSlicedEvent {
-                        original_size,
-                        sliced_size: display.len(),
-                        key: key.clone(),
-                        sliced_display: display.clone(),
-                    });
+                    let replacement = dispatch_sliced(
+                        session_id,
+                        BudgetSlicedEvent {
+                            original_size,
+                            sliced_size: display.len(),
+                            key: key.clone(),
+                            sliced_display: display.clone(),
+                        },
+                    );
                     if let Some(new_display) = replacement {
                         let before = display.len();
                         let after = new_display.len();
@@ -328,12 +349,14 @@ pub fn apply_budget_slice(
     }
 }
 
-/// Dispatch a `BudgetSlicedEvent` to all registered listeners. The
-/// first listener that returns `Some` wins; the rest are skipped for
-/// this event. Returns `None` if no listener returned a replacement.
-fn dispatch_sliced(event: BudgetSlicedEvent) -> Option<String> {
+/// Dispatch a `BudgetSlicedEvent` to listeners registered for
+/// `session_id`. The first listener that returns `Some` wins; the
+/// rest are skipped for this event. Returns `None` if no listener
+/// returned a replacement (or if the session has none registered).
+fn dispatch_sliced(session_id: &str, event: BudgetSlicedEvent) -> Option<String> {
     let listeners = sliced_listeners().lock().unwrap_or_else(|e| e.into_inner());
-    for listener in listeners.iter() {
+    let queue = listeners.get(session_id)?;
+    for listener in queue.iter() {
         if let Some(replacement) = listener(event.clone()) {
             return Some(replacement);
         }
@@ -899,6 +922,8 @@ mod tests {
     // for why this OnceLock registry cannot be injected.
     use serial_test::serial;
 
+    const TEST_SESSION: &str = "test-budget-session";
+
     fn test_stratum_store() -> Arc<kf_compress_core::store::InMemoryOffloadStore> {
         Arc::new(kf_compress_core::store::InMemoryOffloadStore::new())
     }
@@ -1016,7 +1041,7 @@ mod tests {
         }
         let big = "q".repeat(10_000);
         let outcome = ToolOutcome::Success { content: big };
-        let sliced = apply_budget_slice(outcome, &shared_budget(), &shared_store());
+        let sliced = apply_budget_slice(outcome, &shared_budget(), &shared_store(), TEST_SESSION);
         match sliced {
             ToolOutcome::Success { content } => {
                 assert!(
@@ -1047,7 +1072,7 @@ mod tests {
         let outcome = ToolOutcome::Success {
             content: "hello".into(),
         };
-        let out = apply_budget_slice(outcome, &shared_budget(), &shared_store());
+        let out = apply_budget_slice(outcome, &shared_budget(), &shared_store(), TEST_SESSION);
         match out {
             ToolOutcome::Success { content } => assert_eq!(content, "hello"),
             other => panic!("under-budget Success must pass through, got {other:?}"),
@@ -1492,21 +1517,24 @@ mod tests {
             key: "k".into(),
             sliced_display: "d".into(),
         };
-        assert!(dispatch_sliced(event).is_none());
+        assert!(dispatch_sliced(TEST_SESSION, event).is_none());
     }
 
     #[tokio::test]
     async fn test_dispatch_sliced_listener_returns_none_propagates_none() {
         let _guard = shared_budget_test_lock().lock().await;
         clear_sliced_listeners();
-        register_sliced_listener(std::sync::Arc::new(|_event: BudgetSlicedEvent| None));
+        register_sliced_listener(
+            TEST_SESSION,
+            std::sync::Arc::new(|_event: BudgetSlicedEvent| None),
+        );
         let event = BudgetSlicedEvent {
             original_size: 100,
             sliced_size: 50,
             key: "k".into(),
             sliced_display: "d".into(),
         };
-        assert!(dispatch_sliced(event).is_none());
+        assert!(dispatch_sliced(TEST_SESSION, event).is_none());
         clear_sliced_listeners();
     }
 
@@ -1514,19 +1542,23 @@ mod tests {
     async fn test_dispatch_sliced_first_listener_wins() {
         let _guard = shared_budget_test_lock().lock().await;
         clear_sliced_listeners();
-        register_sliced_listener(std::sync::Arc::new(|event: BudgetSlicedEvent| {
-            Some(format!("first:{}", event.sliced_size))
-        }));
-        register_sliced_listener(std::sync::Arc::new(|_event: BudgetSlicedEvent| {
-            Some("second".to_string())
-        }));
+        register_sliced_listener(
+            TEST_SESSION,
+            std::sync::Arc::new(|event: BudgetSlicedEvent| {
+                Some(format!("first:{}", event.sliced_size))
+            }),
+        );
+        register_sliced_listener(
+            TEST_SESSION,
+            std::sync::Arc::new(|_event: BudgetSlicedEvent| Some("second".to_string())),
+        );
         let event = BudgetSlicedEvent {
             original_size: 100,
             sliced_size: 50,
             key: "k".into(),
             sliced_display: "d".into(),
         };
-        let result = dispatch_sliced(event);
+        let result = dispatch_sliced(TEST_SESSION, event);
         assert_eq!(result.as_deref(), Some("first:50"));
         clear_sliced_listeners();
     }
@@ -1538,7 +1570,7 @@ mod tests {
         let outcome = ToolOutcome::Error {
             message: "boom".into(),
         };
-        let result = apply_budget_slice(outcome, &shared_budget(), &shared_store());
+        let result = apply_budget_slice(outcome, &shared_budget(), &shared_store(), TEST_SESSION);
         match result {
             ToolOutcome::Error { message } => assert_eq!(message, "boom"),
             other => panic!("expected Error passthrough, got {other:?}"),
@@ -1551,7 +1583,7 @@ mod tests {
         let _guard = shared_budget_test_lock().lock().await;
         reset_shared_budget(1000, 950);
         let outcome = ToolOutcome::Failure(crate::shared::ToolError::Cancelled);
-        let result = apply_budget_slice(outcome, &shared_budget(), &shared_store());
+        let result = apply_budget_slice(outcome, &shared_budget(), &shared_store(), TEST_SESSION);
         assert!(matches!(result, ToolOutcome::Failure(_)));
         reset_shared_budget(200_000, 0);
     }
@@ -1567,7 +1599,7 @@ mod tests {
             content: big,
             truncated: false,
         };
-        let result = apply_budget_slice(outcome, &shared_budget(), &shared_store());
+        let result = apply_budget_slice(outcome, &shared_budget(), &shared_store(), TEST_SESSION);
         match result {
             ToolOutcome::FileContent {
                 content, truncated, ..
@@ -1590,7 +1622,7 @@ mod tests {
             content: "small".into(),
             truncated: false,
         };
-        let result = apply_budget_slice(outcome, &shared_budget(), &shared_store());
+        let result = apply_budget_slice(outcome, &shared_budget(), &shared_store(), TEST_SESSION);
         match result {
             ToolOutcome::FileContent {
                 content, truncated, ..
@@ -1646,13 +1678,16 @@ mod tests {
         let captured: std::sync::Arc<std::sync::Mutex<Option<BudgetSlicedEvent>>> =
             std::sync::Arc::new(std::sync::Mutex::new(None));
         let captured_clone = captured.clone();
-        register_sliced_listener(std::sync::Arc::new(move |event: BudgetSlicedEvent| {
-            *captured_clone.lock().unwrap() = Some(event.clone());
-            Some(format!("compressed:{}", event.sliced_size))
-        }));
+        register_sliced_listener(
+            TEST_SESSION,
+            std::sync::Arc::new(move |event: BudgetSlicedEvent| {
+                *captured_clone.lock().unwrap() = Some(event.clone());
+                Some(format!("compressed:{}", event.sliced_size))
+            }),
+        );
         let big = "q".repeat(10_000);
         let outcome = ToolOutcome::Success { content: big };
-        let sliced = apply_budget_slice(outcome, &shared_budget(), &shared_store());
+        let sliced = apply_budget_slice(outcome, &shared_budget(), &shared_store(), TEST_SESSION);
         match sliced {
             ToolOutcome::Success { content } => {
                 assert!(
@@ -1703,6 +1738,7 @@ mod tests {
             ToolOutcome::Success { content: big },
             &shared_budget(),
             &shared_store(),
+            TEST_SESSION,
         );
         assert_eq!(
             current_session_mode(),
@@ -1763,10 +1799,11 @@ mod tests {
         reset_shared_budget(200_000, 0);
     }
 
-    // ponytail: pinned invariant — listeners accumulate but only the
-    // first Some-returning listener is called. This tests the safety
-    // property that allows append-only SLICED_LISTENERS to be
-    // acceptable without bounded eviction.
+    // ponytail: pinned invariant — within a session, listeners accumulate
+    // but only the first Some-returning listener is called. This tests the
+    // safety property that allows per-session append-only listeners to be
+    // acceptable without bounded eviction. (WO 38.8: the registry is now
+    // keyed by session_id, so concurrent sessions don't shadow each other.)
     #[tokio::test]
     async fn test_sliced_listeners_duplicate_registration_is_safe() {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -1775,21 +1812,27 @@ mod tests {
         clear_sliced_listeners();
 
         let call_count = Arc::new(AtomicU64::new(0));
-        register_sliced_listener(Arc::new({
-            let cc = call_count.clone();
-            move |_event: BudgetSlicedEvent| {
-                cc.fetch_add(1, Ordering::Relaxed);
-                Some("winner".to_string())
-            }
-        }));
+        register_sliced_listener(
+            TEST_SESSION,
+            Arc::new({
+                let cc = call_count.clone();
+                move |_event: BudgetSlicedEvent| {
+                    cc.fetch_add(1, Ordering::Relaxed);
+                    Some("winner".to_string())
+                }
+            }),
+        );
         // Duplicate the same logical listener — simulates a plugin reload.
-        register_sliced_listener(Arc::new({
-            let cc = call_count.clone();
-            move |_event: BudgetSlicedEvent| {
-                cc.fetch_add(1, Ordering::Relaxed);
-                Some("shadowed".to_string())
-            }
-        }));
+        register_sliced_listener(
+            TEST_SESSION,
+            Arc::new({
+                let cc = call_count.clone();
+                move |_event: BudgetSlicedEvent| {
+                    cc.fetch_add(1, Ordering::Relaxed);
+                    Some("shadowed".to_string())
+                }
+            }),
+        );
 
         let event = BudgetSlicedEvent {
             original_size: 100,
@@ -1797,7 +1840,7 @@ mod tests {
             key: "k".into(),
             sliced_display: "d".into(),
         };
-        let result = dispatch_sliced(event);
+        let result = dispatch_sliced(TEST_SESSION, event);
         assert_eq!(result.as_deref(), Some("winner"));
         assert_eq!(
             call_count.load(Ordering::Relaxed),

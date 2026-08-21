@@ -320,42 +320,6 @@ impl Executor {
             task_owner: None,
         };
 
-        // Register per-session budget and stratum hooks after construction
-        // so we can reference `this.budget` and `this.stratum_store` (WO 22.6-R2).
-        #[cfg(all(feature = "budget", feature = "stratum"))]
-        {
-            if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum")
-                && !cfg.tools.disabled_plugins.contains("stratum")
-            {
-                if let Some(ref stratum_store) = this.stratum_store {
-                    crate::session::stratum::register_default_budget_listener(
-                        stratum_store.clone(),
-                    );
-                    tracing::info!("stratum->budget slice listener registered");
-                }
-            }
-        }
-        #[cfg(feature = "budget")]
-        {
-            // Runtime `enabled_plugins` gate (WO 15.7 5.1): the config key
-            // for the folded budget plugin is `"kf-budget"`. Skip
-            // hooks when disabled at runtime.
-            if cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget")
-                && !cfg.tools.disabled_plugins.contains("kf-budget")
-            {
-                if let (Some(ref budget), Some(ref _store)) = (&this.budget, &this.budget_store) {
-                    crate::session::budget::init_from_config(budget, &cfg);
-                    for hook in crate::session::budget::budget_hooks(budget) {
-                        this.hook_runner.add_post_hook(hook);
-                    }
-                    tracing::info!("budget session-start, post-tool-bash, post-tool-write_file, pre-compact hooks registered");
-                }
-            } else {
-                tracing::info!(
-                    "budget hooks skipped (disabled via enabled_plugins or disabled_plugins)"
-                );
-            }
-        }
         this.init_default_verifiers(plugin_registry);
         this.build_task_spawner();
         Ok(this)
@@ -387,6 +351,97 @@ impl Executor {
         store: std::sync::Arc<kf_compress_core::store::InMemoryOffloadStore>,
     ) {
         self.stratum_store = Some(store);
+    }
+
+    /// Attach per-session budget + stratum stores and wire the budget
+    /// guard into production (WO 38.8). Runs `init_from_config`, registers
+    /// the budget hooks (session-start, post-tool-bash, post-tool-write_file,
+    /// pre-compact), and registers the Stratum slice-compression listener
+    /// keyed by this executor's `session_id`. Must be called AFTER
+    /// `set_session_id`. Idempotent: clears the session's stale listeners
+    /// first so repeated attaches (e.g. on `/plugins` reload) don't
+    /// accumulate dead entries.
+    #[cfg(all(feature = "budget", feature = "stratum"))]
+    pub fn attach_session_stores(&mut self, stores: crate::session::SessionStores) {
+        let cfg = read_shared_config(&self.config);
+        self.budget = Some(stores.budget);
+        self.budget_store = Some(stores.budget_store);
+        self.stratum_store = Some(stores.stratum_store);
+
+        let sid = self.session_id.clone();
+        crate::session::budget::clear_session_sliced_listeners(&sid);
+
+        // Stratum slice listener (compression hook).
+        if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum")
+            && !cfg.tools.disabled_plugins.contains("stratum")
+        {
+            crate::session::stratum::register_default_budget_listener(
+                &sid,
+                self.stratum_store.clone().expect("stratum_store set above"),
+            );
+            tracing::info!("stratum->budget slice listener registered for session {sid}");
+        }
+
+        // Budget hooks.
+        if cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget")
+            && !cfg.tools.disabled_plugins.contains("kf-budget")
+        {
+            if let Some(ref budget) = self.budget {
+                crate::session::budget::init_from_config(budget, &cfg);
+                for hook in crate::session::budget::budget_hooks(budget) {
+                    self.hook_runner.add_post_hook(hook);
+                }
+                tracing::info!(
+                    "budget hooks registered for session {sid} (session-start, post-tool-bash, post-tool-write_file, pre-compact)"
+                );
+            }
+        } else {
+            tracing::info!(
+                "budget hooks skipped for session {sid} (disabled via enabled_plugins or disabled_plugins)"
+            );
+        }
+    }
+
+    /// Attach per-session budget stores (budget-only, no stratum).
+    /// See [`attach_session_stores`] for the full variant. WO 38.8.
+    #[cfg(all(feature = "budget", not(feature = "stratum")))]
+    pub fn attach_session_stores(&mut self, stores: crate::session::SessionStores) {
+        let cfg = read_shared_config(&self.config);
+        self.budget = Some(stores.budget);
+        self.budget_store = Some(stores.budget_store);
+
+        let sid = self.session_id.clone();
+        crate::session::budget::clear_session_sliced_listeners(&sid);
+
+        if cfg.tools.enabled_plugins.iter().any(|n| n == "kf-budget")
+            && !cfg.tools.disabled_plugins.contains("kf-budget")
+        {
+            if let Some(ref budget) = self.budget {
+                crate::session::budget::init_from_config(budget, &cfg);
+                for hook in crate::session::budget::budget_hooks(budget) {
+                    self.hook_runner.add_post_hook(hook);
+                }
+                tracing::info!("budget hooks registered for session {sid}");
+            }
+        }
+    }
+
+    /// Attach per-session stratum store (stratum-only, no budget). WO 38.8.
+    #[cfg(all(not(feature = "budget"), feature = "stratum"))]
+    pub fn attach_session_stores(&mut self, stores: crate::session::SessionStores) {
+        self.stratum_store = Some(stores.stratum_store);
+    }
+
+    /// No-op attach when neither budget nor stratum is enabled. WO 38.8.
+    #[cfg(all(not(feature = "budget"), not(feature = "stratum")))]
+    pub fn attach_session_stores(&mut self, _stores: crate::session::SessionStores) {}
+
+    /// Clear this session's sliced listeners. Call on executor teardown
+    /// so a dropped session doesn't leak listeners into the process-global
+    /// registry. WO 38.8.
+    #[cfg(feature = "budget")]
+    pub fn clear_session_listeners(&self) {
+        crate::session::budget::clear_session_sliced_listeners(&self.session_id);
     }
 
     /// Set the session identifier forwarded to lifecycle hooks as
@@ -946,7 +1001,11 @@ impl Executor {
                 && !cfg.tools.disabled_plugins.contains("stratum")
             {
                 if let Some(ref stratum_store) = self.stratum_store {
+                    // WO 38.8: clear stale listeners for this session before
+                    // re-registering, so reloads don't accumulate dead entries.
+                    crate::session::budget::clear_session_sliced_listeners(&self.session_id);
                     crate::session::stratum::register_default_budget_listener(
+                        &self.session_id,
                         stratum_store.clone(),
                     );
                 }
@@ -1223,5 +1282,16 @@ impl Executor {
 
     fn collect_carryover(&mut self, tc: &ToolInvocation, crs: &[CorrectionResult]) {
         self.cost.collect_carryover(tc, crs);
+    }
+}
+
+// WO 38.8: clear this session's sliced listeners on teardown so a
+// dropped session doesn't leak listeners into the process-global
+// registry. No-op when the budget feature is off or the session never
+// registered any.
+#[cfg(feature = "budget")]
+impl Drop for Executor {
+    fn drop(&mut self) {
+        crate::session::budget::clear_session_sliced_listeners(&self.session_id);
     }
 }

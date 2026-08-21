@@ -562,9 +562,11 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         tracing::warn!(warning = %w, "plugin load warning");
     }
 
-    // ── Per-session stores (WO 22.6-R2) ──
+    // ── Per-session stores (WO 22.6-R2, WO 38.8 wiring) ──
     // Create per-session budget and Stratum offload stores with LRU caps.
-    // These replace the old process-global OnceLock pattern.
+    // These are attached to the executor via attach_session_stores so the
+    // budget guard runs in production (WO 38.8). Empty struct when both
+    // features are off.
     #[cfg(feature = "budget")]
     let session_stores = {
         let cfg_stores = kf_code::shared::read_shared_config(&shared_config);
@@ -589,6 +591,8 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             kf_compress_core::store::InMemoryOffloadStore::new_with_cap(1000),
         ),
     };
+    #[cfg(all(not(feature = "budget"), not(feature = "stratum")))]
+    let session_stores = session::SessionStores {};
 
     // ── Stratum in-process tools (feature-gated) ──
     // When the `stratum` feature is enabled, the five core Stratum tools
@@ -688,6 +692,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             context_index,
             trace_recorder,
             mcp_manager,
+            session_stores,
         )
         .await
     } else {
@@ -706,6 +711,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             context_index,
             trace_recorder,
             mcp_manager,
+            session_stores,
         )
         .await
     }

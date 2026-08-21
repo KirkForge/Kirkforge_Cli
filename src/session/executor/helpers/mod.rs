@@ -32,13 +32,15 @@ pub(crate) fn apply_budget_slice(
     outcome: ToolOutcome,
     #[cfg(feature = "budget")] budget: &crate::session::budget::SharedBudget,
     #[cfg(feature = "budget")] store: &std::sync::Arc<dyn kf_budget_core::OffloadStore>,
+    session_id: &str,
 ) -> ToolOutcome {
     #[cfg(feature = "budget")]
     {
-        crate::session::budget::apply_budget_slice(outcome, budget, store)
+        crate::session::budget::apply_budget_slice(outcome, budget, store, session_id)
     }
     #[cfg(not(feature = "budget"))]
     {
+        let _ = session_id;
         outcome
     }
 }

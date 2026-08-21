@@ -787,7 +787,7 @@ impl Executor {
             #[cfg(feature = "budget")]
             let outcome = {
                 if let (Some(ref budget), Some(ref store)) = (&self.budget, &self.budget_store) {
-                    apply_budget_slice(outcome, budget, store)
+                    apply_budget_slice(outcome, budget, store, &self.session_id)
                 } else {
                     outcome
                 }
@@ -884,7 +884,7 @@ impl Executor {
         #[cfg(feature = "budget")]
         let outcome = {
             if let (Some(ref budget), Some(ref store)) = (&self.budget, &self.budget_store) {
-                apply_budget_slice(outcome, budget, store)
+                apply_budget_slice(outcome, budget, store, &self.session_id)
             } else {
                 outcome
             }

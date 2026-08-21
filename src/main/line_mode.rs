@@ -58,6 +58,7 @@ pub(super) async fn run_line_mode(
     context_index: Option<kf_context_index::ContextIndex>,
     trace_recorder: Option<session::replay::TraceRecorder>,
     mcp_manager: Option<std::sync::Arc<session::mcp_client::McpClientManager>>,
+    session_stores: session::SessionStores,
 ) -> anyhow::Result<()> {
     // If running in non-interactive mode (scripted), deny all approvals.
     // If running in line-mode interactive (no TUI), prompt on stderr and
@@ -75,6 +76,10 @@ pub(super) async fn run_line_mode(
         Some(plugin_registry),
     )?;
     executor.set_session_id(session_id);
+    // WO 38.8: attach per-session budget/stratum stores so the budget guard
+    // runs in production. Must come after set_session_id because the stratum
+    // listener is keyed by session_id.
+    executor.attach_session_stores(session_stores);
     executor.set_non_interactive(non_interactive);
     if let session::conversation::OpenOutcome::Restored(messages) = open_outcome {
         executor.set_recovered_messages(messages);

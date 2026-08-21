@@ -143,12 +143,16 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
         None,
     )
     .expect("executor");
+    executor.set_session_id("ctx-econ-35-5".to_string());
     executor.set_context_index(index);
 
     // Budget leg: pre-load to Approaching so the read_file result must be
     // sliced; the offload store keeps the middle. The capture listener
     // (registered first, returns None) records the slice event; the
     // default stratum listener then compresses the sliced display.
+    // WO 38.8: listeners are keyed by session_id, so they must match the
+    // executor's session_id.
+    const SESSION: &str = "ctx-econ-35-5";
     let budget: SharedBudget = Arc::new(Mutex::new(TokenBudget {
         ceiling: 2000,
         approaching_ratio: 0.8,
@@ -160,11 +164,14 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
     executor.set_stratum_store(stratum_store.clone());
     let captured: Arc<Mutex<Option<BudgetSlicedEvent>>> = Arc::new(Mutex::new(None));
     let captured_clone = captured.clone();
-    register_sliced_listener(Arc::new(move |event: BudgetSlicedEvent| {
-        *captured_clone.lock().unwrap() = Some(event);
-        None
-    }));
-    register_default_budget_listener(stratum_store.clone());
+    register_sliced_listener(
+        SESSION,
+        Arc::new(move |event: BudgetSlicedEvent| {
+            *captured_clone.lock().unwrap() = Some(event);
+            None
+        }),
+    );
+    register_default_budget_listener(SESSION, stratum_store.clone());
 
     let (approval_tx, mut approval_rx) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(async move { while approval_rx.recv().await.is_some() {} });

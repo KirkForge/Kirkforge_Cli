@@ -751,7 +751,15 @@ compresses the sliced display so the model sees a single coordinated
 post-compression size, and the Stratum session mode auto-escalates `Lite →
 Full` when the budget is `Approaching`. The coordination is a sync
 registered-listener dispatch (not the async `EventBus`) because the slice path
-is itself sync.
+is itself sync. The listener registry is keyed by session_id (WO 38.8) so
+concurrent executors (personas, subagents, `/plugins` reload) dispatch slices
+to their own listeners — the old append-only global `Vec` let session #1's
+listener shadow session #2's. `run_session.rs` attaches the per-session
+`SessionStores` to the executor via `attach_session_stores`, which wires
+the budget guard, the stratum slice listener, and the budget hooks into the
+production session path (WO 38.8 — previously `set_budget_stores` /
+`set_stratum_store` had zero production callers and `apply_budget_slice` was
+dead code on the `None/None` path).
 
 ---
 
@@ -781,8 +789,15 @@ budget guard ships as a compiled-in module
 The 4 in-process hooks receive full `HookContext` with real tool result content
  and compact metadata — the lossy canned-JSON shim that existed when the budget
  guard ran as a shell plugin is eliminated (ADR-047). The hooks observe and report budget
-usage; active slicing of tool results before they enter the conversation shipped
-in Workorder 7.1 (`check_and_slice` in `src/session/budget.rs`).
+ usage; active slicing of tool results before they enter the conversation shipped
+ in Workorder 7.1 (`check_and_slice` in `src/session/budget.rs`). The budget guard
+ is wired into the production session path via `attach_session_stores` (WO 38.8):
+ `run_session.rs` builds `SessionStores` and passes them to `run_tui` /
+ `run_line_mode`, which call `executor.attach_session_stores(stores)` after
+ `set_session_id`. This runs `init_from_config`, registers the budget hooks,
+ and registers the Stratum slice-compression listener keyed by session_id.
+ The executor's `Drop` impl clears the session's listeners on teardown so a
+ dropped session doesn't leak into the process-global registry.
 
 `PreCompactHook` (in `src/session/budget.rs`) escalates the Stratum session
 mode to `Full` when a `pre-compact` fires under budget pressure, so the next

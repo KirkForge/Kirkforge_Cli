@@ -337,3 +337,197 @@ fn adr_path_literals_reference_existing_crates() {
         panic!("ADR path-literal violations:\n{}", failures.join("\n"));
     }
 }
+
+// ── WO status drift (WO 38.13) ───────────────────────────────────────────
+//
+// The ADR drift test above enforces ADR file-header ↔ README-index agreement.
+// WO 38.13 extends the same pattern to workorder status: the `## Status` line
+// in each WO file under docs/workorders/ must agree (on leading keyword) with
+// the status column in the docs/workorders/README.md index table. The two
+// sources of truth drifted for ~100 WOs before this test existed; this test
+// prevents future drift.
+//
+// ponytail: keyword normalization (Done/Planned/In Progress/Pending/...) is
+// a handful of `starts_with` checks. A full markdown-table parser would catch
+// column-order drift, but the README table format is stable — YAGNI.
+
+fn wo_dir() -> PathBuf {
+    repo_root().join("docs").join("workorders")
+}
+
+/// Normalize a status string to its leading keyword for comparison.
+/// "Done (`abc123`)" → "done", "In Progress (worktree)" → "in progress".
+fn wo_status_keyword(s: &str) -> String {
+    let s = s.trim().to_lowercase();
+    let s = s.trim_start_matches('-').trim_start_matches('*').trim();
+    if s.starts_with("done") || s.starts_with("completed") {
+        return "done".to_string();
+    }
+    if s.starts_with("in progress") || s.starts_with("inprogress") || s.starts_with("in-progress")
+    {
+        return "in progress".to_string();
+    }
+    if s.starts_with("pending") {
+        return "pending".to_string();
+    }
+    if s.starts_with("planned") {
+        return "planned".to_string();
+    }
+    if s.starts_with("partial") {
+        return "partial".to_string();
+    }
+    if s.starts_with("superseded") {
+        return "superseded".to_string();
+    }
+    if s.starts_with("skipped") || s.starts_with("skip") {
+        return "skipped".to_string();
+    }
+    if s.starts_with("accepted") {
+        return "accepted".to_string();
+    }
+    if s.starts_with("living") {
+        return "in progress".to_string();
+    }
+    if s.starts_with("mostly") {
+        return "done".to_string();
+    }
+    s.to_string()
+}
+
+/// Parse the `## Status` header from a WO file body. Handles both
+/// `## Status: X` and `- **Status:** X` formats.
+fn parse_wo_status_header(body: &str) -> Option<String> {
+    for line in body.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("## Status") {
+            let rest = rest.trim_start_matches(':').trim();
+            return Some(rest.to_string());
+        }
+        if let Some(rest) = t.strip_prefix("- **Status:**") {
+            return Some(rest.trim().to_string());
+        }
+        if let Some(rest) = t.strip_prefix("**Status:**") {
+            return Some(rest.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Parse WO number from a filename stem (leading digit run + dots).
+fn wo_number_from_stem(stem: &str) -> Option<String> {
+    let chars: String = stem
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    // Strip trailing dot if any
+    let trimmed = chars.trim_end_matches('.');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Parse the README index table rows. Returns (num, status) pairs.
+/// WO index rows have plain numbers (not [NNNN] like ADRs):
+/// `| 32.2 | [Title](file.md) | Done (`abc`) | S | — |`
+fn parse_wo_index_table(readme: &str) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    for line in readme.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') {
+            continue;
+        }
+        let inner = trimmed.trim_matches('|');
+        let cells: Vec<&str> = inner.split('|').map(str::trim).collect();
+        if cells.len() < 3 {
+            continue;
+        }
+        // WO num is a plain number like "32.2" or "6.1"
+        if !cells[0]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit())
+        {
+            continue;
+        }
+        // Must be purely numeric/dots
+        if !cells[0].chars().all(|c| c.is_ascii_digit() || c == '.') {
+            continue;
+        }
+        let num = cells[0].to_string();
+        let status = cells[2].to_string();
+        rows.push((num, status));
+    }
+    rows
+}
+
+#[test]
+fn wo_status_headers_match_readme_index() {
+    // WO 38.13: WO file `## Status` headers must agree with the README index
+    // table on leading keyword. This is the structural fix that prevents the
+    // ~100-WO drift that accumulated before this test existed.
+    let readme =
+        std::fs::read_to_string(wo_dir().join("README.md")).expect("docs/workorders/README.md exists");
+    let index_rows = parse_wo_index_table(&readme);
+    assert!(
+        !index_rows.is_empty(),
+        "no WO index rows parsed — table format drifted?"
+    );
+
+    let index_status: std::collections::BTreeMap<String, String> = index_rows
+        .iter()
+        .cloned()
+        .collect();
+
+    // Collect file headers for every WO file (excluding README + archive).
+    // Only WOs present in the README index are checked — many older series
+    // (18-26, 30, 31) have file headers but no README row and are out of
+    // scope for this drift guard.
+    let mut file_status: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let entries = std::fs::read_dir(wo_dir()).expect("docs/workorders/ readable");
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let file = p.file_name().unwrap().to_string_lossy().to_string();
+        if file == "README.md" {
+            continue;
+        }
+        let num = wo_number_from_stem(&file)
+            .unwrap_or_else(|| panic!("WO {file} has no leading digit run"));
+        // Skip WOs not in the README index (older series without index rows).
+        if !index_status.contains_key(&num) {
+            continue;
+        }
+        let body = std::fs::read_to_string(&p).expect("WO readable");
+        let status = parse_wo_status_header(&body)
+            .unwrap_or_else(|| panic!("WO {file} missing a parseable Status header"));
+        file_status.insert(num, status);
+    }
+
+    // Compare: every WO in the index must have a file, and keywords must agree.
+    let mut failures = Vec::new();
+    for (num, idx_status) in &index_status {
+        let Some(f_status) = file_status.get(num) else {
+            // Index references a WO with no file — skip (some are overview
+            // entries pointing at files that exist under different naming).
+            continue;
+        };
+        let fk = wo_status_keyword(f_status);
+        let rk = wo_status_keyword(idx_status);
+        if fk != rk {
+            failures.push(format!(
+                "WO {num}: file header [{f_status}] ({fk}) != README index [{idx_status}] ({rk})"
+            ));
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "WO status drift (file header ↔ README index mismatch):\n{}",
+            failures.join("\n")
+        );
+    }
+}

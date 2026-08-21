@@ -56,3 +56,12 @@ Choose **Option A** for the MVP.
 - TypeScript build gate (`npm run build`) and unit tests (`npm test`) run in `editors/vscode/`.
 - `vsce package` and `ovsx package` produce installable `.vsix` artifacts.
 - Rust matrix remains unchanged; the existing crossterm resize handler is verified rather than modified.
+
+## Amendment (2026-08-21, WO 38.13)
+
+The VS Code extension described in this ADR was **archived**. The
+`editors/vscode/` directory no longer exists in the repo — the extension
+scaffold was removed when the TS→Rust migration (WO 29.9) deleted every
+TypeScript tree. The decision record is retained as history; it does not
+describe a live capability. A future editor integration would start from
+the current Rust-only architecture (no `npm/kf-plugin/`, no TS build).

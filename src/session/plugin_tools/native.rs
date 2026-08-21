@@ -84,12 +84,6 @@ fn derive_languages(caps: &[ToolCap]) -> Vec<&'static str> {
     if has("ruff") || has("pyright") {
         langs.push("python");
     }
-    langs.push("shell (advisory only)");
-    langs.push("cpp (validator required)");
-    langs.push("c (validator required)");
-    langs.push("rust (validator required)");
-    langs.push("go (validator required)");
-    langs.push("sql (validator required)");
     if langs.is_empty() {
         langs.push("unknown");
     }
@@ -159,7 +153,7 @@ impl Tool for PluginDoctor {
                     "secdev": {
                         "available": true,
                         "source": "internal",
-                        "note": "Regex-based security scanner (advisory for C/C++/Go/Rust/SQL).",
+                        "note": "Regex-based security scanner (JS/TS/Python only).",
                     },
                     "languages": languages,
                 }))
@@ -209,20 +203,21 @@ impl Tool for PluginToolsList {
     }
 
     async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
-        // Ported verbatim from the former TS CLI `tools` command (deleted WO 29.9).
+        // Rust runtime truth: the only in-process verifier is the regex
+        // security emitter (JS/TS/Python). The former TS lint engines
+        // (tool-lint-ts/py/sh/c/rs/go/sql) were deleted in WO 29.9 and
+        // never ported — listing them would advertise dead capabilities.
         ToolOutcome::Success {
-            content: "KirkForge Native Lint Engines (internal, always available):\n\
-                      \x20 JS/TS:  tool-lint-ts (29 rules)\n\
-                      \x20 Python: tool-lint-py (34 rules)\n\
-                      \x20 Shell:  tool-lint-sh (9 rules)\n\
-                      \x20 C/C++:  tool-lint-c (10 rules)\n\
-                      \x20 Rust:   tool-lint-rs (8 rules)\n\
-                      \x20 Go:     tool-lint-go (7 rules)\n\
-                      \x20 SQL:    tool-lint-sql (6 rules)\n\
+            content: "KirkForge Native Verifiers (internal, always available):\n\
+                      \x20 Security: regex emitter (14 rules, JS/TS/Python)\n\
                       \n\
                       Type Checkers (external, required on PATH):\n\
                       \x20 JS/TS:  tsc\n\
-                      \x20 Python: pyright\n"
+                      \x20 Python: pyright\n\
+                      \n\
+                      Linters (external, optional on PATH):\n\
+                      \x20 JS/TS:  eslint\n\
+                      \x20 Python: ruff, bandit\n"
                 .to_string(),
         }
     }
@@ -565,8 +560,8 @@ mod tests {
         let out = tool.run(&ToolContext::new(), json!({})).await;
         match out {
             ToolOutcome::Success { content } => {
-                assert!(content.contains("tool-lint-ts"));
-                assert!(content.contains("tool-lint-py"));
+                assert!(content.contains("Security: regex emitter"));
+                assert!(!content.contains("tool-lint-"));
                 assert!(content.contains("pyright"));
                 assert!(content.contains("tsc"));
             }
@@ -784,7 +779,7 @@ mod tests {
             },
         ];
         let langs = derive_languages(&caps);
-        assert!(langs.contains(&"shell (advisory only)"));
+        assert!(langs.contains(&"unknown"));
         assert!(!langs.contains(&"typescript"));
         assert!(!langs.contains(&"python"));
     }

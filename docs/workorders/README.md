@@ -506,13 +506,13 @@ plan + ordering.
 | WO | Title | Status | Priority | Deps |
 |----|-------|--------|----------|------|
 | 27.0 | [Series overview](27.0-wo27-overview.md) | In Progress | — | — |
-| 27.1 | [Landlock default-on + actually applied (C1)](27.1-landlock-default-on.md) | Planned | P0 | — |
-| 27.2 | [Test health: CI green + triage 49 ignored + coverage gate (H6)](27.2-test-health.md) | In Progress | P0/P1 | — |
+| 27.1 | [Landlock default-on + actually applied (C1)](27.1-landlock-default-on.md) | Done | P0 | — |
+| 27.2 | [Test health: CI green + triage 49 ignored + coverage gate (H6)](27.2-test-health.md) | Done (CI green, e2e feature-gated, coverage gate shipped in WO 33 series) | P0/P1 | — |
 | 27.3 | [Architecture debt: tools↔session cycle + god-objects (H7/H8)](27.3-architecture-debt.md) | Planned | P1 | — |
 | 27.4 | [Plugin trust default (H9)](27.4-plugin-trust.md) | Planned | P1 | — |
 | 27.5 | [Bash hardening: background jobs + deny-list posture (H3/H5)](27.5-bash-hardening.md) | Planned | P2 | 27.1 |
 | 27.6 | [TUI themes (polish)](27.6-tui-themes.md) | Planned | P2 | — |
-| 27.7 | [TUI mouse support (polish)](27.7-tui-mouse.md) | Planned | P2 | — |
+| 27.7 | [TUI mouse support (polish)](27.7-tui-mouse.md) | In Progress | P2 | — |
 
 **8 sub-workorders.** Highest leverage: **27.2** (CI green is the unblock for
 everything) and **27.1** (C1 is the security moat vs codex-cli). 27.6/27.7 are
@@ -564,7 +564,7 @@ biggest target. See [WO 29.0](29.0-wo29-overview.md) for the full phased plan.
 
 | WO | Title | Status | Est | Phase |
 |----|-------|--------|-----|-------|
-| 29.0 | [Series overview](29.0-wo29-overview.md) | Planned | — | — |
+| 29.0 | [Series overview](29.0-wo29-overview.md) | Done (TS→Rust migration completed in WO 29.9) | — | — |
 | 29.1 | [Fold bundled plugin into compiled-in Rust tools](29.1-fold-bundled-plugin.md) | In Progress (Phase 1 shipped; verify tools deferred to 29.7) | M | 1 |
 | 29.2 | [Rust security emitter (replace bridge-emitter.ts)](29.2-rust-security-emitter.md) | Done (R1+R2; R3 folded into 29.9) | S | 1 |
 | 29.3 | [Port pure modules (classifier + routing + correction + truth-model)](29.3-pure-module-ports.md) | Done | M | 2 |
@@ -614,7 +614,7 @@ items get individual WO 32 sub-workorders for tracking. See
 
 | WO | Title | Status | Est | Priority |
 |----|-------|--------|-----|----------|
-| 32.0 | [Series overview + full deferral inventory](32.0-wo32-overview.md) | In Progress | — | — |
+| 32.0 | [Series overview + full deferral inventory](32.0-wo32-overview.md) | Done (32.1-32.20 shipped; 32.3/32.4/32.15/32.16 pending) | — | — |
 | 32.1 | [Fix stale WO 30 overview statuses](32.1-fix-wo30-overview-statuses.md) | Done | S | — |
 | 32.2 | [Fix stale plugin_verify deferral message](32.2-fix-plugin-verify-message.md) | Done (`f2c33d4`) | S | — |
 | 32.3 | [Clean up untracked npm/ build artifacts](32.3-clean-npm-artifacts.md) | Pending | S | — |
@@ -630,7 +630,7 @@ items get individual WO 32 sub-workorders for tracking. See
 | 32.13 | [Streaming timeout per-adapter configurability](32.13-streaming-timeout-configurable.md) | Done (`d6e507e`; default 180s) | S | Low |
 | 32.14 | [WO 28.7 R4 ci.yml coverage step](32.14-ci-yml-coverage-step.md) | Done (`b31f4a4`; now in ci-nightly.yml per ADR-074) | S | Medium |
 | 32.15 | [WO 28.5 R3 landlock FS confinement test](32.15-landlock-fs-confinement-test.md) | Pending | S | Low |
-| 32.16 | [WO 28.8 R6 Windows stub test](32.16-windows-stub-test.md) | Pending | S | Low |
+| 32.16 | [WO 28.8 R6 Windows stub test](32.16-windows-stub-test.md) | Done | S | Low |
 | 32.17 | [WO 28.16 R4 computer_use vision loop (re-deferred 3×)](32.17-computer-use-vision-loop.md) | Done (`55aa9f0`; WO 32.17 shipped the hosted computer_use beta) | L | Medium |
 | 32.18 | [WO 28.17 R2 bash require_allowlist mode](32.18-bash-require-allowlist.md) | Done (`ef2d765`; default-off) | S | Low |
 | 32.19 | [WO 29.7 R6 SLO monitor + R7 security-emitter integration](32.19-slo-monitor-security-emitter.md) | Done (`41014b7`; R7 shipped; R6 disclosed as YAGNI) | M | Low |
@@ -694,17 +694,17 @@ workorders + 1 doc-audit workorder. See
 | WO | Title | Status | Priority |
 |----|-------|--------|----------|
 | 34.0 | [Series overview](34.0-wo34-overview.md) | In Progress | — |
-| 34.1 | [Kill F1-F6 tab bar + command palette (Ctrl+K)](34.1-kill-tab-bar-command-palette.md) | Pending | — |
-| 34.2 | [/help overlay (stop polluting conversation)](34.2-help-overlay.md) | Pending | — |
-| 34.3 | [Simplify status bar to 4 items](34.3-simplify-status-bar.md) | Pending | — |
-| 34.4 | [Settings → semantic controls](34.4-settings-semantic-controls.md) | Pending | — |
-| 34.5 | [Models → chooser](34.5-model-chooser.md) | Pending | — |
-| 34.6 | [Jobs → structured monitor](34.6-jobs-monitor.md) | Pending | — |
-| 34.7 | [Unify sessions/threads/forks naming](34.7-unify-sessions-naming.md) | Pending | — |
-| 34.8 | [Welcome screen quick actions](34.8-welcome-screen.md) | Pending | — |
-| 34.9 | [Slash command taxonomy (everyday/advanced/developer)](34.9-slash-command-taxonomy.md) | Pending | — |
-| 34.10 | [Approval dialog action-first](34.10-approval-dialog.md) | Pending | — |
-| 34.11 | [Doc audit (CHANGELOG, state.md, TECHNICAL.md)](34.11-doc-audit.md) | In Progress | — |
+| 34.1 | [Kill F1-F6 tab bar + command palette (Ctrl+K)](34.1-kill-tab-bar-command-palette.md) | Partially done (WO 34.1) | — |
+| 34.2 | [/help overlay (stop polluting conversation)](34.2-help-overlay.md) | Done | — |
+| 34.3 | [Simplify status bar to 4 items](34.3-simplify-status-bar.md) | Done | — |
+| 34.4 | [Settings → semantic controls](34.4-settings-semantic-controls.md) | Done | — |
+| 34.5 | [Models → chooser](34.5-model-chooser.md) | Done | — |
+| 34.6 | [Jobs → structured monitor](34.6-jobs-monitor.md) | Done | — |
+| 34.7 | [Unify sessions/threads/forks naming](34.7-unify-sessions-naming.md) | Done | — |
+| 34.8 | [Welcome screen quick actions](34.8-welcome-screen.md) | Done | — |
+| 34.9 | [Slash command taxonomy (everyday/advanced/developer)](34.9-slash-command-taxonomy.md) | Done | — |
+| 34.10 | [Approval dialog action-first](34.10-approval-dialog.md) | Done | — |
+| 34.11 | [Doc audit (CHANGELOG, state.md, TECHNICAL.md)](34.11-doc-audit.md) | Done | — |
 
 **12 sub-workorders.** All 11 implementation workorders (34.1-34.11) are
 pending; only the planning commit (`d94c575`) has landed. WO 34.11 (this
@@ -724,13 +724,13 @@ tests, the kf-orchestrator seam, and a version-badge gate.
 | WO | Title | Status | Priority | Depends on |
 |----|-------|--------|----------|------------|
 | 35.0 | [Series overview + verification verdicts](35.0-wo35-overview.md) | Done | — | — |
-| 35.1 | [Real pipeline semantics for scout/coder/reviewer](35.1-pipeline-semantics.md) | Pending | P0 | 35.2 |
-| 35.2 | [Per-subagent worktree isolation + artifact return](35.2-subagent-worktrees.md) | Pending | P1 | — |
-| 35.3 | [Cooperative cancellation + temp-dir cleanup](35.3-cooperative-cancellation.md) | Pending | P1 | — |
-| 35.4 | [Sandbox posture indicator (real layer state)](35.4-sandbox-posture-indicator.md) | Pending | P2 | — |
-| 35.5 | [Cross-component integration tests (2 chains)](35.5-cross-component-integration-tests.md) | Pending | P2 | 35.1, 35.3 |
-| 35.6 | [Wire Executor into kf-orchestrator ModelClient](35.6-orchestrator-modelclient-wiring.md) | Pending | P2 | 35.1, 35.3 |
-| 35.7 | [Version badge consistency gate](35.7-version-badge-gate.md) | Pending | P3 | — |
+| 35.1 | [Real pipeline semantics for scout/coder/reviewer](35.1-pipeline-semantics.md) | Done | P0 | 35.2 |
+| 35.2 | [Per-subagent worktree isolation + artifact return](35.2-subagent-worktrees.md) | Done | P1 | — |
+| 35.3 | [Cooperative cancellation + temp-dir cleanup](35.3-cooperative-cancellation.md) | Done | P1 | — |
+| 35.4 | [Sandbox posture indicator (real layer state)](35.4-sandbox-posture-indicator.md) | Done | P2 | — |
+| 35.5 | [Cross-component integration tests (2 chains)](35.5-cross-component-integration-tests.md) | Done | P2 | 35.1, 35.3 |
+| 35.6 | [Wire Executor into kf-orchestrator ModelClient](35.6-orchestrator-modelclient-wiring.md) | Done (core scope trimmed per owner instruction; follow-ups below) | P2 | 35.1, 35.3 |
+| 35.7 | [Version badge consistency gate](35.7-version-badge-gate.md) | Done | P3 | — |
 
 ### Series 36 — Close the WO 35 remainders; unify orchestration
 
@@ -739,13 +739,13 @@ deferral, not a new wish). See [WO 36.0](36.0-wo36-overview.md).
 
 | WO | Title | Status | Priority | Depends on |
 |----|-------|--------|----------|------------|
-| 36.0 | [Series overview](36.0-wo36-overview.md) | In Progress | — | — |
-| 36.1 | [Measure release binary; decide rusqlite](36.1-binary-size-rusqlite.md) | Pending | P1 | — |
-| 36.2 | [Bash-job owner tracking + cancel-by-owner](36.2-bash-job-owner-tracking.md) | Pending | P1 | — |
-| 36.3 | [Abort model streams mid-request on cancel](36.3-stream-abort.md) | Pending | P1 | — |
-| 36.4 | [Live cancel token for the parent session](36.4-parent-cancel-token.md) | Pending | P2 | 36.3 |
-| 36.5 | [Production-wire the ModelClient seam](36.5-modelclient-production-wiring.md) | Pending | P2 | 36.3, 36.4 |
-| 36.6 | [EventSink → EventBus bridge](36.6-eventsink-bridge.md) | Pending | P3 | folds into 36.5 |
+| 36.0 | [Series overview](36.0-wo36-overview.md) | Done | — | — |
+| 36.1 | [Measure release binary; decide rusqlite](36.1-binary-size-rusqlite.md) | Done | P1 | — |
+| 36.2 | [Bash-job owner tracking + cancel-by-owner](36.2-bash-job-owner-tracking.md) | Done | P1 | — |
+| 36.3 | [Abort model streams mid-request on cancel](36.3-stream-abort.md) | Done | P1 | — |
+| 36.4 | [Live cancel token for the parent session](36.4-parent-cancel-token.md) | Done | P2 | 36.3 |
+| 36.5 | [Production-wire the ModelClient seam](36.5-modelclient-production-wiring.md) | Done (all three steps landed; 36.6 folded in as step 3) | P2 | 36.3, 36.4 |
+| 36.6 | [EventSink → EventBus bridge](36.6-eventsink-bridge.md) | Done (folded into WO 36.5 step 3) | P3 | folds into 36.5 |
 ### Series 37 — Registry hardening + the reducer
 
 Post-WO-36 residuals. See [WO 37.0](37.0-wo37-overview.md). CLI/UX
@@ -754,8 +754,8 @@ deferred to its own analysis-first series (WO 38 candidate).
 | WO | Title | Status | Priority | Depends on |
 |----|-------|--------|----------|------------|
 | 37.0 | [Series overview](37.0-wo37-overview.md) | Done | — | — |
-| 37.1 | [BashJobRegistry hardening](37.1-registry-hardening.md) | Pending | P1 | — |
-| 37.2 | [The reducer: make packet real](37.2-reducer.md) | Pending | P2 | — |
+| 37.1 | [BashJobRegistry hardening](37.1-registry-hardening.md) | Done | P1 | — |
+| 37.2 | [The reducer: make packet real](37.2-reducer.md) | Done | P2 | — |
 ### Series 38 — Stability plumbing (12-audit synthesis)
 
 Driven by twelve read-only audit agents (~120 findings, deduplicated).
@@ -764,19 +764,19 @@ See [WO 38.0](38.0-wo38-overview.md). WO 39 carries the strategic half.
 | WO | Title | Status | Priority |
 |----|-------|--------|----------|
 | 38.0 | [Series overview](38.0-wo38-overview.md) | In Progress | — |
-| 38.1 | [Security chokepoints](38.1-security-chokepoints.md) | Pending | P0 |
-| 38.2 | [Panic containment + terminal survival](38.2-panic-containment.md) | Pending | P0 |
+| 38.1 | [Security chokepoints](38.1-security-chokepoints.md) | Done | P0 |
+| 38.2 | [Panic containment + terminal survival](38.2-panic-containment.md) | Done | P0 |
 | 38.3 | [Liveness: async I/O discipline](38.3-liveness.md) | Done | P0 |
-| 38.4 | [Orchestration correctness](38.4-orchestration-correctness.md) | Pending | P0 |
-| 38.5 | [Adapter robustness](38.5-adapter-robustness.md) | Pending | P0 |
-| 38.6 | [Crash-corruption recovery](38.6-crash-recovery.md) | Pending | P1 |
-| 38.7 | [Resource lifecycle + worktree sweep](38.7-resource-lifecycle.md) | Pending | P1 |
-| 38.8 | [Wire the budget guard (thesis)](38.8-budget-guard-wiring.md) | Pending | P1 |
+| 38.4 | [Orchestration correctness](38.4-orchestration-correctness.md) | Done | P0 |
+| 38.5 | [Adapter robustness](38.5-adapter-robustness.md) | Done | P0 |
+| 38.6 | [Crash-corruption recovery](38.6-crash-recovery.md) | Done | P1 |
+| 38.7 | [Resource lifecycle + worktree sweep](38.7-resource-lifecycle.md) | Done | P1 |
+| 38.8 | [Wire the budget guard (thesis)](38.8-budget-guard-wiring.md) | Done | P1 |
 | 38.9 | [Long-session performance](38.9-session-performance.md) | Pending | P1 |
-| 38.10 | [CLI first-run + scriptability](38.10-cli-first-run.md) | Pending | P1 |
+| 38.10 | [CLI first-run + scriptability](38.10-cli-first-run.md) | Done (P0 + P1 core; P2 deferred) | P1 |
 | 38.11 | [TUI state hygiene](38.11-tui-state-hygiene.md) | Pending | P1 |
 | 38.12 | [Test hygiene completion](38.12-test-hygiene.md) | Pending | P2 |
-| 38.13 | [Docs truth pass + WO reconcile](38.13-docs-truth-pass.md) | Pending | P1 |
+| 38.13 | [Docs truth pass + WO reconcile](38.13-docs-truth-pass.md) | Done | P1 |
 
 ### Series 39 — Prove the thesis, borrow the ecosystem
 
@@ -798,8 +798,8 @@ than 20 hours next week watching CI operations.
 | WO | Title | Status |
 |----|-------|--------|
 | 40.0 | [Series overview](40.0-wo40-overview.md) | In Progress |
-| 40.1 | [CI workflow architecture reset](40.1-ci-workflow-reset.md) | Pending |
-| 40.2 | [Windows cross-compile gate + one-pass fix](40.2-windows-cross-compile-gate.md) | Pending |
-| 40.3 | [Nextest profiles + timeout policy](40.3-nextest-profiles.md) | Pending |
+| 40.1 | [CI workflow architecture reset](40.1-ci-workflow-reset.md) | Done |
+| 40.2 | [Windows cross-compile gate + one-pass fix](40.2-windows-cross-compile-gate.md) | Done (P0 — this is the fix for the recurring 25+ |
+| 40.3 | [Nextest profiles + timeout policy](40.3-nextest-profiles.md) | Done |
 | 40.4 | [Sleep elimination (30+ tests)](40.4-sleep-elimination.md) | Pending |
-| 40.5 | [Global state isolation](40.5-global-state-isolation.md) | Pending |
+| 40.5 | [Global state isolation](40.5-global-state-isolation.md) | Done |

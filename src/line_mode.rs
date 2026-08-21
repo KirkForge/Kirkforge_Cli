@@ -37,9 +37,18 @@ pub enum LineReader {
     Interactive {
         editor: Arc<Mutex<Option<Box<rustyline::DefaultEditor>>>>,
         history_path: PathBuf,
+        /// One-shot primed input (WO 38.10 `--prompt`/`-p`). Yielded once
+        /// before the editor is consulted, so a CLI arg can seed the first
+        /// turn without piping. `None` after the first `next_line`.
+        primed: Option<String>,
     },
     /// Plain `stdin` reader for pipes and non-interactive runs.
-    Plain,
+    Plain {
+        /// One-shot primed input (WO 38.10 `--prompt`/`-p`). Yielded once
+        /// before stdin is read, so `kf-code run -p "hello"` reaches the
+        /// model without a pipe. `None` after the first `next_line`.
+        primed: Option<String>,
+    },
 }
 
 impl LineReader {
@@ -67,10 +76,22 @@ impl LineReader {
             return Ok(Self::Interactive {
                 editor: Arc::new(Mutex::new(Some(Box::new(editor)))),
                 history_path,
+                primed: None,
             });
         }
 
-        Ok(Self::Plain)
+        Ok(Self::Plain { primed: None })
+    }
+
+    /// Seed the reader with a one-shot first turn (WO 38.10 `--prompt`/`-p`).
+    /// The primed value is returned by the next `next_line` call, exactly
+    /// once, before the underlying source (editor or stdin) is consulted.
+    /// Calling this twice overwrites the prior primed value — intended for
+    /// a single CLI arg, not queued input.
+    pub fn prime(&mut self, prompt: String) {
+        match self {
+            Self::Interactive { primed, .. } | Self::Plain { primed } => *primed = Some(prompt),
+        }
     }
 
     /// Read the next line from the user.
@@ -83,7 +104,14 @@ impl LineReader {
             Self::Interactive {
                 editor,
                 history_path,
+                primed,
             } => {
+                // Yield the primed `--prompt`/`-p` value once before the
+                // editor (WO 38.10). A primed value is a single turn even
+                // when it contains blank lines.
+                if let Some(p) = primed.take() {
+                    return Ok(Some(p));
+                }
                 let editor = editor.clone();
                 let history_path = history_path.clone();
                 let result = tokio::task::spawn_blocking(move || {
@@ -126,7 +154,14 @@ impl LineReader {
                     Err(e) => Err(e.into()),
                 }
             }
-            Self::Plain => {
+            Self::Plain { primed } => {
+                // Yield the primed `--prompt`/`-p` value once before stdin
+                // (WO 38.10). A primed value is a single turn even when it
+                // contains blank lines — fixes the multi-paragraph pipe
+                // truncation for the arg form.
+                if let Some(p) = primed.take() {
+                    return Ok(Some(p));
+                }
                 let line = tokio::task::spawn_blocking(|| {
                     let stdin = std::io::stdin();
                     let mut reader = stdin.lock();
@@ -163,7 +198,7 @@ mod tests {
         // Pipes and redirects always fall back to the plain reader.
         let reader = LineReader::new(true).unwrap();
         assert!(
-            matches!(reader, LineReader::Plain),
+            matches!(reader, LineReader::Plain { .. }),
             "expected plain reader for non-tty stdin"
         );
     }
@@ -176,5 +211,43 @@ mod tests {
             .expect("data_dir should resolve")
             .join("line_history.txt");
         assert_eq!(expected.file_name().unwrap(), "line_history.txt");
+    }
+
+    /// `prime` seeds a one-shot first turn that `next_line` yields before
+    /// consulting stdin (WO 38.10 `--prompt`/`-p`). The primed value is
+    /// returned exactly once; the following read falls through to stdin.
+    #[tokio::test]
+    async fn primed_prompt_is_yielded_once_before_stdin() {
+        // Plain reader: stdin in a test is not a TTY, so this exercises the
+        // real Plain branch. We prime an arbitrary value and expect it back
+        // on the first `next_line` without blocking on stdin.
+        let mut reader = LineReader::new(false).unwrap();
+        reader.prime("hello from -p".into());
+        let first = reader
+            .next_line()
+            .await
+            .expect("next_line should not error")
+            .expect("primed prompt should be Some");
+        assert_eq!(first, "hello from -p");
+    }
+
+    /// A primed value containing blank lines is a single turn — this is
+    /// the fix for the multi-paragraph pipe truncation (WO 38.10): piped
+    /// stdin still treats a blank line as a heredoc terminator, but a `-p`
+    /// arg is delivered whole.
+    #[tokio::test]
+    async fn primed_prompt_with_blank_lines_is_one_turn() {
+        let mut reader = LineReader::new(false).unwrap();
+        let multi = "first paragraph\n\nsecond paragraph".to_string();
+        reader.prime(multi.clone());
+        let first = reader
+            .next_line()
+            .await
+            .expect("next_line should not error")
+            .expect("primed prompt should be Some");
+        assert_eq!(
+            first, multi,
+            "primed multi-paragraph prompt must arrive whole"
+        );
     }
 }

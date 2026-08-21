@@ -40,15 +40,32 @@ pub struct Cli {
 pub enum Command {
     /// Start an interactive coding session.
     Run {
+        /// Model name to use for this session. Overrides `default_model` in
+        /// config.toml for this invocation only (not persisted). Examples:
+        /// `qwen2.5:0.5b` (Ollama), `claude-3-5-sonnet` (Anthropic, needs
+        /// `anthropic_api_key`), `gpt-4o` (OpenAI-compat, needs
+        /// `openai_api_key`). If unset and `default_model` is empty, the
+        /// session exits 3 (model unreachable) with a setup hint.
         #[arg(short, long)]
         model: Option<String>,
 
+        /// Ollama (or OpenAI-compat) host URL. Overrides
+        /// `model.ollama_host` in config.toml for this invocation. Example:
+        /// `--host http://localhost:11434`. Cloud providers ignore this.
         #[arg(long)]
         host: Option<String>,
 
+        /// Force a specific adapter type, bypassing `adapter_routing`
+        /// prefix matching. One of: `Ollama`, `Anthropic`, `OpenAiCompat`,
+        /// `DeepSeek`, `Gemini`, `Bedrock`, `Vertex`. Rarely needed —
+        /// `adapter_routing` in config.toml usually picks the right one.
         #[arg(long)]
         model_type: Option<String>,
 
+        /// Auto-approve every destructive tool call this session. Equivalent
+        /// to `auto_approve = true` in config.toml but scoped to this run
+        /// (not persisted). Use only on trusted prompts; there is no
+        /// per-call confirmation afterward.
         #[arg(long)]
         auto_approve: bool,
 
@@ -58,12 +75,25 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
 
+        /// Override the system prompt for this session. The value is used
+        /// verbatim in place of the built-in agent system prompt. Useful
+        /// for scripting a narrow task (`--system "Only output JSON."`).
         #[arg(short, long)]
         system: Option<String>,
 
+        /// Resume a prior session from a conversation log path. The path
+        /// must point to a `*.conv.ndjson` file. Use `--continue-session`
+        /// instead to resume by session id (resolves the path for you).
         #[arg(short, long)]
         resume: Option<String>,
 
+        /// Non-interactive (scripted) mode: read prompts from stdin (one
+        /// turn per non-empty line) and deny all destructive tool calls
+        /// unless `auto_approve` is set. Implies line mode (no TUI). This
+        /// flag denies every approval by default — pair with
+        /// `--auto-approve` (or `auto_approve = true` in config.toml) to
+        /// let destructive tools run unattended. Stdin EOF or a blank line
+        /// ends the session (heredoc terminator).
         #[arg(long)]
         non_interactive: bool,
 
@@ -149,6 +179,15 @@ pub enum Command {
         /// `<data-dir>/<session-id>.trace.ndjson` for later replay.
         #[arg(long)]
         no_trace: bool,
+
+        /// One-shot prompt (WO 38.10): run this single prompt as the first
+        /// turn, then continue from stdin (or exit on EOF). Forces line
+        /// mode (no TUI) so the prompt runs unattended. The value is one
+        /// turn even if it contains blank lines — fixes the
+        /// multi-paragraph pipe truncation that affects piped stdin. Use
+        /// for scripting: `kf-code run -p "explain this file" --no-tui`.
+        #[arg(short, long)]
+        prompt: Option<String>,
     },
     /// Print shell completion script and exit.
     /// Example: kf-code completions bash >> ~/.bashrc
@@ -744,6 +783,35 @@ mod tests {
         let cli = Cli::try_parse_from(["kf-code", "run", "-m", "qwen2.5:0.5b"]).expect("parse");
         match cli.command {
             Command::Run { model, .. } => assert_eq!(model.as_deref(), Some("qwen2.5:0.5b")),
+            _ => panic!("expected Run"),
+        }
+    }
+
+    /// `run -p "<prompt>"` (WO 38.10) parses into the `prompt` field.
+    /// Both the short `-p` and long `--prompt` forms must work.
+    #[test]
+    fn run_with_prompt_parses() {
+        let cli = Cli::try_parse_from(["kf-code", "run", "-p", "hello world"]).expect("parse");
+        match cli.command {
+            Command::Run { prompt, .. } => assert_eq!(prompt.as_deref(), Some("hello world")),
+            _ => panic!("expected Run"),
+        }
+        let cli =
+            Cli::try_parse_from(["kf-code", "run", "--prompt", "explain this"]).expect("parse");
+        match cli.command {
+            Command::Run { prompt, .. } => assert_eq!(prompt.as_deref(), Some("explain this")),
+            _ => panic!("expected Run"),
+        }
+    }
+
+    /// A multi-paragraph `-p` value survives intact (no blank-line
+    /// truncation at the parser layer). The heredoc-terminator behaviour
+    /// only applies to piped stdin, not to the arg form (WO 38.10).
+    #[test]
+    fn run_prompt_with_blank_lines_parses_whole() {
+        let cli = Cli::try_parse_from(["kf-code", "run", "-p", "first\n\nsecond"]).expect("parse");
+        match cli.command {
+            Command::Run { prompt, .. } => assert_eq!(prompt.as_deref(), Some("first\n\nsecond")),
             _ => panic!("expected Run"),
         }
     }

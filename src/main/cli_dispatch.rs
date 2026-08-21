@@ -142,6 +142,7 @@ pub async fn main() {
             block_edits,
             i_accept_unsandboxed,
             no_trace,
+            prompt,
         } => {
             run_session(RunArgs {
                 model,
@@ -166,6 +167,7 @@ pub async fn main() {
                 block_edits,
                 i_accept_unsandboxed,
                 no_trace,
+                prompt,
             })
             .await
         }

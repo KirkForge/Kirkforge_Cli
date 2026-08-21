@@ -131,11 +131,12 @@ pub fn load_config() -> (Config, Option<String>) {
     (cfg, warning)
 }
 
-// First-run onboarding banner text (WO 14.1). Printed to stdout in
+// First-run onboarding banner text (WO 14.1). Printed to stderr in
 // `load_or_create_config` when a new config file is written, so a new
-// user gets a concrete next step instead of silent success. Kept as a
-// pure helper so the exact wording is unit-testable without capturing
-// stdout.
+// user gets a concrete next step instead of silent success. Routed to
+// stderr (WO 38.10) so it cannot pollute machine-readable stdout when
+// `--output stream-json` runs on a fresh data dir. Kept as a pure
+// helper so the exact wording is unit-testable without capturing stdout.
 fn first_run_banner(path: &std::path::Path) -> String {
     format!(
         "Config created at {}. Next: set a model — try `kf-code run -m qwen2.5:0.5b` \
@@ -171,7 +172,39 @@ fn legacy_config_path() -> Option<PathBuf> {
 /// pre-rename path, it is migrated (copied) to the new location
 /// instead of writing defaults — preserving user customizations across
 /// the `kirkforge → kf-code` rename.
+///
+/// **Lenient on parse errors**: a hard TOML parse failure in an existing
+/// config file is downgraded to a stderr warning and defaults are used
+/// (the `warning` from `load_config`). Use [`load_or_create_config_strict`]
+/// on the `run`/`bench` paths where a corrupt config must stop the
+/// process with exit 5 instead of silently falling back to defaults.
 pub fn load_or_create_config() -> Config {
+    load_or_create_config_impl(false).unwrap_or_else(|e| {
+        // Lenient path: a hard parse error is surfaced as a warning and
+        // we fall back to defaults. This preserves the historical
+        // behaviour for plugin/legacy callers that don't gate on config
+        // validity.
+        let path = super::config_path();
+        eprintln!("Warning: {e} ({})", path.display());
+        Config::default()
+    })
+}
+
+/// Strict variant (WO 38.10): like [`load_or_create_config`] but returns
+/// `Err` on a hard TOML parse failure in an existing config file. Used on
+/// the `run` and `bench run` paths so a corrupt config stops the process
+/// (the dispatcher classifies the error as `ConfigParse` → exit 5)
+/// instead of silently running with defaults. First-run (no config file)
+/// and unknown-key soft-merge warnings are NOT errors — only a TOML
+/// syntax error in an existing file is.
+pub fn load_or_create_config_strict() -> anyhow::Result<Config> {
+    load_or_create_config_impl(true)
+}
+
+// Shared body for the lenient and strict variants. `strict` controls
+// whether a hard parse error in an existing config file is returned as
+// `Err` (strict) or downgraded to a warning + defaults (lenient).
+fn load_or_create_config_impl(strict: bool) -> anyhow::Result<Config> {
     let path = super::config_path();
     let exists = path.exists();
 
@@ -194,17 +227,28 @@ pub fn load_or_create_config() -> Config {
                     );
                     let (cfg, warning) = load_config();
                     if let Some(w) = warning {
-                        eprintln!("Warning: {} ({})", w, path.display());
+                        if strict {
+                            return Err(anyhow::anyhow!("{w}"));
+                        }
+                        eprintln!("Warning: {w} ({})", path.display());
                     }
-                    return cfg;
+                    return Ok(cfg);
                 }
             }
         }
     }
 
     let (cfg, warning) = load_config();
-    if let Some(w) = warning {
-        eprintln!("Warning: {} ({})", w, path.display());
+    if let Some(w) = &warning {
+        if strict && exists {
+            // Hard parse failure in an existing config: surface as Err so
+            // the dispatcher exits 5. The message already says "Failed to
+            // parse config (...)". Unknown-key soft-merge warnings never
+            // reach here (merge_toml_into_config ignores unknown keys
+            // silently), so only a real TOML syntax error trips this.
+            return Err(anyhow::anyhow!("{w}"));
+        }
+        eprintln!("Warning: {w} ({})", path.display());
     }
 
     if !exists {
@@ -233,7 +277,7 @@ pub fn load_or_create_config() -> Config {
                         );
                     }
                 }
-                println!("{}", first_run_banner(&path));
+                eprintln!("{}", first_run_banner(&path));
                 tracing::info!(
                     "Config file created at {}. Edit it to customize model, host, etc.",
                     path.display()
@@ -246,7 +290,7 @@ pub fn load_or_create_config() -> Config {
         }
     }
 
-    cfg
+    Ok(cfg)
 }
 
 /// Save config to disk.
@@ -2177,13 +2221,15 @@ mod tests {
     }
 
     #[test]
-    fn first_run_banner_printed_to_stdout() {
+    fn first_run_banner_printed_to_stderr() {
         let path = std::path::PathBuf::from("/tmp/kf-code/config.toml");
         let banner = first_run_banner(&path);
-        // The banner is what `load_or_create_config` prints via `println!`
-        // on a first run (no config file present). Asserting on the helper
-        // output avoids fragile in-process stdout capture while pinning the
-        // exact user-visible wording.
+        // The banner is what `load_or_create_config` prints via `eprintln!`
+        // on a first run (no config file present). Routed to stderr (WO
+        // 38.10) so `--output stream-json` on a fresh data dir keeps stdout
+        // byte-clean. Asserting on the helper output avoids fragile
+        // in-process stdout capture while pinning the exact user-visible
+        // wording.
         assert!(banner.contains("Config created"), "got: {banner}");
         assert!(banner.contains("/tmp/kf-code/config.toml"), "got: {banner}");
         assert!(banner.contains("-m qwen2.5:0.5b"), "got: {banner}");
@@ -2222,6 +2268,106 @@ mod tests {
             "second run must see the file present (banner suppressed)"
         );
         let _cfg2 = load_or_create_config();
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WO 38.10: a hard TOML parse failure in an existing config.toml must
+    /// surface as `Err` from the strict variant (→ exit 5 in the
+    /// dispatcher) instead of silently falling back to defaults. The
+    /// lenient `load_or_create_config` keeps the historical warn+defaults
+    /// behaviour. Unknown-key soft-merge warnings are NOT errors — only a
+    /// real TOML syntax error trips the strict path.
+    #[test]
+    fn strict_config_load_fails_on_hard_parse_error() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = std::env::temp_dir().join(format!(
+            "kf_code_strict_parse_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let _env =
+            crate::shared::test_util::EnvGuard::set("KF_CODE_DATA_DIR", dir.to_str().unwrap());
+        let config_path = super::super::config_path();
+
+        // First run: writes a valid default config (no error).
+        let _cfg = load_or_create_config_strict().expect("first run must succeed");
+        assert!(config_path.exists(), "first run created the config file");
+
+        // Corrupt the config with a TOML syntax error (unterminated
+        // string / bad table). This is a hard parse failure, not an
+        // unknown-key warning.
+        std::fs::write(&config_path, "default_model = \"qwen\n[bad =").unwrap();
+
+        // Strict variant must return Err so the dispatcher exits 5.
+        let res = load_or_create_config_strict();
+        assert!(
+            res.is_err(),
+            "strict load must fail on a hard TOML parse error, got Ok"
+        );
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("Failed to parse config"),
+            "strict load error must mention the parse failure, got: {err}"
+        );
+
+        // Lenient variant keeps the historical behaviour: warn + defaults.
+        let cfg = load_or_create_config();
+        assert!(
+            cfg.model.default_model.is_empty(),
+            "lenient load falls back to defaults on parse error"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WO 38.10: unknown keys in an otherwise-valid config are a soft
+    /// merge (ignored), NOT a hard parse error. The strict variant must
+    /// return `Ok` for an unknown-key config — only a real TOML syntax
+    /// error trips exit 5.
+    #[test]
+    fn strict_config_load_ignores_unknown_keys() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = std::env::temp_dir().join(format!(
+            "kf_code_strict_unknown_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let _env =
+            crate::shared::test_util::EnvGuard::set("KF_CODE_DATA_DIR", dir.to_str().unwrap());
+        let config_path = super::super::config_path();
+
+        // First run: writes a valid default config.
+        let _cfg = load_or_create_config_strict().expect("first run must succeed");
+        assert!(config_path.exists());
+
+        // Write a valid TOML file with an unknown key. This parses fine
+        // (merge_toml_into_config ignores unknown keys), so the strict
+        // variant must NOT error.
+        std::fs::write(
+            &config_path,
+            "default_model = \"qwen2.5:0.5b\"\nunknown_key = 42\n",
+        )
+        .unwrap();
+
+        let cfg = load_or_create_config_strict().expect(
+            "strict load must succeed for a valid TOML file with unknown keys (soft merge)",
+        );
+        assert_eq!(cfg.model.default_model, "qwen2.5:0.5b");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

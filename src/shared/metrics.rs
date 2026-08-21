@@ -326,12 +326,31 @@ static TEST_LOCK: Mutex<()> = Mutex::new(());
 static TEST_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Resolve the metrics log path inside the platform data directory.
+///
+/// Honors `KF_CODE_DATA_DIR` (WO 38.10) so `kf-code metrics` / `verify`
+/// read the same installation the operator pointed the rest of the CLI
+/// at. Without this, a `KF_CODE_DATA_DIR` override (common on macOS/Windows
+/// dev boxes with multiple installs) made `metrics`/`verify` read a
+/// different installation's `metrics.ndjson` than the one `run` wrote to.
+/// `session::data_dir()` already honors this env var; this mirrors it for
+/// the metrics path so both resolve consistently.
 pub fn metrics_path() -> Option<PathBuf> {
     #[cfg(test)]
     {
         if let Some(path) = PATH_OVERRIDE.with(|o| o.borrow().clone()) {
             return Some(path);
         }
+    }
+    // WO 38.10: prefer the operator's explicit data-dir override so
+    // metrics/verify stay consistent with the installation that `run`
+    // writes to. Matches `session::data_dir()` precedence (env var first,
+    // then the platform default).
+    if let Ok(dir) = std::env::var("KF_CODE_DATA_DIR") {
+        let path = PathBuf::from(dir).join("metrics.ndjson");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok()?;
+        }
+        return Some(path);
     }
     let dirs = directories::ProjectDirs::from("", "KirkForge", "kf-code")?;
     let data = dirs.data_local_dir();
@@ -919,5 +938,39 @@ mod tests {
         // The report either shows "No verifier verdicts" or a table;
         // we just assert it doesn't panic.
         assert!(!report.is_empty());
+    }
+
+    /// WO 38.10: `metrics_path()` honors `KF_CODE_DATA_DIR` so `kf-code
+    /// metrics`/`verify` read the same installation `run` writes to.
+    /// Without this, an override pointed the rest of the CLI at one
+    /// data dir but metrics at the platform default. The thread-local
+    /// `PATH_OVERRIDE` (set by `with_test_path`) must be clear so the
+    /// env-var branch is exercised; `TEST_LOCK` serializes env mutation.
+    #[test]
+    fn metrics_path_honors_kf_code_data_dir() {
+        let _lock = super::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Ensure the thread-local test override is clear so the env-var
+        // branch is reached (other tests in this thread may have set it).
+        PATH_OVERRIDE.with(|o| *o.borrow_mut() = None);
+
+        let dir = std::env::temp_dir().join(format!(
+            "kf_code_metrics_env_test_{}_{}",
+            std::process::id(),
+            TEST_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let _env = crate::shared::test_util::EnvGuard::set("KF_CODE_DATA_DIR", dir.as_os_str());
+
+        let path = metrics_path().expect("metrics_path should resolve under KF_CODE_DATA_DIR");
+        assert_eq!(
+            path,
+            dir.join("metrics.ndjson"),
+            "metrics_path must honor KF_CODE_DATA_DIR, got {path:?}"
+        );
+
+        PATH_OVERRIDE.with(|o| *o.borrow_mut() = None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -59,6 +59,12 @@ pub(super) async fn run_line_mode(
     trace_recorder: Option<session::replay::TraceRecorder>,
     mcp_manager: Option<std::sync::Arc<session::mcp_client::McpClientManager>>,
     session_stores: session::SessionStores,
+    // One-shot prompt from `--prompt`/`-p` (WO 38.10). When set, it is
+    // run as the first turn before the stdin loop starts, so
+    // `kf-code run -p "hello"` reaches the model without piping. The
+    // value is a single turn even if it contains blank lines (fixes the
+    // multi-paragraph pipe truncation for the arg form).
+    prompt: Option<String>,
 ) -> anyhow::Result<()> {
     // If running in non-interactive mode (scripted), deny all approvals.
     // If running in line-mode interactive (no TUI), prompt on stderr and
@@ -127,6 +133,15 @@ pub(super) async fn run_line_mode(
     let cancelled = std::sync::atomic::AtomicBool::new(false);
 
     let mut line_reader = line_mode::LineReader::new(!non_interactive)?;
+    // `--prompt`/`-p` one-shot (WO 38.10): prime the reader with the
+    // arg value as the first turn. `LineReader::prime` yields it once,
+    // then `next_line` falls back to stdin (interactive continuation or
+    // piped multi-turn). A `-p` value is a single turn even with
+    // internal blank lines — fixes the multi-paragraph pipe truncation
+    // for the arg form.
+    if let Some(p) = prompt {
+        line_reader.prime(p);
+    }
     let mut turn_no: usize = 0;
     let mut total_prompt_tokens: usize = 0;
     let mut total_completion_tokens: usize = 0;

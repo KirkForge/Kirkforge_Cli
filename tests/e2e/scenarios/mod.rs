@@ -32,6 +32,7 @@ pub mod config_isolation;
 pub mod daemon_ping;
 pub mod mock_error_response;
 pub mod plain_chat;
+pub mod prompt_flag;
 pub mod retry_5xx;
 pub mod tool_approval;
 pub mod tui_approval;

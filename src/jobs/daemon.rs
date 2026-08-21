@@ -65,14 +65,16 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
         }
     }
 
-    // Write PID file.
+    let listener = UnixListener::bind(&socket_path)
+        .with_context(|| format!("bind jobd socket at {}", socket_path.display()))?;
+
+    // Write PID file only after the socket is bound. If bind fails, no
+    // stale PID is left behind for a daemon that never started (mirrors
+    // src/daemon/server.rs:63-71).
     let pid = std::process::id();
     if let Err(e) = std::fs::write(&pid_path, format!("{pid}\n")) {
         tracing::warn!(error = %e, path = %pid_path.display(), "Failed to write jobd PID file");
     }
-
-    let listener = UnixListener::bind(&socket_path)
-        .with_context(|| format!("bind jobd socket at {}", socket_path.display()))?;
 
     let store = Arc::new(Mutex::new(JobStore::new(crate::session::jobs_dir()?)));
     store.lock().await.ensure_root()?;

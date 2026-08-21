@@ -324,8 +324,26 @@ impl McpClient {
                 return None;
             }
         };
-        let stdin = child.stdin.take()?;
-        let stdout = child.stdout.take()?;
+        // Take stdin/stdout before wiring; if either is missing the spawn
+        // is unusable. Kill the child first so a `?` early-return does not
+        // orphan it (the child was already spawned with piped stdio but
+        // setup_process_group does not set kill_on_drop on the MCP server).
+        let stdin = match child.stdin.take() {
+            Some(s) => s,
+            None => {
+                kill_process_group(&mut child);
+                tracing::warn!(server = %config.name, "MCP server stdin unavailable; killed orphan");
+                return None;
+            }
+        };
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                kill_process_group(&mut child);
+                tracing::warn!(server = %config.name, "MCP server stdout unavailable; killed orphan");
+                return None;
+            }
+        };
         let stderr = child.stderr.take();
 
         let alive = Arc::new(AtomicBool::new(true));

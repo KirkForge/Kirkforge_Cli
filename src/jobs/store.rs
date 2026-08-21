@@ -89,7 +89,7 @@ impl JobStore {
 
         let path = self.job_path(&job.id);
         let temp = path.with_extension("json.tmp");
-        {
+        let result = (|| -> Result<()> {
             let file = fs::File::create(&temp)
                 .with_context(|| format!("creating temporary job file {}", temp.display()))?;
             #[cfg(unix)]
@@ -100,15 +100,21 @@ impl JobStore {
             }
             serde_json::to_writer_pretty(file, job)
                 .with_context(|| format!("serializing job {}", job.id))?;
+            crate::tools::atomic_write::rename_with_retry(&temp, &path).with_context(|| {
+                format!(
+                    "renaming temporary job file {} to {}",
+                    temp.display(),
+                    path.display()
+                )
+            })?;
+            Ok(())
+        })();
+        // Remove a leftover .tmp on any failure so a half-written temp
+        // file does not accumulate (mirrors atomic_write.rs:46-49).
+        if result.is_err() {
+            let _ = fs::remove_file(&temp);
         }
-        crate::tools::atomic_write::rename_with_retry(&temp, &path).with_context(|| {
-            format!(
-                "renaming temporary job file {} to {}",
-                temp.display(),
-                path.display()
-            )
-        })?;
-        Ok(())
+        result
     }
 
     /// List all jobs on disk, skipping entries whose `job.json` cannot be
@@ -194,7 +200,7 @@ impl JobStore {
         let runs_dir = self.runs_dir(&job.id);
         let summary_path = runs_dir.join(&run.run_id).join("run.json");
         let temp = summary_path.with_extension("tmp");
-        {
+        let result = (|| -> Result<()> {
             let file = fs::File::create(&temp)
                 .with_context(|| format!("creating temporary run summary {}", temp.display()))?;
             #[cfg(unix)]
@@ -205,14 +211,22 @@ impl JobStore {
             }
             serde_json::to_writer_pretty(file, run)
                 .with_context(|| format!("serializing run {}", run.run_id))?;
+            crate::tools::atomic_write::rename_with_retry(&temp, &summary_path).with_context(
+                || {
+                    format!(
+                        "renaming temporary run summary {} to {}",
+                        temp.display(),
+                        summary_path.display()
+                    )
+                },
+            )?;
+            Ok(())
+        })();
+        // Remove a leftover .tmp on any failure (mirrors atomic_write.rs:46-49).
+        if result.is_err() {
+            let _ = fs::remove_file(&temp);
         }
-        crate::tools::atomic_write::rename_with_retry(&temp, &summary_path).with_context(|| {
-            format!(
-                "renaming temporary run summary {} to {}",
-                temp.display(),
-                summary_path.display()
-            )
-        })?;
+        result?;
 
         job.last_run = Some(run.clone());
         self.save(job)?;

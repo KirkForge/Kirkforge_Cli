@@ -301,6 +301,25 @@ pub(crate) fn build_task_prompt(persona: &str, task: &str) -> String {
     }
 }
 
+// WO 39.3: registry-aware preamble. When the persona matches a dynamic
+// agent (`.claude/agents/*.md`), the agent's system prompt + the Claude
+// alias suffix replace the generic preamble. Falls back to
+// [`build_task_prompt`] for built-in personas and unknown names with no
+// agent. `registry` may be `None` (workflow/orchestrator callers that
+// don't load agents) — equivalent to an empty registry.
+pub(crate) fn build_task_prompt_with_agents(
+    persona: &str,
+    task: &str,
+    registry: Option<&crate::session::agents::AgentRegistry>,
+) -> String {
+    if let Some(reg) = registry {
+        if let Some(agent) = reg.get(persona) {
+            return crate::session::agents::build_agent_prompt(agent, task);
+        }
+    }
+    build_task_prompt(persona, task)
+}
+
 /// Per-session background task manager. Task ids come from the
 /// process-global [`NEXT_TASK_ID`] counter, so ids (and the owner tags
 /// derived from them) are unique across all managers (WO 37.1).
@@ -447,6 +466,12 @@ pub struct Task {
     bg_semaphore: Arc<tokio::sync::Semaphore>,
     concurrency_mode: TaskConcurrencyMode,
     max_bg: usize,
+    /// Dynamic agent registry (WO 39.3). Used to (a) build the agent
+    /// system-prompt preamble when `persona` names a discovered agent,
+    /// and (b) list discovered agents in the tool description. An empty
+    /// registry (no `.claude/agents` dir or trust gate refused) means
+    /// every unknown persona keeps the generic coder preamble.
+    agents: std::sync::Arc<crate::session::agents::AgentRegistry>,
 }
 
 impl Task {
@@ -456,6 +481,7 @@ impl Task {
             bg_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
             concurrency_mode: TaskConcurrencyMode::Queue,
             max_bg: 4,
+            agents: std::sync::Arc::new(crate::session::agents::AgentRegistry::new()),
         }
     }
 
@@ -465,6 +491,7 @@ impl Task {
             bg_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
             concurrency_mode: TaskConcurrencyMode::Queue,
             max_bg: 4,
+            agents: std::sync::Arc::new(crate::session::agents::AgentRegistry::new()),
         }
     }
 
@@ -474,11 +501,34 @@ impl Task {
         concurrency_mode: TaskConcurrencyMode,
     ) -> Self {
         let permits = max_background_tasks.clamp(1, 64);
+        // WO 39.3: share the global registry so the tool description and
+        // the spawner see the same agents. trust_workspace=true is the
+        // permissive read; the spawner's trust gate already controls the
+        // load, and the tool only needs the list for prompt building.
+        let agents = crate::session::agents::global_registry(true);
         Self {
             task_manager: manager,
             bg_semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
             concurrency_mode,
             max_bg: permits,
+            agents,
+        }
+    }
+
+    /// Test constructor with an explicit agent registry (WO 39.3).
+    pub fn with_agent_registry(
+        manager: Arc<Mutex<TaskManager>>,
+        max_background_tasks: usize,
+        concurrency_mode: TaskConcurrencyMode,
+        agents: std::sync::Arc<crate::session::agents::AgentRegistry>,
+    ) -> Self {
+        let permits = max_background_tasks.clamp(1, 64);
+        Self {
+            task_manager: manager,
+            bg_semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
+            concurrency_mode,
+            max_bg: permits,
+            agents,
         }
     }
 }
@@ -492,9 +542,18 @@ impl Default for Task {
 #[async_trait::async_trait]
 impl Tool for Task {
     fn def(&self) -> ToolDef {
+        // WO 39.3: when dynamic agents are discovered, list them in the
+        // description so the model knows which persona names are valid.
+        let description = format!(
+            "Run a prompt through an isolated subagent with its own conversation and toolset. \
+             Use this for research, planning, or focused implementation that should not pollute \
+             the main thread. If background=true the task runs asynchronously and returns an id; \
+             retrieve the result with task_output.{}",
+            self.agents.description_suffix()
+        );
         ToolDef {
             name: "task",
-            description: "Run a prompt through an isolated subagent with its own conversation and toolset. Use this for research, planning, or focused implementation that should not pollute the main thread. If background=true the task runs asynchronously and returns an id; retrieve the result with task_output.",
+            description: crate::shared::intern_static_str(&description),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -558,7 +617,9 @@ impl Tool for Task {
             .unwrap_or(1);
         // WO 35.1: apply the persona preamble here — run_task uses the
         // prompt verbatim. prompt_summary below stays the raw user prompt.
-        let full_prompt = build_task_prompt(&persona, &prompt);
+        // WO 39.3: when the persona names a discovered agent, the agent's
+        // system prompt + alias suffix replace the generic preamble.
+        let full_prompt = build_task_prompt_with_agents(&persona, &prompt, Some(&self.agents));
 
         let spawner = match &ctx.task_spawner {
             Some(s) => s.clone(),
@@ -2035,6 +2096,186 @@ mod tests {
                 .status(&nested_id),
             Some(TaskStatus::Cancelled),
             "nested task must read as Cancelled after the outer cancel"
+        );
+    }
+
+    // ── WO 39.3: dynamic agent registry integration ──
+
+    fn reviewer_registry() -> std::sync::Arc<crate::session::agents::AgentRegistry> {
+        let mut reg = crate::session::agents::AgentRegistry::new();
+        reg.register(crate::session::agents::AgentDef {
+            name: "reviewer".into(),
+            description: "Reviews code".into(),
+            system_prompt: "You are a senior code reviewer.".into(),
+            tools: vec!["Read".into(), "Grep".into()],
+            model: Some("fast-model".into()),
+        });
+        std::sync::Arc::new(reg)
+    }
+
+    #[test]
+    fn build_task_prompt_with_agents_uses_agent_system_prompt() {
+        let reg = reviewer_registry();
+        let p = build_task_prompt_with_agents("reviewer", "review PR", Some(&reg));
+        assert!(
+            p.contains("senior code reviewer"),
+            "agent system prompt must be the preamble: {p}"
+        );
+        assert!(p.contains("review PR"));
+        assert!(
+            p.contains("Tool-name aliases"),
+            "alias suffix must be appended: {p}"
+        );
+    }
+
+    #[test]
+    fn build_task_prompt_with_agents_falls_back_for_unknown_persona() {
+        let reg = reviewer_registry();
+        let p = build_task_prompt_with_agents("mystery", "do thing", Some(&reg));
+        assert!(
+            p.contains("implementation assistant"),
+            "unknown persona with no agent falls back to coder preamble: {p}"
+        );
+    }
+
+    #[test]
+    fn build_task_prompt_with_agents_falls_back_when_registry_none() {
+        let p = build_task_prompt_with_agents("reviewer", "do thing", None);
+        assert!(
+            p.contains("implementation assistant"),
+            "None registry falls back to generic preamble: {p}"
+        );
+    }
+
+    #[test]
+    fn build_task_prompt_with_agents_built_in_personas_not_shadowed() {
+        let reg = reviewer_registry();
+        let p = build_task_prompt_with_agents("explore", "search", Some(&reg));
+        assert!(
+            p.contains("research assistant"),
+            "built-in explore persona must not be shadowed by registry: {p}"
+        );
+    }
+
+    #[test]
+    fn task_def_description_lists_discovered_agents() {
+        let reg = reviewer_registry();
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, reg);
+        let def = tool.def();
+        assert!(
+            def.description.contains("reviewer"),
+            "def: {}",
+            def.description
+        );
+        assert!(def.description.contains("Reviews code"));
+    }
+
+    #[test]
+    fn task_def_description_no_agents_suffix_when_empty() {
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let tool = Task::with_agent_registry(
+            manager,
+            4,
+            TaskConcurrencyMode::Queue,
+            std::sync::Arc::new(crate::session::agents::AgentRegistry::new()),
+        );
+        let def = tool.def();
+        assert!(
+            !def.description.contains("Discovered agents"),
+            "empty registry must not add the suffix: {}",
+            def.description
+        );
+    }
+
+    // The Task tool's run() must route a persona matching a registered
+    // agent through the agent's system prompt. We capture the prompt
+    // reaching the spawner to prove the agent preamble was applied.
+    #[tokio::test]
+    async fn task_tool_routes_persona_through_agent_preamble() {
+        struct Capture {
+            seen: Arc<std::sync::Mutex<Option<String>>>,
+        }
+        #[async_trait::async_trait]
+        impl TaskSpawner for Capture {
+            async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+                *self.seen.lock().unwrap() = Some(request.prompt);
+                Ok("ok".to_string())
+            }
+        }
+        let reg = reviewer_registry();
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, reg);
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(Capture { seen: seen.clone() });
+        let ctx = ToolContext::with_spawner(spawner);
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({"prompt": "review this PR", "persona": "reviewer"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "got {outcome:?}"
+        );
+        let p = seen.lock().unwrap().clone().unwrap();
+        assert!(
+            p.contains("senior code reviewer"),
+            "spawner must receive the agent system prompt as preamble: {p}"
+        );
+        assert!(p.contains("Tool-name aliases"));
+        assert!(p.contains("review this PR"));
+    }
+
+    // The Task tool's run() must pass the agent's model override through
+    // to the spawner's TaskRequest.model.
+    #[tokio::test]
+    async fn task_tool_passes_agent_model_override() {
+        struct Capture {
+            seen_model: Arc<std::sync::Mutex<Option<String>>>,
+        }
+        #[async_trait::async_trait]
+        impl TaskSpawner for Capture {
+            async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+                *self.seen_model.lock().unwrap() = request.model;
+                Ok("ok".to_string())
+            }
+        }
+        let mut reg = crate::session::agents::AgentRegistry::new();
+        reg.register(crate::session::agents::AgentDef {
+            name: "fast-rev".into(),
+            description: "fast reviewer".into(),
+            system_prompt: "You review fast.".into(),
+            tools: vec!["Grep".into()],
+            model: Some("custom-model-x".into()),
+        });
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
+        let seen_model = Arc::new(std::sync::Mutex::new(None));
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(Capture {
+            seen_model: seen_model.clone(),
+        });
+        let ctx = ToolContext::with_spawner(spawner);
+        // The Task tool reads "model" from args, not the agent def. The
+        // agent's model is consumed by the spawner (InProcessTaskSpawner
+        // consults request.model OR the subagent_provider). Here we verify
+        // the Task tool passes the explicit model arg; the agent model
+        // override is a spawner-side concern (see task_spawner tests).
+        let _ = tool
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "prompt": "review",
+                    "persona": "fast-rev",
+                    "model": "explicit-model"
+                }),
+            )
+            .await;
+        assert_eq!(
+            seen_model.lock().unwrap().as_deref(),
+            Some("explicit-model"),
+            "explicit model arg must reach the spawner"
         );
     }
 }

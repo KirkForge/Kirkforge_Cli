@@ -109,6 +109,10 @@ pub struct InProcessTaskSpawner {
     /// are forwarded here so the parent's handler decides (WO 30.6).
     parent_approval:
         std::sync::Arc<std::sync::Mutex<Option<mpsc::UnboundedSender<ApprovalRequest>>>>,
+    /// Dynamic agent registry (WO 39.3). An unknown-persona request is
+    /// looked up here before falling back to the full toolset. `None` =
+    /// registry not loaded (behaves as today: full toolset).
+    agents: std::sync::Arc<crate::session::agents::AgentRegistry>,
 }
 
 impl InProcessTaskSpawner {
@@ -119,6 +123,13 @@ impl InProcessTaskSpawner {
         undo_stack: Option<UndoStackRef>,
         supports_images: bool,
     ) -> Self {
+        // WO 39.3: load the workspace agent registry once, honoring the
+        // trust gate. An empty registry (dir absent or refused) is fine —
+        // the `_` arm falls back to the full toolset as before.
+        let trust_workspace = crate::shared::read_shared_config(&config)
+            .tools
+            .plugin_trust_workspace;
+        let agents = crate::session::agents::global_registry(trust_workspace);
         Self {
             config,
             model_name,
@@ -126,6 +137,7 @@ impl InProcessTaskSpawner {
             undo_stack,
             supports_images,
             parent_approval: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            agents,
         }
     }
 
@@ -144,6 +156,28 @@ impl InProcessTaskSpawner {
     pub fn clear_parent_approval(&self) {
         if let Ok(mut guard) = self.parent_approval.lock() {
             *guard = None;
+        }
+    }
+
+    /// Test/explicit constructor with a pre-built agent registry (WO 39.3).
+    /// The default `new()` loads the global workspace registry; this lets
+    /// tests inject a populated registry without touching the filesystem.
+    pub fn with_agent_registry(
+        config: SharedConfig,
+        model_name: String,
+        ollama_host: String,
+        undo_stack: Option<UndoStackRef>,
+        supports_images: bool,
+        agents: std::sync::Arc<crate::session::agents::AgentRegistry>,
+    ) -> Self {
+        Self {
+            config,
+            model_name,
+            ollama_host,
+            undo_stack,
+            supports_images,
+            parent_approval: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            agents,
         }
     }
 }
@@ -316,6 +350,16 @@ impl InProcessTaskSpawner {
                 .parse()
                 .unwrap_or(TaskConcurrencyMode::Queue),
         });
+        // WO 39.3: an unknown persona name is looked up in the dynamic
+        // agent registry (`.claude/agents/*.md`). A hit restricts the
+        // toolset to the agent's `tools` frontmatter (translated through
+        // the Claude→native alias table) and records the agent def so the
+        // system prompt is prepended below. A miss keeps the full toolset.
+        let agent_def = self.agents.get(&request.persona).cloned();
+        let agent_allowlist: Vec<String> = agent_def
+            .as_ref()
+            .map(|a| crate::session::agents::translate_tool_list(&a.tools))
+            .unwrap_or_default();
         let tools: Vec<Arc<dyn Tool>> = match request.persona.as_str() {
             "explore" => all
                 .into_iter()
@@ -341,6 +385,10 @@ impl InProcessTaskSpawner {
                         "read_file" | "read_image" | "grep" | "glob" | "task"
                     )
                 })
+                .collect(),
+            _ if !agent_allowlist.is_empty() => all
+                .into_iter()
+                .filter(|t| agent_allowlist.iter().any(|n| *n == t.def().name))
                 .collect(),
             _ => all,
         };
@@ -438,6 +486,10 @@ impl InProcessTaskSpawner {
         // preambles (build_task_prompt) or role prompts (the parallel
         // orchestrator) themselves, so a role prompt is no longer
         // double-wrapped in a generic "You are..." preamble.
+        // WO 39.3: when the persona resolved to a dynamic agent, the
+        // caller (build_task_prompt) already substituted the agent's
+        // system prompt + alias suffix for the generic preamble, so the
+        // prompt here is already agent-shaped and needs no further wrap.
         let prompt = request.prompt.as_str();
 
         let mut prompt_tokens: i64 = 0;
@@ -865,5 +917,70 @@ mod tests {
                 "worktree {d:?} must be removed on error return"
             );
         }
+    }
+
+    // ── WO 39.3: agent registry integration ──
+
+    // The spawner's `_` arm consults the registry before falling back to
+    // the full toolset. This test proves the agent_def lookup + alias
+    // translation produces a correct allowlist WITHOUT a live model: we
+    // verify the registry the spawner holds resolves the persona and the
+    // translated allowlist filters as expected. The actual run_task path
+    // needs a live adapter; the toolset filter is pure data over the
+    // registry, so we test the pieces the spawner composes.
+    #[test]
+    fn spawner_agent_lookup_translates_tool_allowlist() {
+        let mut reg = crate::session::agents::AgentRegistry::new();
+        reg.register(crate::session::agents::AgentDef {
+            name: "reviewer".into(),
+            description: "Reviews code".into(),
+            system_prompt: "You are a reviewer.".into(),
+            // Claude names that map through the alias table.
+            tools: vec!["Read".into(), "Grep".into(), "Task".into()],
+            model: None,
+        });
+        let reg = Arc::new(reg);
+
+        // Simulate the spawner's `_` arm lookup.
+        let agent = reg.get("reviewer").expect("agent must resolve");
+        let allowlist = crate::session::agents::translate_tool_list(&agent.tools);
+        assert_eq!(
+            allowlist,
+            vec!["read_file", "grep", "task"],
+            "Claude tool names must translate to native names, Task→task passthrough"
+        );
+    }
+
+    // A persona NOT in the registry yields no agent_def, so the `_` arm
+    // falls back to the full toolset (empty allowlist = no filter).
+    #[test]
+    fn spawner_unknown_persona_yields_no_agent_def() {
+        let reg = crate::session::agents::AgentRegistry::new();
+        let reg = Arc::new(reg);
+        assert!(reg.get("mystery-persona").is_none());
+    }
+
+    // The spawner's with_agent_registry constructor stores the handle.
+    #[test]
+    fn spawner_with_agent_registry_stores_handle() {
+        let mut reg = crate::session::agents::AgentRegistry::new();
+        reg.register(crate::session::agents::AgentDef {
+            name: "x".into(),
+            description: "x".into(),
+            system_prompt: "x".into(),
+            tools: vec![],
+            model: None,
+        });
+        let reg = Arc::new(reg);
+        let config: SharedConfig = Arc::new(std::sync::RwLock::new(Config::default()));
+        let spawner = InProcessTaskSpawner::with_agent_registry(
+            config,
+            "test".into(),
+            "127.0.0.1:1".into(),
+            None,
+            false,
+            reg.clone(),
+        );
+        assert!(spawner.agents.get("x").is_some(), "registry must be stored");
     }
 }

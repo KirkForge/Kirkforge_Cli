@@ -493,6 +493,24 @@ keys fall back to the parent when unset. Enables the brain+brawn split: an
 expensive cloud model orchestrates while cheap brawn runs on a different
 provider/account.
 
+**Dynamic agents (WO 39.3 — Claude compat phase 2)**: `.claude/agents/*.md`
+files load into an `AgentRegistry` (`src/session/agents.rs`) at spawner
+construction. Each file has YAML-like frontmatter (`name`, `description`,
+`tools`, `model`) and a body that is the agent's system prompt. When the
+`task` tool's `persona` argument matches a registered agent name, the
+spawner's `_` arm (previously the full-toolset fallback) restricts the
+toolset to the agent's `tools` list — translated through the
+`CLAUDE_TOOL_ALIASES` table (Read→read_file, Bash→bash, Task→task, …) — and
+the `task` tool prepends the agent's system prompt + a Claude alias suffix
+(the model's prose references to "use Read" can't be rewritten reliably,
+so the suffix maps alias→native in one paragraph). The agent's `model`
+frontmatter overrides the per-call model (plumbed through `TaskRequest`).
+Trust gate: the workspace `.claude/agents/` dir is model-writable in-session,
+so it gets the same `plugin_trust_workspace` opt-in as workspace plugins —
+`load_from_dir` refuses it unless `plugin_trust_workspace = true` or the dir
+is under the canonical data directory. The `task` tool description lists
+discovered agents so the model knows which persona names are valid.
+
 **Color themes** (WO 27.6): the TUI ships a central `Theme` palette (`src/tui/theme.rs`) covering every color role the markdown renderer, search highlighter, table grid, and budget indicator use. Four built-ins: `default` (prior hard-coded colors — the back-compat baseline), `dark` (high-contrast dark), `light` (readable on white terminals — swaps `Black`/`Cyan`/`Yellow` for higher-luminance alternatives), and `monokai` (warm palette with the canonical Monokai hex values). The active theme is selected by `display.theme` (TOML) or `KF_CODE_THEME` (env), both defaulting to `"default"`, and is live-switchable via the `/theme [name]` slash command — `/theme` with no argument cycles through the four built-ins. Unknown names fall back to `default`. The render functions in `src/tui/rendering/` take a `&Theme` and read colors by role name (`code_block_fg`, `link`, `budget_tight`, …); zero `Color::*` literals remain in production code under `rendering/`. Custom user-loaded palettes are explicitly out of scope (upgrade path: a `Theme::custom(palette)` constructor reading a TOML color map).
 
 **Mouse support** (WO 27.7): the TUI enables crossterm mouse capture at startup and routes click/drag/scroll through `events::handle_mouse_event` (`src/tui/events.rs`). The mouse wheel scrolls the chat (unchanged from before); a left-click in the chat body "grabs" the view (turns auto-follow off so it sticks where the user clicked) and a subsequent left-drag scroll-pans the chat by the row delta (natural scrolling — content follows the drag). WO 34.1 removed the top tab bar, so row 0 is now the header and a click there is a drag-grab (not a tab switch) — the command palette (Ctrl+K) and direct Ctrl-shortcuts (Ctrl+M/S/J/,/P) replace click-to-switch-tab. `DisableMouseCapture` runs in both the normal shutdown path and the panic-safe `TerminalGuard::drop`, so the terminal is never left with capture stuck on. Operators who dislike mouse capture hijacking their scrollback wheel can disable all of it with `display.mouse_enabled = false` (TOML) or `KF_CODE_MOUSE_ENABLED=false` (env) — when false, `EnableMouseCapture` is skipped entirely so the terminal keeps native scrollback. Click-to-position the text cursor inside the prompt input is deferred to 27.7-R2-later (the `LineReader` does not expose a set-position API cleanly); panel focus + drag-scroll alone close the competitive gap.

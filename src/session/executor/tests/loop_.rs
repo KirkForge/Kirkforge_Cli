@@ -442,19 +442,23 @@ async fn test_deterministic_mode_produces_same_tool_sequence() {
 /// tools, cancel after observing the first two `ToolResult` events, then
 /// abort the turn and verify the reloaded log contains exactly those two
 /// results and no later ones.
-/// WO 19.9: replaced `sleep(250ms)` with `yield_now()` — after the gate
-/// signal, a few yield cycles give the tool time to start before we cancel.
+///
+/// WO 38.12: replaced the 150ms post-gate wall-clock margin with a
+/// deterministic done-count gate. Each tool sends its completion count
+/// through a `tokio::sync::watch` channel. The test waits for the count
+/// to reach 2 (both fast 100ms tools done) before firing cancel — no
+/// timing margin, no flake surface. A `watch` channel holds the latest
+/// value so there's no lost-notification race (unlike `Notify`).
 #[tokio::test]
 async fn test_mid_batch_checkpoint_persists_partial_results() {
     use std::sync::atomic::Ordering;
 
-    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
-    let started_tx = Arc::new(std::sync::Mutex::new(Some(started_tx)));
+    let (done_tx, mut done_rx) = tokio::sync::watch::channel(0u32);
 
     struct GatedSleepTool {
         def: ToolDef,
         sleep_ms: u64,
-        gate_tx: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+        done_tx: tokio::sync::watch::Sender<u32>,
     }
 
     #[async_trait::async_trait]
@@ -464,12 +468,10 @@ async fn test_mid_batch_checkpoint_persists_partial_results() {
         }
 
         async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
-            if let Ok(mut guard) = self.gate_tx.lock() {
-                if let Some(tx) = guard.take() {
-                    let _ = tx.send(());
-                }
-            }
             tokio::time::sleep(std::time::Duration::from_millis(self.sleep_ms)).await;
+            self.done_tx.send_modify(|c| {
+                *c += 1;
+            });
             ToolOutcome::Success {
                 content: "done".into(),
             }
@@ -490,7 +492,7 @@ async fn test_mid_batch_checkpoint_persists_partial_results() {
                     parameters: serde_json::json!({"type": "object", "properties": {}}),
                 },
                 sleep_ms: if i < 2 { 100 } else { 3000 },
-                gate_tx: started_tx.clone(),
+                done_tx: done_tx.clone(),
             }) as Arc<dyn Tool>
         })
         .collect();
@@ -553,11 +555,12 @@ async fn test_mid_batch_checkpoint_persists_partial_results() {
             .await
     });
 
-    let _ = started_rx.await;
-    // WO 19.9: 150ms is enough for one 100ms tool to finish while still
-    // leaving the 3s tools incomplete. The original 250ms was unnecessarily
-    // generous; 150ms cuts test time without losing determinism.
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    // Wait for both fast (100ms) tools to complete before cancelling.
+    // This is deterministic — no wall-clock margin. The slow (3000ms)
+    // tools are still running when we cancel. `watch::Receiver::wait_for`
+    // holds the current value so there's no lost-notification race.
+    let fast_count = 2u32;
+    let _ = done_rx.wait_for(|c| *c >= fast_count).await;
     cancelled.store(true, Ordering::SeqCst);
 
     turn_handle.abort();

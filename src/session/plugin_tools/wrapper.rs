@@ -614,7 +614,13 @@ mod tests {
     async fn run_returns_cancelled_when_token_fires() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("sleep.sh");
-        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        let ready = dir.path().join("ready");
+        let ready_str = ready.to_string_lossy().to_string();
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\ntouch '{ready_str}'; sleep 30\n"),
+        )
+        .unwrap();
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&script).unwrap().permissions();
         perms.set_mode(0o755);
@@ -633,12 +639,21 @@ mod tests {
         );
 
         let ctx = make_tool_ctx();
-        // Cancel from a separate task after the child has spawned and
-        // entered the select! wait (run() borrows ctx, so it cannot be
-        // spawned itself).
+        // WO 38.12: gated-start — poll for the readiness file before firing
+        // cancel. The script touches `ready` immediately on start, so we
+        // know the child is running. Replaces the fixed 200ms sleep-then-
+        // cancel race. No production readiness signal exists; the readiness
+        // file is a test-only technique.
         let token = ctx.token.clone();
+        let ready_clone = ready.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                if ready_clone.exists() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
             token.cancel();
         });
 

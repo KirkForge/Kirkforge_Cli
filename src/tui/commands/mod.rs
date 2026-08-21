@@ -303,6 +303,23 @@ mod tests {
         panic!("job {id} did not leave Running within 2s");
     }
 
+    // Poll a spawned job until it reaches the Running state, with a bounded
+    // 2s total budget and a 10ms interval. WO 38.12: replaces a fixed 100ms
+    // sleep that raced the spawn path. Panics on timeout so a regression
+    // fails loudly.
+    async fn wait_for_job_running(registry: &crate::session::bash_jobs::BashJobRegistry, id: u64) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if let Some(job) = registry.get(id).await {
+                if matches!(job.status, JobStatus::Running) {
+                    return;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("job {id} did not reach Running within 2s");
+    }
+
     // Fresh background-completion sender per call; the receiver is dropped,
     // which is fine — sends are `let _ =` best-effort in production code.
     fn bg_tx() -> tokio::sync::mpsc::UnboundedSender<crate::tui::commands::BgCmdDone> {
@@ -387,11 +404,11 @@ mod tests {
         );
     }
 
-    // #[ignore]: known flaky under parallel load — the spawned `sleep 5`
-    // job races the cancel/reap path and intermittently reports a status
-    // other than Cancelled/Failed. Run with `cargo test -- --ignored`.
+    // WO 38.12: un-ignored — root cause (WO 36.2 owner tracking) is fixed,
+    // and the 100ms sleep-then-cancel race is replaced with poll-until-
+    // Running (wait_for_job_running) so the cancel fires only after the
+    // job is observable as Running.
     #[tokio::test]
-    #[ignore = "timing-sensitive job-cancel race"]
     async fn handle_jobs_command_cancel_running_job_succeeds() {
         let _guard = test_registry_lock().lock().await;
         let registry = crate::session::bash_jobs::global_registry();
@@ -411,7 +428,7 @@ mod tests {
             .await
             .unwrap();
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        wait_for_job_running(&registry, id).await;
 
         let out = handle_jobs_command(&format!("{id} cancel"), &mut app_state(), &bg_tx()).await;
         assert!(out.contains("Cancel"), "got: {out}");

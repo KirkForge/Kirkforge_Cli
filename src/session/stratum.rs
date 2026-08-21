@@ -774,9 +774,31 @@ mod tests {
 
     // ── WO 8.6 coordination tests ──────────────────────────────────────
 
+    /// RAII guard: restores the session mode on drop (even on panic).
+    /// Complements #[serial] — serial prevents inter-test interleaving,
+    /// the guard prevents leaked state when a test panics.
+    struct SessionModeGuard {
+        prior: Mode,
+    }
+
+    impl SessionModeGuard {
+        fn new() -> Self {
+            Self {
+                prior: current_session_mode(),
+            }
+        }
+    }
+
+    impl Drop for SessionModeGuard {
+        fn drop(&mut self) {
+            set_session_mode(self.prior);
+        }
+    }
+
     #[test]
     #[serial]
     fn session_mode_round_trip() {
+        let _guard = SessionModeGuard::new();
         set_session_mode(Mode::Lite);
         assert_eq!(current_session_mode(), Mode::Lite);
         set_session_mode(Mode::Full);

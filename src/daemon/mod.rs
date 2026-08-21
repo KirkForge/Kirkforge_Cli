@@ -650,8 +650,6 @@ mod tests {
 
     #[test]
     fn recent_list_is_capped() {
-        use std::time::Duration;
-
         let _guard = crate::session::test_data_dir_lock().blocking_lock();
         let dir = with_empty_data_dir();
         let dir_path = dir._dir.path().to_path_buf();
@@ -659,11 +657,18 @@ mod tests {
         // Create real session files so the daemon's refresh sees them.
         let sessions_dir = dir_path.join("sessions");
         std::fs::create_dir_all(&sessions_dir).unwrap();
-        for i in 0..10 {
+        // WO 38.12: replaced 10x thread::sleep(10ms) with explicit mtime
+        // via set_modified. Filesystems round mtimes to whole seconds, so
+        // use 2s steps for a guaranteed-distinct ordering. Open with write
+        // access (Windows SetFileTime requires GENERIC_WRITE).
+        let base = std::time::SystemTime::UNIX_EPOCH;
+        for i in 0..10u64 {
             let path = sessions_dir.join(format!("s{i}.conv.ndjson"));
             std::fs::write(&path, "").unwrap();
-            // Stagger mtimes so the listing order is predictable.
-            std::thread::sleep(Duration::from_millis(10));
+            let mtime = base + std::time::Duration::from_secs(i * 2 + 100);
+            let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            file.set_modified(mtime).unwrap();
+            drop(file);
         }
 
         let mut state = DaemonState::new();

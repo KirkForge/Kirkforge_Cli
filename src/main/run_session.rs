@@ -129,6 +129,9 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // When enabled, create an isolated git worktree for the session.
     // Edits land in the worktree, not the user's working tree.
     // The worktree is removed when `_worktree` is dropped.
+    // WO 38.7: sweep stale worktree dirs from crashed sessions before
+    // creating a new one (age-guarded; only dirs older than 24h).
+    session::worktree::sweep_stale_worktrees();
     let _worktree: Option<session::worktree::WorktreeSession> = if config.session.worktree_enabled {
         let repo_root = std::env::current_dir()?;
         let wt =

@@ -354,7 +354,7 @@ impl ConversationLog {
     fn write_atomic_static(path: &std::path::Path, messages: &[Message]) -> anyhow::Result<()> {
         use std::io::Write;
         let tmp_path = path.with_extension("ndjson.tmp");
-        {
+        let result = (|| -> anyhow::Result<()> {
             let mut file = std::fs::OpenOptions::new()
                 .create(true)
                 .truncate(true)
@@ -368,15 +368,23 @@ impl ConversationLog {
                 writeln!(file, "{line}")?;
             }
             file.sync_all()?;
+            drop(file);
+            crate::tools::atomic_write::rename_with_retry(&tmp_path, path).with_context(|| {
+                format!(
+                    "commit conversation log from {} to {}",
+                    tmp_path.display(),
+                    path.display()
+                )
+            })?;
+            Ok(())
+        })();
+        // On any failure (write, serialize, sync, or rename) remove the
+        // leftover .tmp so a half-written temp file does not accumulate
+        // across turns (mirrors atomic_write.rs:46-49).
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp_path);
         }
-        crate::tools::atomic_write::rename_with_retry(&tmp_path, path).with_context(|| {
-            format!(
-                "commit conversation log from {} to {}",
-                tmp_path.display(),
-                path.display()
-            )
-        })?;
-        Ok(())
+        result
     }
 
     /// Replace the in-memory message list and rewrite the log file

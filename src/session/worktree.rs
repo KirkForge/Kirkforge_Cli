@@ -24,6 +24,72 @@ async fn git_output(cwd: &std::path::Path, args: &[&str]) -> anyhow::Result<std:
     .map_err(|e| anyhow::anyhow!("git task join failed: {e}"))?
 }
 
+/// Age threshold for a stale session worktree to be considered sweepable.
+/// A worktree dir is stale when its git registration is gone (parent repo
+/// moved) or the session crashed without running Drop. We only remove dirs
+/// older than this so a session that is mid-creation is never touched.
+/// ponytail: 24h is generous — a session worktree is created at startup
+/// and removed at session end; nothing legitimately in-flight is this old.
+/// Upgrade path: reference-count worktree dirs if they need transactional
+/// semantics.
+const STALE_WORKTREE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Boot sweep: remove `kf-code-session-*` dirs in the temp dir older than
+/// [`STALE_WORKTREE_MAX_AGE`]. Called at session start so crashed-session
+/// worktrees don't accumulate forever (WO 38.7). Mirrors the age-guarded
+/// orphan-snap sweep in `undo.rs:398-462`.
+///
+/// Best-effort: a failure to read or remove one directory is logged and
+/// does not abort the scan of the rest. Only directories matching the
+/// `kf-code-session-` prefix are considered.
+pub fn sweep_stale_worktrees() {
+    let tmp = std::env::temp_dir();
+    let Ok(entries) = std::fs::read_dir(&tmp) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(name) = dir.file_name().and_then(|f| f.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("kf-code-session-") {
+            continue;
+        }
+        // Skip dirs that are too young to be safely considered stale.
+        let modified = match std::fs::metadata(&dir).and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(path = %dir.display(), error = %e, "could not stat worktree dir; skipping");
+                continue;
+            }
+        };
+        // Skip if the dir is too young, or the mtime is in the future
+        // (clock skew) — never delete a possibly-in-flight worktree.
+        let too_young = match now.duration_since(modified) {
+            Ok(age) => age < STALE_WORKTREE_MAX_AGE,
+            Err(_) => true,
+        };
+        if too_young {
+            continue;
+        }
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            tracing::warn!(path = %dir.display(), error = %e, "failed to remove stale worktree dir");
+        } else {
+            tracing::info!(path = %dir.display(), "removed stale session worktree dir");
+        }
+    }
+    // Best-effort prune of stale git worktree registrations.
+    // ceiling: prune runs against the current dir's repo; if the CWD is
+    // not a git repo this is a no-op. Upgrade path: walk known repo roots.
+    if let Ok(cwd) = std::env::current_dir() {
+        let _ = git_output_sync(&cwd, &["worktree", "prune"]);
+    }
+}
+
 /// Manages an isolated git worktree for a session.
 /// Created at session start, removed at session end.
 pub struct WorktreeSession {
@@ -141,13 +207,32 @@ impl Drop for WorktreeSession {
                 &self.worktree_path.to_string_lossy(),
             ],
         );
-        if let Err(e) = result {
+        if result.is_ok() {
+            if let Ok(out) = &result {
+                if out.status.success() {
+                    return;
+                }
+            }
+        }
+        // Git failed (repo moved, worktree registry corrupt, git
+        // unavailable). Fall back to a direct fs::remove_dir_all so the
+        // directory itself does not leak, then prune stale worktree
+        // registrations best-effort. WO 38.7.
+        tracing::warn!(
+            path = %self.worktree_path.display(),
+            "git worktree remove failed; falling back to fs::remove_dir_all + prune"
+        );
+        if let Err(e) = std::fs::remove_dir_all(&self.worktree_path) {
             tracing::warn!(
                 path = %self.worktree_path.display(),
                 error = %e,
-                "failed to remove worktree"
+                "fs::remove_dir_all fallback failed"
             );
         }
+        // Best-effort prune: clears stale .git/worktrees entries for
+        // directories that no longer exist. Ignores failure — nothing
+        // more we can do in Drop.
+        let _ = git_output_sync(self.original_path.as_path(), &["worktree", "prune"]);
     }
 }
 
@@ -537,5 +622,92 @@ mod tests {
                 "session id `{bad}` should be rejected as a path-traversal risk"
             );
         }
+    }
+
+    // WO 38.7: the boot sweep removes age-qualified kf-code-session-* dirs
+    // (older than STALE_WORKTREE_MAX_AGE) and leaves fresh dirs alone.
+    // Mirrors the undo.rs orphan-snap sweep test (undo.rs:855-883).
+    #[test]
+    fn sweep_removes_stale_dirs_but_keeps_fresh() {
+        let tmp = std::env::temp_dir();
+        let pid = std::process::id();
+        let stale = tmp.join(format!("kf-code-session-sweep-stale-{pid}"));
+        let fresh = tmp.join(format!("kf-code-session-sweep-fresh-{pid}"));
+        // Clean up any leftovers from a prior run.
+        let _ = fs::remove_dir_all(&stale);
+        let _ = fs::remove_dir_all(&fresh);
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("leftover.txt"), b"x").unwrap();
+        fs::create_dir_all(&fresh).unwrap();
+        fs::write(fresh.join("inflight.txt"), b"x").unwrap();
+
+        // Age the stale dir past the sweep threshold.
+        let old = std::time::SystemTime::now()
+            - STALE_WORKTREE_MAX_AGE
+            - std::time::Duration::from_secs(60);
+        let f = std::fs::File::open(&stale).unwrap();
+        let times = std::fs::FileTimes::new().set_modified(old);
+        f.set_times(times).unwrap();
+        drop(f);
+
+        sweep_stale_worktrees();
+
+        assert!(!stale.exists(), "stale worktree dir should be removed");
+        assert!(
+            fresh.exists(),
+            "fresh worktree dir should survive (not in-flight)"
+        );
+
+        let _ = fs::remove_dir_all(&stale);
+        let _ = fs::remove_dir_all(&fresh);
+    }
+
+    // WO 38.7: Drop falls back to fs::remove_dir_all when git fails (repo
+    // moved/unavailable). A non-existent repo root makes `git worktree
+    // remove` fail; the dir must still be removed by the fallback.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn worktree_drop_removes_dir_when_git_fails() {
+        let tmp = std::env::temp_dir().join(format!("kf-code-wt-drop-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test"],
+            vec!["config", "user.name", "test"],
+        ] {
+            let out = Command::new("git")
+                .args(&args)
+                .current_dir(&tmp)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?} failed");
+        }
+        fs::write(tmp.join("README.md"), "test").unwrap();
+        for args in [vec!["add", "."], vec!["commit", "-m", "init"]] {
+            let out = Command::new("git")
+                .args(&args)
+                .current_dir(&tmp)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?} failed");
+        }
+
+        let session_id = format!("drop-test-{}", std::process::id());
+        let wt = WorktreeSession::create(&session_id, &tmp).await.unwrap();
+        let wt_path = wt.path().clone();
+        assert!(wt_path.exists());
+
+        // Delete the repo root BEFORE dropping the worktree so `git
+        // worktree remove` fails (repo gone) and Drop must fall back to
+        // fs::remove_dir_all. The worktree dir itself is under $TMPDIR,
+        // not under the repo, so it survives the repo deletion.
+        let _ = fs::remove_dir_all(&tmp);
+
+        drop(wt);
+        assert!(
+            !wt_path.exists(),
+            "worktree dir should be removed by the fs fallback when git fails"
+        );
     }
 }

@@ -363,8 +363,7 @@ fn wo_status_keyword(s: &str) -> String {
     if s.starts_with("done") || s.starts_with("completed") {
         return "done".to_string();
     }
-    if s.starts_with("in progress") || s.starts_with("inprogress") || s.starts_with("in-progress")
-    {
+    if s.starts_with("in progress") || s.starts_with("inprogress") || s.starts_with("in-progress") {
         return "in progress".to_string();
     }
     if s.starts_with("pending") {
@@ -444,11 +443,7 @@ fn parse_wo_index_table(readme: &str) -> Vec<(String, String)> {
             continue;
         }
         // WO num is a plain number like "32.2" or "6.1"
-        if !cells[0]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_digit())
-        {
+        if !cells[0].chars().next().is_some_and(|c| c.is_ascii_digit()) {
             continue;
         }
         // Must be purely numeric/dots
@@ -467,24 +462,23 @@ fn wo_status_headers_match_readme_index() {
     // WO 38.13: WO file `## Status` headers must agree with the README index
     // table on leading keyword. This is the structural fix that prevents the
     // ~100-WO drift that accumulated before this test existed.
-    let readme =
-        std::fs::read_to_string(wo_dir().join("README.md")).expect("docs/workorders/README.md exists");
+    let readme = std::fs::read_to_string(wo_dir().join("README.md"))
+        .expect("docs/workorders/README.md exists");
     let index_rows = parse_wo_index_table(&readme);
     assert!(
         !index_rows.is_empty(),
         "no WO index rows parsed — table format drifted?"
     );
 
-    let index_status: std::collections::BTreeMap<String, String> = index_rows
-        .iter()
-        .cloned()
-        .collect();
+    let index_status: std::collections::BTreeMap<String, String> =
+        index_rows.iter().cloned().collect();
 
     // Collect file headers for every WO file (excluding README + archive).
     // Only WOs present in the README index are checked — many older series
     // (18-26, 30, 31) have file headers but no README row and are out of
     // scope for this drift guard.
-    let mut file_status: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut file_status: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
     let entries = std::fs::read_dir(wo_dir()).expect("docs/workorders/ readable");
     for e in entries.flatten() {
         let p = e.path();

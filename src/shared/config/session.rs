@@ -31,6 +31,12 @@ pub struct SessionConfig {
     pub checkpoint_interval_messages: usize,
     #[serde(default)]
     pub worktree_enabled: bool,
+    /// WO 41.1: when true, the pipeline's coder patch is `git apply`'d
+    /// to the parent workspace automatically after the Reviewer phase.
+    /// Default false — the patch is surfaced in the TUI summary for
+    /// explicit application. Only meaningful with `worktree_enabled`.
+    #[serde(default)]
+    pub auto_apply_patch: bool,
     // ponytail: renamed from compaction_use_llm in WO 21.6-R5 — the
     // actual impl is heuristic keyword extraction, not LLM
     // summarization. The serde alias preserves backward compat with
@@ -63,6 +69,7 @@ impl Default for SessionConfig {
             preserve_recent_messages: default_preserve_recent_messages(),
             checkpoint_interval_messages: default_checkpoint_interval_messages(),
             worktree_enabled: false,
+            auto_apply_patch: false,
             compaction_use_heuristic: default_compaction_use_heuristic(),
             compaction_drop_threshold: default_compaction_drop_threshold(),
             stem_file_cap: None,

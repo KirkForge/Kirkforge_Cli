@@ -163,6 +163,15 @@ pub fn jobs_dir() -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
+/// The `tasks/` subdirectory of the data dir, where completed subagent
+/// summaries are persisted as `<id>.json` (WO 41.5 Phase 1). Mirrors
+/// [`jobs_dir`].
+pub fn tasks_dir() -> anyhow::Result<PathBuf> {
+    let dir = data_dir()?.join("tasks");
+    ensure_private_data_dir(&dir);
+    Ok(dir)
+}
+
 pub fn config_path() -> PathBuf {
     let mut path = data_dir().unwrap_or_else(|e| {
         tracing::warn!(

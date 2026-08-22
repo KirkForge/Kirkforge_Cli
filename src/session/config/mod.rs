@@ -2399,10 +2399,10 @@ mod tests {
 
         // ── 1. Total struct-level fields ──────────────────────────
         // ModelConfig=33 (32 direct + subagent_provider sub-struct handle),
-        // SecurityConfig=22, ToolConfig=34, SessionConfig=8,
-        // DisplayConfig=7 → 105 total pub fields.
+        // SecurityConfig=22, ToolConfig=34, SessionConfig=9,
+        // DisplayConfig=7 → 106 total pub fields.
         assert_eq!(
-            CONFIG_FIELD_COUNT, 105,
+            CONFIG_FIELD_COUNT, 106,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2572,7 +2572,7 @@ mod tests {
         //   ToolConfig:  max_tool_result_chars,
         //                mcp_servers, lsp_servers, max_plugin_trust,
         //                stratum_mode, budget_ceiling, budget_approaching_ratio
-        //   SessionConfig: worktree_enabled
+        //   SessionConfig: worktree_enabled, auto_apply_patch
         //
         // Additionally skipped by apply_env_overrides (4 more, beyond the 15):
         //   SecurityConfig: deny_paths, deny_urls, deny_extensions,

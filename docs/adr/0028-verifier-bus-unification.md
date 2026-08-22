@@ -214,3 +214,21 @@ The wire format is NDJSON lines of KVB events. Both sides must ignore unknown ev
 
 - The bridge adds a serialization hop. In-process Rust verifiers will remain faster than TS-originated verifiers for local Rust projects. Upgrade path: keep Rust built-ins as defaults and invoke TS verifiers only when the slot has no local implementation.
 - The shared event schema is a breaking change for both event buses. Migration must be staged: first add KVB event kinds alongside existing kinds, then deprecate old kinds once both sides consume KVB.
+
+## Amendment (2026-08-22, WO 41.3) — cross-language NDJSON bridge retired, TS tree deleted
+
+The "ponytail" section above records that the cross-language NDJSON wire
+bridge (Rust ↔ TS orchestrator over stdio) shipped in WO 10.8 via
+`TsOrchestratorBridgeVerifier` shelling out to
+`npm/kf-plugin/packages/orchestrator/src/bridge-emitter.ts`. That bridge is
+**retired as of WO 29.2**: the 14 regex security rules now live in Rust
+(`src/session/verifier/security_emitter.rs`), and
+`TsOrchestratorBridgeVerifier` is a thin `BusVerifier` wrapper that calls
+`security_emitter::emit_security_findings(&changed_files)` directly — no
+subprocess, no NDJSON round-trip. This was the last Rust→TS call path. The
+entire `npm/kf-plugin/` tree was deleted in WO 29.9, so the
+`bridge-emitter.ts` file no longer exists. The Rust `VerifierBus` is
+authoritative: built-in verifiers register directly, plugin verifiers
+register via `register_plugin_verifiers_into_bus`, and the security scan
+registers via the `TsOrchestratorBridgeVerifier` wrapper (now a misnomer —
+it no longer bridges to TS).

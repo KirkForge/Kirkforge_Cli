@@ -94,3 +94,28 @@ shell-out to an in-process pure-Rust verify via the `minisign-verify`
 crate. The `verify_signatures` / `signature_key_path` config fields and
 the `TrustPolicy::with_verify_signatures` API are unchanged; only the
 backend changed. See ADR-057 for the decision and dep choice.
+
+## Amendment (2026-08-22, WO 41.3) — Node SDK + shell fallbacks deleted
+
+Several statements above describe paths that no longer exist:
+
+- The "Node SDK" paragraph (`kf-plugin-sdk` self-plugin as an external
+  shell-out with 6 tools `plugin_verify`, etc.) is **stale**: the
+  `npm/kf-plugin/` tree was deleted in WO 29.9. The six tools are now
+  compiled-in Rust impls behind the `kf-plugin-tools` feature (WO 29.1);
+  `verify` runs the security emitter natively, `audit_verify` walks the
+  hash chain natively (WO 35.6), and `verify_workspace` reports
+  not-implemented (the crate reducer shipped in WO 37.2/ADR-076; this tool
+  is not yet wired to it).
+- The "Graceful degradation" clause stating "a user who builds without
+  `--features video` still gets video support via the shell plugin" and the
+  reference to `plugins/*/kf-code.toml` fallbacks are **stale**: the shell
+  plugin trees were deleted in WO 29.9. Building without a feature means
+  the plugin's capabilities are absent, not shell-backed. ADR-048 (Draw)
+  and ADR-049 (Video) are Superseded.
+- The `plugins/stratum/` shell fallback referenced in the Implementation
+  notes is likewise gone (see ADR-046 amendment).
+
+The two-path dispatch (compiled-in vs absent) survives, but the "external
+shell-out" path is gone. See `docs/TECHNICAL.md` § Plugin system for the
+current model.

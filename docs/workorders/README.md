@@ -845,3 +845,30 @@ Driven by 8 read-only exploration agents. See
 | 42.10 | [Subagent persistence Phase 1](42.10-subagent-persistence.md) | Done |
 | 42.11 | [Wire content_hash in verifier path](42.11-content-hash-wiring.md) | Done |
 | 42.12 | [Token count cache at append time](42.12-token-count-cache.md) | Done |
+
+### Series 43 — Honest-assessment backlog serialization
+
+Driven by 6 read-only analysis agents; every claim verified against the
+tree, ~11 stale claims corrected in-line. See
+[WO 43.0](43.0-wo43-overview.md).
+
+| WO | Title | Status |
+|----|-------|--------|
+| 43.0 | [Series overview + claim-drift corrections](43.0-wo43-overview.md) | Planned |
+| 43.1 | [Typed adapter errors (retire string probe)](43.1-typed-adapter-errors.md) | Planned |
+| 43.2 | [Atomic-write EINTR retry (open/fsync)](43.2-atomic-write-retry.md) | Planned |
+| 43.3 | [Audit-log redaction residual gap](43.3-audit-redaction.md) | Planned |
+| 43.4 | [Path-safety property tests](43.4-path-safety-proptest.md) | Planned |
+| 43.5 | [PlaceholderTab + adapter no-op disclosure](43.5-panic-path-elimination.md) | Planned |
+| 43.6 | [Wire kf-rbac into the daemon](43.6-wire-kf-rbac.md) | Planned |
+| 43.7 | [Placeholder-ADR prose triage](43.7-placeholder-adr-triage.md) | Planned |
+| 43.8 | [Silent-error triage (.ok()/catch-alls)](43.8-silent-error-triage.md) | Planned |
+| 43.9 | [Per-failure correction prompts](43.9-correction-prompt-guidance.md) | Planned |
+| 43.10 | [Cross-session state preservation policy](43.10-cross-session-state-policy.md) | Planned |
+| 43.11 | [Landlock graduation to plugin path](43.11-os-sandbox-graduation.md) | Planned |
+| 43.12 | [Windows test parity residual](43.12-windows-test-parity-finish.md) | Planned |
+| 43.13 | [Spec-task triage (TECHNICAL.md)](43.13-spec-task-triage.md) | Planned |
+| 43.14 | [cargo-mutants nightly gate](43.14-mutation-testing.md) | Planned |
+| 43.15 | [Machine-greppable ADR predicates](43.15-machine-greppable-adrs.md) | Planned |
+| 43.16 | [No-throw dispatch finish + grep gate](43.16-no-throw-dispatch.md) | Planned |
+| 43.17 | [Plugin consent ledger (mirror 42.5)](43.17-content-hash-consent.md) | Planned |

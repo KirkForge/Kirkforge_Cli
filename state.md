@@ -15,6 +15,12 @@
 
 ## Pending / Deferred (open)
 
+- **WO 43.0-43.17**: honest-assessment backlog serialized as the Series 43
+  workorders (all Planned, no code yet). 6 analysis agents verified every
+  claim; ~11 backlog claims were stale and corrected in-line (notably:
+  scout.rs:138 `unimplemented!()` is `#[cfg(test)]`-only, ADR 0011/0012
+  already Rejected, landlock already default-on for bash, Windows rename
+  retry already shipped). Start at [43.0](docs/workorders/43.0-wo43-overview.md).
 - **WO 39.4**: Claude compat phase 3 (hook stdin-JSON contract + generic
   pre/post-tool events). Deferred — lowest wild frequency of the artifact
   classes. Tracked in [39.4](docs/workorders/39.4-claude-compat-phase3.md).

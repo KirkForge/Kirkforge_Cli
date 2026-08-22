@@ -53,7 +53,7 @@ pub fn bang_permission_action(cmd: &str, config: &crate::shared::Config) -> Perm
     } else {
         PermissionAction::Allow
     };
-    evaluate(&config.security.permission_rules, "bash", &args, default)
+    evaluate(&config.security.permission_rules, "bash", &args, default).0
 }
 
 /// What a `!` command actually did. Pure data — the formatting helpers

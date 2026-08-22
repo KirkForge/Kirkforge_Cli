@@ -611,6 +611,8 @@ entry (the record is inserted only after `proc.spawn()` succeeds).
 `status` and `list` expose the state for
 the `/jobs` view (WO 30.2).
 
+
+
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`
 
 Session daemon (background process tracking recent sessions), scheduled-job
@@ -754,6 +756,25 @@ The plugin verifier (`kf-plugin-host::PluginVerifier::run`, invoked under the
 verifier-bus mutex on every file write) gets a watchdog thread that kills its
 process group after 5s and fails closed (`VerifierError::TimedOut`); a hung
 verifier script can no longer hold the bus lock.
+
+### Capability discovery + PASS coverage scope (WO 41.4)
+
+A forward-looking capability map (`verifier_capabilities()` in
+`src/session/verifier/bus.rs`) lists each verifier category with its status:
+`active` (has a producer — `security`, via the Rust regex emitter WO 29.2),
+`stub` (emitter not ported — `lint`, `types`, `graph`), or `external`
+(delegates to a not-yet-ported subsystem — `verify-workspace`, reducer pending).
+The static set mirrors the honest stub disclosure already printed by
+`plugin_verify` (`native.rs` `render_verify`). The `/verify-capabilities`
+slash command surfaces `verifier_capability_report()` so the user can see at a
+glance what contributes to a verdict without reading source.
+
+The pipeline summary (`ParallelResult::summary`) distinguishes `PASS` from
+`PASS (security-only coverage)`: a completed (non-aborted) run's
+`verdict_label` is set to `"PASS (security-only coverage)"` and rendered as a
+`Verdict:` line, mirroring `plugin_verify`. Aborted runs reach no verdict and
+carry no label. The pipeline does not run the reducer; the label is the honest
+default until lint/types/graph emitters ship.
 
 ---
 
@@ -1086,35 +1107,51 @@ subagent personas within a single session. Workflows are invoked two ways: the
 TUI `/workflow run` slash command, and the `workflow_run` tool (WO 9.1) which
 lets the agent loop and bench harness run a named template via a tool call.
 
-### Scout→coder→reviewer pipeline (WO 32.5; pipeline semantics WO 35.1)
+### Scout→coder→reviewer pipeline (WO 32.5; pipeline semantics WO 35.1; WO 41.1 rename + patch application)
 
-`ParallelOrchestrator` (`src/session/parallel_orchestrator.rs`) runs three
-subagents as a real pipeline, not a fan-out: the Scout (`explore` persona,
-read-only) completes first and its context summary is injected into the
-Coder's prompt; the Coder (`coder` persona, write, own worktree when
-`session.worktree_enabled` per WO 35.2) returns a change summary plus an
-appliable diff patch, which is injected into the Reviewer's prompt; the
-Reviewer (`plan` persona, read-only) critiques the Coder's actual changes
-(not the task blurb) and ends with "## Review Complete". The extracted patch
-is exposed on `ParallelResult.coder_patch`. `run_parallel` and
-`run_sequential` are the same pipeline since WO 35.1 — the entry point
-selected by `/workflow run <name> --parallel` reflects whether worktree
-isolation is enabled, not ordering. Each role registers a `TaskManager`
-entry (internal cancel bookkeeping, not rendered by `/jobs`) with the
-WO 35.3 cancel pair (flag + token) and its owner id riding on the role's
-`TaskBrief`, so `ParallelOrchestrator::cancel_all()` stops in-flight
-roles cooperatively (each runs cleanup, captures any worktree patch, and
-returns) and cancel-by-owner still reaches role-spawned bash jobs. Since
-WO 36.5 the orchestrator holds one injectable `Arc<dyn ModelClient>` —
-production uses the `ExecutorAdapter` (below), so roles execute through
-the same seam as kf-orchestrator's delegation modes and inherit WO 32.4
+`PipelineOrchestrator` (`src/session/parallel_orchestrator.rs`; renamed from
+`ParallelOrchestrator` in WO 41.1 — the pipeline is sequential, the old
+name misled) runs three subagents as a real pipeline, not a fan-out: the
+Scout (`explore` persona, read-only) completes first and its context
+summary is injected into the Coder's prompt; the Coder (`coder` persona,
+write, own worktree when `session.worktree_enabled` per WO 35.2) returns a
+change summary plus an appliable diff patch, which is injected into the
+Reviewer's prompt; the Reviewer (`plan` persona, read-only) critiques the
+Coder's actual changes (not the task blurb) and ends with "## Review
+Complete". The extracted patch is exposed on `PipelineResult.coder_patch`
+(renamed from `ParallelResult` in WO 41.1). WO 41.1 collapsed the two
+public entry points (`run_parallel` / `run_sequential`) into a single
+`run_pipeline` — both were the same pipeline since WO 35.1; the
+`/workflow run <name> --parallel` flag now means "worktree isolation"
+(not "concurrent execution") and selects coder FS isolation, not
+ordering. Each role registers a `TaskManager` entry (internal cancel
+bookkeeping, not rendered by `/jobs`) with the WO 35.3 cancel pair (flag
++ token) and its owner id riding on the role's `TaskBrief`, so
+`PipelineOrchestrator::cancel_all()` stops in-flight roles cooperatively
+(each runs cleanup, captures any worktree patch, and returns) and
+cancel-by-owner still reaches role-spawned bash jobs. Since WO 36.5 the
+orchestrator holds one injectable `Arc<dyn ModelClient>` — production
+uses the `ExecutorAdapter` (below), so roles execute through the same
+seam as kf-orchestrator's delegation modes and inherit WO 32.4
 landlock/CWD confinement and WO 30.6 approval forwarding. The brief's
 persona marks it caller-framed: the pipeline's role prompt is the
 complete prompt (one wrapper, never two — the WO 35.1 rule).
 
+WO 41.1 closed the patch-discard hole: the Coder's captured patch was
+returned in `coder_patch` but no consumer read it — the parent workspace
+stayed unchanged while the TUI reported success. The pipeline consumer
+(`handle_run` in `src/tui/commands/workflow.rs`) now reads
+`result.coder_patch` after the Reviewer phase. When
+`session.auto_apply_patch` is true, `apply_patch_to_parent` runs
+`git apply -` in the parent CWD (stdin-piped patch, 30s timeout,
+`kill_on_drop`); on conflict/dirty-tree the git stderr is surfaced as
+an error event (success=false), never silent loss. The default
+(`auto_apply_patch=false`) surfaces the patch text and a `git apply`
+hint in the TUI summary — the user applies it explicitly.
+
 WO 38.4 (orchestration correctness, adversarial review) closed four
 holes in this pipeline. (1) `/workflow cancel` on the parallel path is
-real: the TUI stores the live `Arc<ParallelOrchestrator>` in
+real: the TUI stores the live `Arc<PipelineOrchestrator>` in
 `GenerationState.workflow_orchestrator` at `handle_run` time, and
 `handle_cancel` calls `cancel_all()` on it — previously a lying no-op
 (the shared flag was only read by the sequential DAG runner and
@@ -1124,7 +1161,7 @@ phase, closing the window where a cancel during scout could not reach
 the not-yet-registered reviewer handle. A prior-phase *error*
 short-circuits the same way: a failed scout is never stringified into
 the coder's context and a dead provider does not burn two more full
-sessions — `ParallelResult.aborted` names the reason and the summary
+sessions — `PipelineResult.aborted` names the reason and the summary
 renders `ABORTED` (no lying success UI). (2) Identities mint from the
 process-global `NEXT_TASK_ID` counter (WO 37.1), not `pid+millis`: two
 `task` calls in one assistant message no longer collide on the temp dir
@@ -1159,7 +1196,7 @@ final assistant message, `format` echoes the brief's template, and
 persona selection maps `task-decompose` → `plan` (read-only) and the
 three writer modes → `coder` (ADR-075 documents the flattening and the
 rejected session-variant). Since WO 36.5 the adapter is the pipeline's
-production executor: `ParallelOrchestrator` roles run as `TaskBrief`s
+production executor: `PipelineOrchestrator` roles run as `TaskBrief`s
 through it. A brief carrying a `persona` is caller-framed (the pipeline
 owns the complete role prompt); delegation-mode briefs get the adapter's
 mode frame. Execution hints (`persona`, `max_turns`, `owner`, `cancel`)

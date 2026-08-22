@@ -10,6 +10,7 @@ why, and the gate evidence.
 ## [Unreleased]
 
 ### Fixed
+- WO 41.3: permission docs fix + ADR audit — accurate permission engine description, stale ADR amendments — [41.3](docs/workorders/41.3-permission-docs.md)
 - WO 38.1: security chokepoints — [38.1](docs/workorders/38.1-security-chokepoints.md)
 - WO 38.2: panic containment + terminal survival — [38.2](docs/workorders/38.2-panic-containment.md)
 - WO 38.3: liveness — unblock TUI event loop, bound subprocesses — [38.3](docs/workorders/38.3-liveness.md)
@@ -24,6 +25,7 @@ why, and the gate evidence.
 - WO 39.1: bench suite repair — load fix, free-win verifies, export-tasks, script fix — [39.1](docs/workorders/39.1-bench-cross-tool.md)
 - WO 40.2: Windows cross-compile gate in ci-local.sh — [40.2](docs/workorders/40.2-windows-cross-compile-gate.md)
 - WO 40.4: sleep elimination — 8 test-sync sleeps converted — [40.4](docs/workorders/40.4-sleep-elimination.md)
+
 
 ### Added
 - WO 35.1: real scout→coder→reviewer pipeline — [35.1](docs/workorders/35.1-pipeline-semantics.md)
@@ -48,6 +50,7 @@ why, and the gate evidence.
 - WO 40.1: CI workflow architecture reset — [40.1](docs/workorders/40.1-ci-workflow-reset.md)
 - WO 40.3: nextest profiles + timeout policy — [40.3](docs/workorders/40.3-nextest-profiles.md)
 - WO 40.5: global state isolation — CwdGuard, env injection, data dir override — [40.5](docs/workorders/40.5-global-state-isolation.md)
+
 
 ### Changed
 - WO 40.4: test sleeps → structural sync (8 tests) — [40.4](docs/workorders/40.4-sleep-elimination.md)

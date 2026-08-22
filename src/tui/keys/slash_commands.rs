@@ -188,6 +188,12 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
         group: "Advanced",
     },
     SlashCommand {
+        triggers: &["/verify-capabilities"],
+        description: "List verifier categories and their status (active/stub/external)",
+        usage: "/verify-capabilities shows which verifiers are real vs stub",
+        group: "Advanced",
+    },
+    SlashCommand {
         triggers: &["/memory"],
         description: "Memory commands",
         usage: "/memory add <fact> | list | search <query> | rm <name>",
@@ -205,12 +211,18 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
         usage: "/auto-approve [on | off | status]. No arg toggles. Persists to config.toml.",
         group: "Advanced",
     },
-    // ── Developer (8 commands) ──────────────────────────────────────
+    // ── Developer (9 commands) ──────────────────────────────────────
     SlashCommand {
         triggers: &["/jobs"],
         description: "Background bash jobs",
         usage: "/jobs | <id> | clean\n\
                 Scheduled jobs: /jobs schedule <spec> bash <cmd>, /jobs scheduled list, /jobs run-now <id>, /jobs logs <id>",
+        group: "Developer",
+    },
+    SlashCommand {
+        triggers: &["/tasks"],
+        description: "List persisted subagent task summaries (WO 41.5)",
+        usage: "/tasks",
         group: "Developer",
     },
     SlashCommand {
@@ -450,6 +462,14 @@ pub(crate) async fn dispatch_slash_command(
                 .push_back(ConversationEntry::new("system", msg));
             Ok(true)
         }
+        "/tasks" => {
+            let msg = crate::tui::commands::handle_tasks_command(args).await;
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new("system", msg));
+            Ok(true)
+        }
         "/status" => {
             let msg = crate::tui::commands::handle_status_command(args, state).await;
             state
@@ -521,6 +541,16 @@ pub(crate) async fn dispatch_slash_command(
         "/verify" => {
             // WO 11.7: show recent verifier verdicts from the metrics log.
             let msg = crate::shared::metrics::format_verifier_report(20);
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new("system", msg));
+            Ok(true)
+        }
+        "/verify-capabilities" => {
+            // WO 41.4: forward-looking capability map — which verifier
+            // categories are active vs stub vs external.
+            let msg = crate::session::verifier::bus::verifier_capability_report();
             state
                 .conversation
                 .messages
@@ -947,6 +977,7 @@ mod tests {
             "/fork",
             "/resume",
             "/jobs",
+            "/tasks",
             "/status",
             "/model",
             "/route",
@@ -968,6 +999,7 @@ mod tests {
             "/memory",
             "/metrics",
             "/verify",
+            "/verify-capabilities",
             "/gh",
             "/init",
             "/plugins",

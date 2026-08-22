@@ -30,3 +30,22 @@
   ci-local.sh; ci-nightly uploads a report without enforcing. If someone
   asks "why does CI pass with lower coverage locally-enforced" — that's the
   ADR-074 design, local gate + nightly report.
+
+## Round 3 fresh audit (WO 43.18-43.24)
+
+- Fresh-exploration rounds beat backlog verification: 7 agents, all NEW
+  findings, near-zero drift because nothing was pre-claimed.
+- Best hunting ground: cross-surface seams. Per-surface work (TUI, daemon,
+  bash runner) was solid; bugs lived at exits that bypass all surfaces
+  (line-mode default SIGINT, panic-abort skipping Drop) and in files the
+  grep-based WO 38.3 sweep structurally missed (tools/grep.rs itself).
+- panic="abort" + BufWriter is a real pattern-combo bug class here: any
+  Drop-based flush is dead code in release. audit.rs had it; check other
+  Drop-flushed writers before assuming durability.
+- The classic ratatui emoji-slice panic was ALREADY fixed (WO 38.2/38.11) —
+  but its regression tests are ASCII-only, so a real multibyte cursor bug
+  (app.rs:872 byte+char mixup) ships green. "Fixed" without a unicode
+  regression test isn't fixed.
+- cargo tree --duplicates + reading feature lists found 1-2MB of wins in
+  30 min (ungated headless_chrome, arboard image-data). Empty cargo
+  features that gate nothing are free money.

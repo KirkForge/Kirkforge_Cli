@@ -348,7 +348,7 @@ impl TaskManager {
     /// to record terminal results on a handle inserted before the subagent
     /// completed. The `task` tool's background path doesn't need this because
     /// it inserts the handle and updates it inside the spawned worker closure,
-    /// but `ParallelOrchestrator` inserts then awaits `run_task` directly.
+    /// but `PipelineOrchestrator` inserts then awaits `run_task` directly.
     pub fn get_mut(&mut self, id: &str) -> Option<&mut TaskHandle> {
         self.tasks.get_mut(id)
     }

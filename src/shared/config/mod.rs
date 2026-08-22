@@ -40,7 +40,8 @@ use serde::{Deserialize, Serialize};
 //           SecurityConfig.bash_allowlist).
 // WO 32.13: bumped 102 → 103 (added ModelConfig.streaming_timeout_secs).
 // WO 39.2: bumped 103 → 104 → 105 (added ToolConfig.load_project_mcp_json).
-pub const CONFIG_FIELD_COUNT: usize = 105;
+// WO 41.1: bumped 105 → 106 (added SessionConfig.auto_apply_patch).
+pub const CONFIG_FIELD_COUNT: usize = 106;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

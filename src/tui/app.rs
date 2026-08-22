@@ -318,12 +318,12 @@ pub struct GenerationState {
     pub workflow_in_progress: Option<crate::tui::commands::WorkflowHandle>,
     /// Cancel flag for the running workflow, checked between steps.
     pub workflow_cancel: Option<Arc<AtomicBool>>,
-    /// Live handle to the parallel pipeline orchestrator (WO 38.4):
-    /// `/workflow cancel` calls `cancel_all()` on it, which stops
-    /// in-flight roles AND arms the pipeline flag so un-started phases
-    /// never begin. Sequential workflows leave this `None`.
+    /// Live handle to the pipeline orchestrator (WO 38.4 / WO 41.1
+    /// rename): `/workflow cancel` calls `cancel_all()` on it, which
+    /// stops in-flight roles AND arms the pipeline flag so un-started
+    /// phases never begin. Sequential workflows leave this `None`.
     pub workflow_orchestrator:
-        Option<Arc<crate::session::parallel_orchestrator::ParallelOrchestrator>>,
+        Option<Arc<crate::session::parallel_orchestrator::PipelineOrchestrator>>,
     /// True while a `/test` command is running. Used to (1) gate the
     /// input box against stacking tests, (2) drive the spinner in
     /// place of the model-generation spinner.

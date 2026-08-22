@@ -415,6 +415,13 @@
 # workspace). Env: KF_CODE_WORKTREE_ENABLED.
 # [session]
 # worktree_enabled = false
+# auto_apply_patch = false
+# When true, the scout→coder→reviewer pipeline (`/workflow run --parallel`)
+# `git apply`s the coder's captured patch to the parent workspace
+# automatically after the Reviewer phase. On conflict/dirty-tree the error
+# is surfaced (not silent loss). Default: false — the patch is surfaced
+# in the TUI summary for explicit application. Only meaningful with
+# worktree_enabled=true. (WO 41.1)
 
 # ---------------------------------------------------------------------------
 # Workspace plugin sources

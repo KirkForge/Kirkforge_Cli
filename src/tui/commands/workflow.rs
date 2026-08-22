@@ -6,8 +6,9 @@
 //! `task` tool's `InProcessTaskSpawner` through a thin `StepRunner`
 //! implementation. The `--parallel` flag (WO 32.5) dispatches to
 //! `ParallelOrchestrator` for the scout→coder→reviewer pipeline (WO 35.1
-//! gave it real stage-to-stage context handoff) instead of the sequential
-//! DAG runner.
+//! gave it real stage-to-stage context handoff; WO 41.1 renamed it to
+//! `PipelineOrchestrator` and wired the coder patch consumer) instead of
+//! the sequential DAG runner.
 
 use crate::shared::read_shared_config;
 use crate::tools::task::TaskSpawner;
@@ -65,7 +66,7 @@ impl WorkflowHandle {
 ///
 /// Subcommands:
 ///   `/workflow run <name>`          — load and start a workflow.
-///   `/workflow run <name> --parallel` — scout/coder/reviewer fan-out (WO 32.5).
+///   `/workflow run <name> --parallel` — scout/coder/reviewer pipeline with worktree isolation (WO 32.5/41.1).
 ///   `/workflow status`              — show step progress of the running workflow.
 ///   `/workflow cancel`              — abort the running workflow.
 pub async fn handle_workflow_command(
@@ -215,11 +216,11 @@ async fn handle_run(
 
     let name_for_spawn = name.clone();
     if parallel {
-        // WO 32.5/35.1: scout→coder→reviewer pipeline. The workflow's
+        // WO 32.5/35.1/41.1: scout→coder→reviewer pipeline. The workflow's
         // first agent step prompt becomes the task description for all
         // three roles; each stage's output is handed to the next. The
-        // worktree flag selects the entry point (coder isolation), not
-        // the ordering — both entries run the same pipeline.
+        // worktree flag selects coder isolation, not ordering — one
+        // pipeline entry point since WO 41.1.
         let task_description = workflow
             .steps
             .iter()
@@ -231,14 +232,14 @@ async fn handle_run(
                 );
                 name.clone()
             });
-        let worktree_enabled = {
+        let (worktree_enabled, auto_apply_patch) = {
             let c = crate::shared::read_shared_config(&shared_cfg);
-            c.session.worktree_enabled
+            (c.session.worktree_enabled, c.session.auto_apply_patch)
         };
         // WO 38.4: constructed here (not inside the spawn) so the TUI
         // state keeps an Arc for `/workflow cancel` to reach.
         let orchestrator = Arc::new(
-            crate::session::parallel_orchestrator::ParallelOrchestrator::new(
+            crate::session::parallel_orchestrator::PipelineOrchestrator::new(
                 shared_cfg,
                 model_name,
                 ollama_host,
@@ -247,20 +248,54 @@ async fn handle_run(
             ),
         );
         state.generation.workflow_orchestrator = Some(orchestrator.clone());
+        // WO 41.1: the parent workspace CWD is where `git apply` lands
+        // the coder's patch. Captured here (not inside the spawn) so the
+        // spawn owns a stable path even if the test/runtime CWD shifts.
+        let parent_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let worktree_enabled_spawn = worktree_enabled;
         tokio::spawn(async move {
-            let result = if worktree_enabled {
-                orchestrator.run_parallel(&task_description).await
-            } else {
+            if !worktree_enabled_spawn {
                 tracing::info!("worktree disabled; coder runs without an isolated worktree");
-                orchestrator.run_sequential(&task_description).await
-            };
+            }
+            let result = orchestrator.run_pipeline(&task_description).await;
             // WO 38.4: an aborted pipeline (prior-phase error or cancel)
             // is a failure — the summary names the reason; no lying UI.
-            let (success, error) = match &result.aborted {
+            let (mut success, mut error) = match &result.aborted {
                 None => (true, None),
                 Some(reason) => (false, Some(reason.clone())),
             };
-            let summary = result.summary();
+            let mut summary = result.summary();
+            // WO 41.1: consume the coder patch — never silently discard.
+            if let Some(patch) = &result.coder_patch {
+                if auto_apply_patch {
+                    match crate::session::parallel_orchestrator::apply_patch_to_parent(
+                        patch,
+                        &parent_cwd,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            summary.push_str("\n\n✅ Coder patch applied to parent workspace.");
+                        }
+                        Err(e) => {
+                            success = false;
+                            error = Some(format!("git apply failed: {e}"));
+                            summary.push_str(&format!(
+                                "\n\n❌ Coder patch application failed: {e}\n\
+                                 Patch is in the log above; apply manually with `git apply`."
+                            ));
+                        }
+                    }
+                } else {
+                    // Default: surface the patch text + hint, do NOT apply.
+                    summary.push_str(
+                        "\n\n📝 Coder patch (not auto-applied; \
+                                     apply with `git apply` or `/apply`):\n```diff\n",
+                    );
+                    summary.push_str(patch);
+                    summary.push_str("\n```");
+                }
+            }
             crate::send_or_warn!(
                 completion_tx.send(PersonaResult {
                     kind: crate::tui::commands::PersonaKind::Coder,

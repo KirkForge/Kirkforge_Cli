@@ -305,6 +305,93 @@ pub fn default_verifier_bus() -> VerifierBus {
     VerifierBus::new()
 }
 
+// ── WO 41.4: verifier capability discovery ─────────────────────────────
+//
+// A forward-looking capability map: which verifier categories are active
+// (have a producer), stub (emitter not ported), or external (delegates to
+// cargo/eslint/etc.). The static set mirrors the honest stub disclosure
+// already printed by `plugin_verify` (`src/session/plugin_tools/native.rs`
+// `render_verify`): security is active (Rust emitter, WO 29.2), lint/types/
+// graph are stubs (emitters not ported), verify-workspace is deferred
+// (reducer not ported). Surfaced via `/verify-capabilities` so the user can
+// see at a glance what contributes to a verdict without reading source.
+
+/// A verifier category's implementation status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capability {
+    /// Has a real producer (e.g. the Rust security emitter).
+    Active,
+    /// Emitter not ported yet — the category reports nothing.
+    Stub,
+    /// Delegates to an external toolchain (cargo/eslint/etc.) or is
+    /// otherwise deferred to a not-yet-ported subsystem.
+    External,
+}
+
+impl std::fmt::Display for Capability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Capability::Active => write!(f, "active"),
+            Capability::Stub => write!(f, "stub"),
+            Capability::External => write!(f, "external"),
+        }
+    }
+}
+
+/// One row in the capability map.
+#[derive(Debug, Clone)]
+pub struct VerifierCapability {
+    pub category: &'static str,
+    pub status: Capability,
+    pub note: &'static str,
+}
+
+/// The static capability map. Mirrors the stub set in `native.rs`
+/// `render_verify` and `deferred_message`. Update both when a category
+/// gains a producer.
+pub fn verifier_capabilities() -> &'static [VerifierCapability] {
+    &[
+        VerifierCapability {
+            category: "security",
+            status: Capability::Active,
+            note: "Rust regex emitter (14 rules, WO 29.2)",
+        },
+        VerifierCapability {
+            category: "lint",
+            status: Capability::Stub,
+            note: "emitter not ported",
+        },
+        VerifierCapability {
+            category: "types",
+            status: Capability::Stub,
+            note: "emitter not ported",
+        },
+        VerifierCapability {
+            category: "graph",
+            status: Capability::Stub,
+            note: "emitter not ported",
+        },
+        VerifierCapability {
+            category: "verify-workspace",
+            status: Capability::External,
+            note: "reducer not ported (ReducedStatePacket assembly pending)",
+        },
+    ]
+}
+
+/// Human-readable capability report for `/verify-capabilities`.
+pub fn verifier_capability_report() -> String {
+    let mut out = String::from("verifier capabilities:\n");
+    for cap in verifier_capabilities() {
+        out.push_str(&format!(
+            "  {}: {} — {}\n",
+            cap.category, cap.status, cap.note
+        ));
+    }
+    out.push_str("overall: PASS (security-only coverage) until lint/types/graph emitters ship");
+    out
+}
+
 // ── WO 29.2: Rust-native security emitter ──────────────────────────────
 //
 // The TS orchestrator NDJSON bridge (WO 10.8) is retired. The 14 regex
@@ -502,6 +589,76 @@ mod tests {
         assert_eq!(Severity::Info.to_string(), "info");
         assert_eq!(Severity::Warning.to_string(), "warning");
         assert_eq!(Severity::Error.to_string(), "error");
+    }
+
+    // ── WO 41.4: capability discovery ────────────────────────────────
+
+    #[test]
+    fn capability_display_labels() {
+        assert_eq!(Capability::Active.to_string(), "active");
+        assert_eq!(Capability::Stub.to_string(), "stub");
+        assert_eq!(Capability::External.to_string(), "external");
+    }
+
+    #[test]
+    fn verifier_capabilities_lists_all_known_categories() {
+        let caps = verifier_capabilities();
+        let names: Vec<&str> = caps.iter().map(|c| c.category).collect();
+        assert!(names.contains(&"security"), "security must be listed");
+        assert!(names.contains(&"lint"), "lint must be listed");
+        assert!(names.contains(&"types"), "types must be listed");
+        assert!(names.contains(&"graph"), "graph must be listed");
+        assert!(
+            names.contains(&"verify-workspace"),
+            "verify-workspace must be listed"
+        );
+    }
+
+    #[test]
+    fn verifier_capabilities_security_is_active_others_are_stubs() {
+        let caps = verifier_capabilities();
+        let security = caps
+            .iter()
+            .find(|c| c.category == "security")
+            .expect("security category present");
+        assert_eq!(security.status, Capability::Active);
+        for cat in ["lint", "types", "graph"] {
+            let c = caps
+                .iter()
+                .find(|c| c.category == cat)
+                .expect("category present");
+            assert_eq!(
+                c.status,
+                Capability::Stub,
+                "{cat} must be a stub (emitter not ported)"
+            );
+        }
+        let vw = caps
+            .iter()
+            .find(|c| c.category == "verify-workspace")
+            .expect("verify-workspace present");
+        assert_eq!(vw.status, Capability::External);
+    }
+
+    #[test]
+    fn verifier_capability_report_names_every_category_and_coverage() {
+        let report = verifier_capability_report();
+        for cap in verifier_capabilities() {
+            assert!(
+                report.contains(cap.category),
+                "report missing category {:?}: {report}",
+                cap.category
+            );
+            assert!(
+                report.contains(cap.status.to_string().as_str()),
+                "report missing status for {:?}: {report}",
+                cap.category
+            );
+        }
+        assert!(
+            report.contains("PASS (security-only coverage)"),
+            "report must state the security-only coverage scope: {report}"
+        );
     }
 
     #[cfg(unix)]

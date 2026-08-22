@@ -798,6 +798,25 @@ verifier-bus mutex on every file write) gets a watchdog thread that kills its
 process group after 5s and fails closed (`VerifierError::TimedOut`); a hung
 verifier script can no longer hold the bus lock.
 
+### Capability discovery + PASS coverage scope (WO 41.4)
+
+A forward-looking capability map (`verifier_capabilities()` in
+`src/session/verifier/bus.rs`) lists each verifier category with its status:
+`active` (has a producer — `security`, via the Rust regex emitter WO 29.2),
+`stub` (emitter not ported — `lint`, `types`, `graph`), or `external`
+(delegates to a not-yet-ported subsystem — `verify-workspace`, reducer pending).
+The static set mirrors the honest stub disclosure already printed by
+`plugin_verify` (`native.rs` `render_verify`). The `/verify-capabilities`
+slash command surfaces `verifier_capability_report()` so the user can see at a
+glance what contributes to a verdict without reading source.
+
+The pipeline summary (`ParallelResult::summary`) distinguishes `PASS` from
+`PASS (security-only coverage)`: a completed (non-aborted) run's
+`verdict_label` is set to `"PASS (security-only coverage)"` and rendered as a
+`Verdict:` line, mirroring `plugin_verify`. Aborted runs reach no verdict and
+carry no label. The pipeline does not run the reducer; the label is the honest
+default until lint/types/graph emitters ship.
+
 ---
 
 ## Context index

@@ -611,48 +611,7 @@ entry (the record is inserted only after `proc.spawn()` succeeds).
 `status` and `list` expose the state for
 the `/jobs` view (WO 30.2).
 
-### Permissions
 
-The permission engine (`src/shared/permission.rs`, ADR-004 amended) is the
-primary approval gate for every tool call. It replaces the binary
-`auto_approve: bool` and the ReadOnly/Destructive tier model with an ordered,
-first-match-wins rule list. A rule has four fields:
-
-| Field | Meaning |
-|-------|---------|
-| `tool` | Exact tool name (`"bash"`, `"edit_file"`, `"write_file"`, …) or `"*"` for every tool |
-| `key` | Which argument to match: `"command"` for `bash`, `"path"` for file tools, or `"*"` to match without inspecting args |
-| `pattern` | Glob. `*` = zero-or-more chars in one path segment (does NOT cross `/`); `**` = any chars including `/`; `?` = exactly one non-`/` char; plain strings match exactly |
-| `action` | `allow` (skip approval), `ask` (show the approval dialog), `deny` (refuse without showing the dialog) |
-
-Rules are evaluated in declaration order; the **first match wins**. When no
-rule matches, the default is `Ask` (unless `auto_approve = true`, in which case
-`Allow` — preserving backwards compatibility with the old boolean). The TUI's
-`[A]lways` key in the approval dialog writes a `permission_rules` entry
-matching the current tool call instead of flipping the global flag; the rule
-persists in `~/.local/share/kf-code/config.toml` and survives across sessions.
-`/permissions list | revoke <i> | clear` (WO 14.5) manages them at runtime.
-
-**Glob semantics:** for `bash` `command` rules with `action = "deny"`, lone
-`*` is automatically promoted to `**` so a deny pattern like `rm -rf *` also
-blocks absolute paths across `/`. Allow/Ask rules use the literal pattern (no
-promotion) — write explicit `**` when you intend a cross-slash match.
-
-**Compound-clause evaluation (WO 38.1):** bash `command` rules are evaluated
-per compound clause (`;`/`&&`/`||`/`|`/newline). An Allow/Ask rule matches
-only when **every** clause matches (a `cargo test*` rule no longer authorizes
-`cargo test; curl …`), and a Deny rule trips when **any** clause matches (a
-deny still fires when the payload hides after a newline).
-
-**Env-secret scrubbing (WO 38.1):** the bash runner scrubs credential-shaped
-env vars (`*_API_KEY`/`*_TOKEN`/`*_SECRET`, case-insensitive) from every child
-shell env. The `!` passthrough and `/test` share this runner and are scrubbed
-too.
-
-See `config.toml.example` for concrete rule examples and
-`src/shared/permission.rs` (module doc comment) for the full engine
-description. ADR-004 records the tier model as the historical default that the
-rule engine supersedes.
 
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`
 

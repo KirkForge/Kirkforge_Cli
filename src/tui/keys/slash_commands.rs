@@ -211,12 +211,18 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
         usage: "/auto-approve [on | off | status]. No arg toggles. Persists to config.toml.",
         group: "Advanced",
     },
-    // ── Developer (8 commands) ──────────────────────────────────────
+    // ── Developer (9 commands) ──────────────────────────────────────
     SlashCommand {
         triggers: &["/jobs"],
         description: "Background bash jobs",
         usage: "/jobs | <id> | clean\n\
                 Scheduled jobs: /jobs schedule <spec> bash <cmd>, /jobs scheduled list, /jobs run-now <id>, /jobs logs <id>",
+        group: "Developer",
+    },
+    SlashCommand {
+        triggers: &["/tasks"],
+        description: "List persisted subagent task summaries (WO 41.5)",
+        usage: "/tasks",
         group: "Developer",
     },
     SlashCommand {
@@ -450,6 +456,14 @@ pub(crate) async fn dispatch_slash_command(
         }
         "/jobs" => {
             let msg = crate::tui::commands::handle_jobs_command(args, state, ctx.bg_tx).await;
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new("system", msg));
+            Ok(true)
+        }
+        "/tasks" => {
+            let msg = crate::tui::commands::handle_tasks_command(args).await;
             state
                 .conversation
                 .messages
@@ -963,6 +977,7 @@ mod tests {
             "/fork",
             "/resume",
             "/jobs",
+            "/tasks",
             "/status",
             "/model",
             "/route",

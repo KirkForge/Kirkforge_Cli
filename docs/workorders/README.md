@@ -801,7 +801,7 @@ than 20 hours next week watching CI operations.
 | 40.1 | [CI workflow architecture reset](40.1-ci-workflow-reset.md) | Done |
 | 40.2 | [Windows cross-compile gate + one-pass fix](40.2-windows-cross-compile-gate.md) | Done (P0 — this is the fix for the recurring 25+ |
 | 40.3 | [Nextest profiles + timeout policy](40.3-nextest-profiles.md) | Done |
-| 40.4 | [Sleep elimination (30+ tests)](40.4-sleep-elimination.md) | Pending |
+| 40.4 | [Sleep elimination (30+ tests)](40.4-sleep-elimination.md) | Done (residual documented) |
 | 40.5 | [Global state isolation](40.5-global-state-isolation.md) | Done |
 
 ### Series 41 — Agent runtime acceptance (verified from external review)

@@ -971,15 +971,16 @@ mod tests {
     async fn caching_adapter_aborts_forwarder_on_consumer_drop() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
-        // Inner adapter emits events one at a time (capacity-1 channel), so
-        // emission of event N+1 is gated by the forwarder pulling event N.
-        // `emitted` therefore counts how many events the forwarder drained.
-        // With the consumer-drop abort, the forwarder stops pulling after the
-        // consumer drops, so `emitted` stays small. Without the abort it would
-        // drain all events.
+        // Inner adapter emits events one at a time, gated by a Notify so the
+        // test controls exactly when each event fires — no wall-clock sleep.
+        // `emitted` counts how many events the forwarder drained. The test
+        // allows exactly one event through, receives it, drops the consumer,
+        // and the forwarder's `tx_out.closed()` arm aborts the pull loop.
         let emitted = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(tokio::sync::Notify::new());
         struct CountingAdapter {
             emitted: Arc<AtomicUsize>,
+            gate: Arc<tokio::sync::Notify>,
             n: usize,
         }
         #[async_trait::async_trait]
@@ -1002,10 +1003,11 @@ mod tests {
             ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
                 let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(1);
                 let emitted = self.emitted.clone();
+                let gate = self.gate.clone();
                 let n = self.n;
                 tokio::spawn(async move {
                     for i in 0..n {
-                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        gate.notified().await;
                         let ev = StreamEvent::Text(format!("ev{i}"));
                         if tx.send(ev).await.is_err() {
                             break;
@@ -1020,6 +1022,7 @@ mod tests {
         let cache = ResponseCache::new(true, Some(tmp.path().into()));
         let inner = Box::new(CountingAdapter {
             emitted: emitted.clone(),
+            gate: gate.clone(),
             n: 10,
         });
         let wrapped = CachingAdapter::new(inner, cache, false);
@@ -1027,24 +1030,18 @@ mod tests {
         let tools: Vec<ToolDef> = vec![];
 
         let mut rx = wrapped.stream(&messages, &tools).await.unwrap();
+        // Allow exactly one event through, receive it, then drop the consumer.
+        // The forwarder's select! breaks on tx_out.closed(); the spawned
+        // task's next gate.notified().await never fires, so emitted stays at 1.
+        gate.notify_one();
         let _first = rx.recv().await;
         drop(rx);
 
-        // Poll `emitted` until it stabilizes (stops growing for two consecutive
-        // reads), which means the forwarder has aborted. Bounded to 1s as a
-        // regression guard. Replaces a 60ms wall-clock sleep.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-        let mut last = emitted.load(Ordering::SeqCst);
-        loop {
+        // Yield a few times to let the forwarder task observe the closed
+        // receiver and abort. No wall-clock sleep needed — the forwarder
+        // breaks on the next poll after tx_out closes.
+        for _ in 0..8 {
             tokio::task::yield_now().await;
-            let now = emitted.load(Ordering::SeqCst);
-            if now == last {
-                break;
-            }
-            last = now;
-            if std::time::Instant::now() >= deadline {
-                break;
-            }
         }
 
         let count = emitted.load(Ordering::SeqCst);

@@ -118,7 +118,7 @@ if [ "$MODE" = "full" ]; then
     if command -v cargo-tarpaulin >/dev/null 2>&1; then
         run_step "Generate coverage" cargo tarpaulin --out Xml --locked --lib --timeout 120 -- --skip test_build_fork_tree_nests_children
         echo
-        echo "==> Enforce coverage thresholds (mirror ci.yml)"
+        echo "==> Enforce coverage thresholds (local-only; ci-nightly uploads the report, ADR-074)"
         if ! python3 - <<'PY'; then
             import xml.etree.ElementTree as ET
             import sys

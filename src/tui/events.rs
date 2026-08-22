@@ -471,14 +471,14 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                     last.content.push_str(&chunk);
                     if last.content.len() > PTY_TAIL_BYTES {
                         let total = last.content.len();
-                        let start = total - PTY_TAIL_BYTES;
-                        // Cut on a char boundary so we don't split a
-                        // multi-byte UTF-8 sequence.
-                        let start = last.content[start..]
-                            .char_indices()
-                            .next()
-                            .map(|(i, _)| start + i)
-                            .unwrap_or(start);
+                        let mut start = total - PTY_TAIL_BYTES;
+                        // Walk back to a char boundary BEFORE slicing so a
+                        // multibyte char straddling the offset doesn't
+                        // panic (WO 43.25). The prior char_indices fixup
+                        // here was dead code — the slice panicked first.
+                        while !last.content.is_char_boundary(start) {
+                            start -= 1;
+                        }
                         let tail = last.content[start..].to_string();
                         last.content = format!(
                             "… [{total} bytes total, showing last {PTY_TAIL_BYTES}]\n{tail}"
@@ -1880,5 +1880,60 @@ mod tests {
         assert_eq!(s.conversation.cursor_position, 9);
         s.set_cursor_line_col(5, 0);
         assert_eq!(s.conversation.cursor_position, 12);
+    }
+
+    /// PTY tail cut at 64 KiB with a multibyte char straddling the cut
+    /// point must not panic and must produce char-aligned output
+    /// (WO 43.25). Before the fix, `&last.content[start..]` panicked
+    /// because `start` landed mid-character; the `char_indices` fixup
+    /// that followed was dead code (sliced first).
+    #[test]
+    fn bash_partial_output_tail_cut_handles_multibyte_without_panic() {
+        let mut s = app_state();
+        // Seed a tool message so the BashPartialOutput arm appends to it.
+        s.conversation
+            .messages
+            .push_back(ConversationEntry::new("tool", ""));
+
+        // Build content whose 64 KiB tail boundary lands inside `🎉`
+        // (4 bytes). We want the char that straddles `start` to be
+        // multibyte, so the tail starts mid-character.
+        const PTY_TAIL_BYTES: usize = 64 * 1024;
+        // content = prefix + "🎉" + suffix, total > PTY_TAIL_BYTES, and
+        // start = total - PTY_TAIL_BYTES lands inside the emoji.
+        // Want start in [prefix_len+1, prefix_len+3] (inside the emoji).
+        //   start = prefix_len + 4 + suffix_len - PTY_TAIL_BYTES
+        //   pick suffix_len = PTY_TAIL_BYTES - 2 => start = prefix_len + 2.
+        let emoji = "🎉";
+        let suffix_len = PTY_TAIL_BYTES - 2;
+        let prefix_len = PTY_TAIL_BYTES + 10; // ensures total > PTY_TAIL_BYTES
+        let prefix = "a".repeat(prefix_len);
+        let suffix = "b".repeat(suffix_len);
+        let content = format!("{prefix}{emoji}{suffix}");
+        let total = content.len();
+        assert!(total > PTY_TAIL_BYTES);
+        let start = total - PTY_TAIL_BYTES;
+        // Confirm the cut lands inside the emoji (mid-char).
+        assert!(!content.is_char_boundary(start));
+        assert!(start > prefix_len && start < prefix_len + emoji.len());
+
+        // Drive the handler: append a chunk that takes content over the
+        // cap. We push the whole content as one chunk for the test.
+        dispatch_turn_event(&mut s, TurnEvent::BashPartialOutput(content));
+
+        // Did not panic. The tool message is now the bounded tail form.
+        let last = s.conversation.messages.back().expect("tool msg present");
+        assert_eq!(last.role, "tool");
+        // Output must be valid UTF-8 (no sliced char) — `to_string`
+        // would have panicked on invalid utf8 during the format!.
+        // Verify the boundary walk: the tail after the marker line is
+        // char-aligned.
+        assert!(last.content.starts_with("… ["));
+        let header_end = last.content.find('\n').expect("header line");
+        let tail = &last.content[header_end + 1..];
+        assert!(tail.is_char_boundary(0));
+        // The prefix `a`s were trimmed (the tail starts inside the
+        // emoji region, not back in the prefix).
+        assert!(!tail.starts_with('a'));
     }
 }

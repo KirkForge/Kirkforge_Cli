@@ -108,7 +108,11 @@ impl Executor {
                     const STEM_FILE_CAP: usize = 4096;
                     let cap = stem_file_cap.unwrap_or(STEM_FILE_CAP);
                     if content.len() > cap {
-                        Some((p.clone(), format!("{} [...truncated]", &content[..cap])))
+                        // Walk back to a UTF-8 char boundary so a
+                        // multibyte char straddling the cap doesn't
+                        // panic the turn (WO 43.25).
+                        let end = truncate_at_char_boundary(&content, cap);
+                        Some((p.clone(), format!("{} [...truncated]", &content[..end])))
                     } else {
                         Some((p.clone(), content))
                     }
@@ -219,5 +223,54 @@ impl Executor {
             tool_defs,
             stem_tokens,
         }
+    }
+}
+
+/// Walk `idx` back to the nearest UTF-8 char boundary at or before it
+/// (WO 43.25). Used so truncating arbitrary file content at a byte cap
+/// doesn't slice mid-character and panic the turn.
+fn truncate_at_char_boundary(s: &str, mut idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    while !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cut point landing inside a 4-byte char must walk back to the
+    /// char start, not panic (WO 43.25).
+    #[test]
+    fn truncate_at_char_boundary_handles_multibyte() {
+        // `🎉` is 4 bytes at offset 1..5. A cut at 3 (mid-char) walks
+        // back to 1 — the start of the char, not the middle.
+        let s = "a🎉b";
+        assert_eq!(s.len(), 6);
+        assert!(!s.is_char_boundary(3));
+        let end = truncate_at_char_boundary(s, 3);
+        assert!(s.is_char_boundary(end));
+        assert_eq!(end, 1);
+        assert_eq!(&s[..end], "a");
+    }
+
+    /// A cut point already on a boundary is returned unchanged.
+    #[test]
+    fn truncate_at_char_boundary_keeps_aligned_cut() {
+        let s = "a🎉b";
+        let end = truncate_at_char_boundary(s, 5); // start of `b`
+        assert_eq!(end, 5);
+        assert_eq!(&s[..end], "a🎉");
+    }
+
+    /// A cap beyond the string length clamps to the whole string.
+    #[test]
+    fn truncate_at_char_boundary_clamps_past_end() {
+        let s = "a🎉b";
+        assert_eq!(truncate_at_char_boundary(s, 100), s.len());
     }
 }

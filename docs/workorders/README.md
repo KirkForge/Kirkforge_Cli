@@ -879,3 +879,4 @@ tree, ~11 stale claims corrected in-line. See
 | 43.22 | [Adapter transport robustness](43.22-adapter-transport-robustness.md) | Planned |
 | 43.23 | [Subprocess lifecycle: PDEATHSIG, MCP idle, registry sweep](43.23-subprocess-lifecycle.md) | Planned |
 | 43.24 | [Test assertion quality triage](43.24-test-assertion-quality.md) | Planned |
+| 43.25 | [UTF-8 byte-slice panic hardening (executor + TUI streaming)](43.25-utf8-byte-slice-panic-hardening.md) | Done |

@@ -69,7 +69,13 @@ impl DoomLoopTracker {
     pub fn observe(&mut self, tool: &str, error: &str) -> Option<DoomHit> {
         let truncated = if error.len() > Self::ERROR_TRUNCATE {
             let mut t = String::with_capacity(Self::ERROR_TRUNCATE + 1);
-            t.push_str(&error[..Self::ERROR_TRUNCATE]);
+            // Walk back to a UTF-8 char boundary so a multibyte char
+            // straddling the cut point doesn't panic the turn (WO 43.25).
+            let mut end = Self::ERROR_TRUNCATE;
+            while !error.is_char_boundary(end) {
+                end -= 1;
+            }
+            t.push_str(&error[..end]);
             t.push('…');
             t
         } else {
@@ -684,5 +690,31 @@ mod tests {
         let expected_len = DoomLoopTracker::ERROR_TRUNCATE + "…".len();
         assert_eq!(hit.last_error.len(), expected_len);
         assert!(hit.last_error.ends_with('…'));
+    }
+
+    /// A non-ASCII error whose cut point lands inside a multibyte
+    /// char must not panic and must produce char-aligned output
+    /// (WO 43.25). Before the fix, `&error[..ERROR_TRUNCATE]`
+    /// panicked because the byte index split a 4-byte char.
+    #[test]
+    fn doom_loop_truncates_non_ascii_without_panic() {
+        let mut t = DoomLoopTracker::new();
+        // `🎉` is 4 bytes; place it so the 200-byte cut lands mid-char.
+        let prefix = "a".repeat(197);
+        let error = format!("{prefix}🎉bcdef");
+        assert!(error.len() > DoomLoopTracker::ERROR_TRUNCATE);
+        assert!(!error.is_char_boundary(DoomLoopTracker::ERROR_TRUNCATE));
+        // Must not panic.
+        t.observe("bash", &error);
+        t.observe("bash", &error);
+        let hit = t
+            .observe("bash", &error)
+            .expect("third identical error should fire");
+        // Output is valid UTF-8, ends with the ellipsis, and the
+        // body before it is char-aligned (no sliced char).
+        assert!(hit.last_error.ends_with('…'));
+        let body = &hit.last_error[..hit.last_error.len() - "…".len()];
+        assert!(body.is_char_boundary(body.len()));
+        assert!(body.starts_with(&prefix));
     }
 }

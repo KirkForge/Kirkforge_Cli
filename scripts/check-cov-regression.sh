@@ -16,8 +16,7 @@
 #
 # The baseline file (docs/coverage-baseline.md) is the single source of
 # truth for the PER-CRATE floor enforced here. A separate per-directory
-# tarpaulin gate in scripts/ci-local.sh (mirrored by the kf-testdoctor
-# `default_thresholds_match_local_gate` drift guard) covers src/session,
+# tarpaulin gate in scripts/ci-local.sh covers src/session,
 # src/tools, src/adapters — a different granularity, not compared here.
 
 set -euo pipefail

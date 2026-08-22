@@ -10,6 +10,7 @@ why, and the gate evidence.
 ## [Unreleased]
 
 ### Fixed
+- WO 42.5: MCP .mcp.json content-based re-approval — approvals now store a sha256 content hash; a modified `.mcp.json` under an approved path re-gates — [42.5](docs/workorders/42.5-mcp-content-approval.md)
 - WO 41.1: apply coder patch to parent + rename to PipelineOrchestrator — [41.1](docs/workorders/41.1-patch-application.md)
 - WO 41.2: escape handoff delimiters in content to prevent fence spoofing — [41.2](docs/workorders/41.2-handoff-delimiter-spoof.md)
 - WO 41.3: permission docs fix + ADR audit — accurate permission engine description, stale ADR amendments — [41.3](docs/workorders/41.3-permission-docs.md)

@@ -104,37 +104,79 @@ pub fn approval_db_path() -> Option<PathBuf> {
         .map(|d| d.join("approved_mcp_projects.json"))
 }
 
+/// One approved project: its path plus a content hash of the `.mcp.json`
+/// that was approved. The hash lets us re-gate when the file changes under
+/// an already-approved path (WO 42.5). `None` means the entry predates the
+/// hash, or the file was absent at approval time — both are treated as
+/// "needs re-approval" when a file is present, which is the safe default.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ApprovedProject {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+}
+
 /// Project fingerprint: the absolute path of the project root. A path
-/// change (different checkout) re-prompts; this is intentionally simple
-/// and does not hash the file contents (a changed `.mcp.json` under an
-/// approved path is not re-gated — ponytail: hash the file when a real
-/// audit demands it; the path key already prevents cross-project spray).
+/// change (different checkout) re-prompts.
 pub fn project_key(project_root: &Path) -> String {
     project_root.to_string_lossy().to_string()
 }
 
-/// Load the set of approved project paths. Absent file → empty set.
-pub fn load_approved_projects() -> Vec<String> {
+/// sha256 hex of the bytes of `project_root/.mcp.json`, or `None` if the
+/// file is absent. Used both at approval time (to stamp the entry) and at
+/// load time (to detect a change).
+fn current_content_hash(project_root: &Path) -> Option<String> {
+    let path = project_root.join(".mcp.json");
+    let bytes = std::fs::read(&path).ok()?;
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Some(hex::encode(hasher.finalize()))
+}
+
+/// Load the approved-project ledger. Absent file → empty vec. Lenient of
+/// both the new (`Vec<ApprovedProject>`) and legacy (`Vec<String>`)
+/// formats: a legacy entry is read back with `content_hash: None`, which
+/// `is_approved` treats as "needs re-approval" when a file is present.
+pub fn load_approved_projects() -> Vec<ApprovedProject> {
     let path = match approval_db_path() {
         Some(p) => p,
         None => return Vec::new(),
     };
-    match std::fs::read_to_string(&path) {
-        Ok(content) => {
-            let parsed: Vec<String> = serde_json::from_str(&content).unwrap_or_default();
-            parsed
-        }
-        Err(_) => Vec::new(),
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    // New format first.
+    if let Ok(parsed) = serde_json::from_str::<Vec<ApprovedProject>>(&content) {
+        return parsed;
     }
+    // Legacy format: `Vec<String>` of bare paths. Migrate to entries with
+    // no hash (→ re-approval on next load, the safe default).
+    serde_json::from_str::<Vec<String>>(&content)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| ApprovedProject {
+            path,
+            content_hash: None,
+        })
+        .collect()
 }
 
-/// Record an approval for a project path. Best-effort: a write failure
-/// is logged and swallowed (the next launch re-prompts, which is safe).
+/// Record an approval for a project path, stamping the current `.mcp.json`
+/// content hash so a later edit re-gates. Best-effort: a write failure is
+/// logged and swallowed (the next launch re-prompts, which is safe).
 pub fn record_approval(project_root: &Path) {
     let key = project_key(project_root);
+    let hash = current_content_hash(project_root);
     let mut approved = load_approved_projects();
-    if !approved.contains(&key) {
-        approved.push(key);
+    if let Some(entry) = approved.iter_mut().find(|e| e.path == key) {
+        entry.content_hash = hash;
+    } else {
+        approved.push(ApprovedProject {
+            path: key,
+            content_hash: hash,
+        });
     }
     let path = match approval_db_path() {
         Some(p) => p,
@@ -152,11 +194,22 @@ pub fn record_approval(project_root: &Path) {
     }
 }
 
-/// Check whether a project has already been approved. `true` means the
-/// `.mcp.json` servers may load without prompting.
+/// Check whether a project is approved *and* its `.mcp.json` is unchanged
+/// since approval. `true` means the servers may load without prompting.
+/// A present file whose stored hash is missing or differs → `false` (re-gate).
 pub fn is_approved(project_root: &Path) -> bool {
     let key = project_key(project_root);
-    load_approved_projects().contains(&key)
+    let approved = load_approved_projects();
+    let Some(entry) = approved.into_iter().find(|e| e.path == key) else {
+        return false;
+    };
+    match current_content_hash(project_root) {
+        // File present: must match the stored hash exactly.
+        Some(current) => entry.content_hash.is_some_and(|h| h == current),
+        // File absent now. Approved iff it was also absent at approval time
+        // (stored None) — there is nothing to spawn, so no re-gate needed.
+        None => entry.content_hash.is_none(),
+    }
 }
 
 /// Decide whether to load `.mcp.json` servers for a project, given the
@@ -363,5 +416,76 @@ mod tests {
         let db = approval_db_path().unwrap();
         let content = std::fs::read_to_string(&db).unwrap();
         assert!(content.contains("/fake/project2"));
+    }
+
+    // ── WO 42.5: content-based re-approval ──────────────────────────
+
+    #[test]
+    fn approval_persists_with_content_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::session::DataDirGuard::set(dir.path().to_path_buf());
+        let proj = dir.path().to_path_buf();
+        write_mcp_json(&proj, r#"{ "mcpServers": { "s": { "command": "x" } } }"#);
+        assert!(!is_approved(&proj));
+        record_approval(&proj);
+        // The persisted entry must carry a non-empty content hash.
+        let db = approval_db_path().unwrap();
+        let body: Vec<ApprovedProject> =
+            serde_json::from_str(&std::fs::read_to_string(&db).unwrap()).unwrap();
+        let entry = body
+            .iter()
+            .find(|e| e.path == proj.to_string_lossy())
+            .unwrap();
+        let hash = entry.content_hash.as_ref().expect("hash stamped");
+        assert!(!hash.is_empty());
+    }
+
+    #[test]
+    fn modified_file_re_prompts() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::session::DataDirGuard::set(dir.path().to_path_buf());
+        let proj = dir.path().to_path_buf();
+        write_mcp_json(&proj, r#"{ "mcpServers": { "s": { "command": "x" } } }"#);
+        record_approval(&proj);
+        assert!(is_approved(&proj));
+        // Attacker edits the file: add a new malicious server entry.
+        write_mcp_json(
+            &proj,
+            r#"{ "mcpServers": { "s": { "command": "x" }, "evil": { "command": "pwn" } } }"#,
+        );
+        assert!(
+            !is_approved(&proj),
+            "a changed .mcp.json must re-gate, not load silently"
+        );
+    }
+
+    #[test]
+    fn unchanged_file_loads_silently() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::session::DataDirGuard::set(dir.path().to_path_buf());
+        let proj = dir.path().to_path_buf();
+        let body = r#"{ "mcpServers": { "s": { "command": "x" } } }"#;
+        write_mcp_json(&proj, body);
+        record_approval(&proj);
+        // Re-read without touching the file — must stay approved.
+        assert!(is_approved(&proj));
+        assert!(is_approved(&proj));
+    }
+
+    #[test]
+    fn legacy_entry_without_hash_triggers_re_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::session::DataDirGuard::set(dir.path().to_path_buf());
+        let proj = dir.path().to_path_buf();
+        write_mcp_json(&proj, r#"{ "mcpServers": { "s": { "command": "x" } } }"#);
+        // Hand-write a legacy-format ledger (bare path strings, no hashes).
+        let db = approval_db_path().unwrap();
+        let legacy = serde_json::to_string(&vec![proj.to_string_lossy().to_string()]).unwrap();
+        std::fs::write(&db, legacy).unwrap();
+        // The project is "in the ledger" but has no content hash → re-gate.
+        assert!(
+            !is_approved(&proj),
+            "legacy entry without hash must re-approve (safe default)"
+        );
     }
 }

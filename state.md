@@ -4,6 +4,7 @@
 
 ## Pending / Deferred
 
+- **WO 42.7 follow-up (pre-existing drift)**: `adr_xref_drift` test fails because WO 41.7 and 41.8 file headers say `Done` but `docs/workorders/README.md` index rows (lines 817-818) still say `Pending`. This predates WO 42.7 and is out of its scope. Fix: update the two README rows to `Done` (or revert the file headers). Tracked here.
 - **WO 41.5 Phase 2-3**: `/jobs` integration + transcript links (Phase 2), full `AgentRun` object with workspace/model/permissions/budget/transcript/artifacts (Phase 3). Tracked in [41.5](docs/workorders/41.5-persistent-subagent.md).
 - **WO 41.6**: shadowed-rule diagnostics in `/permissions list`. Tracked in [41.6](docs/workorders/41.6-shadow-diagnostics.md).
 - **WO 41.7**: property/fuzz testing of the glob matcher. Tracked in [41.7](docs/workorders/41.7-glob-fuzz.md).

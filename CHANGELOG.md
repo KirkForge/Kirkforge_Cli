@@ -10,6 +10,7 @@ why, and the gate evidence.
 ## [Unreleased]
 
 ### Fixed
+- WO 42.7: offload store FIFO eviction + byte cap — replace random-order HashMap eviction with insertion-ordered VecDeque, add `max_bytes` cap — [42.7](docs/workorders/42.7-offload-fifo.md)
 - WO 41.1: apply coder patch to parent + rename to PipelineOrchestrator — [41.1](docs/workorders/41.1-patch-application.md)
 - WO 41.2: escape handoff delimiters in content to prevent fence spoofing — [41.2](docs/workorders/41.2-handoff-delimiter-spoof.md)
 - WO 41.3: permission docs fix + ADR audit — accurate permission engine description, stale ADR amendments — [41.3](docs/workorders/41.3-permission-docs.md)

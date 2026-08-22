@@ -1702,14 +1702,19 @@ mod tests {
                 );
             }
 
-            // If ANY clause does NOT match, allow returns false.
+            // If ANY clause does NOT match, allow returns false. The assume
+            // must guard the actual condition (the "mismatch" clause doesn't
+            // match the prefix glob), not just string inequality — `word*`
+            // matches any string starting with `word`, so `bad` starting with
+            // `word` would make the "mismatch" clause actually match.
             #[test]
             fn allow_one_mismatch_is_false(
                 word in "[a-z]{1,8}",
                 bad in "[a-z]{1,8}",
                 sep in separator_strategy(),
             ) {
-                prop_assume!(word != bad);
+                let bad_clause = format!("{bad}y");
+                prop_assume!(!bad_clause.starts_with(word.as_str()));
                 let pattern = format!("{word}*");
                 let cmd = format!("{word}x{sep}{bad}y");
                 prop_assert!(

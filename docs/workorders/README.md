@@ -292,7 +292,7 @@ in progress in separate worktrees at the time of this WO.
 | 14.3 | [Actionable errors + typed error classification](14.3-actionable-errors-typed-classification.md) | Done (`5bb731e`; `KirkForgeError::hint()` + `From<anyhow::Error>` downcast) | High | — |
 | 14.4 | [Status bar graceful degradation on narrow terminals](14.4-status-bar-graceful-degradation.md) | Done (`2f26cda`) | Medium | — |
 | 14.5 | [`/permissions` command (list + revoke `[A]lways` rules)](14.5-permissions-revoke-command.md) | Done (`f8e9f4c`; pure ops layer + 6 tests) | Medium | 14.2 (soft) |
-| 14.6 | [Slash-command + `@`-mention autocomplete](14.6-slash-mention-autocomplete.md) | In Progress (worktree) | High | 14.2, 14.5 (soft) |
+| 14.6 | [Slash-command + `@`-mention autocomplete](14.6-slash-mention-autocomplete.md) | Done (`complete_command` + `file_completer` + `slash_menu` shipped) | High | 14.2, 14.5 (soft) |
 | 14.7 | [Publish KIRK-BENCH spec + signature Token Budget Challenge](14.7-kirk-bench-spec-publish.md) | Done (`327510c`; ADR-066; `token_budget_challenge.toml`) | High | 14.0 (soft) |
 | 14.8 | [Dead-code + `#[allow(...)]` audit (internal stability)](14.8-dead-code-clippy-allow-audit.md) | Done (`120db95`; 20 dead items removed, 740-line `dispatch_tool_call` deleted) | Medium | — |
 | 14.9 | [Doc-sync reconcile ADR count + stale claims](14.9-doc-sync-reconcile-adr-count.md) | Done (`9c6bf5a`) | Medium | 14.0 (soft) |
@@ -505,14 +505,14 @@ plan + ordering.
 
 | WO | Title | Status | Priority | Deps |
 |----|-------|--------|----------|------|
-| 27.0 | [Series overview](27.0-wo27-overview.md) | In Progress | — | — |
+| 27.0 | [Series overview](27.0-wo27-overview.md) | Done | — | — |
 | 27.1 | [Landlock default-on + actually applied (C1)](27.1-landlock-default-on.md) | Done | P0 | — |
 | 27.2 | [Test health: CI green + triage 49 ignored + coverage gate (H6)](27.2-test-health.md) | Done (CI green, e2e feature-gated, coverage gate shipped in WO 33 series) | P0/P1 | — |
-| 27.3 | [Architecture debt: tools↔session cycle + god-objects (H7/H8)](27.3-architecture-debt.md) | Planned | P1 | — |
-| 27.4 | [Plugin trust default (H9)](27.4-plugin-trust.md) | Planned | P1 | — |
-| 27.5 | [Bash hardening: background jobs + deny-list posture (H3/H5)](27.5-bash-hardening.md) | Planned | P2 | 27.1 |
-| 27.6 | [TUI themes (polish)](27.6-tui-themes.md) | Planned | P2 | — |
-| 27.7 | [TUI mouse support (polish)](27.7-tui-mouse.md) | In Progress | P2 | — |
+| 27.3 | [Architecture debt: tools↔session cycle + god-objects (H7/H8)](27.3-architecture-debt.md) | Done (via WO 28.1 + 28.3) | P1 | — |
+| 27.4 | [Plugin trust default (H9)](27.4-plugin-trust.md) | Done (`plugin_trust_workspace` shipped) | P1 | — |
+| 27.5 | [Bash hardening: background jobs + deny-list posture (H3/H5)](27.5-bash-hardening.md) | Done (via WO 28.5 + 28.17) | P2 | 27.1 |
+| 27.6 | [TUI themes (polish)](27.6-tui-themes.md) | Done (`theme.rs` + `/theme` command shipped) | P2 | — |
+| 27.7 | [TUI mouse support (polish)](27.7-tui-mouse.md) | Done (R1+R3+R4 shipped; R2 deferred to WO 32.12) | P2 | — |
 
 **8 sub-workorders.** Highest leverage: **27.2** (CI green is the unblock for
 everything) and **27.1** (C1 is the security moat vs codex-cli). 27.6/27.7 are
@@ -539,7 +539,7 @@ See [WO 28.0](28.0-wo28-overview.md) for the full plan + ordering.
 | 28.3 | [Split turn.rs god-object (H8)](28.3-turn-rs-split.md) | Done (2087→1191 LOC) | M |
 | 28.4 | [Fix TS plugin-SDK cycles](28.4-ts-plugin-cycles.md) | Superseded (TS tree deleted, WO 29.9) | M |
 | 28.5 | [Landlock on background bash jobs](28.5-background-landlock.md) | Done (R1+R2; R3 test deferred) | S |
-| 28.6 | [e2e binary-spawn hang debug/convert](28.6-e2e-hang-debug.md) | Planned | M |
+| 28.6 | [e2e binary-spawn hang debug/convert](28.6-e2e-hang-debug.md) | Done (hang fixed via WO 32.9; tests behind `e2e-tests` feature) | M |
 | 28.7 | [Coverage regression gate](28.7-coverage-gate.md) | Done (R1-R4 local; ci.yml step deferred) | M |
 | 28.8 | [daemon/client.rs tests](28.8-daemon-client-tests.md) | Done (R1-R5; R6 Windows deferred) | M |
 | 28.9 | [Session coverage >75%](28.9-session-coverage-75.md) | Done (5 tests; R2.5/R2.6 disclosed) | XL |
@@ -614,11 +614,11 @@ items get individual WO 32 sub-workorders for tracking. See
 
 | WO | Title | Status | Est | Priority |
 |----|-------|--------|-----|----------|
-| 32.0 | [Series overview + full deferral inventory](32.0-wo32-overview.md) | Done (32.1-32.20 shipped; 32.3/32.4/32.15/32.16 pending) | — | — |
+| 32.0 | [Series overview + full deferral inventory](32.0-wo32-overview.md) | Done (32.1-32.20 shipped; 32.15 pending) | — | — |
 | 32.1 | [Fix stale WO 30 overview statuses](32.1-fix-wo30-overview-statuses.md) | Done | S | — |
 | 32.2 | [Fix stale plugin_verify deferral message](32.2-fix-plugin-verify-message.md) | Done (`f2c33d4`) | S | — |
-| 32.3 | [Clean up untracked npm/ build artifacts](32.3-clean-npm-artifacts.md) | Pending | S | — |
-| 32.4 | [Subagent CWD confinement](32.4-subagent-cwd-confinement.md) | Pending | M | High |
+| 32.3 | [Clean up untracked npm/ build artifacts](32.3-clean-npm-artifacts.md) | Done (`npm/` directory removed) | S | — |
+| 32.4 | [Subagent CWD confinement](32.4-subagent-cwd-confinement.md) | Done (`landlock_extra_paths` includes `sandbox_dir` in `task_spawner.rs:322-344`) | M | High |
 | 32.5 | [Parallel orchestration (scout/coder/reviewer)](32.5-parallel-orchestration.md) | Done (`9965478`; partially implemented — per-subagent worktree + Reviewer BusVerifier deferred) | L | Medium |
 | 32.6 | [Cross-tool benchmark vs Codex/Claude Code](32.6-cross-tool-benchmark.md) | Done (`d769d4b`; framework + runner shipped; live run pending) | M | High |
 | 32.7 | [WO 28.9 missing 11 tests (R3/R4/R5 — silent deferral)](32.7-missing-28.9-tests.md) | Done (`b294295`) | M | High |
@@ -658,12 +658,14 @@ for Cargo/Clippy, `JwksResolver` for kf-rbac JWT). See
 
 | WO | Title | Status | Priority |
 |----|-------|--------|----------|
-| 33.0 | [Series overview](33.0-wo33-overview.md) | In Progress | — |
+| 33.0 | [Series overview](33.0-wo33-overview.md) | Done | — |
 | 33.1 | [Concurrency cancellation](33.1-concurrency-cancellation.md) | Done (`839d39d`) | P0 |
 | 33.2 | [Remove artificial needs: dependencies](33.2-remove-artificial-needs.md) | Done (`839d39d`) | P0 |
 | 33.3 | [Split CI into PR / post-merge / nightly workflows](33.3-split-ci-workflows.md) | Done (`cd79462`) | P0 |
+| 33.4 | [Remove redundant cargo check (clippy covers it)](33.4-remove-redundant-check.md) | Done (CI runs `cargo clippy` only) | P0 |
 | 33.5 | [Nextest profiles (ci-fast, ci-full, integration, e2e)](33.5-nextest-profiles.md) | Done (`7e82ea2`) | P1 |
 | 33.6 | [Path-aware / changed-package test selection](33.6-changed-package-selection.md) | Done (`95c9588`) | P1 |
+| 33.9 | [Windows: split tests from release build](33.9-windows-split-release.md) | Done (Windows tests in `ci-merge.yml`; release in `ci-nightly.yml`) | P1 |
 | 33.11 | [Profile: measure top-20 slowest tests](33.11-slowest-tests.md) | Done (measurement) (`7820522`) | P1 |
 | 33.12 | [Kill wall-clock sleeps in tests (phase 1)](33.12-kill-sleeps.md) | Done (`b010aa4` + `ac8df2b`) | P1 |
 | 33.13 | [Kill global env mutation in tests (phase 2)](33.13-kill-env-mutation.md) | Done (EnvGuard mechanism shipped; rollout complete per WO 33.16 session) (`35d1a21` + `d89689d`-`a2a2f80`) | P1 |

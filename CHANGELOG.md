@@ -9,6 +9,9 @@ why, and the gate evidence.
 
 ## [Unreleased]
 
+### Changed
+- docs: update stale WO statuses — 14 WOs marked Done (shipped but never updated): 14.6, 27.0-27.7, 28.6, 31.0, 32.3, 32.4, 33.0, 33.4, 33.9
+
 ### Fixed
 - WO 42.5: MCP .mcp.json content-based re-approval — approvals now store a sha256 content hash; a modified `.mcp.json` under an approved path re-gates — [42.5](docs/workorders/42.5-mcp-content-approval.md)
 - WO 42.7: offload store FIFO eviction + byte cap — replace random-order HashMap eviction with insertion-ordered VecDeque, add `max_bytes` cap — [42.7](docs/workorders/42.7-offload-fifo.md)

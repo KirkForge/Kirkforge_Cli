@@ -872,3 +872,10 @@ tree, ~11 stale claims corrected in-line. See
 | 43.15 | [Machine-greppable ADR predicates](43.15-machine-greppable-adrs.md) | Planned |
 | 43.16 | [No-throw dispatch finish + grep gate](43.16-no-throw-dispatch.md) | Planned |
 | 43.17 | [Plugin consent ledger (mirror 42.5)](43.17-content-hash-consent.md) | Planned |
+| 43.18 | [Abrupt-exit safety: line-mode SIGINT, audit flush, grep blocking](43.18-concurrency-shutdown-safety.md) | Planned |
+| 43.19 | [TUI panic hardening + multibyte cursor fix](43.19-tui-panic-hardening.md) | Planned |
+| 43.20 | [Dependency and binary-size audit](43.20-dep-size-audit.md) | Planned |
+| 43.21 | [Persistence crash robustness](43.21-persistence-crash-robustness.md) | Planned |
+| 43.22 | [Adapter transport robustness](43.22-adapter-transport-robustness.md) | Planned |
+| 43.23 | [Subprocess lifecycle: PDEATHSIG, MCP idle, registry sweep](43.23-subprocess-lifecycle.md) | Planned |
+| 43.24 | [Test assertion quality triage](43.24-test-assertion-quality.md) | Planned |

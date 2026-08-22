@@ -21,6 +21,12 @@
   scout.rs:138 `unimplemented!()` is `#[cfg(test)]`-only, ADR 0011/0012
   already Rejected, landlock already default-on for bash, Windows rename
   retry already shipped). Start at [43.0](docs/workorders/43.0-wo43-overview.md).
+- **WO 43.18-43.24**: round-3 fresh segment audit (concurrency/shutdown,
+  TUI, deps/size, persistence crash-robustness, adapter transport,
+  subprocess lifecycle, test quality). NEW findings — top risks: line-mode
+  Ctrl-C orphans bash children; audit BufWriter lost on panic-abort; no
+  PDEATHSIG (parent abort orphans all subprocesses); Bedrock `[DONE]`
+  injection bypasses truncation; headless_chrome ungated (~1-2 MB).
 - **WO 39.4**: Claude compat phase 3 (hook stdin-JSON contract + generic
   pre/post-tool events). Deferred — lowest wild frequency of the artifact
   classes. Tracked in [39.4](docs/workorders/39.4-claude-compat-phase3.md).

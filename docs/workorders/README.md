@@ -838,10 +838,10 @@ Driven by 8 read-only exploration agents. See
 | 42.3 | [Secret scrubbing — expand coverage](42.3-secret-scrubbing.md) | Done |
 | 42.4 | [rlimits/unshare — fail-closed](42.4-rlimits-fail-closed.md) | Done |
 | 42.5 | [MCP .mcp.json content-based re-approval](42.5-mcp-content-approval.md) | Done |
-| 42.6 | [Performance: WO 38.9 items 2-6](42.6-performance-items.md) | Pending |
+| 42.6 | [Performance: WO 38.9 items 2-6](42.6-performance-items.md) | In Progress |
 | 42.7 | [Offload store FIFO eviction + byte cap](42.7-offload-fifo.md) | Done |
 | 42.8 | [Handoff delimiter escaping](42.8-handoff-escaping.md) | Done |
 | 42.9 | [PipelineOrchestrator rename + patch application](42.9-pipeline-rename-patch.md) | Done |
 | 42.10 | [Subagent persistence Phase 1](42.10-subagent-persistence.md) | Done |
-| 42.11 | [Wire content_hash in verifier path](42.11-content-hash-wiring.md) | Pending |
+| 42.11 | [Wire content_hash in verifier path](42.11-content-hash-wiring.md) | Done |
 | 42.12 | [Token count cache at append time](42.12-token-count-cache.md) | Done |

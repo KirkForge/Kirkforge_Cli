@@ -135,6 +135,12 @@ impl CorrectionLoop {
                     if !applied || is_suggestion {
                         break; // can't fix, or suggestion only → stop looping
                     }
+                    // A fix mutated disk content — any cached Clean verdict
+                    // for this event's path is now stale. Drop it so the next
+                    // verify_event re-runs verifiers against the fixed file.
+                    if let Some(path) = event_path(event) {
+                        self.verifier_handler.invalidate_cache(&path);
+                    }
                 }
                 Verdict::Unfixable(err) => {
                     results.push(CorrectionResult {
@@ -170,6 +176,16 @@ pub struct CorrectionResult {
     pub fix: Option<FixSuggestion>,
     pub file: Option<std::path::PathBuf>,
     pub line: Option<u32>,
+}
+
+/// Extract the file path from a `FileWrite`/`Edit` event. Returns `None`
+/// for events that don't target a specific file (BashExec, ToolError, …).
+fn event_path(event: &BusEvent) -> Option<std::path::PathBuf> {
+    match event {
+        BusEvent::FileWrite(e) => Some(e.path.clone()),
+        BusEvent::Edit(e) => Some(e.path.clone()),
+        _ => None,
+    }
 }
 
 /// Apply a text-based fix suggestion to the filesystem.

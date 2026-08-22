@@ -808,6 +808,14 @@ After a tool execution event, the correction loop (up to 3 iterations):
 4. `Unfixable` → report to the model.
 5. Re-verify after each auto-fix to catch cascading issues.
 
+WO 42.11 adds a verdict cache to `VerifierHandler::verify_event`: verdicts for
+`FileWrite` events with `content_hash > 0` are cached keyed by
+`(file_path, content_hash)`. Only `Clean`/`Skipped` verdicts are cached —
+`Fixable`/`Unfixable` are not, because the correction loop re-verifies after
+applying a fix (disk content changed). After a fix is applied, the loop calls
+`invalidate_cache(path)` to drop the stale entry. This skips redundant
+`cargo build`/`clippy`/`test` runs for unchanged file content across turns.
+
 WO 38.3 bounds every subprocess wait in this path. The formatter
 (`apply_command_fix`) gets the hooks treatment — `kill_on_drop`, null stdin,
 own process group, 5s `tokio::time::timeout` with group kill — so a hung

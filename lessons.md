@@ -1,3 +1,57 @@
+# Lessons — WO 42.6 item 2 + WO 42.11 session (worktree wo42.6)
+
+## What I learned about this codebase
+
+- `content_hash` on `FileWriteEvent` was computed at `dispatch.rs:104` via
+  `DefaultHasher` but never read by any verifier — pure dead data. The fix is a
+  verdict cache in `VerifierHandler::verify_event` keyed by
+  `(file_path, content_hash)`.
+- The correction loop (`CorrectionLoop::run`) re-calls `verify_event` with the
+  SAME event up to 3x. Verifiers read from DISK, not the event — so after a fix
+  is applied, the disk content changes but `content_hash` stays the same. This
+  means: (a) only `Clean`/`Skipped` verdicts are cacheable (Fixable/Unfixable
+  need re-verification after a fix), and (b) after a fix, the cache must be
+  invalidated for the path (`invalidate_cache`) so the next iteration re-runs
+  against the fixed disk content.
+- `HashMap::retain` passes `(&K, &V)` to the closure — destructuring with
+  `|(p, _), _|` doesn't work (parser sees `p` as a pattern binding, then `!=`
+  as unexpected). Use `|key, _| key.0 != *path` instead.
+- `clippy::type_complexity` fires on `Arc<Mutex<HashMap<(PathBuf, u64), (Verdict, String)>>>`
+  — add `#[allow(clippy::type_complexity)]` on the field (matches the
+  codebase convention for complex tuple types).
+- The correction loop does NOT use `drain_corrections` — it uses the
+  `FixSuggestion` embedded directly in the `Verdict::Fixable(fix)`. The
+  `pending_corrections` / `drain_corrections` path is only consumed by tests.
+- `futures_util` is already a dep (used for `FutureExt::catch_unwind` in the
+  existing handler) — no new dep needed.
+- Cold build in a fresh worktree: `cargo check -p kf-code --lib` took ~7 min,
+  `cargo test --lib` (test profile + all dev-deps) took ~9 min. Shared
+  `CARGO_TARGET_DIR` across worktrees causes lock contention with parallel
+  worktrees (wo32.15, wo38.9, wo40.4 all building concurrently). Budget 30+
+  min for a cold gate run when other worktrees are active.
+- Concurrent verification (WO 42.6 item 3) was DEFERRED — the current
+  `verify_event` loop runs verifiers sequentially with a per-verifier timeout.
+  Making it concurrent via `join_all` would require restructuring the
+  `all_findings` accumulation + the `pending_corrections` push (both are
+  order-sensitive). The verdict cache (item 2) is the big win — it
+  eliminates redundant cargo runs entirely; concurrency only helps when
+  verifiers actually run, which the cache makes rare.
+
+## What didn't work / would do differently
+
+- First closure attempt for `HashMap::retain` used `|(p, _), p != path` which
+  is invalid Rust syntax — the `!=` after a pattern binding is a parse error.
+  Cost one compile cycle. Check the `HashMap::retain` signature
+  (`Fn(&K, &V) -> bool`) before writing the closure.
+
+## Scope creep (disclosed)
+
+- None. Files touched are exactly the WO's list: handler.rs (cache),
+  correction.rs (invalidate after fix), tests.rs (5 tests), plus doc-sync
+  files (42.11 WO, 42.6 WO, README index, TECHNICAL.md, CHANGELOG, state.md).
+
+---
+
 # Lessons — WO 42.12 session (worktree wo42.12)
 
 ## What I learned about this codebase

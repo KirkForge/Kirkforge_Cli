@@ -214,6 +214,45 @@
 # follow_symlinks = false
 
 # ---------------------------------------------------------------------------
+# Permission rules (allow / ask / deny)
+# ---------------------------------------------------------------------------
+#
+# Per-tool, per-argument allow/ask/deny rules. Each rule matches a tool call
+# against a glob pattern and decides whether the call is auto-approved (allow),
+# prompts the user (ask), or is refused outright (deny). Rules are evaluated
+# in declaration order — first match wins. When no rule matches, the default
+# is Ask (unless auto_approve = true, in which case Allow).
+#
+# See src/shared/permission.rs for the full engine description.
+#
+# [[permission_rules]]
+# tool = "bash"
+# key = "command"
+# pattern = "cargo test*"
+# action = "allow"
+#
+# [[permission_rules]]
+# tool = "edit_file"
+# key = "path"
+# pattern = "src/**/*.rs"
+# action = "allow"
+#
+# [[permission_rules]]
+# tool = "bash"
+# key = "command"
+# pattern = "rm -rf **"
+# action = "deny"
+#
+# Field reference:
+#   tool    — exact tool name ("bash", "edit_file", "write_file", ...) or "*"
+#   key     — which argument to match: "command" for bash, "path" for file
+#             tools, or "*" to match without inspecting args
+#   pattern — glob. "*" = one path segment (does NOT cross "/"). "**" = any
+#             chars including "/". For bash deny rules, lone "*" is promoted
+#             to "**" so deny patterns block across slashes.
+#   action  — "allow", "ask", or "deny"
+
+# ---------------------------------------------------------------------------
 # Deny / allow lists
 # ---------------------------------------------------------------------------
 

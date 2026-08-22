@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted (amended)
 
 ## Date
 
@@ -134,3 +134,21 @@ fn edit_file(path, old_string, new_string) -> Result {
 
 - Should bash output be streamed to the UI in real-time (like a terminal) or delivered as a block after completion? Streaming is more responsive but requires more TUI state. Start with block delivery, add streaming as a UI refinement.
 - Tool call context window management: each tool result is a full `{role: "tool", content: "..."}` message. A `cat` of a large file or a `grep` with 500 matches blows the context. Mitigation: truncate tool results at a configurable limit and append `\n... (N more lines truncated)`. Make this a per-tool setting.
+
+## Amendment (2026-08-22, WO 41.3) — permission_rules supersedes the tier model
+
+The ReadOnly/Destructive tier model described in § "Approval tiers" above was
+the original approval gate. It has been **superseded as the primary gate** by
+the `permission_rules` engine (`src/shared/permission.rs`): an ordered,
+first-match-wins list of user-defined rules that match a tool call against
+`(tool, key, pattern, action)` and decide allow / ask / deny. The TUI's
+`[A]lways` key writes a `permission_rules` entry instead of flipping the
+global `auto_approve` flag.
+
+The tier model survives as the **default** when no `permission_rules` entry
+matches: destructive tools fall back to `Ask` (or `Allow` when
+`auto_approve = true`), and read-only tools stay frictionless. The compound-
+clause evaluation (WO 38.1) and env-secret scrubbing (WO 38.1) layered on top
+of the rule engine are documented in `docs/TECHNICAL.md` § Permissions and in
+the `src/shared/permission.rs` module doc comment. See `config.toml.example`
+for concrete rule examples.

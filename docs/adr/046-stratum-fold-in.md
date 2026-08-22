@@ -36,3 +36,12 @@ The standalone `kirkstratum-cli` binary was removed in ADR-068 / WO 21.11.
 - Shell-plugin path (`plugins/stratum/`) remains as fallback when feature is off.
 - The standalone `kirkstratum-cli` binary was removed in ADR-068 / WO 21.11.
 - Config field `stratum_mode` (off/lite/full/ultra) was proposed in the workorder but deferred — the existing `enabled_plugins` toggle is sufficient for on/off, and mode selection passes through tool arguments.
+
+## Amendment (2026-08-22, WO 41.3) — shell fallback deleted
+
+The Decision and Implementation notes above state "the shell-plugin path
+remains as fallback when feature is off" and reference `plugins/stratum/`.
+Both were deleted in WO 29.9: there is no shell-plugin tree and no shell
+fallback. When the `stratum` feature is off, the Stratum tools and hooks are
+simply absent — not shell-backed. This matches ADR-050 (consolidation) and
+`docs/TECHNICAL.md` § Plugin system.

@@ -1,3 +1,32 @@
+# Lessons — WO 41.6 session (worktree wo416)
+
+## What I learned about this codebase
+
+- `detect_changes()` with the `worktree` param works — it correctly
+  reported only the 6 changed files, low risk, 0 affected processes.
+  This is the first session where the worktree-aware detect_changes was
+  used and it worked (previous sessions noted it indexed the main
+  checkout only).
+- The `list` function in `permissions.rs` is pure and returns a String —
+  adding diagnostics after the rule rows is a 3-line insert. The pure
+  ops-layer split (WO 11.0 pattern) makes this trivially testable.
+- `clippy::needless_range_loop` fires on `for m in 0..n` even when the
+  index is used to build the result tuple — use
+  `rules.iter().enumerate().take(n)` instead. One lint cycle cost.
+- The shadowing subsumption check `glob_match(M.pattern, N.pattern)` is
+  sound but incomplete: it never false-positives (if M's glob matches
+  N's pattern string, M matches every value N does) but may miss true
+  shadowings where the subset relation isn't expressible as "M matches
+  N's pattern string." This is the right tradeoff for an advisory
+  diagnostic — documented in the function doc comment.
+
+## What didn't work / would do differently
+
+- Nothing significant. The task was small (fast-path exemption
+  territory: pure function + wiring + tests).
+
+---
+
 # Lessons — WO 37.2 session (worktree wo37-b)
 
 ## What I learned about this codebase

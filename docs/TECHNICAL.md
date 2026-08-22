@@ -864,7 +864,10 @@ ranked by TF-IDF embedding cosine similarity (pure-Rust sparse vectors over
 name + kind tokens, persisted in `CachedIndex`); a substring query falls back to
 the original `retrieve()`. The prompt builder calls `retrieve_hybrid` every
 turn. Zero new dependencies — the embeddings module is pure Rust over the
-existing `serde` / `tree-sitter` / `walkdir` set.
+existing `serde` / `tree-sitter` / `walkdir` set. WO 38.9 item 5: the query
+path now uses pre-computed embeddings from `CachedIndex` (loaded via
+`ContextIndex::from_cached`) instead of rebuilding the vocabulary and
+re-embedding all symbols per query.
 
 The walker also handles five non-trivial syntax patterns (WO 8.9):
 

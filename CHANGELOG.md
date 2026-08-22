@@ -9,6 +9,9 @@ why, and the gate evidence.
 
 ## [Unreleased]
 
+### Performance
+- WO 38.9/42.6 items 4-6: memory mtime cache, CachedIndex embeddings in query path, prompt stem stability — [38.9](docs/workorders/38.9-session-performance.md), [42.6](docs/workorders/42.6-performance-items.md)
+
 ### Fixed
 - WO 42.5: MCP .mcp.json content-based re-approval — approvals now store a sha256 content hash; a modified `.mcp.json` under an approved path re-gates — [42.5](docs/workorders/42.5-mcp-content-approval.md)
 - WO 42.7: offload store FIFO eviction + byte cap — replace random-order HashMap eviction with insertion-ordered VecDeque, add `max_bytes` cap — [42.7](docs/workorders/42.7-offload-fifo.md)

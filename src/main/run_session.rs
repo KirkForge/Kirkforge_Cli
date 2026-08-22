@@ -485,7 +485,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             if cache_path.exists() {
                 if let Ok(cached) = kf_context_index::ContextIndex::load(&cache_path) {
                     if kf_context_index::ContextIndex::is_current(&cached, path) {
-                        let idx = kf_context_index::ContextIndex::from_symbols_and_edges_and_calls(cached.symbols, cached.edges, cached.call_edges);
+                        let idx = kf_context_index::ContextIndex::from_cached(cached);
                         tracing::info!(
                             symbol_count = idx.symbols().len(),
                             "loaded repo-graph context index from cache"

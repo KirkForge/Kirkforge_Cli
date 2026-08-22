@@ -4,6 +4,14 @@
 
 ## Shipped (closed this session)
 
+- **WO 43.28**: Done. `scrub_secrets_from_child_env` (bash_runner/mod.rs)
+  was foreground-only; background/scheduled (`BashJobRegistry::spawn`,
+  covers jobs/runner.rs) and PTY (`pty::run_with_pty`) inherited the full
+  parent env and could leak `*_API_KEY`/`*_TOKEN` to the model via
+  `bash(background=true)` + `bash_status`. Helper made `pub(crate)`, applied
+  on all three spawn paths; pinning test added. Helper + `is_secret_env_name`
+  now `pub(crate)` so PTY (separate `portable_pty::CommandBuilder` type)
+  reuses the same name-match logic.
 - **WO 41.0-41.9**: ALL Done (series complete).
 - **WO 42.0-42.12**: ALL Done (series complete). 42.0 overview closed.
 - **WO 38.9**: items 1-6 all done (was 30%, now 100%). Closed.
@@ -33,7 +41,7 @@
   24 NEW verified findings (no re-scoping of existing 43.x items). Top
   risks: 3 raw UTF-8 byte-slice panics incl. two outside the tool
   catch_unwind (43.25); prompt-compaction OOB panic on over-budget path
-  (43.29); background/PTY bash skip the secret env scrub (43.28);
+  (43.29); background/PTY bash skip the secret env scrub (43.28 — DONE);
   `KF_CODE_*` env overrides dead in production (43.32); context-index
   `retrieve()` smears unresolved edges → multi-MB prompts (43.34); pre-tool
   hook deny ineffective for file tools (43.30); workflow-bash/plugin-bus

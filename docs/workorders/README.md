@@ -879,3 +879,18 @@ tree, ~11 stale claims corrected in-line. See
 | 43.22 | [Adapter transport robustness](43.22-adapter-transport-robustness.md) | Planned |
 | 43.23 | [Subprocess lifecycle: PDEATHSIG, MCP idle, registry sweep](43.23-subprocess-lifecycle.md) | Planned |
 | 43.24 | [Test assertion quality triage](43.24-test-assertion-quality.md) | Planned |
+| 43.25 | [UTF-8 byte-slice panic hardening (executor + TUI streaming)](43.25-utf8-byte-slice-panic-hardening.md) | Planned |
+| 43.26 | [Unguarded subprocess spawns (workflow bash, plugin-bus verifier)](43.26-unguarded-subprocess-workflow-pluginbus.md) | Planned |
+| 43.27 | [Atomic-write permission preservation + undo-ordering bug](43.27-atomic-write-permissions-undo-order.md) | Planned |
+| 43.28 | [Background/PTY bash secret leakage (env scrub gap)](43.28-background-pty-bash-secret-leak.md) | Done |
+| 43.29 | [Prompt-compaction out-of-bounds panic (minify_old_messages)](43.29-prompt-compaction-oob-panic.md) | Planned |
+| 43.30 | [Pre-tool hook veto ineffective for file tools](43.30-file-tool-hook-veto.md) | Planned |
+| 43.31 | [Doom-loop banner renders wrong selection](43.31-doom-loop-banner-selection.md) | Planned |
+| 43.32 | [Bash env-override layer dead in production](43.32-config-env-override-layer-dead.md) | Planned |
+| 43.33 | [jobd stop/pid hygiene (auth + no timeout + pid removal on reject)](43.33-jobd-stop-auth-timeout.md) | Planned |
+| 43.34 | [Context-index retrieval smears unresolved edges (inflated prompts)](43.34-context-index-retrieve-smear.md) | Planned |
+| 43.35 | [kf-memory-store stale-lock latch after crash](43.35-memory-store-stale-lock.md) | Planned |
+| 43.36 | [kf-compress-core Lite mode is a no-op (identical to Off)](43.36-compress-core-lite-noop.md) | Planned |
+| 43.37 | [Verifier pending_corrections dead-queue growth + MCP pending-map leak](43.37-verifier-corrections-queue-mcp-leak.md) | Planned |
+| 43.38 | [Async blocking in tools (glob walk, computer_use sleep) + shell-glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Planned |
+| 43.39 | [kf-bench markdown-delta baseline computation contradicts the regression signal](43.39-bench-delta-rate.md) | Planned |

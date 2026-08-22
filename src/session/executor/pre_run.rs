@@ -112,7 +112,21 @@ impl Executor {
         } else {
             PermissionAction::Ask
         };
-        let action = evaluate(&permission_rules, &tc.name, &tc.arguments, default_action);
+        let (action, matched_rule_idx) =
+            evaluate(&permission_rules, &tc.name, &tc.arguments, default_action);
+
+        if let Some(idx) = matched_rule_idx {
+            let r = &permission_rules[idx];
+            tracing::debug!(
+                tool = %tc.name,
+                rule_index = idx,
+                rule_tool = %r.tool,
+                rule_key = %r.key,
+                rule_pattern = %r.pattern,
+                action = ?action,
+                "permission rule matched",
+            );
+        }
 
         if matches!(action, PermissionAction::Deny) {
             let reason = format!(
@@ -128,6 +142,21 @@ impl Executor {
                     .and_then(|v| v.as_str())
                     .unwrap_or(""),
             );
+            if let Some(idx) = matched_rule_idx {
+                let r = &permission_rules[idx];
+                self.audit_log.log_destructive(
+                    &tc.name,
+                    &tc.arguments,
+                    false,
+                    Some(&format!(
+                        "denied by rule #{} {}:{}={} -> deny",
+                        idx + 1,
+                        r.tool,
+                        r.key,
+                        r.pattern,
+                    )),
+                );
+            }
             return Ok(PreRunVerdict::Skip {
                 events: vec![TurnEvent::ToolResult {
                     name: tc.name.clone(),

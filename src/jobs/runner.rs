@@ -63,7 +63,7 @@ async fn run_bash_job(
     } else {
         PermissionAction::Ask
     };
-    match evaluate(&config.security.permission_rules, "bash", &args, default) {
+    match evaluate(&config.security.permission_rules, "bash", &args, default).0 {
         PermissionAction::Deny => {
             return record_failure(
                 job,

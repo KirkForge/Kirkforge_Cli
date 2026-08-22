@@ -629,15 +629,15 @@ items get individual WO 32 sub-workorders for tracking. See
 | 32.12 | [WO 27.7 R2 click-in-prompt cursor positioning](32.12-click-in-prompt-cursor.md) | Done (`fced991`) | S | Low |
 | 32.13 | [Streaming timeout per-adapter configurability](32.13-streaming-timeout-configurable.md) | Done (`d6e507e`; default 180s) | S | Low |
 | 32.14 | [WO 28.7 R4 ci.yml coverage step](32.14-ci-yml-coverage-step.md) | Done (`b31f4a4`; now in ci-nightly.yml per ADR-074) | S | Medium |
-| 32.15 | [WO 28.5 R3 landlock FS confinement test](32.15-landlock-fs-confinement-test.md) | Pending | S | Low |
+| 32.15 | [WO 28.5 R3 landlock FS confinement test](32.15-landlock-fs-confinement-test.md) | Done | S | Low |
 | 32.16 | [WO 28.8 R6 Windows stub test](32.16-windows-stub-test.md) | Done | S | Low |
 | 32.17 | [WO 28.16 R4 computer_use vision loop (re-deferred 3×)](32.17-computer-use-vision-loop.md) | Done (`55aa9f0`; WO 32.17 shipped the hosted computer_use beta) | L | Medium |
 | 32.18 | [WO 28.17 R2 bash require_allowlist mode](32.18-bash-require-allowlist.md) | Done (`ef2d765`; default-off) | S | Low |
 | 32.19 | [WO 29.7 R6 SLO monitor + R7 security-emitter integration](32.19-slo-monitor-security-emitter.md) | Done (`41014b7`; R7 shipped; R6 disclosed as YAGNI) | M | Low |
 | 32.20 | [WO 31.2/31.3/31.5 Node + Go + generic verifiers](32.20-node-go-generic-verifiers.md) | Done (`598841d`) | M | Medium |
 
-**21 items.** 32.1-32.2, 32.5-32.14, 32.17-32.20 done (13 shipped). 32.3, 32.4,
-32.15, 32.16 pending (4 open). 32.0 overview in progress. High priority
+**21 items.** 32.1-32.2, 32.5-32.14, 32.15, 32.17-32.20 done (14 shipped).
+32.3, 32.4 pending (2 open). 32.0 overview in progress. High priority
 remaining: 32.4 (CWD confinement — security). Most persistent was 32.17
 (computer_use vision loop — re-deferred 3× since WO 25.18, finally shipped in
 WO 32.17). Note: several WO 32 file `## Status` headers still say "Pending"

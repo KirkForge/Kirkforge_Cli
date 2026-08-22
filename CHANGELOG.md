@@ -58,6 +58,7 @@ why, and the gate evidence.
 - WO 40.5: global state isolation — CwdGuard, env injection, data dir override — [40.5](docs/workorders/40.5-global-state-isolation.md)
 - WO 42.3: secret scrubbing expanded — AWS creds, passwords, private keys, conn strings — [42.3](docs/workorders/42.3-secret-scrubbing.md)
 - WO 42.4: rlimits/unshare fail-closed when `--harden` is set — [42.4](docs/workorders/42.4-rlimits-fail-closed.md)
+- WO 32.15: landlock FS confinement integration test — verifies real bash job confined by landlock cannot read outside the sandbox — [32.15](docs/workorders/32.15-landlock-fs-confinement-test.md)
 
 
 

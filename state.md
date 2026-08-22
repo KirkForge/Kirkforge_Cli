@@ -4,18 +4,19 @@
 
 ## Pending / Deferred
 
-- **WO 42.7 follow-up (pre-existing drift)**: `adr_xref_drift` test fails because WO 41.7 and 41.8 file headers say `Done` but `docs/workorders/README.md` index rows (lines 817-818) still say `Pending`. This predates WO 42.7 and is out of its scope. Fix: update the two README rows to `Done` (or revert the file headers). Tracked here.
 - **WO 41.5 Phase 2-3**: `/jobs` integration + transcript links (Phase 2), full `AgentRun` object with workspace/model/permissions/budget/transcript/artifacts (Phase 3). Tracked in [41.5](docs/workorders/41.5-persistent-subagent.md).
 - **WO 41.6**: shadowed-rule diagnostics in `/permissions list`. Tracked in [41.6](docs/workorders/41.6-shadow-diagnostics.md).
 - **WO 39.1 Phase 3-4**: external runner for `claude -p`/`codex exec`/`opencode run` + same-model LiteLLM gateway. Tracked in [39.1](docs/workorders/39.1-bench-cross-tool.md).
 - **WO 39.4**: Claude compat phase 3 (hook stdin-JSON contract + generic pre/post-tool events). Deferrable.
 - **WO 38.9 items 4-6**: memory mtime-cache, prompt-cache stem stability, (path,mtime) minified cache, trace delta-only. Tracked in [38.9](docs/workorders/38.9-session-performance.md).
 - **WO 38.10 P2s**: `--read-stdin-full` flag, JSON error-object emission, session.id in summary, replay/Ctrl-C/CLI polish. Tracked in [38.10](docs/workorders/38.10-cli-first-run.md).
+- **WO 38.4 item 3**: Esc-then-input window — landed in WO 38.5 (loop_.rs), noted in [38.4](docs/workorders/38.4-orchestration-correctness.md).
+- **WO 42.6**: performance items (WO 38.9 items 2-6). Tracked in [42.6](docs/workorders/42.6-performance-items.md).
+- **WO 42.11**: wire content_hash in verifier path. Tracked in [42.11](docs/workorders/42.11-content-hash-wiring.md).
 
 ## Known flakes (pre-existing, not introduced this session)
 
 - `same_ms_double_spawn_gets_distinct_{temp_dirs,worktrees}` — real-concurrency git tests, `#[cfg(unix)]` gated, flake under extreme parallel load. Pass in isolation.
-- `adr_xref_drift::wo_status_headers_match_readme_index` — WO 41.7 and 41.8 file headers say "Done" but README index says "Pending". Pre-existing drift, not introduced this session.
 
 ## Architecture notes (load-bearing, not in WOs)
 

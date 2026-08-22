@@ -1144,11 +1144,14 @@ picked up on the next start:
   first-load-per-project approval prompt: a cloned repo's `.mcp.json` is
   attacker-controllable spawn config, so the approval is persisted in the
   data dir (`approved_mcp_projects.json`) and only approved projects load
-  silently on subsequent launches. `resolve_project_mcp` is a pure
-  function over `(config_flag, doc, already_approved)` so the gate logic
-  is testable without a terminal; the prompt UI is the caller's job
-  (run_session prints to stderr; a TUI modal is deferred — see Deferrals
-  in the WO).
+  silently on subsequent launches. The approval stores a sha256 content
+  hash alongside the project path (WO 42.5): a modified `.mcp.json` under
+  an already-approved path re-gates, closing the modified-after-approval
+  attack vector. Legacy approvals without a hash trigger re-approval (safe
+  default). `resolve_project_mcp` is a pure function over
+  `(config_flag, doc, already_approved)` so the gate logic is testable
+  without a terminal; the prompt UI is the caller's job (run_session
+  prints to stderr; a TUI modal is deferred — see Deferrals in the WO).
 
 ---
 

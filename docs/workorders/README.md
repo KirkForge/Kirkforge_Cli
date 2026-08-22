@@ -832,3 +832,4 @@ Driven by 8 read-only exploration agents. See
 |----|-------|--------|
 | 42.0 | [Series overview](42.0-wo42-overview.md) | In Progress |
 | 42.1 | [Delete dead testdoctor test + fix coverage gate path](42.1-dead-testdoctor.md) | Done |
+| 42.2 | [Audit chain verification on restart](42.2-audit-chain-verify.md) | Done |

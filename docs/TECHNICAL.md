@@ -537,7 +537,10 @@ trail alongside the existing log: `AuditEvent` (29-literal `AuditAction`
 + `AuditOutcome`), `initial_hash`/`chain_hash_of` (SHA-256, or HMAC-SHA256
 when keyed via `KIRKFORGE_AUDIT_KEY`), `MemoryAuditSink`, `FileAuditSink`
 (size-based rotation, default 50 MB / 10 files), `AuditLogger`, and a
-`create_audit_sink` factory for `{memory, file}`. The `event_bus` module
+`create_audit_sink` factory for `{memory, file}`. WO 42.2: `FileAuditSink::new`
+resumes `last_hash` from the last on-disk event so the chain continues across
+restarts, and `verify_chain` replays the file to detect tampering;
+`create_audit_sink` calls it on construction and warns on a broken chain. The `event_bus` module
 ports `@kirkforge/core-events`'s `EventBus`: async `emit` with idempotency
 cache (TTL + size cap) and bounded buffer, `on` returning an unsub
 callable, `drain_buffer`, `shutdown`, and `graceful_shutdown`. Dead sinks

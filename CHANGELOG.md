@@ -28,6 +28,7 @@ why, and the gate evidence.
 - WO 40.2: Windows cross-compile gate in ci-local.sh — [40.2](docs/workorders/40.2-windows-cross-compile-gate.md)
 - WO 40.4: sleep elimination — 8 test-sync sleeps converted — [40.4](docs/workorders/40.4-sleep-elimination.md)
 - WO 42.1: delete dead testdoctor test referencing deleted ci.yml — [42.1](docs/workorders/42.1-dead-testdoctor.md)
+- WO 42.2: audit chain resumes on restart + `FileAuditSink::verify_chain` — [42.2](docs/workorders/42.2-audit-chain-verify.md)
 
 
 ### Added

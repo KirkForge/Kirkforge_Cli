@@ -591,15 +591,67 @@ impl FileAuditSink {
         if let Some(parent) = file_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        // Resume the hash chain from the last event already on disk so a
+        // restart continues the chain instead of resetting to genesis (WO 42.2).
+        // Missing/empty file → genesis; unparseable last line → warn + genesis.
+        let resumed = match std::fs::read_to_string(&file_path) {
+            Ok(content) => {
+                let last_line = content.lines().rev().find(|l| !l.trim().is_empty());
+                match last_line {
+                    Some(line) => match serde_json::from_str::<AuditEvent>(line) {
+                        Ok(evt) => Some(evt.chain_hash),
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                path = %file_path.display(),
+                                "audit file last line unparseable; chain resumes from genesis"
+                            );
+                            None
+                        }
+                    },
+                    None => None,
+                }
+            }
+            Err(_) => None,
+        };
         Self {
             file_path,
             buffer: Mutex::new(Vec::new()),
             flush_size,
-            last_hash: Mutex::new(initial_hash(hmac_key)),
+            last_hash: Mutex::new(resumed.unwrap_or_else(|| initial_hash(hmac_key))),
             max_file_size_bytes,
             max_rotated_files,
             hmac_key: hmac_key.map(|s| s.to_string()),
         }
+    }
+
+    /// The configured log path.
+    pub fn file_path(&self) -> &Path {
+        &self.file_path
+    }
+
+    /// Replay the on-disk chain from genesis; true iff every event's recorded
+    /// `chain_hash` matches a fresh computation. Mirrors
+    /// `MemoryAuditSink::verify_chain` and the `verify_audit_jsonl` walker in
+    /// `plugin_tools/native.rs`. A missing/empty file is an intact (trivial)
+    /// chain. A read or parse error returns false (cannot prove integrity).
+    pub fn verify_chain(&self) -> bool {
+        let Ok(content) = std::fs::read_to_string(&self.file_path) else {
+            return true;
+        };
+        let key = self.hmac_key.as_deref();
+        let mut prev = initial_hash(key);
+        for line in content.lines().filter(|l| !l.trim().is_empty()) {
+            let Ok(event): std::result::Result<AuditEvent, _> = serde_json::from_str(line) else {
+                return false;
+            };
+            let expected = chain_hash_of(&prev, &event, key);
+            if event.chain_hash != expected {
+                return false;
+            }
+            prev = event.chain_hash;
+        }
+        true
     }
 
     pub fn write(&self, event: AuditEvent) -> bool {
@@ -697,13 +749,19 @@ pub enum AuditSinkKind {
 pub fn create_audit_sink(kind: AuditSinkKind) -> std::result::Result<AuditSink, String> {
     Ok(match kind {
         AuditSinkKind::Memory => AuditSink::Memory(MemoryAuditSink::new(None)),
-        AuditSinkKind::File { file_path } => AuditSink::File(FileAuditSink::new(
-            file_path,
-            None,
-            50 * 1024 * 1024,
-            10,
-            100,
-        )),
+        AuditSinkKind::File { file_path } => {
+            let sink = FileAuditSink::new(file_path, None, 50 * 1024 * 1024, 10, 100);
+            // Startup integrity check (WO 42.2): warn if the existing chain is
+            // broken. Non-fatal — the sink still appends, but the operator is
+            // told the historical chain can no longer be trusted.
+            if !sink.verify_chain() {
+                tracing::warn!(
+                    path = %sink.file_path().display(),
+                    "audit chain verification failed on startup; existing events may be tampered"
+                );
+            }
+            AuditSink::File(sink)
+        }
     })
 }
 
@@ -1359,6 +1417,127 @@ mod tests {
             !rotated_path(&path, 3).exists(),
             ".3 must not exist — max_rotated_files=2"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── WO 42.2: chain resumes on restart + verify_chain ─────────────────
+
+    #[test]
+    fn file_sink_resumes_chain_across_restart() {
+        let dir = fresh_audit_dir("resume");
+        let path = dir.join("audit.jsonl");
+        // First run: write two events and flush to disk.
+        let sink = FileAuditSink::new(path.clone(), None, 50 * 1024 * 1024, 10, 1);
+        assert!(sink.write(base_event()));
+        let mut e2 = base_event();
+        e2.id = "evt-2".into();
+        e2.sequence = 2;
+        sink.write(e2);
+        sink.close();
+        // Capture the last sealed hash from disk.
+        let first_contents = std::fs::read_to_string(&path).unwrap();
+        let first_lines: Vec<&str> = first_contents.trim().split('\n').collect();
+        let last_evt: AuditEvent = serde_json::from_str(first_lines.last().unwrap()).unwrap();
+        let expected_last_hash = last_evt.chain_hash.clone();
+        // Simulate restart: a new sink on the same file.
+        let sink2 = FileAuditSink::new(path.clone(), None, 50 * 1024 * 1024, 10, 1);
+        // last_hash must now equal the previous last event's chain_hash, so a
+        // new event chains from it — not from genesis.
+        let resumed = sink2.last_hash.lock().unwrap().clone();
+        assert_eq!(
+            resumed, expected_last_hash,
+            "new sink must resume last_hash from the previous last event"
+        );
+        assert_ne!(
+            resumed,
+            initial_hash(None),
+            "resumed hash must differ from genesis when prior events exist"
+        );
+        // Append a third event and verify the whole file's chain is intact.
+        let mut e3 = base_event();
+        e3.id = "evt-3".into();
+        e3.sequence = 3;
+        sink2.write(e3);
+        sink2.close();
+        assert!(
+            sink2.verify_chain(),
+            "full chain across restart must verify"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_sink_verify_chain_detects_tamper() {
+        let dir = fresh_audit_dir("tamper");
+        let path = dir.join("audit.jsonl");
+        let sink = FileAuditSink::new(path.clone(), None, 50 * 1024 * 1024, 10, 1);
+        for i in 0..3u64 {
+            let mut e = base_event();
+            e.id = format!("evt-{i}");
+            e.sequence = i;
+            e.reason = format!("event {i}");
+            sink.write(e);
+        }
+        sink.close();
+        // Intact chain verifies.
+        assert!(sink.verify_chain());
+        // Tamper: rewrite the middle event's reason without resealing.
+        let content = std::fs::read_to_string(&path).unwrap();
+        let mut lines: Vec<String> = content.trim().split('\n').map(str::to_string).collect();
+        let mut evt: serde_json::Value = serde_json::from_str(&lines[1]).unwrap();
+        evt["reason"] = serde_json::json!("tampered after the fact");
+        lines[1] = serde_json::to_string(&evt).unwrap();
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        assert!(
+            !sink.verify_chain(),
+            "tampered chain must fail verification"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_sink_verify_chain_on_empty_or_missing_file() {
+        // Missing file → trivial intact chain (true).
+        let dir = fresh_audit_dir("empty");
+        let missing = dir.join("nope.jsonl");
+        let sink = FileAuditSink::new(missing.clone(), None, 50 * 1024 * 1024, 10, 1);
+        assert!(
+            sink.verify_chain(),
+            "missing file is a trivial intact chain"
+        );
+        // Empty file → trivial intact chain (true).
+        let empty = dir.join("empty.jsonl");
+        std::fs::write(&empty, "").unwrap();
+        let sink2 = FileAuditSink::new(empty, None, 50 * 1024 * 1024, 10, 1);
+        assert!(sink2.verify_chain(), "empty file is a trivial intact chain");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_audit_sink_warns_on_tampered_file_chain() {
+        // Build a file with a broken chain; create_audit_sink should still
+        // succeed (non-fatal) — we only assert it returns the sink. The warn!
+        // is best-effort logging and not asserted here.
+        let dir = fresh_audit_dir("factory_tampered");
+        let path = dir.join("audit.jsonl");
+        let sink = FileAuditSink::new(path.clone(), None, 50 * 1024 * 1024, 10, 1);
+        for i in 0..3u64 {
+            let mut e = base_event();
+            e.id = format!("evt-{i}");
+            e.sequence = i;
+            sink.write(e);
+        }
+        sink.close();
+        // Tamper the middle line.
+        let content = std::fs::read_to_string(&path).unwrap();
+        let mut lines: Vec<String> = content.trim().split('\n').map(str::to_string).collect();
+        let mut evt: serde_json::Value = serde_json::from_str(&lines[1]).unwrap();
+        evt["reason"] = serde_json::json!("tampered");
+        lines[1] = serde_json::to_string(&evt).unwrap();
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        // Factory must not error on a broken chain (warn-only).
+        let sink = create_audit_sink(AuditSinkKind::File { file_path: path }).expect("file sink");
+        assert_eq!(sink.name(), "file");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

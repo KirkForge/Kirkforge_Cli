@@ -520,7 +520,7 @@ mod tests {
                 failed: false,
             },
             aborted: None,
-            verdict_label: Some("PASS (security-only coverage)".into()),
+            verdict_label: None,
         };
         let s = r.summary();
         assert!(s.contains("Coder patch: 2 lines"), "got: {s}");
@@ -530,7 +530,7 @@ mod tests {
     // claim a PASS coverage scope it did not earn.
     #[test]
     fn parallel_result_summary_aborted_run_has_no_verdict_label() {
-        let r = ParallelResult {
+        let r = PipelineResult {
             scout: SubagentResult {
                 task_id: "task-1".into(),
                 summary: "found 3 files".into(),
@@ -1144,6 +1144,7 @@ mod tests {
                 failed: false,
             },
             aborted: None,
+            verdict_label: None,
         };
         let summary = result.summary();
         assert!(

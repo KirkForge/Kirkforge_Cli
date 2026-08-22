@@ -48,6 +48,7 @@ why, and the gate evidence.
 - WO 40.1: CI workflow architecture reset — [40.1](docs/workorders/40.1-ci-workflow-reset.md)
 - WO 40.3: nextest profiles + timeout policy — [40.3](docs/workorders/40.3-nextest-profiles.md)
 - WO 40.5: global state isolation — CwdGuard, env injection, data dir override — [40.5](docs/workorders/40.5-global-state-isolation.md)
+- WO 41.7: property/fuzz testing of glob_matcher and command evaluation — [41.7](docs/workorders/41.7-glob-fuzz.md)
 
 ### Changed
 - WO 40.4: test sleeps → structural sync (8 tests) — [40.4](docs/workorders/40.4-sleep-elimination.md)

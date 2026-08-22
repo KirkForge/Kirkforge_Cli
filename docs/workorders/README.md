@@ -836,3 +836,4 @@ Driven by 8 read-only exploration agents. See
 | 42.3 | [Secret scrubbing — expand coverage](42.3-secret-scrubbing.md) | Done |
 | 42.4 | [rlimits/unshare — fail-closed](42.4-rlimits-fail-closed.md) | Done |
 | 42.5 | [MCP .mcp.json content-based re-approval](42.5-mcp-content-approval.md) | Done |
+| 42.7 | [Offload store FIFO eviction + byte cap](42.7-offload-fifo.md) | Done |

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::RwLock;
 use tracing::warn;
@@ -29,11 +29,65 @@ pub trait OffloadStore: Send + Sync {
     fn backend_name(&self) -> &'static str;
 }
 
+/// Insertion-ordered payload set with O(1) lookup and a running byte total.
+struct StoreData {
+    map: HashMap<String, String>,
+    order: VecDeque<String>,
+    total_bytes: u64,
+}
+
+impl StoreData {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+            total_bytes: 0,
+        }
+    }
+
+    fn insert(&mut self, key: String, value: String) {
+        let len = value.len() as u64;
+        if let Some(old) = self.map.insert(key.clone(), value) {
+            self.total_bytes = self
+                .total_bytes
+                .wrapping_sub(old.len() as u64)
+                .wrapping_add(len);
+            return;
+        }
+        self.order.push_back(key);
+        self.total_bytes = self.total_bytes.wrapping_add(len);
+    }
+
+    fn remove(&mut self, key: &str) -> Option<String> {
+        let value = self.map.remove(key)?;
+        self.total_bytes = self.total_bytes.wrapping_sub(value.len() as u64);
+        // ponytail: O(n) retain per remove; fine for cap~1000, swap to a
+        // HashMap<key, index> + swap_remove if eviction volume gets heavy.
+        self.order.retain(|k| k != key);
+        Some(value)
+    }
+
+    fn get(&self, key: &str) -> Option<&String> {
+        self.map.get(key)
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+        self.total_bytes = 0;
+    }
+}
+
 /// In-memory offload store keyed by the full 32-byte BLAKE3 hash.
 #[must_use]
 pub struct InMemoryOffloadStore {
-    data: RwLock<HashMap<String, String>>,
+    data: RwLock<StoreData>,
     max_entries: Option<usize>,
+    max_bytes: Option<u64>,
 }
 
 impl InMemoryOffloadStore {
@@ -49,8 +103,9 @@ impl InMemoryOffloadStore {
     /// ```
     pub fn new() -> Self {
         Self {
-            data: RwLock::new(HashMap::new()),
+            data: RwLock::new(StoreData::new()),
             max_entries: None,
+            max_bytes: None,
         }
     }
 
@@ -58,22 +113,37 @@ impl InMemoryOffloadStore {
     /// whenever it exceeds `max_entries`. The cap is enforced on every
     /// [`Self::evict_if_over_cap`] call — callers should invoke it
     /// after inserts.
-    // ponytail: per-session store, cap 1000 entries, evict FIFO if throughput matters
+    // ponytail: per-session store, cap 1000 entries, FIFO eviction via
+    // insertion-ordered VecDeque (was random HashMap order pre-WO 42.7).
     pub fn new_with_cap(max_entries: usize) -> Self {
         Self {
-            data: RwLock::new(HashMap::new()),
+            data: RwLock::new(StoreData::new()),
             max_entries: Some(max_entries),
+            max_bytes: None,
         }
     }
 
-    /// Remove the oldest entries when the store exceeds its cap.
-    /// Call this after `put` to keep the store bounded. No-op when
-    /// the store has no cap or is within limits.
+    /// Create a new in-memory store bounded by both an entry count and a
+    /// total byte size. On every [`Self::evict_if_over_cap`] call the
+    /// oldest entries are evicted until the store is under both caps.
+    pub fn new_with_byte_cap(max_entries: usize, max_bytes: u64) -> Self {
+        Self {
+            data: RwLock::new(StoreData::new()),
+            max_entries: Some(max_entries),
+            max_bytes: Some(max_bytes),
+        }
+    }
+
+    /// Remove the oldest entries when the store exceeds its entry cap
+    /// and/or its byte cap. Call this after `put` to keep the store
+    /// bounded. No-op when the store has no caps or is within limits.
+    /// Eviction is FIFO: the front of the insertion order is dropped first.
     pub fn evict_if_over_cap(&self) {
-        let max = match self.max_entries {
-            Some(m) => m,
-            None => return,
-        };
+        let max_entries = self.max_entries;
+        let max_bytes = self.max_bytes;
+        if max_entries.is_none() && max_bytes.is_none() {
+            return;
+        }
         let mut guard = match self.data.write() {
             Ok(g) => g,
             Err(poisoned) => {
@@ -81,13 +151,18 @@ impl InMemoryOffloadStore {
                 poisoned.into_inner()
             }
         };
-        let excess = guard.len().saturating_sub(max);
-        if excess == 0 {
-            return;
-        }
-        let keys_to_remove: Vec<String> = guard.keys().take(excess).cloned().collect();
-        for key in keys_to_remove {
-            guard.remove(&key);
+        while guard.len() > 0 {
+            let over_entries = matches!(max_entries, Some(m) if guard.len() > m);
+            let over_bytes = matches!(max_bytes, Some(m) if guard.total_bytes > m);
+            if !over_entries && !over_bytes {
+                return;
+            }
+            // FIFO: drop the oldest (front of insertion order).
+            if let Some(key) = guard.order.front().cloned() {
+                guard.remove(&key);
+            } else {
+                return;
+            }
         }
     }
 }
@@ -291,5 +366,79 @@ mod tests {
         assert!(debug.contains("backend: \"memory\""));
         assert!(debug.contains("len: 1"));
         assert!(debug.starts_with("InMemoryOffloadStore {"));
+    }
+
+    #[test]
+    fn evict_if_over_cap_is_fifo() {
+        let store = InMemoryOffloadStore::new_with_cap(2);
+        let ka = store.put("alpha");
+        let kb = store.put("beta");
+        let kc = store.put("gamma");
+        // cap=2, so after the third put + eviction the oldest ("alpha") is gone.
+        assert_eq!(store.get(&ka), None, "oldest entry must be evicted first");
+        assert!(store.get(&kb).is_some(), "newer entries survive");
+        assert!(store.get(&kc).is_some(), "newest entry survives");
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn byte_cap_evicts_oldest_first() {
+        // 3 distinct entries of 100 bytes each, cap 250 bytes => the oldest is
+        // evicted to bring the total under the cap (200 <= 250).
+        let store = InMemoryOffloadStore::new_with_byte_cap(100, 250);
+        let payload = |n: usize| "x".repeat(100) + &n.to_string();
+        let ka = store.put(&payload(0));
+        let kb = store.put(&payload(1));
+        let kc = store.put(&payload(2));
+        // total after 3 inserts = ~300 > 250 => evict oldest.
+        assert_eq!(store.get(&ka), None, "oldest evicted by byte cap");
+        assert!(store.get(&kb).is_some());
+        assert!(store.get(&kc).is_some());
+        assert!(store.len() <= 2, "byte cap reduces entry count");
+    }
+
+    #[test]
+    fn byte_cap_evicts_multiple_until_under_cap() {
+        // cap 150 bytes, entries ~100 bytes each: need to evict down to 1.
+        let store = InMemoryOffloadStore::new_with_byte_cap(100, 150);
+        let payload = |n: usize| "y".repeat(100) + &n.to_string();
+        let ka = store.put(&payload(0));
+        let kb = store.put(&payload(1));
+        let kc = store.put(&payload(2));
+        assert_eq!(store.get(&ka), None, "oldest evicted");
+        assert_eq!(store.get(&kb), None, "second-oldest also evicted");
+        assert!(store.get(&kc).is_some(), "newest survives");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn both_caps_enforced_together() {
+        // entry cap 2 binds before byte cap could ever bind (byte cap is huge).
+        let store = InMemoryOffloadStore::new_with_byte_cap(2, u64::MAX);
+        let ka = store.put("first");
+        let _kb = store.put("second");
+        let _kc = store.put("third");
+        assert_eq!(store.get(&ka), None, "entry cap evicts oldest");
+        assert_eq!(store.len(), 2);
+
+        // now flip: tiny byte cap binds even with one entry.
+        let store = InMemoryOffloadStore::new_with_byte_cap(100, 3);
+        let ka = store.put("abc");
+        let _kb = store.put("def");
+        // 6 bytes > 3 => evict oldest.
+        assert_eq!(store.get(&ka), None);
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn duplicate_put_does_not_grow_order() {
+        let store = InMemoryOffloadStore::new_with_cap(2);
+        let _ = store.put("dup");
+        let _ = store.put("dup");
+        assert_eq!(
+            store.len(),
+            1,
+            "duplicate key does not create a second slot"
+        );
     }
 }

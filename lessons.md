@@ -1,3 +1,38 @@
+# Lessons — WO 42.12 session (worktree wo42.12)
+
+## What I learned about this codebase
+
+- `Message.token_count` existed but was only populated from the API
+  `usage.completion_tokens` path (`turn.rs:1134`). The field was added
+  speculatively but never wired up at append time — classic "field exists,
+  nobody writes to it" gap.
+- There are FOUR copies of `estimate_message_tokens` (`PromptBuilder`,
+  `compaction`, `microcompaction`, `summarizer`), all identical. I added
+  a shared free function in `prompt/mod.rs` and made all four delegate to
+  it. Consolidating them into one was the lazy path — one cache check
+  instead of four.
+- Inside `impl PromptBuilder`, a method named `estimate_message_tokens`
+  shadows the free function of the same name. `estimate_message_tokens(m)`
+  would recurse; must use `crate::session::prompt::estimate_message_tokens(m)`
+  to reach the free function. Same-module name shadowing gotcha.
+- Content mutation sites that needed cache clearing: `truncate_tool_results`,
+  `dedup_adjacent_tool_results`, `minify_old_messages`, `stub_old_tool_results`
+  (all in `prompt/mod.rs`), plus compaction's stub + condense paths. Six sites
+  total — grep for `.content =` to find them all.
+- The `adr_xref_drift` test has a pre-existing failure (WO 41.7/41.8 file
+  headers say "Done" but README says "Pending"). Verified by stashing my
+  changes and re-running — the failure is on origin/dev, not introduced
+  by WO 42.12.
+
+## What didn't work / would do differently
+
+- First test for `truncate_tool_results_clears_token_count_cache` used
+  `tool_name: "bash"` with 30k chars — but bash's cap is 60k, so no
+  truncation happened. Switched to `grep` (cap 15k) to actually trigger
+  the truncation path. Read the per-tool caps before writing the test.
+
+---
+
 # Lessons — WO 41.6 session (worktree wo416)
 
 ## What I learned about this codebase

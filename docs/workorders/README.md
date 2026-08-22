@@ -817,3 +817,9 @@ undersell the engine). See [WO 41.0](41.0-wo41-overview.md).
 | 41.7 | [Glob matcher fuzz testing](41.7-glob-fuzz.md) | Pending |
 | 41.8 | [Audit logging of matched rule](41.8-audit-logging.md) | Pending |
 | 41.9 | [Documentation update](41.9-docs-update.md) | Done |
+
+### Series 42 — Performance
+
+| WO | Title | Status |
+|----|-------|--------|
+| 42.12 | [Token count cache at append time](42.12-token-count-cache.md) | Done |

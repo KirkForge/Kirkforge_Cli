@@ -79,22 +79,7 @@ pub const DEFAULT_PRESERVE_RECENT: usize = 8;
 /// `PromptBuilder` so the compaction path reports numbers consistent
 /// with the budget checks in the request builder.
 fn estimate_message_tokens(m: &Message) -> usize {
-    let content = super::count_tokens(&m.content);
-    let thinking = m
-        .thinking
-        .as_ref()
-        .map(|t| super::count_tokens(t))
-        .unwrap_or(0);
-    let tool_calls = m
-        .tool_calls
-        .as_ref()
-        .map(|calls| {
-            serde_json::to_string(calls)
-                .map(|s| super::count_tokens(&s))
-                .unwrap_or(0)
-        })
-        .unwrap_or(0);
-    content + thinking + tool_calls
+    super::estimate_message_tokens(m)
 }
 
 /// Estimate tokens for a message list.
@@ -186,6 +171,7 @@ pub fn compact_to_budget(
                 // ("🔧 bash — [previous tool result omitted …]").
                 let mut stub = msg.clone();
                 stub.content = TOOL_RESULT_STUB.to_string();
+                stub.token_count = None;
                 new_messages.push(stub);
                 dropped_tool_results += 1;
             }
@@ -206,6 +192,7 @@ pub fn compact_to_budget(
                     condensed.content = format!(
                         "{ASSISTANT_CONDENSED_PREFIX}{original_chars}{ASSISTANT_CONDENSED_SUFFIX}",
                     );
+                    condensed.token_count = None;
                     new_messages.push(condensed);
                     condensed_assistant_turns += 1;
                 }

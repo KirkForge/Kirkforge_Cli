@@ -16,8 +16,11 @@
 ## Known flakes (pre-existing, not introduced this session)
 
 - `same_ms_double_spawn_gets_distinct_{temp_dirs,worktrees}` — real-concurrency git tests, `#[cfg(unix)]` gated, flake under extreme parallel load. Pass in isolation.
+- `adr_xref_drift::wo_status_headers_match_readme_index` — WO 41.7 and 41.8 file headers say "Done" but README index says "Pending". Pre-existing drift, not introduced this session.
 
 ## Architecture notes (load-bearing, not in WOs)
+
+- `Message.token_count` is now populated at append time (`ConversationLog::append`/`append_async`). Estimators (`estimate_message_tokens` in `prompt/mod.rs`) return the cached value when `Some`, falling back to BPE counting when `None`. Content mutation sites (`truncate_tool_results`, `dedup_adjacent_tool_results`, `minify_old_messages`, `stub_old_tool_results`, compaction stub/condense) clear `token_count = None` to avoid stale cache. WO 42.12.
 
 - `panic = "abort"` in release — panic hook (WO 38.2) restores terminal before abort. Keep abort (binary size); don't switch to unwind without measuring.
 - Budget guard wired in production (WO 38.8) — `set_budget_stores` + `set_stratum_store` called from `run_session.rs`. Listener registry is session-keyed `HashMap`, not the old append-only Vec.

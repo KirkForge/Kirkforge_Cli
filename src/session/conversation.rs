@@ -135,7 +135,10 @@ impl ConversationLog {
     /// Durability: the line is written and the file is flushed with
     /// `sync_all` before the in-memory vector is updated, so a crash
     /// loses at most the message currently being appended.
-    pub fn append(&mut self, msg: Message) -> anyhow::Result<()> {
+    pub fn append(&mut self, mut msg: Message) -> anyhow::Result<()> {
+        if msg.token_count.is_none() {
+            msg.token_count = Some(crate::session::prompt::estimate_message_tokens(&msg));
+        }
         let line = serde_json::to_string(&msg)?;
         let bytes = format!("{line}\n");
         use std::io::Write;
@@ -161,7 +164,10 @@ impl ConversationLog {
 
     /// Async version of [`append`]: offloads the blocking disk write to a
     /// dedicated thread pool so the Tokio runtime keeps making progress.
-    pub async fn append_async(&mut self, msg: Message) -> anyhow::Result<()> {
+    pub async fn append_async(&mut self, mut msg: Message) -> anyhow::Result<()> {
+        if msg.token_count.is_none() {
+            msg.token_count = Some(crate::session::prompt::estimate_message_tokens(&msg));
+        }
         let line = serde_json::to_string(&msg)?;
         let bytes = format!("{line}\n");
         let path = self.path.clone();
@@ -1338,5 +1344,39 @@ mod tests {
     fn test_open_outcome_partial_eq_with_loaded() {
         assert_eq!(OpenOutcome::Loaded, OpenOutcome::Loaded);
         assert_ne!(OpenOutcome::Loaded, OpenOutcome::Created);
+    }
+
+    #[test]
+    fn append_populates_token_count_when_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path).unwrap();
+        log.append(Message {
+            role: crate::shared::Role::User,
+            content: "hello world this is a test message".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(log.len(), 1);
+        assert!(
+            log.messages[0].token_count.is_some(),
+            "token_count must be Some after append"
+        );
+    }
+
+    #[test]
+    fn append_preserves_api_provided_token_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.ndjson");
+        let (mut log, _outcome) = ConversationLog::open(path).unwrap();
+        let api_value = 42usize;
+        log.append(Message {
+            role: crate::shared::Role::Assistant,
+            content: "response".into(),
+            token_count: Some(api_value),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(log.messages[0].token_count, Some(api_value));
     }
 }

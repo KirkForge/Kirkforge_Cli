@@ -822,3 +822,24 @@ undersell the engine). See [WO 41.0](41.0-wo41-overview.md).
 | 41.7 | [Glob matcher fuzz testing](41.7-glob-fuzz.md) | Pending |
 | 41.8 | [Audit logging of matched rule](41.8-audit-logging.md) | Pending |
 | 41.9 | [Documentation update](41.9-docs-update.md) | Pending |
+
+### Series 42 — Post-30h review findings
+
+Driven by 8 read-only exploration agents. See
+[WO 42.0](42.0-wo42-overview.md).
+
+| WO | Title | Status |
+|----|-------|--------|
+| 42.0 | [Series overview](42.0-wo42-overview.md) | In Progress |
+| 42.1 | [Delete dead testdoctor test + fix coverage gate path](42.1-dead-testdoctor.md) | Pending |
+| 42.2 | [Audit chain verification on restart](42.2-audit-chain-verify.md) | Pending |
+| 42.3 | [Secret scrubbing: expand coverage](42.3-secret-scrubbing.md) | Pending |
+| 42.4 | [rlimits/unshare: fail-closed](42.4-rlimits-fail-closed.md) | Pending |
+| 42.5 | [MCP .mcp.json: content-based re-approval](42.5-mcp-content-approval.md) | Pending |
+| 42.6 | [Performance: WO 38.9 items 2-6](42.6-performance-items.md) | Pending |
+| 42.7 | [Offload store: fix false FIFO + add byte cap](42.7-offload-fifo.md) | Pending |
+| 42.8 | [Handoff delimiter escaping](42.8-handoff-escaping.md) | Pending |
+| 42.9 | [PipelineOrchestrator rename + patch application](42.9-pipeline-rename-patch.md) | Pending |
+| 42.10 | [Subagent persistence Phase 1](42.10-subagent-persistence.md) | Pending |
+| 42.11 | [Wire content_hash in verifier path](42.11-content-hash-wiring.md) | Pending |
+| 42.12 | [Populate Message.token_count at append time](42.12-token-count-cache.md) | Pending |

@@ -400,6 +400,11 @@ rules created by the approval dialog's `[A]lways` key. The pure ops layer
 (`src/tui/commands/permissions.rs`) mutates `Config.security.permission_rules`
 in place; the TUI match arm persists via `save_config` on `revoke`/`clear`
 (`list` is read-only). 1-indexed positions match `/jobs` and `/undo list`.
+`list` also emits shadowed-rule diagnostics (WO 41.6): `⚠ Rule #N is shadowed
+by rule #M` when an earlier broader-or-equal rule on the same (tool, key)
+makes rule N unreachable under first-match-wins. The check is sound but
+incomplete — it never false-positives, may miss subset relations not
+expressible as "M's glob matches N's pattern string."
 
 The **status bar** (`render_status` in `src/tui/widgets/status.rs`) degrades by
 priority on narrow terminals: low-value spans (plugin count, skills, tool-call

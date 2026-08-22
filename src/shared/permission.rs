@@ -349,6 +349,61 @@ pub fn suggest_rule(tool: &str, args: &Value) -> PermissionRule {
     }
 }
 
+/// Detect rules shadowed by an earlier broader-or-equal rule.
+///
+/// Returns `(shadowed_index, shadower_index)` pairs, both 0-indexed, where
+/// `shadower_index < shadowed_index` and the shadower matches every tool
+/// call the shadowed rule would match (first-match-wins makes the shadowed
+/// rule unreachable).
+///
+/// **Subsumption check** (sound, never false-positive): rule M shadows
+/// rule N when M's tool subsumes N's (`*` or equal), M's key subsumes N's
+/// (`*` or equal), and M's pattern as a glob matches N's pattern string.
+/// If M's glob matches the literal text of N's pattern, any value matching
+/// N's anchored pattern also matches M's — M is a superset. This is an
+/// over-approximation: it may miss some true shadowings (subset relations
+/// not expressible as "M matches N's pattern string") but never flags a
+/// rule that isn't truly shadowed. A diagnostic warning is advisory, so a
+/// sound-but-incomplete check is the right tradeoff.
+///
+/// **`key = "*"` shortcut:** a rule with `key = "*"` fires without
+/// inspecting args, so it subsumes any same-or-wilder-tool rule regardless
+/// of the shadowed rule's key/pattern.
+pub fn detect_shadowed_rules(rules: &[PermissionRule]) -> Vec<(usize, usize)> {
+    let mut shadows = Vec::new();
+    for (n, later) in rules.iter().enumerate() {
+        for (m, earlier) in rules.iter().enumerate().take(n) {
+            if rule_subsumes(earlier, later) {
+                shadows.push((n, m));
+                break;
+            }
+        }
+    }
+    shadows
+}
+
+/// Does `earlier` subsume `later`? I.e. would `earlier` fire for every tool
+/// call `later` would fire for?
+fn rule_subsumes(earlier: &PermissionRule, later: &PermissionRule) -> bool {
+    // Tool: earlier's tool must be `*` or match later's tool exactly.
+    if !tool_matches(earlier.tool.as_str(), later.tool.as_str()) {
+        return false;
+    }
+    // key = "*" fires without inspecting args — subsumes any key/pattern
+    // on a subsuming tool.
+    if earlier.key == "*" {
+        return true;
+    }
+    // Key: earlier's must be `*` (handled) or equal to later's.
+    if earlier.key != later.key {
+        return false;
+    }
+    // Pattern: earlier's glob must match later's pattern string. If M's
+    // pattern matches the literal text of N's pattern, M matches every
+    // value N matches. Equal patterns trivially satisfy this.
+    glob_match(earlier.pattern.as_str(), later.pattern.as_str())
+}
+
 /// Push a permission rule into a `Vec<PermissionRule>`, deduplicating
 /// against an existing identical rule by `(tool, key, pattern)`. The
 /// action of the existing rule is preserved.
@@ -1186,5 +1241,142 @@ mod tests {
         // Standalone `**` with no surrounding slash matches anything.
         assert!(glob_match("**", "foo.rs"));
         assert!(glob_match("**", "a/b/c"));
+    }
+
+    // ── detect_shadowed_rules ─────────────────────────────────────
+
+    #[test]
+    fn shadow_broader_pattern_shadows_specific() {
+        // #1 bash:command=cargo test* → allow shadows #2 bash:command=cargo test → deny.
+        let rules = vec![
+            rule("bash", "command", "cargo test*", PermissionAction::Allow),
+            rule("bash", "command", "cargo test", PermissionAction::Deny),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert_eq!(shadows, vec![(1, 0)], "#2 shadowed by #1");
+    }
+
+    #[test]
+    fn shadow_identical_pattern_shadows() {
+        let rules = vec![
+            rule("bash", "command", "cargo test", PermissionAction::Allow),
+            rule("bash", "command", "cargo test", PermissionAction::Deny),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert_eq!(shadows, vec![(1, 0)]);
+    }
+
+    #[test]
+    fn shadow_wildcard_tool_shadows_specific_tool() {
+        // #1 *:* → allow shadows #2 bash:command=rm -rf ** → deny.
+        let rules = vec![
+            rule("*", "*", "", PermissionAction::Allow),
+            rule("bash", "command", "rm -rf **", PermissionAction::Deny),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert_eq!(shadows, vec![(1, 0)]);
+    }
+
+    #[test]
+    fn shadow_wildcard_key_subsumes_specific_key() {
+        // #1 bash:* → deny (key="*" fires on any bash call) shadows
+        // #2 bash:command=ls → allow.
+        let rules = vec![
+            rule("bash", "*", "", PermissionAction::Deny),
+            rule("bash", "command", "ls", PermissionAction::Allow),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert_eq!(shadows, vec![(1, 0)]);
+    }
+
+    #[test]
+    fn shadow_no_shadow_when_specific_first() {
+        // Specific deny first, broad allow second — no shadowing (first wins).
+        let rules = vec![
+            rule("bash", "command", "rm -rf **", PermissionAction::Deny),
+            rule("bash", "command", "cargo test*", PermissionAction::Allow),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert!(shadows.is_empty(), "disjoint patterns don't shadow");
+    }
+
+    #[test]
+    fn shadow_different_tools_no_shadow() {
+        let rules = vec![
+            rule("bash", "command", "*", PermissionAction::Allow),
+            rule("edit_file", "path", "*", PermissionAction::Ask),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert!(shadows.is_empty(), "different tools don't shadow");
+    }
+
+    #[test]
+    fn shadow_different_keys_no_shadow() {
+        let rules = vec![
+            rule("bash", "command", "*", PermissionAction::Allow),
+            rule("bash", "path", "*", PermissionAction::Ask),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert!(shadows.is_empty(), "different keys don't shadow");
+    }
+
+    #[test]
+    fn shadow_empty_rules_no_shadow() {
+        let shadows = detect_shadowed_rules(&[]);
+        assert!(shadows.is_empty());
+    }
+
+    #[test]
+    fn shadow_single_rule_no_shadow() {
+        let rules = vec![rule("bash", "command", "*", PermissionAction::Allow)];
+        assert!(detect_shadowed_rules(&rules).is_empty());
+    }
+
+    #[test]
+    fn shadow_chain_reports_only_first_shadower() {
+        // #1 cargo* shadows #2 cargo test and #3 cargo test --release.
+        // #2 does NOT shadow #3 (both shadowed by #1, but #2 isn't earlier
+        // than #3 in a subsuming way — "cargo test" doesn't subsume
+        // "cargo test --release"). Only #1 is the shadower for both.
+        let rules = vec![
+            rule("bash", "command", "cargo*", PermissionAction::Allow),
+            rule("bash", "command", "cargo test", PermissionAction::Deny),
+            rule(
+                "bash",
+                "command",
+                "cargo test --release",
+                PermissionAction::Deny,
+            ),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert_eq!(shadows, vec![(1, 0), (2, 0)]);
+    }
+
+    #[test]
+    fn shadow_double_star_subsumes_specific_pattern() {
+        // `**` matches any string including `/`, so it subsumes
+        // `src/main.rs` as a pattern string.
+        let rules = vec![
+            rule("edit_file", "path", "**", PermissionAction::Allow),
+            rule("edit_file", "path", "src/main.rs", PermissionAction::Deny),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert_eq!(shadows, vec![(1, 0)]);
+    }
+
+    #[test]
+    fn shadow_broader_does_not_subsume_narrower_pattern() {
+        // `cargo test` (narrower) does NOT subsume `cargo test*` (broader) —
+        // the glob `cargo test` does not match the string `cargo test*`.
+        // So #2 is NOT shadowed by #1 here (different order from the first test).
+        let rules = vec![
+            rule("bash", "command", "cargo test", PermissionAction::Deny),
+            rule("bash", "command", "cargo test*", PermissionAction::Allow),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert!(
+            shadows.is_empty(),
+            "narrower pattern doesn't subsume broader"
+        );
     }
 }

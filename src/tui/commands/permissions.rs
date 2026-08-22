@@ -11,11 +11,13 @@
 //! passes to `revoke`. Indices are stable within a single `list` →
 //! `revoke` pair; mutating between calls shifts indices.
 
-use crate::shared::permission::{PermissionAction, PermissionRule};
+use crate::shared::permission::{detect_shadowed_rules, PermissionAction, PermissionRule};
 use crate::shared::Config;
 
 /// Format `permission_rules` as `#<i>  <tool>:<key>=<pattern> -> <action>`
 /// rows, 1-indexed. Empty config returns a header noting no rules.
+/// After the rule rows, emits `⚠ Rule #N is shadowed by rule #M` for each
+/// rule whose effect is masked by an earlier broader-or-equal rule.
 pub fn list(cfg: &Config) -> String {
     let rules = &cfg.security.permission_rules;
     if rules.is_empty() {
@@ -25,6 +27,14 @@ pub fn list(cfg: &Config) -> String {
     let mut out = format!("Permission rules ({}):\n", rules.len());
     for (i, rule) in rules.iter().enumerate() {
         out.push_str(&format!("  #{}  {}\n", i + 1, format_rule(rule)));
+    }
+    let shadows = detect_shadowed_rules(rules);
+    for &(shadowed, shadower) in &shadows {
+        out.push_str(&format!(
+            "  ⚠ Rule #{} is shadowed by rule #{}\n",
+            shadowed + 1,
+            shadower + 1
+        ));
     }
     out.push_str("Use /permissions revoke <i> to remove a rule, /permissions clear to remove all.");
     out
@@ -182,5 +192,28 @@ mod tests {
         let msg = clear(&mut cfg);
         assert!(msg.contains("Cleared 0 rule(s)"), "got: {msg}");
         assert!(cfg.security.permission_rules.is_empty());
+    }
+
+    #[test]
+    fn list_shadows_warned_after_rule_rows() {
+        let cfg = config_with_rules(vec![
+            rule("bash", "command", "cargo test*", PermissionAction::Allow),
+            rule("bash", "command", "cargo test", PermissionAction::Deny),
+        ]);
+        let out = list(&cfg);
+        assert!(
+            out.contains("⚠ Rule #2 is shadowed by rule #1"),
+            "shadow warning must appear: {out}"
+        );
+    }
+
+    #[test]
+    fn list_no_shadow_no_warning() {
+        let cfg = config_with_rules(vec![
+            rule("bash", "command", "rm -rf **", PermissionAction::Deny),
+            rule("edit_file", "path", "src/*.rs", PermissionAction::Ask),
+        ]);
+        let out = list(&cfg);
+        assert!(!out.contains("⚠"), "no shadowing → no warning: {out}");
     }
 }

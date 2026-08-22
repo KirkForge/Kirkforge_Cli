@@ -705,7 +705,6 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((persona.clone(), brief.description.clone()));
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             self.events.lock().unwrap().push(format!("end:{phase}"));
             Ok(Emission {
                 agent_id: "pipeline-probe".into(),

@@ -32,7 +32,7 @@ why, and the gate evidence.
 - WO 38.13: docs truth pass — fix overclaims, reconcile WO statuses, drift test, config example — [38.13](docs/workorders/38.13-docs-truth-pass.md)
 - WO 39.1: bench suite repair — load fix, free-win verifies, export-tasks, script fix — [39.1](docs/workorders/39.1-bench-cross-tool.md)
 - WO 40.2: Windows cross-compile gate in ci-local.sh — [40.2](docs/workorders/40.2-windows-cross-compile-gate.md)
-- WO 40.4: sleep elimination — 8 test-sync sleeps converted — [40.4](docs/workorders/40.4-sleep-elimination.md)
+- WO 40.4: sleep elimination — all gratuitous test-sync sleeps eliminated; 2 residual sleeps documented (mock behavior + unconvertible race) — [40.4](docs/workorders/40.4-sleep-elimination.md)
 - WO 42.1: delete dead testdoctor test referencing deleted ci.yml — [42.1](docs/workorders/42.1-dead-testdoctor.md)
 - WO 42.2: audit chain resumes on restart + `FileAuditSink::verify_chain` — [42.2](docs/workorders/42.2-audit-chain-verify.md)
 
@@ -67,7 +67,7 @@ why, and the gate evidence.
 
 
 ### Changed
-- WO 40.4: test sleeps → structural sync (8 tests) — [40.4](docs/workorders/40.4-sleep-elimination.md)
+- WO 40.4: test sleeps → structural sync (10 tests: 8 in commit 941377a3 + 2 in this commit) — [40.4](docs/workorders/40.4-sleep-elimination.md)
 
 ### Performance
 - WO 42.12: populate `Message.token_count` at append time — estimators use cached value, eliminating redundant full-history BPE passes — [42.12](docs/workorders/42.12-token-count-cache.md)

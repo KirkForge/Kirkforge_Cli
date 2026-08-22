@@ -54,6 +54,8 @@ why, and the gate evidence.
 - WO 40.1: CI workflow architecture reset — [40.1](docs/workorders/40.1-ci-workflow-reset.md)
 - WO 40.3: nextest profiles + timeout policy — [40.3](docs/workorders/40.3-nextest-profiles.md)
 - WO 40.5: global state isolation — CwdGuard, env injection, data dir override — [40.5](docs/workorders/40.5-global-state-isolation.md)
+- WO 42.3: secret scrubbing expanded — AWS creds, passwords, private keys, conn strings — [42.3](docs/workorders/42.3-secret-scrubbing.md)
+- WO 42.4: rlimits/unshare fail-closed when `--harden` is set — [42.4](docs/workorders/42.4-rlimits-fail-closed.md)
 
 
 

@@ -136,7 +136,9 @@ pub(crate) fn shell_program() -> &'static str {
 /// Windows job objects are a separate API surface (out of scope for
 /// this WO). Rlimits are always applied when present — the `harden`
 /// flag controls only bash sandbox settings (network, workdir), not
-/// resource limits (H3).
+/// resource limits (H3). WO 42.4: when `harden` is true, setrlimit or
+/// unshare failure refuses the spawn (fail-closed); when `harden` is
+/// false, a warning is emitted and the child proceeds unconfined.
 #[cfg(target_os = "linux")]
 pub(crate) fn setup_rlimits(
     cmd: &mut Command,
@@ -150,6 +152,7 @@ pub(crate) fn setup_rlimits(
     let fsize_bytes: u64 = cfg.filesize_limit_mb.saturating_mul(1024 * 1024);
     let no_network = cfg.harden && cfg.no_network;
     let accept_unsandboxed = cfg.accept_unsandboxed;
+    let harden = cfg.harden;
 
     // WO 30.4: compile the seccomp BPF program here, in the PARENT (before
     // fork). The closure below only applies it — seccompiler::apply_filter is
@@ -160,29 +163,61 @@ pub(crate) fn setup_rlimits(
 
     unsafe {
         cmd.as_std_mut().pre_exec(move || {
-            #[allow(unused_must_use)]
-            {
-                let cpu = libc::rlimit {
-                    rlim_cur: cpu_secs,
-                    rlim_max: cpu_secs,
-                };
-                libc::setrlimit(libc::RLIMIT_CPU, &cpu);
+            // WO 42.4: fail-closed on setrlimit/unshare failures. When
+            // `harden` is true the child MUST NOT run without the requested
+            // resource limits / network isolation. When `harden` is false
+            // we warn (via stderr — the only async-signal-safe channel in
+            // pre_exec) and proceed, matching the prior non-fail-closed
+            // behaviour for the non-hardened path.
+            let cpu = libc::rlimit {
+                rlim_cur: cpu_secs,
+                rlim_max: cpu_secs,
+            };
+            if libc::setrlimit(libc::RLIMIT_CPU, &cpu) != 0 {
+                if harden {
+                    return Err(std::io::Error::last_os_error());
+                }
+                eprintln!(
+                    "setrlimit(RLIMIT_CPU) failed; --harden off, \
+                     continuing WITHOUT cpu cap"
+                );
+            }
 
-                let as_lim = libc::rlimit {
-                    rlim_cur: as_bytes,
-                    rlim_max: as_bytes,
-                };
-                libc::setrlimit(libc::RLIMIT_AS, &as_lim);
+            let as_lim = libc::rlimit {
+                rlim_cur: as_bytes,
+                rlim_max: as_bytes,
+            };
+            if libc::setrlimit(libc::RLIMIT_AS, &as_lim) != 0 {
+                if harden {
+                    return Err(std::io::Error::last_os_error());
+                }
+                eprintln!(
+                    "setrlimit(RLIMIT_AS) failed; --harden off, \
+                     continuing WITHOUT memory cap"
+                );
+            }
 
-                let fsize = libc::rlimit {
-                    rlim_cur: fsize_bytes,
-                    rlim_max: fsize_bytes,
-                };
-                libc::setrlimit(libc::RLIMIT_FSIZE, &fsize);
+            let fsize = libc::rlimit {
+                rlim_cur: fsize_bytes,
+                rlim_max: fsize_bytes,
+            };
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &fsize) != 0 {
+                if harden {
+                    return Err(std::io::Error::last_os_error());
+                }
+                eprintln!(
+                    "setrlimit(RLIMIT_FSIZE) failed; --harden off, \
+                     continuing WITHOUT filesize cap"
+                );
+            }
 
-                if no_network {
-                    // CLONE_NEWNET: place child in empty network namespace.
-                    libc::unshare(libc::CLONE_NEWNET);
+            if no_network {
+                // CLONE_NEWNET: place child in empty network namespace.
+                // `no_network` is only true when `harden` is true, so this
+                // is always fail-closed — the child must not run with
+                // network access if the namespace could not be created.
+                if libc::unshare(libc::CLONE_NEWNET) != 0 {
+                    return Err(std::io::Error::last_os_error());
                 }
             }
 
@@ -245,29 +280,60 @@ pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig, _landlock_pa
     let as_bytes: u64 = cfg.memory_limit_mb.saturating_mul(1024 * 1024);
     let fsize_bytes: u64 = cfg.filesize_limit_mb.saturating_mul(1024 * 1024);
     let no_network = cfg.harden && cfg.no_network;
+    let harden = cfg.harden;
 
     unsafe {
         cmd.as_std_mut().pre_exec(move || {
+            // WO 42.4: fail-closed when harden is true; warn-and-proceed
+            // otherwise. Mirrors the Linux variant's discipline.
             let cpu = libc::rlimit {
                 rlim_cur: cpu_secs,
                 rlim_max: cpu_secs,
             };
-            libc::setrlimit(libc::RLIMIT_CPU, &cpu);
+            if libc::setrlimit(libc::RLIMIT_CPU, &cpu) != 0 {
+                if harden {
+                    return Err(std::io::Error::last_os_error());
+                }
+                eprintln!(
+                    "setrlimit(RLIMIT_CPU) failed; --harden off, \
+                     continuing WITHOUT cpu cap"
+                );
+            }
 
             let as_lim = libc::rlimit {
                 rlim_cur: as_bytes,
                 rlim_max: as_bytes,
             };
-            libc::setrlimit(libc::RLIMIT_AS, &as_lim);
+            if libc::setrlimit(libc::RLIMIT_AS, &as_lim) != 0 {
+                if harden {
+                    return Err(std::io::Error::last_os_error());
+                }
+                eprintln!(
+                    "setrlimit(RLIMIT_AS) failed; --harden off, \
+                     continuing WITHOUT memory cap"
+                );
+            }
 
             let fsize = libc::rlimit {
                 rlim_cur: fsize_bytes,
                 rlim_max: fsize_bytes,
             };
-            libc::setrlimit(libc::RLIMIT_FSIZE, &fsize);
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &fsize) != 0 {
+                if harden {
+                    return Err(std::io::Error::last_os_error());
+                }
+                eprintln!(
+                    "setrlimit(RLIMIT_FSIZE) failed; --harden off, \
+                     continuing WITHOUT filesize cap"
+                );
+            }
 
             if no_network {
-                libc::unshare(libc::CLONE_NEWNET);
+                // CLONE_NEWNET is Linux-only; on other Unixes this fails
+                // and, since `no_network` implies `harden`, fail-closed.
+                if libc::unshare(libc::CLONE_NEWNET) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
             }
             Ok(())
         });
@@ -489,15 +555,33 @@ pub struct ShellOutput {
     pub stderr: String,
 }
 
-/// True if an env-var name is credential-shaped (WO 38.1): ends with
-/// `_API_KEY`/`_TOKEN`/`_SECRET` (case-insensitive) or is exactly one of
-/// `API_KEY`/`TOKEN`/`SECRET`.
+/// True if an env-var name is credential-shaped (WO 38.1 + WO 42.3):
+/// ends with a credential-shaped suffix (case-insensitive) or is
+/// exactly one of the bare credential names.
 fn is_secret_env_name(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
-    ["_API_KEY", "_TOKEN", "_SECRET"]
-        .iter()
-        .any(|s| upper.ends_with(s))
-        || ["API_KEY", "TOKEN", "SECRET"].contains(&upper.as_str())
+    [
+        "_API_KEY",
+        "_TOKEN",
+        "_SECRET",
+        "_ACCESS_KEY",
+        "_PASSWORD",
+        "_PRIVATE_KEY",
+        "_CREDENTIAL",
+        "_PASS",
+        "_CONN_STRING",
+        "_CONNECTION_STRING",
+    ]
+    .iter()
+    .any(|s| upper.ends_with(s))
+        || [
+            "API_KEY",
+            "TOKEN",
+            "SECRET",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_ACCESS_KEY_ID",
+        ]
+        .contains(&upper.as_str())
 }
 
 /// Scrub credential-shaped env vars from the child shell's environment.
@@ -792,10 +876,21 @@ mod tests {
         assert!(is_secret_env_name("DB_PASSWORD_SECRET"));
         assert!(is_secret_env_name("my_api_key"));
         assert!(is_secret_env_name("TOKEN"));
+        // WO 42.3: expanded suffixes + exact AWS matches.
+        assert!(is_secret_env_name("AWS_SECRET_ACCESS_KEY"));
+        assert!(is_secret_env_name("AWS_ACCESS_KEY_ID"));
+        assert!(is_secret_env_name("DB_PASSWORD"));
+        assert!(is_secret_env_name("SSH_PRIVATE_KEY"));
+        assert!(is_secret_env_name("GOOGLE_CREDENTIAL"));
+        assert!(is_secret_env_name("DB_PASS"));
+        assert!(is_secret_env_name("REDIS_CONN_STRING"));
+        assert!(is_secret_env_name("PG_CONNECTION_STRING"));
         assert!(!is_secret_env_name("PATH"));
         assert!(!is_secret_env_name("HOME"));
         assert!(!is_secret_env_name("CARGO_TARGET_DIR"));
         assert!(!is_secret_env_name("TOKENS"));
+        assert!(!is_secret_env_name("PASSWORDS"));
+        assert!(!is_secret_env_name("PASSPHRASE"));
     }
 
     /// WO 38.1: a secret-shaped var set in the parent must NOT be visible
@@ -814,6 +909,61 @@ mod tests {
         .expect("run_shell should succeed");
         assert!(out.status.success(), "stderr: {}", out.stderr);
         assert_eq!(out.stdout.trim(), "[]");
+    }
+
+    /// WO 42.4: non-hardened path warns and proceeds. setrlimit with sane
+    /// values succeeds, so this verifies the happy path under `harden=false`
+    /// — the child runs and exits 0 regardless of rlimit outcomes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_shell_nonharden_proceeds_with_rlimits() {
+        let sandbox = crate::shared::SandboxConfig {
+            harden: false,
+            ..Default::default()
+        };
+        let out = run_shell_with_token(
+            "exit 0",
+            &std::env::temp_dir(),
+            10,
+            None,
+            Some(&sandbox),
+            &[],
+        )
+        .await
+        .expect("non-hardened path should proceed");
+        assert!(out.status.success(), "stderr: {}", out.stderr);
+    }
+
+    /// WO 42.4: hardened path fail-closes on unshare failure. With
+    /// `harden=true` + `no_network=true`, `unshare(CLONE_NEWNET)` is
+    /// attempted. Without CAP_SYS_ADMIN (the common CI/non-root case) it
+    /// fails — the spawn must refuse rather than silently grant network.
+    /// Skipped when running as root (unshare succeeds, child runs fine).
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn run_shell_harden_no_network_failcloses_on_unshare_error() {
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: running as root, unshare(CLONE_NEWNET) will succeed");
+            return;
+        }
+        let sandbox = crate::shared::SandboxConfig {
+            harden: true,
+            no_network: true,
+            ..Default::default()
+        };
+        let result = run_shell_with_token(
+            "exit 0",
+            &std::env::temp_dir(),
+            10,
+            None,
+            Some(&sandbox),
+            &[],
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "harden=true should refuse spawn when unshare fails"
+        );
     }
 
     /// `drain_capped` keeps at most `cap` bytes from the inner reader and

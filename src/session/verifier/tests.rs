@@ -701,3 +701,204 @@ async fn handler_verify_event_times_out_slow_verifier() {
         other => panic!("expected Fixable from the sibling, got {other:?}"),
     }
 }
+
+// ── Verdict cache tests (WO 42.11 / WO 42.6 item 2) ─────────────────────
+//
+// `content_hash` is computed at dispatch time but was never read. The verdict
+// cache keys on (file_path, content_hash) so a re-verify of unchanged content
+// skips re-running cargo build/clippy/test. Only Clean/Skipped verdicts are
+// cached — Fixable/Unfixable are not (the correction loop re-verifies after a
+// fix, and disk content has changed by then).
+
+use crate::session::verifier::types::FileWriteEvent;
+
+/// Verifier that counts how many times `verify` was called. Returns `Clean`
+/// so the verdict is cacheable.
+struct CountingVerifier {
+    name: String,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl CountingVerifier {
+    fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl Verifier for CountingVerifier {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn priority(&self) -> u8 {
+        1
+    }
+    async fn verify(&self, _event: &BusEvent) -> Verdict {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Verdict::Clean
+    }
+}
+
+fn make_file_write_event(hash: u64) -> BusEvent {
+    BusEvent::FileWrite(FileWriteEvent {
+        path: PathBuf::from("/tmp/kf_code_cache_test.rs"),
+        content_length: 10,
+        content_hash: hash,
+    })
+}
+
+#[tokio::test]
+async fn verdict_cache_same_content_hash_skips_reverification() {
+    // Same file+content_hash → verifier runs once, second call is a cache hit.
+    let mut s = VerifierSlots::new();
+    let counter = Arc::new(CountingVerifier {
+        name: "build".into(),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    s.register(counter.clone()).unwrap();
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+
+    let event = make_file_write_event(42);
+    let _ = handler.verify_event(&event).await;
+    assert_eq!(counter.calls(), 1, "first call runs the verifier");
+
+    let _ = handler.verify_event(&event).await;
+    assert_eq!(
+        counter.calls(),
+        1,
+        "second call with same content_hash must hit the cache, not re-run"
+    );
+}
+
+#[tokio::test]
+async fn verdict_cache_different_content_hash_runs_verifier_again() {
+    // Different content_hash → cache miss → verifier runs again.
+    let mut s = VerifierSlots::new();
+    let counter = Arc::new(CountingVerifier {
+        name: "build".into(),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    s.register(counter.clone()).unwrap();
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+
+    let _ = handler.verify_event(&make_file_write_event(1)).await;
+    assert_eq!(counter.calls(), 1, "first content_hash runs the verifier");
+
+    let _ = handler.verify_event(&make_file_write_event(2)).await;
+    assert_eq!(
+        counter.calls(),
+        2,
+        "different content_hash must miss the cache and re-run the verifier"
+    );
+}
+
+#[tokio::test]
+async fn verdict_cache_zero_hash_never_caches() {
+    // content_hash == 0 means the event predates the hash wiring (or the
+    // producer couldn't compute it). Such events must always run verifiers
+    // and never populate the cache — otherwise a 0-hash entry would shadow
+    // a later real-hash event for the same path.
+    let mut s = VerifierSlots::new();
+    let counter = Arc::new(CountingVerifier {
+        name: "build".into(),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    s.register(counter.clone()).unwrap();
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+
+    let event = make_file_write_event(0);
+    let _ = handler.verify_event(&event).await;
+    let _ = handler.verify_event(&event).await;
+    assert_eq!(
+        counter.calls(),
+        2,
+        "content_hash == 0 must never hit the cache"
+    );
+}
+
+#[tokio::test]
+async fn verdict_cache_invalidate_after_fix_clears_entry() {
+    // After the correction loop applies a fix, the cached Clean for that path
+    // is stale (disk content changed). `invalidate_cache` must drop it so the
+    // next verify_event re-runs verifiers.
+    let mut s = VerifierSlots::new();
+    let counter = Arc::new(CountingVerifier {
+        name: "build".into(),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    s.register(counter.clone()).unwrap();
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+
+    let path = PathBuf::from("/tmp/kf_code_cache_invalidate.rs");
+    let event = BusEvent::FileWrite(FileWriteEvent {
+        path: path.clone(),
+        content_length: 10,
+        content_hash: 99,
+    });
+    let _ = handler.verify_event(&event).await;
+    assert_eq!(counter.calls(), 1);
+
+    // Cache hit before invalidation.
+    let _ = handler.verify_event(&event).await;
+    assert_eq!(counter.calls(), 1, "cache hit before invalidation");
+
+    // After a fix, the loop invalidates → next call re-runs.
+    handler.invalidate_cache(&path);
+    let _ = handler.verify_event(&event).await;
+    assert_eq!(
+        counter.calls(),
+        2,
+        "invalidate_cache must drop the entry so the verifier re-runs"
+    );
+}
+
+#[tokio::test]
+async fn verdict_cache_fixable_verdict_not_cached() {
+    // Fixable verdicts must not be cached: the correction loop re-verifies
+    // after applying a fix, and re-running the verifier is the whole point
+    // (it should now see the fixed content and return Clean).
+    struct AlwaysFixable;
+    #[async_trait::async_trait]
+    impl Verifier for AlwaysFixable {
+        fn name(&self) -> &str {
+            "lint"
+        }
+        fn priority(&self) -> u8 {
+            1
+        }
+        async fn verify(&self, _event: &BusEvent) -> Verdict {
+            Verdict::Fixable(FixSuggestion {
+                description: "unused".into(),
+                file: PathBuf::from("/tmp/kf_code_cache_fixable.rs"),
+                original: "a".into(),
+                replacement: "b".into(),
+                severity: "low".into(),
+                command: None,
+                line: None,
+            })
+        }
+    }
+
+    let mut s = VerifierSlots::new();
+    s.register(Arc::new(AlwaysFixable)).unwrap();
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+
+    let event = make_file_write_event(7);
+    let (v1, _) = handler.verify_event(&event).await;
+    assert!(matches!(v1, Verdict::Fixable(_)));
+    let (v2, _) = handler.verify_event(&event).await;
+    assert!(
+        matches!(v2, Verdict::Fixable(_)),
+        "Fixable must not be cached — the correction loop needs to re-verify after a fix"
+    );
+}

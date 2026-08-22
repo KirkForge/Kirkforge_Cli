@@ -10,6 +10,7 @@ why, and the gate evidence.
 ## [Unreleased]
 
 ### Fixed
+- WO 42.11 / WO 42.6 item 2: wire content_hash into verifier path — verdict cache keyed by (file, content_hash); skip re-running cargo build/clippy/test for unchanged file content across correction iterations — [42.11](docs/workorders/42.11-content-hash-wiring.md)
 - WO 42.5: MCP .mcp.json content-based re-approval — approvals now store a sha256 content hash; a modified `.mcp.json` under an approved path re-gates — [42.5](docs/workorders/42.5-mcp-content-approval.md)
 - WO 42.7: offload store FIFO eviction + byte cap — replace random-order HashMap eviction with insertion-ordered VecDeque, add `max_bytes` cap — [42.7](docs/workorders/42.7-offload-fifo.md)
 - WO 41.1: apply coder patch to parent + rename to PipelineOrchestrator — [41.1](docs/workorders/41.1-patch-application.md)

@@ -1,10 +1,12 @@
 use super::slots::VerifierSlots;
 use super::types::{FixSuggestion, Verdict, Verifier};
-use crate::session::verifier::types::{BusEvent, EventKind};
+use crate::session::verifier::types::{BusEvent, EventKind, FileWriteEvent};
 use crate::shared::metrics::{record, MetricEvent};
 
 use futures_util::future::FutureExt;
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,6 +32,15 @@ pub struct VerifierHandler {
     pub(crate) pending_corrections: Arc<tokio::sync::Mutex<Vec<FixSuggestion>>>,
     /// Path guard used when applying auto-fixes.
     pub(crate) path_guard: crate::session::access::PathGuard,
+    /// Verdict cache keyed by `(file_path, content_hash)`. Only `Clean`/`Skipped`
+    /// verdicts are cached — `Fixable`/`Unfixable` are not, because the
+    /// correction loop re-runs verifiers after applying a fix (disk content
+    /// changed, so the cached verdict would be stale). Entries are dropped via
+    /// [`invalidate_cache`] after a correction loop applies any fix.
+    /// ponytail: unbounded HashMap — per-session, bounded by distinct files written;
+    /// add LRU if a session writes thousands of distinct files.
+    #[allow(clippy::type_complexity)]
+    pub(crate) verdict_cache: Arc<std::sync::Mutex<HashMap<(PathBuf, u64), (Verdict, String)>>>,
 }
 
 impl VerifierHandler {
@@ -41,6 +52,7 @@ impl VerifierHandler {
             slots,
             pending_corrections: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             path_guard,
+            verdict_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -53,6 +65,14 @@ impl VerifierHandler {
     pub async fn drain_corrections(&self) -> Vec<FixSuggestion> {
         let mut pending = self.pending_corrections.lock().await;
         std::mem::take(&mut *pending)
+    }
+
+    /// Drop cached verdicts for `path`. Called by the correction loop after a
+    /// fix is applied — disk content changed, so any cached `Clean` for this
+    /// path is stale regardless of which content_hash produced it.
+    pub fn invalidate_cache(&self, path: &PathBuf) {
+        let mut cache = self.verdict_cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.retain(|key, _| key.0 != *path);
     }
 
     /// Run verification and return the verdict plus the decisive
@@ -70,6 +90,34 @@ impl VerifierHandler {
                 "aggregate".to_string(),
             );
         }
+
+        // Verdict cache: skip re-running cargo build/clippy/test when the
+        // same file+content was already verified clean. Only FileWrite events
+        // carry a content_hash; other event kinds always run verifiers.
+        if let BusEvent::FileWrite(FileWriteEvent {
+            path,
+            content_hash: hash,
+            ..
+        }) = event
+        {
+            if *hash > 0 {
+                let cache = self.verdict_cache.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(cached) = cache.get(&(path.clone(), *hash)) {
+                    record(MetricEvent::Verifier {
+                        name: "aggregate".to_string(),
+                        verdict: match &cached.0 {
+                            Verdict::Clean => "clean",
+                            Verdict::Skipped(_) => "skipped",
+                            _ => "fixable",
+                        }
+                        .to_string(),
+                        source: "cache-hit".to_string(),
+                    });
+                    return cached.clone();
+                }
+            }
+        }
+
         let verifiers: Vec<Arc<dyn Verifier>> = {
             let slots = self.slots.read().unwrap_or_else(|e| e.into_inner());
             if slots.is_empty() {
@@ -156,6 +204,24 @@ impl VerifierHandler {
             verdict: verdict_label.to_string(),
             source: "built-in".to_string(),
         });
+
+        // Cache only non-actionable verdicts. Fixable/Unfixable are not
+        // cached: the correction loop re-runs verifiers after applying a fix,
+        // and the disk content has changed by then.
+        if let BusEvent::FileWrite(FileWriteEvent {
+            path,
+            content_hash: hash,
+            ..
+        }) = event
+        {
+            if *hash > 0 && matches!(verdict, Verdict::Clean | Verdict::Skipped(_)) {
+                let mut cache = self.verdict_cache.lock().unwrap_or_else(|e| e.into_inner());
+                cache.insert(
+                    (path.clone(), *hash),
+                    (verdict.clone(), decisive_name.clone()),
+                );
+            }
+        }
 
         (verdict, decisive_name)
     }

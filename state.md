@@ -11,14 +11,21 @@
 - **WO 38.9 items 4-6**: memory mtime-cache, prompt-cache stem stability, (path,mtime) minified cache, trace delta-only. Tracked in [38.9](docs/workorders/38.9-session-performance.md).
 - **WO 38.10 P2s**: `--read-stdin-full` flag, JSON error-object emission, session.id in summary, replay/Ctrl-C/CLI polish. Tracked in [38.10](docs/workorders/38.10-cli-first-run.md).
 - **WO 38.4 item 3**: Esc-then-input window — landed in WO 38.5 (loop_.rs), noted in [38.4](docs/workorders/38.4-orchestration-correctness.md).
-- **WO 42.6**: performance items (WO 38.9 items 2-6). Tracked in [42.6](docs/workorders/42.6-performance-items.md).
-- **WO 42.11**: wire content_hash in verifier path. Tracked in [42.11](docs/workorders/42.11-content-hash-wiring.md).
+- **WO 42.6**: performance items (WO 38.9 items 2-6). Items 2+3 done (verifier cache, token count cache). Items 4-6 pending. Tracked in [42.6](docs/workorders/42.6-performance-items.md).
+- **WO 42.11**: DONE — content_hash wired into verifier path (verdict cache in VerifierHandler).
 
 ## Known flakes (pre-existing, not introduced this session)
 
 - `same_ms_double_spawn_gets_distinct_{temp_dirs,worktrees}` — real-concurrency git tests, `#[cfg(unix)]` gated, flake under extreme parallel load. Pass in isolation.
 
 ## Architecture notes (load-bearing, not in WOs)
+
+- `VerifierHandler::verify_event` caches verdicts keyed by `(file_path, content_hash)`.
+  Only `Clean`/`Skipped` verdicts are cached — `Fixable`/`Unfixable` are not (the
+  correction loop re-verifies after applying a fix; disk content changed, so a
+  cached verdict would be stale). After a fix is applied, `CorrectionLoop::run`
+  calls `invalidate_cache(path)` to drop the stale entry. `content_hash == 0`
+  events never hit the cache (old events / producers without hash). WO 42.11.
 
 - `Message.token_count` is now populated at append time (`ConversationLog::append`/`append_async`). Estimators (`estimate_message_tokens` in `prompt/mod.rs`) return the cached value when `Some`, falling back to BPE counting when `None`. Content mutation sites (`truncate_tool_results`, `dedup_adjacent_tool_results`, `minify_old_messages`, `stub_old_tool_results`, compaction stub/condense) clear `token_count = None` to avoid stale cache. WO 42.12.
 

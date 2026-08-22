@@ -27,6 +27,18 @@
   Ctrl-C orphans bash children; audit BufWriter lost on panic-abort; no
   PDEATHSIG (parent abort orphans all subprocesses); Bedrock `[DONE]`
   injection bypasses truncation; headless_chrome ungated (~1-2 MB).
+- **WO 43.25-43.39**: round-4 full-coverage segment sweep (executor/turn,
+  tools, session/mcp/prompt/verifier, TUI widgets/commands,
+  sandbox/security, daemon/jobs/cli, `crates/*`). 7 fresh read-only agents,
+  24 NEW verified findings (no re-scoping of existing 43.x items). Top
+  risks: 3 raw UTF-8 byte-slice panics incl. two outside the tool
+  catch_unwind (43.25); prompt-compaction OOB panic on over-budget path
+  (43.29); background/PTY bash skip the secret env scrub (43.28);
+  `KF_CODE_*` env overrides dead in production (43.32); context-index
+  `retrieve()` smears unresolved edges → multi-MB prompts (43.34); pre-tool
+  hook deny ineffective for file tools (43.30); workflow-bash/plugin-bus
+  subprocesses unguarded (43.26). See
+  [43.0](docs/workorders/43.0-wo43-overview.md).
 - **WO 39.4**: Claude compat phase 3 (hook stdin-JSON contract + generic
   pre/post-tool events). Deferred — lowest wild frequency of the artifact
   classes. Tracked in [39.4](docs/workorders/39.4-claude-compat-phase3.md).

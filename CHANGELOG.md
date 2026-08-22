@@ -13,6 +13,13 @@ why, and the gate evidence.
 
 - WO 43.0-43.17 — serialized the honest-assessment backlog into 17 verified
   workorders (6 analysis agents; ~11 stale claims corrected in-line).
+- WO 43.18-43.24 — round-3 fresh segment audit: 7 workorders of NEW findings
+  (concurrency/shutdown, TUI, deps/size, persistence, adapters, subprocess,
+  test quality).
+- WO 43.25-43.39 — round-4 full-coverage segment sweep: 15 workorders, 24 NEW
+  findings (UTF-8 slice panics, prompt-compaction OOB, background-bash secret
+  scrub, dead env-override layer, context-index retrieval smear, file-tool
+  hook veto, unguarded subprocesses, crates bugs).
 - WO 43.18-43.24 — fresh segment audit round: abrupt-exit safety, TUI
   hardening, dep/size audit, persistence crash-robustness, adapter
   transport, subprocess lifecycle, test quality (7 analysis agents).

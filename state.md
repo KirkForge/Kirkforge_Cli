@@ -6,8 +6,6 @@
 
 - **WO 41.5 Phase 2-3**: `/jobs` integration + transcript links (Phase 2), full `AgentRun` object with workspace/model/permissions/budget/transcript/artifacts (Phase 3). Tracked in [41.5](docs/workorders/41.5-persistent-subagent.md).
 - **WO 41.6**: shadowed-rule diagnostics in `/permissions list`. Tracked in [41.6](docs/workorders/41.6-shadow-diagnostics.md).
-- **WO 41.7**: property/fuzz testing of the glob matcher. Tracked in [41.7](docs/workorders/41.7-glob-fuzz.md).
-- **WO 41.8**: audit logging of which permission rule caused a decision. Tracked in [41.8](docs/workorders/41.8-audit-logging.md).
 - **WO 39.1 Phase 3-4**: external runner for `claude -p`/`codex exec`/`opencode run` + same-model LiteLLM gateway. Tracked in [39.1](docs/workorders/39.1-bench-cross-tool.md).
 - **WO 39.4**: Claude compat phase 3 (hook stdin-JSON contract + generic pre/post-tool events). Deferrable.
 - **WO 38.9 items 4-6**: memory mtime-cache, prompt-cache stem stability, (path,mtime) minified cache, trace delta-only. Tracked in [38.9](docs/workorders/38.9-session-performance.md).

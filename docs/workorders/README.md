@@ -774,7 +774,7 @@ See [WO 38.0](38.0-wo38-overview.md). WO 39 carries the strategic half.
 | 38.6 | [Crash-corruption recovery](38.6-crash-recovery.md) | Done | P1 |
 | 38.7 | [Resource lifecycle + worktree sweep](38.7-resource-lifecycle.md) | Done | P1 |
 | 38.8 | [Wire the budget guard (thesis)](38.8-budget-guard-wiring.md) | Done | P1 |
-| 38.9 | [Long-session performance](38.9-session-performance.md) | Pending | P1 |
+| 38.9 | [Long-session performance](38.9-session-performance.md) | Done | P1 |
 | 38.10 | [CLI first-run + scriptability](38.10-cli-first-run.md) | Done (P0 + P1 core; P2 deferred) | P1 |
 | 38.11 | [TUI state hygiene](38.11-tui-state-hygiene.md) | Done | P1 |
 | 38.12 | [Test hygiene completion](38.12-test-hygiene.md) | Done | P2 |
@@ -838,7 +838,7 @@ Driven by 8 read-only exploration agents. See
 | 42.3 | [Secret scrubbing — expand coverage](42.3-secret-scrubbing.md) | Done |
 | 42.4 | [rlimits/unshare — fail-closed](42.4-rlimits-fail-closed.md) | Done |
 | 42.5 | [MCP .mcp.json content-based re-approval](42.5-mcp-content-approval.md) | Done |
-| 42.6 | [Performance: WO 38.9 items 2-6](42.6-performance-items.md) | In Progress |
+| 42.6 | [Performance: WO 38.9 items 2-6](42.6-performance-items.md) | Done |
 | 42.7 | [Offload store FIFO eviction + byte cap](42.7-offload-fifo.md) | Done |
 | 42.8 | [Handoff delimiter escaping](42.8-handoff-escaping.md) | Done |
 | 42.9 | [PipelineOrchestrator rename + patch application](42.9-pipeline-rename-patch.md) | Done |

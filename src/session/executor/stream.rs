@@ -144,7 +144,7 @@ impl Executor {
         let history = self.conversation.all();
         let tool_results: Vec<Message> = Vec::new(); // sent as part of history
 
-        let messages = self.prompt_builder.build_messages_with_compaction(
+        let mut messages = self.prompt_builder.build_messages_with_compaction(
             system,
             history,
             model_info.max_context_tokens,
@@ -152,6 +152,27 @@ impl Executor {
             compaction_use_heuristic,
             compaction_drop_threshold,
         );
+
+        // WO 38.9 item 6: inject the volatile suffix (carryover + memory
+        // facts) as a separate system message AFTER the stable stem
+        // (messages[0]) so the cache-stem tracker (prefix_len=1) sees a
+        // stable prefix. The stem is byte-identical across turns; only
+        // the suffix changes. This is what makes the provider KV cache
+        // actually hit.
+        if let Some(suffix) = self.prompt_builder.build_dynamic_suffix(
+            carryover_block.as_deref(),
+            memory_context.as_deref(),
+            memory_enabled,
+            memory_max_tokens,
+            memory_top_n,
+        ) {
+            // Insert after the stem (index 0). If the context index
+            // already inserted a relevant_symbols message at index 1,
+            // the suffix goes after it — both are volatile, order
+            // doesn't matter for cache stability (prefix_len=1).
+            let insert_at = 1.min(messages.len());
+            messages.insert(insert_at, suffix);
+        }
 
         // WO 10.2: prompt-cache stem-reuse detection (ADR-052). The
         // stable prefix is the system message — the one part of the

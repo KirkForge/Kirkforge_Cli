@@ -61,61 +61,56 @@ pub struct PromptBuilder {
     /// dropped on the floor; this field is where the value actually
     /// lives now.
     system_override: Option<String>,
-    /// Cached system-prompt message produced by `build()` on the first call
-    /// and reused when the caller opts into prompt-cache-stem mode and the
-    /// inputs that affect the system prompt (model name, tool list, carryover,
-    /// memory) have not changed. This is the kernel of the P3-6 prompt-cache-
-    /// stem reuse path: the same `Message` object (and therefore the same
-    /// content hash) is passed to the adapter across turns so the provider can
-    /// hit its KV-cache for the stable prefix.
+    /// Cached system-prompt stem produced by `build_stable()` on the
+    /// first call and reused when the stable inputs (model name, tool
+    /// list, system override) have not changed. Volatile content
+    /// (carryover, memory facts) is NOT in the stem — it goes through
+    /// `build_dynamic_suffix()` so the stem cache key is stable across
+    /// turns and the provider KV cache actually hits (WO 38.9 item 6).
     cached_system: Option<(SystemStemKey, Message)>,
     /// Optional repo-graph context index for injecting relevant symbols
     /// into the system prompt before every turn.
     context_index: Option<ContextIndex>,
+    /// Mtime cache for the memory store directory (WO 38.9 item 4).
+    /// When the directory mtime hasn't changed, the parsed facts are
+    /// reused without re-reading from disk. The cache stores the
+    /// directory's last-modified time and the facts parsed at that
+    /// time. An mtime of `None` means "cache cold — read on next use".
+    memory_cache: Option<(
+        std::time::SystemTime,
+        Vec<crate::session::memory::MemoryFact>,
+    )>,
 }
 
 /// Hashable key for the memoised system prompt stem.
 ///
-/// Any field that can change the system-prompt text must be reflected here,
-/// otherwise two turns with different carryover / memory / tools could reuse
-/// the wrong cached system message and poison the prompt cache or the
-/// conversation semantics.
+/// Only STABLE fields are included: model name, thinking support, tool
+/// list, and the system override. Volatile fields (carryover block,
+/// memory context, memory facts) are NOT part of the key — they go
+/// through `build_dynamic_suffix()` so the stem is byte-identical
+/// across turns (WO 38.9 item 6).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SystemStemKey {
     model_name: String,
     model_supports_thinking: bool,
     tool_names: Vec<String>,
-    carryover_block: Option<String>,
-    memory_context: Option<String>,
     memory_enabled: bool,
-    memory_max_tokens: usize,
-    memory_top_n: usize,
     system_override_hash: Option<u64>,
 }
 
 impl SystemStemKey {
-    // reason: cache key components are heterogeneous (str/bool/slice/Option/usize); no obvious struct.
-    #[allow(clippy::too_many_arguments)]
     fn new(
         model_name: &str,
         model_supports_thinking: bool,
         tool_names: &[&str],
-        carryover_block: Option<&str>,
-        memory_context: Option<&str>,
         memory_enabled: bool,
-        memory_max_tokens: usize,
-        memory_top_n: usize,
         system_override: Option<&str>,
     ) -> Self {
         Self {
             model_name: model_name.to_string(),
             model_supports_thinking,
             tool_names: tool_names.iter().map(|s| s.to_string()).collect(),
-            carryover_block: carryover_block.map(|s| s.to_string()),
-            memory_context: memory_context.map(|s| s.to_string()),
             memory_enabled,
-            memory_max_tokens,
-            memory_top_n,
             system_override_hash: system_override.map(|s| {
                 use std::collections::hash_map::DefaultHasher;
                 use std::hash::{Hash, Hasher};
@@ -135,6 +130,7 @@ impl PromptBuilder {
             system_override: None,
             cached_system: None,
             context_index: None,
+            memory_cache: None,
         }
     }
 
@@ -164,28 +160,48 @@ impl PromptBuilder {
         self.system_override.as_deref()
     }
 
-    // reason: build params mirror SystemStemKey::new; heterogeneous types, no obvious struct.
+    // reason: build params mirror the old signature for backward compat;
+    // volatile params are passed through to build_dynamic_suffix.
     #[allow(clippy::too_many_arguments)]
     pub fn build(
         &mut self,
         model_name: &str,
         model_supports_thinking: bool,
         tool_names: &[&str],
-        carryover_block: Option<&str>,
-        memory_context: Option<&str>,
+        _carryover_block: Option<&str>,
+        _memory_context: Option<&str>,
         memory_enabled: bool,
-        memory_max_tokens: usize,
-        memory_top_n: usize,
+        _memory_max_tokens: usize,
+        _memory_top_n: usize,
+    ) -> Message {
+        self.build_stable(
+            model_name,
+            model_supports_thinking,
+            tool_names,
+            memory_enabled,
+        )
+    }
+
+    /// Build the STABLE system-prompt stem (template + tools + `remember`
+    /// instruction when memory is enabled). Volatile content (carryover,
+    /// memory facts) is NOT included — it goes through
+    /// [`build_dynamic_suffix`] so the stem is byte-identical across
+    /// turns and the provider KV cache hits (WO 38.9 item 6).
+    ///
+    /// The stem is memoised by `SystemStemKey` — a cache hit returns the
+    /// same `Message` object so the content hash is stable.
+    fn build_stable(
+        &mut self,
+        model_name: &str,
+        model_supports_thinking: bool,
+        tool_names: &[&str],
+        memory_enabled: bool,
     ) -> Message {
         let key = SystemStemKey::new(
             model_name,
             model_supports_thinking,
             tool_names,
-            carryover_block,
-            memory_context,
             memory_enabled,
-            memory_max_tokens,
-            memory_top_n,
             self.system_override.as_deref(),
         );
         if let Some((ref cached_key, ref cached_msg)) = self.cached_system {
@@ -194,13 +210,6 @@ impl PromptBuilder {
             }
         }
 
-        // Full override: the operator passed --system "..." or set
-        // `system_override` directly. We still append the carryover
-        // block and the memory block so context the operator didn't
-        // know about isn't silently dropped — but the base template
-        // (which carries the safety scaffolding) is replaced. Operators
-        // who want the base template need to embed it in their
-        // override.
         let mut content = if let Some(ref ovr) = self.system_override {
             ovr.clone()
         } else {
@@ -219,46 +228,12 @@ impl PromptBuilder {
                 .unwrap_or_else(|_| "You are a coding agent.".to_string())
         };
 
-        if let Some(block) = carryover_block {
-            if !block.is_empty() {
-                content.push_str("\n\n");
-                content.push_str(block);
-            }
-        }
-
-        // Inject persistent memory facts (if enabled)
+        // The `remember` tool instruction is stable — it depends only on
+        // `memory_enabled`, which doesn't change per turn. Keep it in the
+        // stem so it's cached. The volatile memory FACTS block goes in
+        // build_dynamic_suffix.
         if memory_enabled {
             content.push_str("\n\nYou have a `remember` tool to store important facts about the user's preferences, project conventions, and recurring patterns. Use it when the user explicitly states a preference or when you observe a pattern worth remembering. Stored facts are available in future sessions.");
-
-            let memory_block = match crate::session::memory::MemoryStore::default_store() {
-                Ok(store) => {
-                    if let Some(ctx) = memory_context.filter(|s| !s.is_empty()) {
-                        let selected =
-                            store.select_for_context(ctx, memory_max_tokens, memory_top_n);
-                        for fact in &selected {
-                            let reason = format!("query='{}' matched memory '{}'", ctx, fact.name);
-                            record(MetricEvent::PlanReason {
-                                decision_kind: PlanDecisionKind::MemoryRetrieve,
-                                reason,
-                                related_id: Some(fact.name.clone()),
-                                confidence: 1.0,
-                            });
-                        }
-                        store.to_prompt_block_for_facts(&selected)
-                    } else {
-                        store.to_prompt_block()
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "could not load memory store; skipping memory injection");
-                    String::new()
-                }
-            };
-            if !memory_block.is_empty() {
-                content.push_str("\n\n<memory>\n");
-                content.push_str(&memory_block);
-                content.push_str("\n</memory>");
-            }
         }
 
         let msg = Message {
@@ -273,6 +248,114 @@ impl PromptBuilder {
         };
         self.cached_system = Some((key, msg.clone()));
         msg
+    }
+
+    /// Build the volatile (per-turn) suffix: carryover block + memory
+    /// facts block. This content changes every turn (carryover updates,
+    /// memory context shifts), so it must NOT be in the cached stem.
+    /// The caller appends this as a separate system message AFTER the
+    /// stable stem so `CacheStemTracker` (prefix_len=1) sees a stable
+    /// prefix (WO 38.9 item 6).
+    ///
+    /// Returns `None` when there's no volatile content (no carryover,
+    /// memory disabled, or no facts selected).
+    // reason: params mirror build's volatile subset; heterogeneous types.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_dynamic_suffix(
+        &mut self,
+        carryover_block: Option<&str>,
+        memory_context: Option<&str>,
+        memory_enabled: bool,
+        memory_max_tokens: usize,
+        memory_top_n: usize,
+    ) -> Option<Message> {
+        let mut content = String::new();
+
+        if let Some(block) = carryover_block {
+            if !block.is_empty() {
+                content.push_str(block);
+            }
+        }
+
+        if memory_enabled {
+            let memory_block =
+                self.load_memory_block(memory_context, memory_max_tokens, memory_top_n);
+            if !memory_block.is_empty() {
+                if !content.is_empty() {
+                    content.push_str("\n\n");
+                }
+                content.push_str("<memory>\n");
+                content.push_str(&memory_block);
+                content.push_str("\n</memory>");
+            }
+        }
+
+        if content.is_empty() {
+            return None;
+        }
+
+        Some(Message {
+            role: Role::System,
+            content,
+            content_parts: None,
+            thinking: None,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            token_count: None,
+        })
+    }
+
+    /// Load the memory facts block, using an mtime cache to avoid
+    /// re-reading from disk every turn when the memory directory hasn't
+    /// changed (WO 38.9 item 4).
+    fn load_memory_block(
+        &mut self,
+        memory_context: Option<&str>,
+        memory_max_tokens: usize,
+        memory_top_n: usize,
+    ) -> String {
+        let store = match crate::session::memory::MemoryStore::default_store() {
+            Ok(store) => store,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not load memory store; skipping memory injection");
+                return String::new();
+            }
+        };
+
+        // WO 38.9 item 4: mtime-cache the memory directory. If the
+        // directory mtime hasn't changed since the last read, reuse
+        // the cached facts instead of re-reading + re-parsing every
+        // `.md` file on every turn.
+        let facts = match store.all_cached(&mut self.memory_cache) {
+            Some(facts) => facts,
+            None => {
+                let facts = store.all();
+                if let Ok(meta) = std::fs::metadata(store.root()) {
+                    if let Ok(mtime) = meta.modified() {
+                        self.memory_cache = Some((mtime, facts.clone()));
+                    }
+                }
+                facts
+            }
+        };
+
+        if let Some(ctx) = memory_context.filter(|s| !s.is_empty()) {
+            let selected =
+                store.select_for_context_from(&facts, ctx, memory_max_tokens, memory_top_n);
+            for fact in &selected {
+                let reason = format!("query='{}' matched memory '{}'", ctx, fact.name);
+                record(MetricEvent::PlanReason {
+                    decision_kind: PlanDecisionKind::MemoryRetrieve,
+                    reason,
+                    related_id: Some(fact.name.clone()),
+                    confidence: 1.0,
+                });
+            }
+            store.to_prompt_block_for_facts(&selected)
+        } else {
+            store.to_prompt_block_for_facts(&facts)
+        }
     }
 
     /// Estimate the token size of the stable prompt-cache stem.
@@ -426,8 +509,10 @@ impl PromptBuilder {
 
         Self::dedup_adjacent_tool_results(&mut messages);
 
-        // Inject relevant symbols from the repo-graph context index
-        // into the system message (first message in the assembled list).
+        // Inject relevant symbols from the repo-graph context index.
+        // WO 38.9 item 6: insert as a SEPARATE system message after the
+        // stem (messages[0]) so the stable prefix hash (prefix_len=1)
+        // is not invalidated by per-query symbol changes.
         if let Some(ref idx) = self.context_index {
             let query = history
                 .iter()
@@ -438,8 +523,7 @@ impl PromptBuilder {
             if !query.is_empty() {
                 let relevant = idx.retrieve_hybrid(query, 10);
                 if !relevant.is_empty() && !messages.is_empty() {
-                    let mut content = messages[0].content.clone();
-                    content.push_str("\n\n<relevant_symbols>\n");
+                    let mut content = String::from("<relevant_symbols>\n");
                     for result in &relevant {
                         let sym = &result.symbol;
                         content.push_str(&format!(
@@ -503,8 +587,18 @@ impl PromptBuilder {
                         content.push('\n');
                     }
                     content.push_str("</relevant_symbols>");
-                    messages[0].content = content;
-                    messages[0].token_count = None;
+                    let sym_msg = Message {
+                        role: Role::System,
+                        content,
+                        content_parts: None,
+                        thinking: None,
+                        tool_calls: None,
+                        tool_call_id: None,
+                        tool_name: None,
+                        token_count: None,
+                    };
+                    // Insert after the stem (index 0), before the history.
+                    messages.insert(1, sym_msg);
                 }
             }
         }
@@ -959,6 +1053,82 @@ mod tests {
         );
         assert_eq!(msg.role, Role::System);
         assert!(!msg.content.is_empty());
+    }
+
+    /// WO 38.9 item 6: the stable stem must NOT include carryover or
+    /// memory facts — they go in build_dynamic_suffix. Two builds with
+    /// different carryover/memory_context must produce the same stem.
+    #[test]
+    fn test_stem_stable_across_volatile_changes() {
+        let mut builder = PromptBuilder::new();
+        let stem_a = builder.build(
+            "test-model",
+            false,
+            &["bash"],
+            Some("carryover v1"),
+            Some("ctx v1"),
+            true,
+            500,
+            10,
+        );
+        let stem_b = builder.build(
+            "test-model",
+            false,
+            &["bash"],
+            Some("carryover v2"),
+            Some("ctx v2"),
+            true,
+            500,
+            10,
+        );
+        assert_eq!(
+            stem_a.content, stem_b.content,
+            "stem must be identical despite different carryover/memory_context"
+        );
+    }
+
+    /// WO 38.9 item 6: build_dynamic_suffix returns the volatile block
+    /// (carryover + memory). When carryover is present, it's in the
+    /// suffix, not the stem.
+    #[test]
+    fn test_dynamic_suffix_contains_carryover() {
+        let mut builder = PromptBuilder::new();
+        let suffix = builder.build_dynamic_suffix(Some("carryover text"), None, false, 0, 0);
+        assert!(suffix.is_some(), "suffix should exist with carryover");
+        assert!(
+            suffix.as_ref().unwrap().content.contains("carryover text"),
+            "suffix should contain the carryover block"
+        );
+    }
+
+    /// WO 38.9 item 6: when there's no carryover and memory is disabled,
+    /// build_dynamic_suffix returns None (no volatile content).
+    #[test]
+    fn test_dynamic_suffix_none_when_no_volatile_content() {
+        let mut builder = PromptBuilder::new();
+        let suffix = builder.build_dynamic_suffix(None, None, false, 0, 0);
+        assert!(suffix.is_none(), "no volatile content → no suffix");
+    }
+
+    /// WO 38.9 item 6: the stem must NOT contain carryover or memory
+    /// blocks, even when they're passed to build().
+    #[test]
+    fn test_stem_excludes_carryover_and_memory() {
+        let mut builder = PromptBuilder::new();
+        let stem = builder.build(
+            "test-model",
+            false,
+            &["bash"],
+            Some("CARRYOVER_MARKER"),
+            None,
+            false,
+            0,
+            0,
+        );
+        assert!(
+            !stem.content.contains("CARRYOVER_MARKER"),
+            "stem must not contain carryover content"
+        );
     }
 
     #[test]

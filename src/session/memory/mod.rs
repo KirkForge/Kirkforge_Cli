@@ -104,6 +104,88 @@ impl MemoryStore {
         facts
     }
 
+    /// The memory store's root directory.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Read all facts with an mtime cache (WO 38.9 item 4). If the
+    /// memory directory's mtime hasn't changed since the cache was
+    /// populated, returns the cached facts without re-reading from
+    /// disk. Returns `None` when the cache is cold or stale — the
+    /// caller should fall back to `all()` and update the cache.
+    pub fn all_cached(
+        &self,
+        cache: &mut Option<(std::time::SystemTime, Vec<MemoryFact>)>,
+    ) -> Option<Vec<MemoryFact>> {
+        let current_mtime = std::fs::metadata(&self.root).ok()?.modified().ok()?;
+        if let Some((cached_mtime, ref cached_facts)) = cache {
+            if *cached_mtime == current_mtime {
+                return Some(cached_facts.clone());
+            }
+        }
+        None
+    }
+
+    /// Score all facts (from a pre-loaded list) against `context` using
+    /// TF-IDF keyword matching, then return the top-N subset that fits
+    /// inside `max_tokens`. This is the same logic as
+    /// `select_for_context` but accepts a pre-loaded fact list so the
+    /// caller can use an mtime-cached fact set (WO 38.9 item 4).
+    pub fn select_for_context_from(
+        &self,
+        facts: &[MemoryFact],
+        context: &str,
+        max_tokens: usize,
+        top_n: usize,
+    ) -> Vec<MemoryFact> {
+        if facts.is_empty() || context.is_empty() {
+            return Vec::new();
+        }
+
+        let idf = compute_idf(facts);
+        let query_terms = tokenize(context);
+        if query_terms.is_empty() {
+            return Vec::new();
+        }
+
+        let mut scored: Vec<(f64, &MemoryFact)> = facts
+            .iter()
+            .map(|fact| {
+                let score = score_fact(fact, &query_terms, &idf);
+                (score, fact)
+            })
+            .collect();
+
+        scored.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.name.cmp(&b.1.name))
+        });
+
+        let mut selected = Vec::new();
+        let mut tokens_used = 0usize;
+        for (score, fact) in scored.into_iter().take(top_n) {
+            if score <= 0.0 {
+                break;
+            }
+            let line = format!(
+                "- [{}] {}: {}\n",
+                fact.metadata.get("type").cloned().unwrap_or_default(),
+                fact.name,
+                fact.description
+            );
+            let est = crate::session::prompt::count_tokens(&line);
+            if tokens_used + est > max_tokens && !selected.is_empty() {
+                break;
+            }
+            tokens_used += est;
+            selected.push(fact.clone());
+        }
+
+        selected
+    }
+
     /// Get a single fact by name slug.
     pub fn get(&self, name: &str) -> Option<MemoryFact> {
         let path = self.path_for(name);
@@ -925,6 +1007,63 @@ mod tests {
         store.upsert("fact", "desc", "body", "project").unwrap();
         let selected = store.select_for_context("", 100, 10);
         assert!(selected.is_empty());
+    }
+
+    /// WO 38.9 item 4: all_cached returns None on a cold cache, then
+    /// returns the facts on a second call when the directory mtime
+    /// hasn't changed.
+    #[test]
+    fn test_all_cached_cold_then_warm() {
+        let store = temp_store();
+        store
+            .upsert("fact-a", "desc a", "body a", "project")
+            .unwrap();
+
+        let mut cache: Option<(std::time::SystemTime, Vec<MemoryFact>)> = None;
+        assert!(store.all_cached(&mut cache).is_none(), "cold cache → None");
+
+        let facts = store.all();
+        if let Ok(meta) = std::fs::metadata(store.root()) {
+            if let Ok(mtime) = meta.modified() {
+                cache = Some((mtime, facts.clone()));
+            }
+        }
+
+        let cached = store.all_cached(&mut cache);
+        assert!(cached.is_some(), "warm cache → Some");
+        assert_eq!(cached.unwrap().len(), facts.len());
+    }
+
+    /// WO 38.9 item 4: select_for_context_from works with a pre-loaded
+    /// fact list (same logic as select_for_context but without re-reading
+    /// from disk).
+    #[test]
+    fn test_select_for_context_from_uses_provided_facts() {
+        let store = temp_store().with_dedup_threshold(1.0);
+        store
+            .upsert(
+                "anyhow",
+                "Use anyhow for errors",
+                "We use anyhow for errors",
+                "feedback",
+            )
+            .unwrap();
+        store
+            .upsert(
+                "ratatui",
+                "TUI crate",
+                "This project uses ratatui",
+                "project",
+            )
+            .unwrap();
+
+        let facts = store.all();
+        let selected = store.select_for_context_from(&facts, "anyhow errors", 100, 10);
+        assert!(
+            !selected.is_empty(),
+            "should find anyhow fact, got: {selected:?}"
+        );
+        assert_eq!(selected[0].name, "anyhow");
     }
 
     #[test]

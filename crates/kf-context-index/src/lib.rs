@@ -141,6 +141,11 @@ pub struct ContextIndex {
     symbols: Vec<Symbol>,
     edges: Vec<ImportEdge>,
     call_edges: Vec<CallEdge>,
+    /// Pre-computed TF-IDF embeddings loaded from `CachedIndex`. When
+    /// non-empty and matching `symbols` by index, `retrieve_hybrid`
+    /// uses them directly instead of rebuilding the vocabulary and
+    /// re-embedding every symbol per query (WO 38.9 item 5).
+    embeddings: Vec<SymbolEmbedding>,
 }
 
 impl Default for ContextIndex {
@@ -155,6 +160,7 @@ impl ContextIndex {
             symbols: Vec::new(),
             edges: Vec::new(),
             call_edges: Vec::new(),
+            embeddings: Vec::new(),
         }
     }
 
@@ -164,6 +170,7 @@ impl ContextIndex {
             symbols,
             edges: Vec::new(),
             call_edges: Vec::new(),
+            embeddings: Vec::new(),
         }
     }
 
@@ -173,6 +180,7 @@ impl ContextIndex {
             symbols,
             edges,
             call_edges: Vec::new(),
+            embeddings: Vec::new(),
         }
     }
 
@@ -186,6 +194,26 @@ impl ContextIndex {
             symbols,
             edges,
             call_edges,
+            embeddings: Vec::new(),
+        }
+    }
+
+    /// Create an index from a `CachedIndex`, including pre-computed
+    /// embeddings so the query path does not rebuild them per query
+    /// (WO 38.9 item 5). Embeddings whose `symbol_idx` is out of bounds
+    /// are dropped to keep the invariant `embeddings` matches `symbols`.
+    pub fn from_cached(cached: CachedIndex) -> Self {
+        let len = cached.symbols.len();
+        let embeddings = cached
+            .embeddings
+            .into_iter()
+            .filter(|e| e.symbol_idx < len)
+            .collect();
+        Self {
+            symbols: cached.symbols,
+            edges: cached.edges,
+            call_edges: cached.call_edges,
+            embeddings,
         }
     }
 
@@ -1075,18 +1103,38 @@ impl ContextIndex {
                 .collect();
         }
 
+        // WO 38.9 item 5: use pre-computed embeddings from the cached
+        // index when available, avoiding per-query re-embedding of all
+        // symbols. We still build the vocabulary (cheap — tokenize only)
+        // to embed the query, but skip N embed_symbol calls.
         let vocab = build_vocabulary(&self.symbols);
         if !vocab.is_empty() {
             let qvec = embed_query(query, &vocab);
             if !qvec.is_empty() {
-                let mut scored: Vec<(f32, &Symbol)> = self
-                    .symbols
-                    .iter()
-                    .map(|s| {
-                        let v = embed_symbol(s, &vocab, s.doc.as_deref());
-                        (cosine_similarity(&qvec, &v), s)
-                    })
-                    .collect();
+                let mut scored: Vec<(f32, &Symbol)> = if self.embeddings.len() == self.symbols.len()
+                    && self
+                        .embeddings
+                        .iter()
+                        .all(|e| e.symbol_idx < self.symbols.len())
+                {
+                    self.embeddings
+                        .iter()
+                        .map(|e| {
+                            (
+                                cosine_similarity(&qvec, &e.vector),
+                                &self.symbols[e.symbol_idx],
+                            )
+                        })
+                        .collect()
+                } else {
+                    self.symbols
+                        .iter()
+                        .map(|s| {
+                            let v = embed_symbol(s, &vocab, s.doc.as_deref());
+                            (cosine_similarity(&qvec, &v), s)
+                        })
+                        .collect()
+                };
                 scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
                 let top: Vec<RetrievalResult> = scored
                     .into_iter()
@@ -1195,11 +1243,7 @@ impl ContextIndex {
         let changed_files = git_diff_files(&cached.head, repo_root);
         let changed_count = changed_files.len();
         if changed_files.is_empty() {
-            let idx = Self::from_symbols_and_edges_and_calls(
-                cached.symbols,
-                cached.edges,
-                cached.call_edges,
-            );
+            let idx = Self::from_cached(cached);
             return (idx, 0);
         }
 
@@ -1249,11 +1293,7 @@ impl ContextIndex {
             let changed = git_diff_files(&cached.head, repo_root);
             let count = changed.len();
             let idx = if changed.is_empty() {
-                Self::from_symbols_and_edges_and_calls(
-                    cached.symbols,
-                    cached.edges,
-                    cached.call_edges,
-                )
+                Self::from_cached(cached)
             } else {
                 let (idx, c) = Self::incremental_rebuild(cached, repo_root);
                 debug_assert_eq!(c, count);
@@ -1283,14 +1323,7 @@ impl ContextIndex {
         }
 
         if changed_paths.is_empty() {
-            return (
-                Self::from_symbols_and_edges_and_calls(
-                    cached.symbols,
-                    cached.edges,
-                    cached.call_edges,
-                ),
-                0,
-            );
+            return (Self::from_cached(cached), 0);
         }
 
         let changed_set: std::collections::HashSet<String> = changed_paths
@@ -2430,5 +2463,82 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// WO 38.9 item 5: from_cached preserves embeddings, and
+    /// retrieve_hybrid uses them instead of rebuilding. The result
+    /// should be identical whether using cached embeddings or
+    /// rebuilding from scratch.
+    #[test]
+    fn from_cached_preserves_embeddings_and_retrieve_uses_them() {
+        let dir =
+            std::env::temp_dir().join(format!("kf-code-context-cached-emb-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let src = dir.join("lib.rs");
+        fs::write(&src, "fn authenticate_user() {}\nstruct User {}").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let cache_path = dir.join(".kf-code/context-index/cache.json");
+        idx.save(&cache_path, "test_head").unwrap();
+
+        let cached = ContextIndex::load(&cache_path).unwrap();
+        assert!(
+            !cached.embeddings.is_empty(),
+            "saved cache should have embeddings"
+        );
+
+        let idx_from_cached = ContextIndex::from_cached(cached);
+        assert!(
+            !idx_from_cached.embeddings.is_empty(),
+            "from_cached should preserve embeddings"
+        );
+
+        // retrieve_hybrid with cached embeddings should find the same
+        // symbol as the substring fallback.
+        let results = idx_from_cached.retrieve_hybrid("authenticate", 5);
+        assert!(
+            results.iter().any(|r| r.symbol.name == "authenticate_user"),
+            "retrieve_hybrid with cached embeddings should find authenticate_user, got {results:?}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// WO 38.9 item 5: from_cached drops embeddings whose symbol_idx is
+    /// out of bounds (stale cache with fewer symbols than embeddings).
+    #[test]
+    fn from_cached_drops_out_of_bounds_embeddings() {
+        let cached = CachedIndex {
+            head: "test".to_string(),
+            symbols: vec![Symbol {
+                name: "foo".to_string(),
+                kind: SymbolKind::Function,
+                file: PathBuf::from("src/lib.rs"),
+                line: 1,
+                end_line: 1,
+                doc: None,
+            }],
+            edges: vec![],
+            call_edges: vec![],
+            embeddings: vec![
+                SymbolEmbedding {
+                    symbol_idx: 0,
+                    vector: vec![(0, 1.0)],
+                },
+                SymbolEmbedding {
+                    symbol_idx: 5, // out of bounds
+                    vector: vec![(0, 2.0)],
+                },
+            ],
+            file_mtimes: std::collections::HashMap::new(),
+        };
+        let idx = ContextIndex::from_cached(cached);
+        assert_eq!(idx.embeddings.len(), 1, "out-of-bounds embedding dropped");
+        assert_eq!(idx.embeddings[0].symbol_idx, 0);
     }
 }

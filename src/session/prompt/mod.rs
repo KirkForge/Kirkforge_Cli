@@ -21,6 +21,29 @@ pub(crate) fn count_tokens(s: &str) -> usize {
     kf_budget_core::estimate_tokens(s)
 }
 
+/// Estimate the token count of a single message (content + thinking +
+/// tool_calls JSON). When `msg.token_count` is `Some`, the cached value
+/// is returned directly — avoiding a full BPE pass. This is the shared
+/// implementation used by `ConversationLog::append` and the per-module
+/// `estimate_message_tokens` copies.
+pub(crate) fn estimate_message_tokens(m: &Message) -> usize {
+    if let Some(c) = m.token_count {
+        return c;
+    }
+    let content_tokens = count_tokens(&m.content);
+    let thinking_tokens = m.thinking.as_ref().map(|t| count_tokens(t)).unwrap_or(0);
+    let tool_call_tokens = m
+        .tool_calls
+        .as_ref()
+        .map(|calls| {
+            serde_json::to_string(calls)
+                .map(|s| count_tokens(&s))
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    content_tokens + thinking_tokens + tool_call_tokens
+}
+
 /// Number of trailing messages kept verbatim by automatic microcompaction.
 /// Mirrors `Config::preserve_recent_messages` semantics: the live user turn
 /// and the most recent assistant turn stay intact so the model does not lose
@@ -481,6 +504,7 @@ impl PromptBuilder {
                     }
                     content.push_str("</relevant_symbols>");
                     messages[0].content = content;
+                    messages[0].token_count = None;
                 }
             }
         }
@@ -655,6 +679,7 @@ impl PromptBuilder {
                 msg.content = format!(
                     "{head}\n\n[…truncated {removed_chars} chars of tool output…]\n\n{tail}"
                 );
+                msg.token_count = None;
             }
         }
     }
@@ -688,6 +713,7 @@ impl PromptBuilder {
                     } else {
                         TOOL_RESULT_DEDUP_MARKER.to_string()
                     };
+                    msg.token_count = None;
                     prev_tool = Some((key, *seen + 1));
                     continue;
                 }
@@ -701,18 +727,7 @@ impl PromptBuilder {
     }
 
     fn estimate_message_tokens(m: &Message) -> usize {
-        let content_tokens = count_tokens(&m.content);
-        let thinking_tokens = m.thinking.as_ref().map(|t| count_tokens(t)).unwrap_or(0);
-        let tool_call_tokens = m
-            .tool_calls
-            .as_ref()
-            .map(|calls| {
-                serde_json::to_string(calls)
-                    .map(|s| count_tokens(&s))
-                    .unwrap_or(0)
-            })
-            .unwrap_or(0);
-        content_tokens + thinking_tokens + tool_call_tokens
+        crate::session::prompt::estimate_message_tokens(m)
     }
 
     fn minify_old_messages(messages: &[Message], adjusted: &mut [Message]) -> bool {
@@ -742,6 +757,7 @@ impl PromptBuilder {
                 let savings = msg.content.len() - minified.len();
                 if savings > 20 {
                     adjusted[i].content = minified;
+                    adjusted[i].token_count = None;
                     minified_any = true;
                 }
             }
@@ -766,6 +782,7 @@ impl PromptBuilder {
         for &i in tool_indices.iter().take(preserve_from) {
             if messages[i].content != TOOL_RESULT_STUB {
                 messages[i].content = TOOL_RESULT_STUB.to_string();
+                messages[i].token_count = None;
                 stubbed_any = true;
             }
         }
@@ -1878,5 +1895,56 @@ mod tests {
         let msg_plain = builder2.build("test-model", false, &["bash"], None, None, false, 0, 0);
         assert_eq!(msg_without.content, msg_plain.content);
         assert!(!msg_without.content.contains("Frequently accessed files"));
+    }
+
+    #[test]
+    fn estimate_message_tokens_uses_cache_when_some() {
+        let msg = Message {
+            role: Role::User,
+            content: "hello world this is a test".into(),
+            token_count: Some(99),
+            ..Default::default()
+        };
+        assert_eq!(estimate_message_tokens(&msg), 99);
+    }
+
+    #[test]
+    fn estimate_message_tokens_falls_back_when_none() {
+        let msg = Message {
+            role: Role::User,
+            content: "hello world this is a test".into(),
+            token_count: None,
+            ..Default::default()
+        };
+        let cached = estimate_message_tokens(&msg);
+        let counted = count_tokens("hello world this is a test");
+        assert_eq!(cached, counted);
+    }
+
+    #[test]
+    fn dedup_adjacent_tool_results_clears_token_count_cache() {
+        let mk = |content: &str| Message {
+            role: Role::Tool,
+            content: content.to_string(),
+            token_count: Some(50),
+            ..Default::default()
+        };
+        let mut msgs = vec![mk("same"), mk("same")];
+        PromptBuilder::dedup_adjacent_tool_results(&mut msgs);
+        assert_eq!(msgs[1].token_count, None, "dedup must clear cache");
+    }
+
+    #[test]
+    fn truncate_tool_results_clears_token_count_cache() {
+        let long_content = "x".repeat(30_000);
+        let mut msgs = vec![Message {
+            role: Role::Tool,
+            content: long_content,
+            tool_name: Some("grep".into()),
+            token_count: Some(1000),
+            ..Default::default()
+        }];
+        PromptBuilder::truncate_tool_results(&mut msgs);
+        assert_eq!(msgs[0].token_count, None, "truncation must clear cache");
     }
 }

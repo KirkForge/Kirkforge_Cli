@@ -64,6 +64,9 @@ why, and the gate evidence.
 ### Changed
 - WO 40.4: test sleeps → structural sync (8 tests) — [40.4](docs/workorders/40.4-sleep-elimination.md)
 
+### Performance
+- WO 42.12: populate `Message.token_count` at append time — estimators use cached value, eliminating redundant full-history BPE passes — [42.12](docs/workorders/42.12-token-count-cache.md)
+
 ## [0.3.10] - 2026-08-16
 
 Release prep — version bump only. WO 33-34 series highlights:

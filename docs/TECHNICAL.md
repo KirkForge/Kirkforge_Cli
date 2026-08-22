@@ -611,6 +611,17 @@ entry (the record is inserted only after `proc.spawn()` succeeds).
 `status` and `list` expose the state for
 the `/jobs` view (WO 30.2).
 
+**Durable subagent summaries (WO 41.5 Phase 1):** on terminal state
+(Completed/Failed/Cancelled), the worker closure serializes a
+`PersistedTask` (id, status label, summary, model, persona,
+prompt_summary, started_at, duration_ms, parent_task_id) to
+`<data_dir>/tasks/<id>.json` — right before `notify.notify_waiters()`.
+`load_persisted_tasks()` reads all `tasks/*.json` sorted by numeric id,
+skipping malformed files. The `/tasks` slash command surfaces this
+read-only history (id, status, persona, duration, truncated summary).
+Phase 2 (`/jobs` integration + transcript links) and Phase 3 (full
+`AgentRun` object) are deferred — tracked in WO 41.5.
+
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`
 
 Session daemon (background process tracking recent sessions), scheduled-job

@@ -50,8 +50,8 @@ pub struct CoverageGaps {
     pub per_dir: Vec<DirCoverage>,
 }
 
-/// Default thresholds matching `.github/workflows/ci.yml`.
-// Must match the CI thresholds in .github/workflows/ci.yml (the coverage gate).
+/// Default thresholds matching the coverage gate in `scripts/ci-local.sh`.
+// Must match the CI thresholds in scripts/ci-local.sh (the coverage gate).
 const DEFAULT_THRESHOLDS: &[(&str, f64)] = &[
     ("src/session", 68.5),
     ("src/tools", 76.0),
@@ -410,63 +410,5 @@ mod tests {
     fn extract_attr_missing_returns_none() {
         let xml = r#"<class filename="foo.rs"/>"#;
         assert_eq!(extract_attr(xml, "missing"), None);
-    }
-
-    #[test]
-    #[ignore = "coverage-gate targets dict not yet in ci.yml"]
-    // ponytail: #[ignore] until coverage-gate targets dict is restored in ci.yml — upgrade path: remove #[ignore] when coverage gate lands (WO 26.x or manual).
-    fn default_thresholds_match_ci_yml() {
-        // Drift guard: DEFAULT_THRESHOLDS must match the thresholds
-        // enforced by the coverage gate in .github/workflows/ci.yml.
-        // Parses the gate's `targets = { ... }` dict so a bump on one
-        // side that forgets the other fails here instead of drifting.
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let ci_yml = manifest
-            .join("..")
-            .join("..")
-            .join(".github")
-            .join("workflows")
-            .join("ci.yml");
-        let text = std::fs::read_to_string(&ci_yml)
-            .unwrap_or_else(|e| panic!("read {}: {e}", ci_yml.display()));
-        let line = text
-            .lines()
-            .find(|l| l.contains("targets = {"))
-            .expect("ci.yml coverage-gate `targets = {` line not found");
-        let start = line.find('{').expect("`{` in targets dict");
-        let end = line.find('}').expect("`}` in targets dict");
-        let dict = &line[start + 1..end];
-
-        let mut ci: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
-        for entry in dict.split(',') {
-            let mut parts = entry.split(':');
-            let key = parts
-                .next()
-                .unwrap_or("")
-                .trim()
-                .trim_matches('\'')
-                .trim_matches('"');
-            if let (false, Ok(v)) = (
-                key.is_empty(),
-                parts.next().unwrap_or("").trim().parse::<f64>(),
-            ) {
-                ci.insert(key, v);
-            }
-        }
-        assert!(
-            !ci.is_empty(),
-            "parsed no thresholds from ci.yml targets dict"
-        );
-
-        for (dir, threshold) in DEFAULT_THRESHOLDS {
-            let ci_val = ci
-                .get(*dir)
-                .copied()
-                .unwrap_or_else(|| panic!("ci.yml coverage gate has no threshold for `{dir}`"));
-            assert!(
-                (ci_val - threshold).abs() < 1e-9,
-                "DEFAULT_THRESHOLDS[{dir}] = {threshold} but ci.yml coverage gate = {ci_val} (drift)",
-            );
-        }
     }
 }

@@ -91,8 +91,8 @@ fi
 # CI runs as a dedicated step. Tarpaulin is heavy; install it with
 # `cargo install cargo-tarpaulin` (or the taiki-e install-action) to
 # exercise the coverage gate locally. The thresholds below mirror
-# .github/workflows/ci.yml and are also drift-guarded by the
-# testdoctor `default_thresholds_match_ci_yml` test.
+# .github/workflows/ci.yml (the deleted pre-split ci.yml; the gate now
+# lives inline here).
 if [ "$MODE" = "full" ]; then
     run_step "ADR xref drift" cargo test -p kf-budget-core --test adr_xref_drift
 

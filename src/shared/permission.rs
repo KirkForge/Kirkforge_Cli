@@ -1356,7 +1356,6 @@ mod tests {
         assert!(glob_match("**", "a/b/c"));
     }
 
-<<<<<<< HEAD
     // ── detect_shadowed_rules ─────────────────────────────────────
 
     #[test]
@@ -1492,364 +1491,362 @@ mod tests {
             shadows.is_empty(),
             "narrower pattern doesn't subsume broader"
         );
-||||||| 3aa6fd28
-=======
-    // ── WO 41.7: property/fuzz tests ──────────────────────────────
+        // ── WO 41.7: property/fuzz tests ──────────────────────────────
 
-    fn separator_strategy() -> impl Strategy<Value = String> {
-        prop_oneof![
-            Just(";"),
-            Just("&&"),
-            Just("||"),
-            Just("|"),
-            Just("\n"),
-            Just("\r"),
-        ]
-        .prop_map(|s| s.to_string())
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
-
-        // Totality: glob_match never panics on arbitrary ASCII and is
-        // deterministic (two calls agree).
-        #[test]
-        fn glob_match_total_and_deterministic_ascii(
-            pattern in "[\\x20-\\x7e]{0,64}",
-            value in "[\\x20-\\x7e]{0,64}",
-        ) {
-            let a = glob_match(&pattern, &value);
-            let b = glob_match(&pattern, &value);
-            prop_assert_eq!(a, b);
+        fn separator_strategy() -> impl Strategy<Value = String> {
+            prop_oneof![
+                Just(";"),
+                Just("&&"),
+                Just("||"),
+                Just("|"),
+                Just("\n"),
+                Just("\r"),
+            ]
+            .prop_map(|s| s.to_string())
         }
 
-        // Totality on Unicode (multi-byte chars). The matcher must not
-        // panic or slice into the middle of a codepoint.
-        #[test]
-        fn glob_match_total_unicode(
-            pattern in "[a-z\\u{1F300}-\\u{1F6FF}*?/]{0,32}",
-            value in "[a-z\\u{1F300}-\\u{1F6FF}/]{0,32}",
-        ) {
-            let _ = glob_match(&pattern, &value);
-        }
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
 
-        // `**` crosses `/`: glob_match("**", s) is true for EVERY value,
-        // including ones containing slashes.
-        #[test]
-        fn glob_match_double_star_matches_anything(
-            value in "[a-z/]{0,64}",
-        ) {
-            prop_assert!(glob_match("**", &value));
-        }
+            // Totality: glob_match never panics on arbitrary ASCII and is
+            // deterministic (two calls agree).
+            #[test]
+            fn glob_match_total_and_deterministic_ascii(
+                pattern in "[\\x20-\\x7e]{0,64}",
+                value in "[\\x20-\\x7e]{0,64}",
+            ) {
+                let a = glob_match(&pattern, &value);
+                let b = glob_match(&pattern, &value);
+                prop_assert_eq!(a, b);
+            }
 
-        // `*` does NOT cross `/`: glob_match("*", s) is true iff s has no
-        // `/`.
-        #[test]
-        fn glob_match_single_star_respects_slash(
-            value in "[a-z/]{0,64}",
-        ) {
-            prop_assert_eq!(
-                glob_match("*", &value),
-                !value.contains('/'),
-            );
-        }
+            // Totality on Unicode (multi-byte chars). The matcher must not
+            // panic or slice into the middle of a codepoint.
+            #[test]
+            fn glob_match_total_unicode(
+                pattern in "[a-z\\u{1F300}-\\u{1F6FF}*?/]{0,32}",
+                value in "[a-z\\u{1F300}-\\u{1F6FF}/]{0,32}",
+            ) {
+                let _ = glob_match(&pattern, &value);
+            }
 
-        // Empty pattern matches only empty value.
-        #[test]
-        fn glob_match_empty_pattern_only_matches_empty(
-            value in "[a-z/]{0,32}",
-        ) {
-            prop_assert_eq!(glob_match("", &value), value.is_empty());
-        }
+            // `**` crosses `/`: glob_match("**", s) is true for EVERY value,
+            // including ones containing slashes.
+            #[test]
+            fn glob_match_double_star_matches_anything(
+                value in "[a-z/]{0,64}",
+            ) {
+                prop_assert!(glob_match("**", &value));
+            }
 
-        // Long inputs must not overflow the stack. The matcher is
-        // recursive; cap the length so CI is fast but the path is
-        // exercised.
-        #[test]
-        fn glob_match_long_inputs_dont_panic(
-            value in "[a-z/]{2000,2000}",
-        ) {
-            let _ = glob_match("**", &value);
-            let _ = glob_match("*", &value);
-        }
-    }
+            // `*` does NOT cross `/`: glob_match("*", s) is true iff s has no
+            // `/`.
+            #[test]
+            fn glob_match_single_star_respects_slash(
+                value in "[a-z/]{0,64}",
+            ) {
+                prop_assert_eq!(
+                    glob_match("*", &value),
+                    !value.contains('/'),
+                );
+            }
 
-    // ── known-behavior glob edge cases (example-style, pinned) ─────
+            // Empty pattern matches only empty value.
+            #[test]
+            fn glob_match_empty_pattern_only_matches_empty(
+                value in "[a-z/]{0,32}",
+            ) {
+                prop_assert_eq!(glob_match("", &value), value.is_empty());
+            }
 
-    #[test]
-    fn glob_match_triple_star_matches_anything() {
-        assert!(glob_match("***", "abc"));
-        assert!(glob_match("***", "a/b"));
-        assert!(glob_match("***", ""));
-    }
-
-    #[test]
-    fn glob_match_a_double_star_slash_b() {
-        // `a/**/b` requires at least one `/`-delimited segment between
-        // `a/` and `/b` because of the literal `/` after `**`.
-        assert!(glob_match("a/**/b", "a/x/b"));
-        assert!(glob_match("a/**/b", "a/x/y/b"));
-        assert!(!glob_match("a/**/b", "a/b"));
-        assert!(!glob_match("a/**/b", "a/x/c"));
-        assert!(!glob_match("a/**/b", "axb"));
-    }
-
-    #[test]
-    fn glob_match_foo_double_star_bar_crosses_slash() {
-        assert!(glob_match("foo**bar", "foobar"));
-        assert!(glob_match("foo**bar", "fooxbar"));
-        assert!(glob_match("foo**bar", "foox/ybar"));
-    }
-
-    #[test]
-    fn glob_match_star_slash_star_matches_two_segments_only() {
-        assert!(glob_match("*/*", "a/b"));
-        assert!(glob_match("*/*", "ab/cd"));
-        assert!(!glob_match("*/*", "a"));
-        assert!(!glob_match("*/*", "a/b/c"));
-    }
-
-    #[test]
-    fn glob_match_unicode_multibyte_safe() {
-        assert!(glob_match("🦀*", "🦀🚀"));
-        assert!(glob_match("a*🦀", "ax🦀"));
-        assert!(!glob_match("🦀", "🦀🚀"));
-    }
-
-    // ── deny_command_matches: compound clauses (WO 41.7) ───────────
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
-
-        // Determinism + totality: deny_command_matches never panics and
-        // is deterministic on arbitrary ASCII.
-        #[test]
-        fn deny_command_matches_total_and_deterministic(
-            pattern in "[a-z *]{0,32}",
-            command in "[a-z ;|&\\n\\r]{0,64}",
-        ) {
-            let a = deny_command_matches(&pattern, &command);
-            let b = deny_command_matches(&pattern, &command);
-            prop_assert_eq!(a, b);
-        }
-
-        // A deny pattern that matches the whole command must also match
-        // when that command appears as a clause after a separator.
-        #[test]
-        fn deny_trips_on_clause_after_separator(
-            sep in separator_strategy(),
-            payload in "[a-z]{1,10}",
-        ) {
-            let pattern = format!("{payload}**");
-            let cmd = format!("echo x{sep}{payload}/evil");
-            prop_assert!(
-                deny_command_matches(&pattern, &cmd),
-                "deny pattern {:?} should trip in command {:?}", pattern, cmd,
-            );
-        }
-
-        // A deny pattern that does NOT match any clause must return false.
-        #[test]
-        fn deny_no_match_returns_false(
-            sep in separator_strategy(),
-            clause_a in "[a-z]{1,8}",
-            clause_b in "[a-z]{1,8}",
-        ) {
-            // Pattern that neither clause matches.
-            let pattern = "zzz**";
-            let cmd = format!("{clause_a}{sep}{clause_b}");
-            prop_assert!(
-                !deny_command_matches(pattern, &cmd),
-                "pattern {:?} should not match command {:?}", pattern, cmd,
-            );
-        }
-    }
-
-    // ── allow_command_matches: every clause must match (WO 41.7) ────
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
-
-        // Totality + determinism.
-        #[test]
-        fn allow_command_matches_total_and_deterministic(
-            pattern in "[a-z *]{0,32}",
-            command in "[a-z ;|&\\n\\r]{0,64}",
-        ) {
-            let a = allow_command_matches(&pattern, &command);
-            let b = allow_command_matches(&pattern, &command);
-            prop_assert_eq!(a, b);
-        }
-
-        // If EVERY clause individually matches the pattern, allow returns
-        // true.
-        #[test]
-        fn allow_all_clauses_match_is_true(
-            word in "[a-z]{1,8}",
-            sep in separator_strategy(),
-        ) {
-            // `word*` matches `word` + any suffix without a `/`.
-            let pattern = format!("{word}*");
-            let cmd = format!("{word}x{sep}{word}y");
-            prop_assert!(
-                allow_command_matches(&pattern, &cmd),
-                "pattern {:?} should match all clauses of {:?}", pattern, cmd,
-            );
-        }
-
-        // If ANY clause does NOT match, allow returns false.
-        #[test]
-        fn allow_one_mismatch_is_false(
-            word in "[a-z]{1,8}",
-            bad in "[a-z]{1,8}",
-            sep in separator_strategy(),
-        ) {
-            prop_assume!(word != bad);
-            let pattern = format!("{word}*");
-            let cmd = format!("{word}x{sep}{bad}y");
-            prop_assert!(
-                !allow_command_matches(&pattern, &cmd),
-                "pattern {:?} should NOT match all clauses of {:?}", pattern, cmd,
-            );
-        }
-    }
-
-    // ── split_compound_clauses: all separators (WO 41.7) ────────────
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
-
-        // Totality + determinism.
-        #[test]
-        fn split_total_and_deterministic(
-            command in "[a-z ;|&\\n\\r]{0,64}",
-        ) {
-            let a = split_compound_clauses(&command);
-            let b = split_compound_clauses(&command);
-            prop_assert_eq!(a, b);
-        }
-
-        // No returned clause is empty (whitespace-only clauses dropped).
-        #[test]
-        fn split_never_returns_empty_clauses(
-            command in "[a-z ;|&\\n\\r\\t ]{0,64}",
-        ) {
-            let clauses = split_compound_clauses(&command);
-            for c in &clauses {
-                prop_assert!(!c.is_empty(), "empty clause in {:?}", clauses);
+            // Long inputs must not overflow the stack. The matcher is
+            // recursive; cap the length so CI is fast but the path is
+            // exercised.
+            #[test]
+            fn glob_match_long_inputs_dont_panic(
+                value in "[a-z/]{2000,2000}",
+            ) {
+                let _ = glob_match("**", &value);
+                let _ = glob_match("*", &value);
             }
         }
 
-        // No returned clause contains a separator char.
+        // ── known-behavior glob edge cases (example-style, pinned) ─────
+
         #[test]
-        fn split_clauses_have_no_separators(
-            command in "[a-z ;|&\\n\\r]{0,64}",
-        ) {
-            let clauses = split_compound_clauses(&command);
-            for c in &clauses {
+        fn glob_match_triple_star_matches_anything() {
+            assert!(glob_match("***", "abc"));
+            assert!(glob_match("***", "a/b"));
+            assert!(glob_match("***", ""));
+        }
+
+        #[test]
+        fn glob_match_a_double_star_slash_b() {
+            // `a/**/b` requires at least one `/`-delimited segment between
+            // `a/` and `/b` because of the literal `/` after `**`.
+            assert!(glob_match("a/**/b", "a/x/b"));
+            assert!(glob_match("a/**/b", "a/x/y/b"));
+            assert!(!glob_match("a/**/b", "a/b"));
+            assert!(!glob_match("a/**/b", "a/x/c"));
+            assert!(!glob_match("a/**/b", "axb"));
+        }
+
+        #[test]
+        fn glob_match_foo_double_star_bar_crosses_slash() {
+            assert!(glob_match("foo**bar", "foobar"));
+            assert!(glob_match("foo**bar", "fooxbar"));
+            assert!(glob_match("foo**bar", "foox/ybar"));
+        }
+
+        #[test]
+        fn glob_match_star_slash_star_matches_two_segments_only() {
+            assert!(glob_match("*/*", "a/b"));
+            assert!(glob_match("*/*", "ab/cd"));
+            assert!(!glob_match("*/*", "a"));
+            assert!(!glob_match("*/*", "a/b/c"));
+        }
+
+        #[test]
+        fn glob_match_unicode_multibyte_safe() {
+            assert!(glob_match("🦀*", "🦀🚀"));
+            assert!(glob_match("a*🦀", "ax🦀"));
+            assert!(!glob_match("🦀", "🦀🚀"));
+        }
+
+        // ── deny_command_matches: compound clauses (WO 41.7) ───────────
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
+            // Determinism + totality: deny_command_matches never panics and
+            // is deterministic on arbitrary ASCII.
+            #[test]
+            fn deny_command_matches_total_and_deterministic(
+                pattern in "[a-z *]{0,32}",
+                command in "[a-z ;|&\\n\\r]{0,64}",
+            ) {
+                let a = deny_command_matches(&pattern, &command);
+                let b = deny_command_matches(&pattern, &command);
+                prop_assert_eq!(a, b);
+            }
+
+            // A deny pattern that matches the whole command must also match
+            // when that command appears as a clause after a separator.
+            #[test]
+            fn deny_trips_on_clause_after_separator(
+                sep in separator_strategy(),
+                payload in "[a-z]{1,10}",
+            ) {
+                let pattern = format!("{payload}**");
+                let cmd = format!("echo x{sep}{payload}/evil");
                 prop_assert!(
-                    !c.contains("&&") && !c.contains("||")
-                        && !c.contains(';') && !c.contains('|')
-                        && !c.contains('\n') && !c.contains('\r'),
-                    "clause {:?} still contains a separator", c,
+                    deny_command_matches(&pattern, &cmd),
+                    "deny pattern {:?} should trip in command {:?}", pattern, cmd,
+                );
+            }
+
+            // A deny pattern that does NOT match any clause must return false.
+            #[test]
+            fn deny_no_match_returns_false(
+                sep in separator_strategy(),
+                clause_a in "[a-z]{1,8}",
+                clause_b in "[a-z]{1,8}",
+            ) {
+                // Pattern that neither clause matches.
+                let pattern = "zzz**";
+                let cmd = format!("{clause_a}{sep}{clause_b}");
+                prop_assert!(
+                    !deny_command_matches(pattern, &cmd),
+                    "pattern {:?} should not match command {:?}", pattern, cmd,
                 );
             }
         }
-    }
 
-    #[test]
-    fn split_all_separator_variants() {
-        assert_eq!(split_compound_clauses("a;b"), vec!["a", "b"]);
-        assert_eq!(split_compound_clauses("a&&b"), vec!["a", "b"]);
-        assert_eq!(split_compound_clauses("a||b"), vec!["a", "b"]);
-        assert_eq!(split_compound_clauses("a|b"), vec!["a", "b"]);
-        assert_eq!(split_compound_clauses("a\nb"), vec!["a", "b"]);
-        assert_eq!(split_compound_clauses("a\rb"), vec!["a", "b"]);
-        assert_eq!(split_compound_clauses("a\r\nb"), vec!["a", "b"]);
-        // Mixed.
-        assert_eq!(
-            split_compound_clauses("ls && echo a; cat b | grep c"),
-            vec!["ls", "echo a", "cat b", "grep c"],
-        );
-        // Empty clauses dropped.
-        assert_eq!(split_compound_clauses("a;;b"), vec!["a", "b"]);
-        assert_eq!(split_compound_clauses("a\n\nb"), vec!["a", "b"]);
-        assert_eq!(split_compound_clauses(";"), Vec::<String>::new());
-        assert_eq!(split_compound_clauses(""), Vec::<String>::new());
-    }
+        // ── allow_command_matches: every clause must match (WO 41.7) ────
 
-    // ── normalize_command_pattern: * → ** promotion (WO 41.7) ──────
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
+            // Totality + determinism.
+            #[test]
+            fn allow_command_matches_total_and_deterministic(
+                pattern in "[a-z *]{0,32}",
+                command in "[a-z ;|&\\n\\r]{0,64}",
+            ) {
+                let a = allow_command_matches(&pattern, &command);
+                let b = allow_command_matches(&pattern, &command);
+                prop_assert_eq!(a, b);
+            }
 
-        // Totality + determinism.
-        #[test]
-        fn normalize_total_and_deterministic(
-            pattern in "[a-z *?/]{0,64}",
-        ) {
-            let a = normalize_command_pattern(&pattern);
-            let b = normalize_command_pattern(&pattern);
-            prop_assert_eq!(a, b);
+            // If EVERY clause individually matches the pattern, allow returns
+            // true.
+            #[test]
+            fn allow_all_clauses_match_is_true(
+                word in "[a-z]{1,8}",
+                sep in separator_strategy(),
+            ) {
+                // `word*` matches `word` + any suffix without a `/`.
+                let pattern = format!("{word}*");
+                let cmd = format!("{word}x{sep}{word}y");
+                prop_assert!(
+                    allow_command_matches(&pattern, &cmd),
+                    "pattern {:?} should match all clauses of {:?}", pattern, cmd,
+                );
+            }
+
+            // If ANY clause does NOT match, allow returns false.
+            #[test]
+            fn allow_one_mismatch_is_false(
+                word in "[a-z]{1,8}",
+                bad in "[a-z]{1,8}",
+                sep in separator_strategy(),
+            ) {
+                prop_assume!(word != bad);
+                let pattern = format!("{word}*");
+                let cmd = format!("{word}x{sep}{bad}y");
+                prop_assert!(
+                    !allow_command_matches(&pattern, &cmd),
+                    "pattern {:?} should NOT match all clauses of {:?}", pattern, cmd,
+                );
+            }
         }
 
-        // Idempotent: normalizing the output again yields the same string.
-        #[test]
-        fn normalize_is_idempotent(
-            pattern in "[a-z *?/]{0,64}",
-        ) {
-            let once = normalize_command_pattern(&pattern);
-            let twice = normalize_command_pattern(&once);
-            prop_assert_eq!(once, twice);
-        }
+        // ── split_compound_clauses: all separators (WO 41.7) ────────────
 
-        // Every maximal run of `*` in the output has even length (no lone
-        // `*` survives).
-        #[test]
-        fn normalize_no_lone_star(
-            pattern in "[a-z *?/]{0,64}",
-        ) {
-            let out = normalize_command_pattern(&pattern);
-            let mut run = 0usize;
-            for ch in out.chars() {
-                if ch == '*' {
-                    run += 1;
-                } else {
-                    prop_assert!(run == 0 || run % 2 == 0,
-                        "lone * (run {}) in output {:?} of pattern {:?}", run, out, pattern);
-                    run = 0;
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
+            // Totality + determinism.
+            #[test]
+            fn split_total_and_deterministic(
+                command in "[a-z ;|&\\n\\r]{0,64}",
+            ) {
+                let a = split_compound_clauses(&command);
+                let b = split_compound_clauses(&command);
+                prop_assert_eq!(a, b);
+            }
+
+            // No returned clause is empty (whitespace-only clauses dropped).
+            #[test]
+            fn split_never_returns_empty_clauses(
+                command in "[a-z ;|&\\n\\r\\t ]{0,64}",
+            ) {
+                let clauses = split_compound_clauses(&command);
+                for c in &clauses {
+                    prop_assert!(!c.is_empty(), "empty clause in {:?}", clauses);
                 }
             }
-            prop_assert!(run == 0 || run % 2 == 0,
-                "lone * (run {}) in output {:?} of pattern {:?}", run, out, pattern);
+
+            // No returned clause contains a separator char.
+            #[test]
+            fn split_clauses_have_no_separators(
+                command in "[a-z ;|&\\n\\r]{0,64}",
+            ) {
+                let clauses = split_compound_clauses(&command);
+                for c in &clauses {
+                    prop_assert!(
+                        !c.contains("&&") && !c.contains("||")
+                            && !c.contains(';') && !c.contains('|')
+                            && !c.contains('\n') && !c.contains('\r'),
+                        "clause {:?} still contains a separator", c,
+                    );
+                }
+            }
         }
-    }
 
-    #[test]
-    fn normalize_promotes_lone_star() {
-        assert_eq!(normalize_command_pattern("rm -rf *"), "rm -rf **");
-        assert_eq!(normalize_command_pattern("*"), "**");
-        assert_eq!(normalize_command_pattern("a*b*c"), "a**b**c");
-    }
+        #[test]
+        fn split_all_separator_variants() {
+            assert_eq!(split_compound_clauses("a;b"), vec!["a", "b"]);
+            assert_eq!(split_compound_clauses("a&&b"), vec!["a", "b"]);
+            assert_eq!(split_compound_clauses("a||b"), vec!["a", "b"]);
+            assert_eq!(split_compound_clauses("a|b"), vec!["a", "b"]);
+            assert_eq!(split_compound_clauses("a\nb"), vec!["a", "b"]);
+            assert_eq!(split_compound_clauses("a\rb"), vec!["a", "b"]);
+            assert_eq!(split_compound_clauses("a\r\nb"), vec!["a", "b"]);
+            // Mixed.
+            assert_eq!(
+                split_compound_clauses("ls && echo a; cat b | grep c"),
+                vec!["ls", "echo a", "cat b", "grep c"],
+            );
+            // Empty clauses dropped.
+            assert_eq!(split_compound_clauses("a;;b"), vec!["a", "b"]);
+            assert_eq!(split_compound_clauses("a\n\nb"), vec!["a", "b"]);
+            assert_eq!(split_compound_clauses(";"), Vec::<String>::new());
+            assert_eq!(split_compound_clauses(""), Vec::<String>::new());
+        }
 
-    #[test]
-    fn normalize_keeps_double_star() {
-        assert_eq!(normalize_command_pattern("rm -rf **"), "rm -rf **");
-        assert_eq!(normalize_command_pattern("**"), "**");
-    }
+        // ── normalize_command_pattern: * → ** promotion (WO 41.7) ──────
 
-    #[test]
-    fn normalize_triple_star_becomes_double_star() {
-        // `***` = `**` + `*` → both consumed as a double-star pair, the
-        // third is promoted to `**`, so the output is `****`.
-        assert_eq!(normalize_command_pattern("***"), "****");
-    }
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
 
-    #[test]
-    fn normalize_no_star_unchanged() {
-        assert_eq!(normalize_command_pattern("ls -la"), "ls -la");
-        assert_eq!(normalize_command_pattern("cargo test"), "cargo test");
-        assert_eq!(normalize_command_pattern(""), "");
->>>>>>> 49c7e6d5
+            // Totality + determinism.
+            #[test]
+            fn normalize_total_and_deterministic(
+                pattern in "[a-z *?/]{0,64}",
+            ) {
+                let a = normalize_command_pattern(&pattern);
+                let b = normalize_command_pattern(&pattern);
+                prop_assert_eq!(a, b);
+            }
+
+            // Idempotent: normalizing the output again yields the same string.
+            #[test]
+            fn normalize_is_idempotent(
+                pattern in "[a-z *?/]{0,64}",
+            ) {
+                let once = normalize_command_pattern(&pattern);
+                let twice = normalize_command_pattern(&once);
+                prop_assert_eq!(once, twice);
+            }
+
+            // Every maximal run of `*` in the output has even length (no lone
+            // `*` survives).
+            #[test]
+            fn normalize_no_lone_star(
+                pattern in "[a-z *?/]{0,64}",
+            ) {
+                let out = normalize_command_pattern(&pattern);
+                let mut run = 0usize;
+                for ch in out.chars() {
+                    if ch == '*' {
+                        run += 1;
+                    } else {
+                        prop_assert!(run == 0 || run % 2 == 0,
+                            "lone * (run {}) in output {:?} of pattern {:?}", run, out, pattern);
+                        run = 0;
+                    }
+                }
+                prop_assert!(run == 0 || run % 2 == 0,
+                    "lone * (run {}) in output {:?} of pattern {:?}", run, out, pattern);
+            }
+        }
+
+        #[test]
+        fn normalize_promotes_lone_star() {
+            assert_eq!(normalize_command_pattern("rm -rf *"), "rm -rf **");
+            assert_eq!(normalize_command_pattern("*"), "**");
+            assert_eq!(normalize_command_pattern("a*b*c"), "a**b**c");
+        }
+
+        #[test]
+        fn normalize_keeps_double_star() {
+            assert_eq!(normalize_command_pattern("rm -rf **"), "rm -rf **");
+            assert_eq!(normalize_command_pattern("**"), "**");
+        }
+
+        #[test]
+        fn normalize_triple_star_becomes_double_star() {
+            // `***` = `**` + `*` → both consumed as a double-star pair, the
+            // third is promoted to `**`, so the output is `****`.
+            assert_eq!(normalize_command_pattern("***"), "****");
+        }
+
+        #[test]
+        fn normalize_no_star_unchanged() {
+            assert_eq!(normalize_command_pattern("ls -la"), "ls -la");
+            assert_eq!(normalize_command_pattern("cargo test"), "cargo test");
+            assert_eq!(normalize_command_pattern(""), "");
+        }
     }
 }

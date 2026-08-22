@@ -611,7 +611,59 @@ entry (the record is inserted only after `proc.spawn()` succeeds).
 `status` and `list` expose the state for
 the `/jobs` view (WO 30.2).
 
+**Durable subagent summaries (WO 41.5 Phase 1):** on terminal state
+(Completed/Failed/Cancelled), the worker closure serializes a
+`PersistedTask` (id, status label, summary, model, persona,
+prompt_summary, started_at, duration_ms, parent_task_id) to
+`<data_dir>/tasks/<id>.json` — right before `notify.notify_waiters()`.
+`load_persisted_tasks()` reads all `tasks/*.json` sorted by numeric id,
+skipping malformed files. The `/tasks` slash command surfaces this
+read-only history (id, status, persona, duration, truncated summary).
+Phase 2 (`/jobs` integration + transcript links) and Phase 3 (full
+`AgentRun` object) are deferred — tracked in WO 41.5.
 
+### Permissions
+
+The permission engine (`src/shared/permission.rs`, ADR-004 amended) is the
+primary approval gate for every tool call. It replaces the binary
+`auto_approve: bool` and the ReadOnly/Destructive tier model with an ordered,
+first-match-wins rule list. A rule has four fields:
+
+| Field | Meaning |
+|-------|---------|
+| `tool` | Exact tool name (`"bash"`, `"edit_file"`, `"write_file"`, …) or `"*"` for every tool |
+| `key` | Which argument to match: `"command"` for `bash`, `"path"` for file tools, or `"*"` to match without inspecting args |
+| `pattern` | Glob. `*` = zero-or-more chars in one path segment (does NOT cross `/`); `**` = any chars including `/`; `?` = exactly one non-`/` char; plain strings match exactly |
+| `action` | `allow` (skip approval), `ask` (show the approval dialog), `deny` (refuse without showing the dialog) |
+
+Rules are evaluated in declaration order; the **first match wins**. When no
+rule matches, the default is `Ask` (unless `auto_approve = true`, in which case
+`Allow` — preserving backwards compatibility with the old boolean). The TUI's
+`[A]lways` key in the approval dialog writes a `permission_rules` entry
+matching the current tool call instead of flipping the global flag; the rule
+persists in `~/.local/share/kf-code/config.toml` and survives across sessions.
+`/permissions list | revoke <i> | clear` (WO 14.5) manages them at runtime.
+
+**Glob semantics:** for `bash` `command` rules with `action = "deny"`, lone
+`*` is automatically promoted to `**` so a deny pattern like `rm -rf *` also
+blocks absolute paths across `/`. Allow/Ask rules use the literal pattern (no
+promotion) — write explicit `**` when you intend a cross-slash match.
+
+**Compound-clause evaluation (WO 38.1):** bash `command` rules are evaluated
+per compound clause (`;`/`&&`/`||`/`|`/newline). An Allow/Ask rule matches
+only when **every** clause matches (a `cargo test*` rule no longer authorizes
+`cargo test; curl …`), and a Deny rule trips when **any** clause matches (a
+deny still fires when the payload hides after a newline).
+
+**Env-secret scrubbing (WO 38.1):** the bash runner scrubs credential-shaped
+env vars (`*_API_KEY`/`*_TOKEN`/`*_SECRET`, case-insensitive) from every child
+shell env. The `!` passthrough and `/test` share this runner and are scrubbed
+too.
+
+See `config.toml.example` for concrete rule examples and
+`src/shared/permission.rs` (module doc comment) for the full engine
+description. ADR-004 records the tier model as the historical default that the
+rule engine supersedes.
 
 ### `daemon/`, `jobs/`, `line_mode/`, `main/`
 
@@ -769,7 +821,7 @@ The static set mirrors the honest stub disclosure already printed by
 slash command surfaces `verifier_capability_report()` so the user can see at a
 glance what contributes to a verdict without reading source.
 
-The pipeline summary (`ParallelResult::summary`) distinguishes `PASS` from
+The pipeline summary (`PipelineResult::summary`) distinguishes `PASS` from
 `PASS (security-only coverage)`: a completed (non-aborted) run's
 `verdict_label` is set to `"PASS (security-only coverage)"` and rendered as a
 `Verdict:` line, mirroring `plugin_verify`. Aborted runs reach no verdict and
@@ -1173,7 +1225,12 @@ limit) and fenced as untrusted data (`<<<BEGIN UNTRUSTED HANDOFF>>>`
 delimiters + an instruction to ignore embedded directives) — a scout
 summary is model output shaped by repo file contents, so injecting it
 raw into the coder's prompt was trusted-position prompt injection
-(strictly worse than tool-result injection). `extract_patch` splits at
+(strictly worse than tool-result injection). WO 41.2 closed the
+delimiter-spoof hole: `fence_handoff` neutralizes any literal
+begin/end delimiter embedded in the body (replaces `<<<`/`>>>` with
+`[[`/`]]`) before wrapping, so a malicious handoff cannot close the
+fence early and smuggle trusted-position text after it.
+`extract_patch` splits at
 the LAST `SUBAGENT_PATCH_MARKER` so a marker the model echoes earlier
 in its text cannot shadow the real appended patch. (4) Cancel is
 transitive to nested subagents: `TaskMetadata.parent_task_id` records

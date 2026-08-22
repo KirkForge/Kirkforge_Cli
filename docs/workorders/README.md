@@ -821,4 +821,4 @@ undersell the engine). See [WO 41.0](41.0-wo41-overview.md).
 | 41.6 | [Shadowed-rule diagnostics](41.6-shadow-diagnostics.md) | Pending |
 | 41.7 | [Glob matcher fuzz testing](41.7-glob-fuzz.md) | Pending |
 | 41.8 | [Audit logging of matched rule](41.8-audit-logging.md) | Pending |
-| 41.9 | [Documentation update](41.9-docs-update.md) | Pending |
+| 41.9 | [Documentation update](41.9-docs-update.md) | Done |

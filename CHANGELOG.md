@@ -10,6 +10,8 @@ why, and the gate evidence.
 ## [Unreleased]
 
 ### Fixed
+- WO 41.1: apply coder patch to parent + rename to PipelineOrchestrator — [41.1](docs/workorders/41.1-patch-application.md)
+- WO 41.2: escape handoff delimiters in content to prevent fence spoofing — [41.2](docs/workorders/41.2-handoff-delimiter-spoof.md)
 - WO 41.3: permission docs fix + ADR audit — accurate permission engine description, stale ADR amendments — [41.3](docs/workorders/41.3-permission-docs.md)
 - WO 38.1: security chokepoints — [38.1](docs/workorders/38.1-security-chokepoints.md)
 - WO 38.2: panic containment + terminal survival — [38.2](docs/workorders/38.2-panic-containment.md)
@@ -50,6 +52,8 @@ why, and the gate evidence.
 - WO 40.1: CI workflow architecture reset — [40.1](docs/workorders/40.1-ci-workflow-reset.md)
 - WO 40.3: nextest profiles + timeout policy — [40.3](docs/workorders/40.3-nextest-profiles.md)
 - WO 40.5: global state isolation — CwdGuard, env injection, data dir override — [40.5](docs/workorders/40.5-global-state-isolation.md)
+- WO 41.4: verifier capability discovery UI + PASS security-only distinction — [41.4](docs/workorders/41.4-verifier-capability-discovery.md)
+- WO 41.5: persist subagent summaries to disk — durable lifecycle Phase 1 — [41.5](docs/workorders/41.5-persistent-subagent.md)
 
 
 ### Changed

@@ -193,6 +193,12 @@ impl BashJobRegistry {
             .kill_on_drop(true)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        // WO 43.28: scrub credential-shaped env vars so a background job
+        // cannot exfiltrate provider/session secrets via `printenv`. Mirrors
+        // the foreground path (bash_runner/mod.rs). The scheduled-jobs runner
+        // (jobs/runner.rs) routes through this same spawn, so this covers
+        // background + scheduled in one place.
+        crate::session::bash_runner::scrub_secrets_from_child_env(&mut proc);
         setup_process_group(&mut proc);
 
         // Resolve the working directory to a canonical absolute path before
@@ -876,6 +882,51 @@ mod tests {
             err.contains("dangerous pattern"),
             "expected dangerous-pattern denial, got: {err}"
         );
+    }
+
+    /// WO 43.28: a secret-shaped env var set in the parent must NOT be
+    /// visible inside a background bash job. Without the scrub in
+    /// `spawn`, `echo "$VAR"` would surface the value to the model via
+    /// `bash_status`. `echo` always exits 0, so the only signal is the
+    /// stdout content — empty when the scrub removed the var, the secret
+    /// value when it didn't.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_spawn_scrubs_secret_env_var() {
+        let _env = crate::shared::test_util::EnvGuard::set(
+            "KF_WO43_TEST_API_KEY",
+            "sk-should-never-leak-background",
+        );
+        let reg = BashJobRegistry::new();
+        let id = reg
+            .spawn(
+                "echo \"$KF_WO43_TEST_API_KEY\"",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("spawn should succeed");
+
+        wait_for_job_done(&reg, id, Duration::from_secs(10)).await;
+
+        let job = reg.get(id).await.unwrap();
+        assert_eq!(
+            job.status,
+            JobStatus::Completed(0),
+            "echo should exit 0; stderr: {}",
+            job.stderr
+        );
+        assert!(
+            !job.stdout.contains("sk-should-never-leak-background"),
+            "background job leaked secret env var: stdout was {:?}",
+            job.stdout
+        );
+        let _ = reg.remove(id).await;
     }
 
     /// Once MAX_JOBS slots are filled with still-running jobs, further spawns

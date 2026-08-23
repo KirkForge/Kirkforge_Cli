@@ -558,7 +558,7 @@ pub struct ShellOutput {
 /// True if an env-var name is credential-shaped (WO 38.1 + WO 42.3):
 /// ends with a credential-shaped suffix (case-insensitive) or is
 /// exactly one of the bare credential names.
-fn is_secret_env_name(name: &str) -> bool {
+pub(crate) fn is_secret_env_name(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     [
         "_API_KEY",
@@ -589,7 +589,12 @@ fn is_secret_env_name(name: &str) -> bool {
 /// secrets (`ANTHROPIC_API_KEY`, `*_TOKEN`, ...) even with approval —
 /// approval covers running the command, not exfiltrating credentials.
 /// The child still inherits everything else (HOME, LANG, cargo env, ...).
-fn scrub_secrets_from_child_env(proc: &mut Command) {
+///
+/// Applied on EVERY bash spawn path: foreground (`run_shell_with_token`),
+/// background (`BashJobRegistry::spawn`), and the PTY path
+/// (`pty::run_with_pty`). A new spawn path that bypasses this is a
+/// credential-leak regression (WO 43.28).
+pub(crate) fn scrub_secrets_from_child_env(proc: &mut Command) {
     for (name, _) in std::env::vars() {
         if is_secret_env_name(&name) {
             proc.env_remove(&name);

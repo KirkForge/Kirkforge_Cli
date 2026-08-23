@@ -20,6 +20,11 @@ why, and the gate evidence.
   findings (UTF-8 slice panics, prompt-compaction OOB, background-bash secret
   scrub, dead env-override layer, context-index retrieval smear, file-tool
   hook veto, unguarded subprocesses, crates bugs).
+- WO 43.28 — applied `scrub_secrets_from_child_env` to background/scheduled
+  (`BashJobRegistry::spawn`) and PTY (`pty::run_with_pty`) bash spawn paths;
+  the foreground-only scrub leaked provider secrets to the model via
+  `bash(background=true)` + `bash_status`. Added `pub(crate)` helper + pinning
+  test.
 - WO 43.18-43.24 — fresh segment audit round: abrupt-exit safety, TUI
   hardening, dep/size audit, persistence crash-robustness, adapter
   transport, subprocess lifecycle, test quality (7 analysis agents).

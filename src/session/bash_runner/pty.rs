@@ -27,6 +27,16 @@ pub fn run_with_pty(
     cmd.arg("-c");
     cmd.arg(command);
     cmd.cwd(workdir);
+    // WO 43.28: scrub credential-shaped env vars on the PTY path too.
+    // `portable_pty::CommandBuilder` inherits the parent env by default;
+    // without this the interactive path leaks the same secrets the
+    // foreground/background paths now scrub. PTY is feature-gated off by
+    // default, but a default-off gap is still a gap.
+    for (name, _) in std::env::vars() {
+        if crate::session::bash_runner::is_secret_env_name(&name) {
+            cmd.env_remove(name);
+        }
+    }
 
     let mut child = pair.slave.spawn_command(cmd)?;
     drop(pair.slave);

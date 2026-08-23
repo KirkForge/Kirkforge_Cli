@@ -135,9 +135,11 @@ Positive:
 
 ## Implementation notes
 
-This ADR is a placeholder. No code lands in the MVP for
-persistent knowledge. The `.plugin3/knowledge/` directory is
-*not* created by the MVP's `init` flow.
+This ADR is a rejected design sketch (see the rejection note at the
+top). No code lands in the MVP for persistent knowledge, and the
+`.plugin3/knowledge/` directory is *not* created by the MVP's `init`
+flow. The design questions below remain open for any future
+contributor who revisits the idea.
 
 A future contributor who picks up this ADR should:
 
@@ -149,8 +151,9 @@ A future contributor who picks up this ADR should:
    MVP build does not pull in the LLM extraction dependency.
 4. Add tests for the extraction + surfacing pipelines.
 
-The ADR will be promoted from `Deferred` to `Accepted` once
-the design questions above are answered.
+The ADR will remain Rejected until the design questions above are
+answered and a future contributor proposes re-accepting it via a new
+ADR.
 
 ### Open questions for the future contributor
 

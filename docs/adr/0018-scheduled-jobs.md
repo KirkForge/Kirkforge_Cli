@@ -37,9 +37,20 @@ pub enum ScheduleSpec {
 
 pub enum JobKind {
     Bash { command: String },
-    Skill { name: String, args: Vec<String> },
+    Workflow {
+        template: String,
+        vars: HashMap<String, String>,
+    },
 }
 ```
+
+> **Amendment (2026-08-23, WO 17.7 / WO 43.7):** the original ADR
+> specified a `Skill { name, args }` variant. It was superseded before
+> shipping by `Workflow { template, vars }`, which dispatches through
+> `kf_workflow::WorkflowExecutor` (the same `WorkflowTool` path as the
+> TUI). The `Skill` variant never landed; both arms are fully
+> implemented in `src/jobs/runner.rs`. See "Skill jobs" below for the
+> historical record.
 
 ### Schedule expressions
 
@@ -74,16 +85,28 @@ Bash jobs reuse the existing `bash_runner` safety gate (`check_bash_command_str`
 
 Rejected runs are recorded as `Failure` with a clear message instead of blocking the daemon.
 
-### Skill jobs
+### Skill jobs (historical — superseded by Workflow jobs)
 
-Skill jobs are accepted by the data model, stored, and listed, but their executor is intentionally stubbed in this ADR. Attempting to run a scheduled skill records `Failure: skill execution not yet implemented`. This lets the TUI and store surface land now without blocking on headless plugin/skill execution.
+> **Historical (pre-WO-17.7):** the original ADR proposed a
+> `JobKind::Skill { name, args }` variant that would be accepted by the
+> data model, stored, and listed, but with its executor intentionally
+> stubbed. Attempting to run a scheduled skill would have recorded
+> `Failure: skill execution not yet implemented`, letting the TUI and
+> store surface land without blocking on headless plugin/skill
+> execution.
+>
+> **Superseded (WO 17.7):** `JobKind::Skill` was replaced by
+> `JobKind::Workflow { template, vars }` before shipping. Workflow jobs
+> are fully executed via `kf_workflow::WorkflowExecutor`
+> (`src/jobs/runner.rs`), dispatching through the same `WorkflowTool`
+> path the TUI uses. There is no stubbed arm in the shipped `JobKind`.
 
 ### TUI integration
 
 New `/jobs` subcommands are namespaced under `/jobs schedule` and `/jobs scheduled` so the existing background-bash `/jobs` commands remain unchanged:
 
 - `/jobs schedule <spec> bash <command>`
-- `/jobs schedule <spec> skill <name> [args...]`
+- `/jobs schedule <spec> workflow <template> [key=value ...]`
 - `/jobs scheduled list`
 - `/jobs scheduled cancel <id>`
 - `/jobs run-now <id>`
@@ -109,7 +132,6 @@ Negative:
 
 - Adds a new top-level dependency (`cron`).
 - Adds a persistent background daemon that must be started (or auto-started) for scheduling to be active.
-- Scheduled skill jobs are not yet executable; the TUI can create them but they will fail until a future ADR implements headless skill invocation.
 
 Positive:
 

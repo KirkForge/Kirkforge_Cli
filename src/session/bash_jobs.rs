@@ -538,6 +538,30 @@ impl BashJobRegistry {
         cancelled
     }
 
+    /// Session-teardown sweep (WO 43.23): persist exit summaries for
+    /// still-running jobs (WO 43.10) and then cancel every running job,
+    /// so a normal quit cannot leave live orphaned process groups
+    /// behind. Called from the TUI shutdown and line-mode exit paths.
+    /// Best-effort like the rest of teardown: `cancel` logs, never
+    /// panics. Returns how many jobs were cancelled.
+    pub async fn sweep_on_session_exit(&self, session_id: &str) -> usize {
+        self.persist_exit_summaries(session_id).await;
+        let ids: Vec<u64> = {
+            let jobs = self.jobs.lock().await;
+            jobs.iter()
+                .filter(|(_, j)| j.status == JobStatus::Running)
+                .map(|(&id, _)| id)
+                .collect()
+        };
+        let mut cancelled = 0;
+        for id in ids {
+            if self.cancel(id).await {
+                cancelled += 1;
+            }
+        }
+        cancelled
+    }
+
     /// Remove a job from the registry, killing a still-running child first.
     ///
     /// Semantics: remove KILLS the child (as it always has) — detaching
@@ -1568,6 +1592,75 @@ mod tests {
             !path.exists(),
             "no running jobs means no file should be created"
         );
+        crate::shared::test_util::remove_test_dir(&temp);
+    }
+
+    // ── WO 43.23: teardown sweep ──
+
+    /// The exit sweep cancels still-running jobs (child process group
+    /// killed — verified structurally via kill(pid, 0) → ESRCH) and
+    /// writes the WO 43.10 exit summary for each, so --resume keeps its
+    /// "died with the session" report.
+    #[tokio::test]
+    async fn test_sweep_on_session_exit_cancels_running_jobs() {
+        let temp = std::env::temp_dir().join(format!(
+            "kf-wo43-23-sweep-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _dd = crate::session::DataDirGuard::set(temp.clone());
+
+        let reg = BashJobRegistry::new();
+        let id = reg
+            .spawn(
+                "sleep 30",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let cancelled = reg.sweep_on_session_exit("test-session-43-23").await;
+        assert_eq!(cancelled, 1, "the running job should have been cancelled");
+
+        let job = reg.get(id).await.unwrap();
+        assert_eq!(job.status, JobStatus::Cancelled);
+        let pid = job
+            .pid
+            .expect("spawned job should have a pid recorded");
+
+        // WO 43.10 preserved: the summary line was written before the kill.
+        let path = crate::session::jobs_dir().unwrap().join("bg-exits.ndjson");
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let summary: BgJobExitSummary = serde_json::from_str(
+            contents.lines().find(|l| !l.trim().is_empty()).expect("summary line"),
+        )
+        .unwrap();
+        assert_eq!(summary.id, id);
+        assert_eq!(summary.status_at_exit, "died-with-session");
+
+        // The child process group is actually dead.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let rc = unsafe { libc::kill(pid as i32, 0) };
+            let gone = rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(3); // ESRCH
+            if gone {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "swept job pid {pid} still alive after cancel"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
         crate::shared::test_util::remove_test_dir(&temp);
     }
 }

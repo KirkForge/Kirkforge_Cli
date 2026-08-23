@@ -142,7 +142,7 @@ pub(super) async fn run_line_mode(
         None,
         Some(plugin_registry),
     )?;
-    executor.set_session_id(session_id);
+    executor.set_session_id(session_id.clone());
     // WO 38.8: attach per-session budget/stratum stores so the budget guard
     // runs in production. Must come after set_session_id because the stratum
     // listener is keyed by session_id.
@@ -442,6 +442,12 @@ pub(super) async fn run_line_mode(
             break;
         }
     }
+
+    // WO 43.23: kill still-running background jobs on exit (persisting
+    // their exit summaries first, WO 43.10) — mirrors TUI teardown.
+    session::bash_jobs::global_registry()
+        .sweep_on_session_exit(&session_id)
+        .await;
 
     // Flush carryover on exit (graceful or SIGINT) — mirrors TUI teardown
     // (`src/tui/mod.rs:436-440`). The executor's cost tracker wrote the

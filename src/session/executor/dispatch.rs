@@ -722,10 +722,9 @@ fn symlink_swap_denied(resolved: &std::path::Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     use super::symlink_swap_denied;
 
-    #[cfg(unix)]
+    // WO 43.12: ungated — pure std::fs, no Unix-only API.
     fn temp_root() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("kf_wo38_symlink_walk_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -733,7 +732,9 @@ mod tests {
         dir
     }
 
-    #[cfg(unix)]
+    // WO 43.12: ungated — symlink_swap_denied uses std::fs::symlink_metadata
+    // + file_type().is_symlink() (both cross-platform); no symlink is created
+    // here, so the test runs identically on Windows.
     #[test]
     fn symlink_swap_denied_allows_real_path() {
         let dir = temp_root();
@@ -789,7 +790,7 @@ mod tests {
 
     /// Write case: new file whose final component does not exist yet —
     /// NotFound is not a symlink, so the walk passes.
-    #[cfg(unix)]
+    // WO 43.12: ungated — no symlink created; pure std::path check.
     #[test]
     fn symlink_swap_denied_allows_nonexistent_new_file() {
         let dir = temp_root();

@@ -4,15 +4,13 @@
 
 ## Shipped (closed this session)
 
-- **WO 43.10**: Done. Cross-session state preservation policy — field-
-  classification table (below) classifies every state store as
-  survives/ephemeral with persistence mechanism + teardown path. The one
-  surviving-class gap (background bash jobs dying with the process) is
-  now persisted: `BashJobRegistry::persist_exit_summaries` writes one
-  NDJSON line per still-Running job to `<jobs_dir>/bg-exits.ndjson` on
-  session teardown, so `--resume` can report "these jobs died with the
-  session". AgentRun-bound fields (transcript, artifacts, verifier
-  results) marked "survives — blocked on WO 41.5 Phase 3".
+- **WO 43.12**: Done. Windows test parity finish — added `--doc` step to
+  ci-merge.yml windows job (mirror of Linux :186); audited 205 `cfg(unix)`
+  occurrences / 90 `#[cfg(unix)]`-gated test fns, ungated 8 platform-agnostic
+  tests (TUI path-completion, symlink_swap_denied non-symlink cases,
+  drain_capped Cursor tests). 82 stay Unix-only (Unix API, bash scripts,
+  setrlimit, process groups, UnixStream, module-gated, subprocess-dependent).
+  No PR-tier windows job (ADR-074 tier). Pushed to wo/wo43.12 (f7a0e035).
 - **WO 43.25-43.39**: ALL Done (15 workorders, round-4 full-coverage segment
   sweep). UTF-8 byte-slice panic hardening (43.25); unguarded subprocess
   spawns (43.26); atomic-write permissions + undo ordering (43.27);
@@ -93,44 +91,6 @@
 - **WO 29.1**: fold bundled plugin into compiled-in Rust tools — Phase 1
   shipped; verify tools deferred to 29.7. Tracked in
   [29.1](docs/workorders/29.1-fold-bundled-plugin.md).
-
-## Cross-session state preservation policy (WO 43.10)
-
-Every state store, classified as survives-session-death vs ephemeral.
-This is the single source of truth for what `--resume` can recover and
-what WO 41.5 Phase 3 (full `AgentRun`) must build against.
-
-### Durable — survives session death
-
-| Field | Owner module | Persistence mechanism | Teardown/cleanup path |
-|---|---|---|---|
-| Session transcript (messages) | `session/conversation.rs` | NDJSON append to `sessions/<id>.conv.ndjson` | `ConversationLog::Drop` flushes; checkpoint rotation for corrupt tails |
-| Session index cache | `session/session_index.rs` | `sessions/.index.ndjson` (id, path, msg count, started_at) | Updated on every `touch_session`; rebuilt if missing |
-| Undo snapshots | `session/undo.rs` | `undo/<session_id>/<n>.snap` | Per-edit push; per-session dir, no auto-eviction |
-| Carryover profile | `session/carryover.rs` | `carryover.json` (model, persona, cost, flags) | `save_carryover` in TUI `teardown()` (`tui/mod.rs:436`) |
-| Task summaries (subagents) | `tools/task.rs` (`PersistedTask`) | `tasks/<id>.json` (WO 41.5 Phase 1) | Written on terminal state; `/tasks` reads them back |
-| Job store (scheduled jobs) | `jobs/store.rs` (`JobStore`) | `jobs/<id>/job.json` + `runs/` | Atomic write + rename; no auto-cleanup |
-| Background bash exit summary | `session/bash_jobs.rs` | `jobs/bg-exits.ndjson` (append, one line per died job) | `persist_exit_summaries()` on session end (`run_session.rs`) |
-| Usage log | `kf-budget-core/paths.rs` | `logs/usage.jsonl` (append) | Written by budget guard; read by `kf-code metrics` |
-| Audit log | `shared/audit.rs` | `audit.jsonl` (append, tamper-evident hash chain) | Written by hook/verifier events; `audit_verify` walks the chain |
-
-### Ephemeral — dies with the process (intentional)
-
-| Field | Owner module | Why ephemeral | Cleanup path |
-|---|---|---|---|
-| Sliced listeners registry | `session/budget.rs` (`SLICED_LISTENERS`) | Session-keyed HashMap; a dropped session must not leak listeners | `clear_session_sliced_listeners` in `Executor::Drop` (WO 38.8) |
-| Background bash job registry | `session/bash_jobs.rs` (`GLOBAL_REGISTRY`) | Child processes + in-memory state; cannot survive process death | Child `kill_on_drop`; exit summary persisted before death (above) |
-| Cancel tokens | `tokio_util::sync::CancellationToken` (per-turn, per-task, per-workflow) | Turn-scoped coordination; meaningless after the turn ends | Dropped with the owning scope; no persistence needed |
-| Sandbox read-gate marks | `shared/access.rs` (`ReadGate`) | Per-session set of "files read this session" for edit-before-read policy | Lives on `Executor`; dropped with it |
-| Verifier slot registrations | `session/verifier/slots.rs` (`VerifierSlots`) | Per-executor verifier instances (build/lint/test/plugin); process-bound | Lives on `VerifierHandler`; dropped with the executor |
-
-### Survives — blocked on WO 41.5 Phase 3
-
-| Field | Owner module | Status |
-|---|---|---|
-| Full AgentRun transcript | `tools/task.rs` (Phase 3) | Blocked — Phase 1 summaries ship; full transcript deferred |
-| AgentRun artifacts | `tools/task.rs` (Phase 3) | Blocked — no artifact store yet |
-| AgentRun verifier results | `tools/task.rs` (Phase 3) | Blocked — no persisted verifier-result binding yet |
 
 ## Known flakes (pre-existing, not introduced this session)
 

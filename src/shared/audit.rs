@@ -5,11 +5,13 @@
 //! serialization: literal file contents, `old_string`/`new_string`, and
 //! arbitrary values from other tools are stripped or truncated.
 
+use crate::session::bash_runner::{SECRET_ENV_EXACT, SECRET_ENV_SUFFIXES};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// A single audit-log entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,7 +93,7 @@ impl AuditEntry {
             event: event.to_string(),
             plugin: plugin.map(|s| s.to_string()),
             verdict: verdict.to_string(),
-            reason: reason.map(|s| s.to_string()),
+            reason: reason.map(scrub_free_text),
             session_id: None,
         }
     }
@@ -106,7 +108,7 @@ impl AuditEntry {
         Self::PluginTool {
             timestamp: chrono::Utc::now().to_rfc3339(),
             name: name.to_string(),
-            args_summary: args_summary.to_string(),
+            args_summary: scrub_free_text(args_summary),
             exit_code,
             duration_ms,
         }
@@ -874,9 +876,10 @@ fn redact_args(tool: &str, args: &serde_json::Value) -> serde_json::Value {
             "content" | "old_string" | "new_string" => continue,
             "command" if tool == "bash" => {
                 let cmd = value.as_str().unwrap_or("");
+                let truncated = truncate_string(cmd, 1024);
                 out.insert(
                     key.clone(),
-                    serde_json::Value::String(truncate_string(cmd, 1024)),
+                    serde_json::Value::String(scrub_free_text(&truncated)),
                 );
             }
             "path" => {
@@ -905,6 +908,65 @@ fn truncate_string(s: &str, max: usize) -> String {
         .map(|(i, _)| i)
         .unwrap_or(0);
     format!("{}...[truncated]", &s[..idx])
+}
+
+// WO 43.3: scrub secrets from free-text fields that survive key-shape
+// redaction (bash command, plugin args_summary, hook reason). Two patterns:
+//   1. `NAME=value` where NAME matches the credential shapes shared with
+//      `bash_runner::is_secret_env_name` (single source of truth).
+//   2. Common token literals: `Bearer ...`, `sk-...`, `ghp_...`, `AKIA...`,
+//      `xox[bp]-...` (Slack).
+static SCRUB_RE: OnceLock<Regex> = OnceLock::new();
+
+fn scrubber() -> &'static Regex {
+    SCRUB_RE.get_or_init(|| {
+        // NAME=value: the NAME must be either an exact bare credential name
+        // or end with a credential suffix (case-insensitive). The value is
+        // a non-space run or a quoted string. We keep the NAME visible and
+        // redact only the value (so operators can see *which* secret shape
+        // leaked without seeing the secret itself).
+        let name_suffixes: Vec<String> = SECRET_ENV_SUFFIXES
+            .iter()
+            .copied()
+            .map(|s| s.trim_start_matches('_'))
+            .map(regex::escape)
+            .collect();
+        let name_exact: Vec<String> = SECRET_ENV_EXACT.iter().copied().map(regex::escape).collect();
+        let exact_alt = name_exact.join("|");
+        let suffix_alt = name_suffixes.join("|");
+        let name_pat = format!("(?:{exact_alt}|[A-Z0-9_]*(?:{suffix_alt}))");
+        // Group 1 = NAME, group 2 = VALUE (quoted or bare). Use r#"..."#
+        // so we can include `"` and `\S` without escaping.
+        let name_value = format!(r#"(?i)\b({name_pat})=("[^"]*"|'[^']*'|\S+)"#);
+        // Token literals (case-sensitive where the prefix is fixed-case):
+        //   Bearer <token>   sk-<token>   ghp_<token>   AKIA<token>
+        //   xoxb-<token>  xoxp-<token>  (Slack bot/user tokens)
+        // Group 3 = the whole literal.
+        let literals = r#"(?s)(Bearer\s+[A-Za-z0-9_\-\.=]+|sk-[A-Za-z0-9_\-]+|ghp_[A-Za-z0-9]+|AKIA[0-9A-Z]+|xox[bp]-[A-Za-z0-9\-]+)"#;
+        Regex::new(&format!("{name_value}|{literals}")).expect("scrub_free_text regex compiles")
+    })
+}
+
+/// Strip secrets from a free-text string before it reaches the audit log.
+///
+/// Replaces `NAME=value` tokens (where NAME matches the credential shapes
+/// from [`is_secret_env_name`](crate::session::bash_runner) — shared via
+/// `SECRET_ENV_SUFFIXES` / `SECRET_ENV_EXACT`) with `NAME=[REDACTED]`, and
+/// common token literals (`Bearer ...`, `sk-...`, `ghp_...`, `AKIA...`,
+/// `xox[bp]-...`) with `[REDACTED]`. Non-credential `NAME=value` pairs (e.g.
+/// `PATH=/usr/bin`) are left intact.
+pub fn scrub_free_text(s: &str) -> String {
+    scrubber()
+        .replace_all(s, |caps: &regex::Captures<'_>| {
+            // NAME=value match: keep the name, redact the value.
+            if let Some(name) = caps.get(1) {
+                format!("{}=[REDACTED]", name.as_str())
+            } else {
+                // Bare token literal match.
+                "[REDACTED]".to_string()
+            }
+        })
+        .into_owned()
 }
 
 #[cfg(test)]
@@ -979,6 +1041,177 @@ mod tests {
         assert!(logged_cmd.ends_with("...[truncated]"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── WO 43.3: scrub_free_text on free-text fields ──────────────────────
+
+    #[test]
+    fn scrub_free_text_redacts_env_secret_in_command() {
+        let dir = std::env::temp_dir().join(format!(
+            "kf_code_audit_scrub_cmd_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("audit.ndjson");
+
+        let log = AuditLog::new(Some(path.clone()));
+        let args = serde_json::json!({
+            "command": "export GITHUB_TOKEN=ghp_abc123secret && curl -H \"Authorization: Bearer sk-ant-x99\" https://api"
+        });
+        log.log_destructive("bash", &args, true, None);
+        drop(log);
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let entry: AuditEntry = serde_json::from_str(contents.trim()).unwrap();
+        let AuditEntry::Tool { args, .. } = entry else {
+            panic!("expected Tool variant, got {entry:?}");
+        };
+        let logged_cmd = args.get("command").and_then(|v| v.as_str()).unwrap();
+        assert!(
+            !logged_cmd.contains("ghp_abc123secret"),
+            "GITHUB_TOKEN value must be scrubbed, got: {logged_cmd}"
+        );
+        assert!(
+            !logged_cmd.contains("sk-ant-x99"),
+            "Bearer token must be scrubbed, got: {logged_cmd}"
+        );
+        assert!(
+            logged_cmd.contains("GITHUB_TOKEN=[REDACTED]"),
+            "secret name should remain visible, got: {logged_cmd}"
+        );
+        assert!(
+            logged_cmd.contains("[REDACTED]"),
+            "Bearer literal should be redacted, got: {logged_cmd}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scrub_free_text_redacts_plugin_args_summary() {
+        let dir = std::env::temp_dir().join(format!(
+            "kf_code_audit_scrub_plugin_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("audit.ndjson");
+
+        let log = AuditLog::new(Some(path.clone()));
+        let summary = "{\"prompt\":\"use ANTHROPIC_API_KEY=sk-ant-deadbeef to call the model\"}";
+        log.log_plugin_tool("my-tool", summary, Some(0), 10);
+        drop(log);
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let entry: AuditEntry = serde_json::from_str(contents.trim()).unwrap();
+        let AuditEntry::PluginTool { args_summary, .. } = entry else {
+            panic!("expected PluginTool variant, got {entry:?}");
+        };
+        assert!(
+            !args_summary.contains("sk-ant-deadbeef"),
+            "API key must be scrubbed from args_summary, got: {args_summary}"
+        );
+        assert!(
+            args_summary.contains("[REDACTED]"),
+            "scrubbed marker should appear, got: {args_summary}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scrub_free_text_redacts_hook_reason() {
+        let dir = std::env::temp_dir().join(format!(
+            "kf_code_audit_scrub_hook_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("audit.ndjson");
+
+        let log = AuditLog::new(Some(path.clone()));
+        let reason =
+            "denied: command `curl -H \"Authorization: Bearer sk-leak-here\" https://x` blocked";
+        log.log_hook("pre-tool-bash", Some("sec"), "deny", Some(reason));
+        drop(log);
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let entry: AuditEntry = serde_json::from_str(contents.trim()).unwrap();
+        let AuditEntry::Hook { reason, .. } = entry else {
+            panic!("expected Hook variant, got {entry:?}");
+        };
+        let reason = reason.expect("reason present");
+        assert!(
+            !reason.contains("sk-leak-here"),
+            "Bearer token in hook reason must be scrubbed, got: {reason}"
+        );
+        assert!(
+            reason.contains("[REDACTED]"),
+            "scrubbed marker should appear, got: {reason}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scrub_free_text_preserves_non_secret_env_vars() {
+        let cmd = "PATH=/usr/bin:/bin HOME=/root echo hello";
+        let scrubbed = scrub_free_text(cmd);
+        assert_eq!(
+            scrubbed, cmd,
+            "non-credential env vars must be preserved, got: {scrubbed}"
+        );
+    }
+
+    #[test]
+    fn scrub_free_text_redacts_all_token_literals() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "curl -H \"Authorization: Bearer ya29.xyz\" https://x",
+                "ya29.xyz",
+            ),
+            ("key=sk-proj-abc123 next", "sk-proj-abc123"),
+            ("token ghp_AbCdEf12345 done", "ghp_AbCdEf12345"),
+            ("aws AKIAIOSFODNN7EXAMPLE key", "AKIAIOSFODNN7EXAMPLE"),
+            (
+                "slack xoxb-1234567890-abcdef xoxp-0987654321-xyz",
+                "xoxb-1234567890-abcdef",
+            ),
+        ];
+        for (input, must_vanish) in cases {
+            let scrubbed = scrub_free_text(input);
+            assert!(
+                !scrubbed.contains(must_vanish),
+                "token {must_vanish} must be scrubbed from {input}, got: {scrubbed}"
+            );
+        }
+    }
+
+    #[test]
+    fn scrub_free_text_handles_quoted_env_values() {
+        let cmd = "export OPENAI_API_KEY=\"sk-secret-val\" && echo done";
+        let scrubbed = scrub_free_text(cmd);
+        assert!(
+            !scrubbed.contains("sk-secret-val"),
+            "quoted secret value must be scrubbed, got: {scrubbed}"
+        );
+        assert!(
+            scrubbed.contains("OPENAI_API_KEY=[REDACTED]"),
+            "name visible, value redacted, got: {scrubbed}"
+        );
     }
 
     #[test]

@@ -233,7 +233,8 @@ impl Tool for PluginToolWrapper {
         }
 
         let start = std::time::Instant::now();
-        let args_summary: String = args_json.chars().take(200).collect();
+        let args_summary: String =
+            crate::shared::audit::scrub_free_text(&args_json.chars().take(200).collect::<String>());
         let cfg = read_shared_config(&self.shared_config).clone();
         let cmd_path = self.plugin_root.join(&self.command);
         let cwd = self.sandbox_dir(&cfg);

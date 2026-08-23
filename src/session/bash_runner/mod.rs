@@ -555,33 +555,42 @@ pub struct ShellOutput {
     pub stderr: String,
 }
 
+/// Credential-shape suffixes (case-insensitive). An env var whose
+/// uppercased name ends with one of these is treated as a secret.
+/// Shared with `shared::audit::scrub_free_text` so the free-text
+/// scrubber uses the same credential shapes (single source of truth,
+/// WO 43.3).
+pub(crate) const SECRET_ENV_SUFFIXES: &[&str] = &[
+    "_API_KEY",
+    "_TOKEN",
+    "_SECRET",
+    "_ACCESS_KEY",
+    "_PASSWORD",
+    "_PRIVATE_KEY",
+    "_CREDENTIAL",
+    "_PASS",
+    "_CONN_STRING",
+    "_CONNECTION_STRING",
+];
+
+/// Bare credential names (case-insensitive). An env var whose
+/// uppercased name is exactly one of these is treated as a secret.
+/// Shared with `shared::audit::scrub_free_text` (WO 43.3).
+pub(crate) const SECRET_ENV_EXACT: &[&str] = &[
+    "API_KEY",
+    "TOKEN",
+    "SECRET",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_ACCESS_KEY_ID",
+];
+
 /// True if an env-var name is credential-shaped (WO 38.1 + WO 42.3):
 /// ends with a credential-shaped suffix (case-insensitive) or is
 /// exactly one of the bare credential names.
 pub(crate) fn is_secret_env_name(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
-    [
-        "_API_KEY",
-        "_TOKEN",
-        "_SECRET",
-        "_ACCESS_KEY",
-        "_PASSWORD",
-        "_PRIVATE_KEY",
-        "_CREDENTIAL",
-        "_PASS",
-        "_CONN_STRING",
-        "_CONNECTION_STRING",
-    ]
-    .iter()
-    .any(|s| upper.ends_with(s))
-        || [
-            "API_KEY",
-            "TOKEN",
-            "SECRET",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_ACCESS_KEY_ID",
-        ]
-        .contains(&upper.as_str())
+    SECRET_ENV_SUFFIXES.iter().any(|s| upper.ends_with(s))
+        || SECRET_ENV_EXACT.contains(&upper.as_str())
 }
 
 /// Scrub credential-shaped env vars from the child shell's environment.

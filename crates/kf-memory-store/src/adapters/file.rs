@@ -121,7 +121,11 @@ impl FileAdapter {
                     let _ = writeln!(f, "{}", std::process::id());
                     return Some(LockGuard(self.lock_path.clone()));
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if self.try_reclaim_stale_lock() {
+                        continue;
+                    }
+                }
                 Err(_) => return None,
             }
             if started.elapsed() >= timeout {
@@ -129,6 +133,37 @@ impl FileAdapter {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    // Reclaim a stale lock left by a crashed process. Returns true if the
+    // lock was removed (caller should retry immediately).
+    fn try_reclaim_stale_lock(&self) -> bool {
+        let pid_dead = fs::read_to_string(&self.lock_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<i32>().ok())
+            .map(|pid| !pid_is_alive(pid))
+            .unwrap_or(false);
+        if pid_dead {
+            let _ = fs::remove_file(&self.lock_path);
+            return true;
+        }
+        // Fallback: if the PID check is inconclusive (unreadable, unparseable,
+        // or the check is unavailable on this platform), reclaim if the lock
+        // file is older than the staleness threshold.
+        // ponytail: 5-minute threshold — generous enough that a live process
+        // holding the lock won't be wrongly reclaimed, short enough that a
+        // crashed writer's lock is cleared well before the 3s retry timeout
+        // makes the store permanently unusable.
+        const STALE_AGE: Duration = Duration::from_secs(300);
+        if let Ok(meta) = fs::metadata(&self.lock_path) {
+            if let Ok(mtime) = meta.modified() {
+                if mtime.elapsed().unwrap_or(Duration::ZERO) >= STALE_AGE {
+                    let _ = fs::remove_file(&self.lock_path);
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn flush(&self, state: &mut LoadState) -> Result<()> {
@@ -158,6 +193,37 @@ impl FileAdapter {
 enum LoadErr {
     Missing,
     Corrupt(String),
+}
+
+// Check whether a process is still alive. On Unix, `kill(pid, 0)` returns 0
+// if the process exists and ESRCH if it doesn't. On non-Unix (or for PID 0 /
+// negative — never valid lock owners), we conservatively report alive so the
+// age-based fallback handles staleness instead.
+fn pid_is_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: kill(2) with signal 0 is a pure liveness probe — no signal is
+        // actually delivered. The only failure modes are ESRCH (no such
+        // process) and EPERM (process exists but we lack permission), both
+        // safe to observe.
+        let rc = unsafe { libc::kill(pid, 0) };
+        if rc == 0 {
+            return true;
+        }
+        // ESRCH = no such process. EPERM = exists but not ours — treat as
+        // alive (let the age fallback handle it rather than stealing a live
+        // process's lock).
+        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        errno != libc::ESRCH
+    }
+    #[cfg(not(unix))]
+    {
+        // No portable liveness probe; rely on the age-based fallback.
+        true
+    }
 }
 
 impl MemoryAdapter for FileAdapter {

@@ -154,6 +154,62 @@ fn file_adapter_query_filters_match_in_memory() {
     assert_eq!(results[0].id, "b");
 }
 
+#[test]
+fn file_adapter_reclaims_stale_lock_from_dead_pid() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("mem.json");
+    let lock_path = {
+        let mut s = path.as_os_str().to_owned();
+        s.push(".lock");
+        std::path::PathBuf::from(s)
+    };
+    // Simulate a crashed process: write a stale PID (999999 almost certainly
+    // dead) to the lock file so the liveness check reclaims it.
+    std::fs::write(&lock_path, "999999\n").unwrap();
+    let a = FileAdapter::new(&path);
+    // write() must succeed — the stale lock is reclaimed, not waited on.
+    // (LockGuard::Drop removes the lock file when write() returns, so the
+    // lock file no longer exists after this call.)
+    a.write(&obj("recovered", "obs", "2024-01-01T00:00:00Z"))
+        .unwrap();
+    // The store is usable after recovery.
+    let got = a.read("recovered").unwrap().unwrap();
+    assert_eq!(got.kind, "obs");
+    // The stale lock file was consumed — a fresh write works without manual
+    // cleanup (proving the reclaim, not just a retry-tolerant write).
+    a.write(&obj("second", "run", "2024-02-01T00:00:00Z"))
+        .unwrap();
+    assert_eq!(a.stats().unwrap().total_objects, 2);
+}
+
+#[test]
+fn file_adapter_reclaims_lock_with_unreadable_pid_via_age_fallback() {
+    // When the PID can't be parsed (garbage in the lock file), the age
+    // fallback should reclaim it. We make the lock file old by setting its
+    // mtime far in the past so the 5-min staleness threshold is met.
+    use std::time::{Duration, SystemTime};
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("mem.json");
+    let lock_path = {
+        let mut s = path.as_os_str().to_owned();
+        s.push(".lock");
+        std::path::PathBuf::from(s)
+    };
+    std::fs::write(&lock_path, "not-a-number\n").unwrap();
+    // Set mtime to 10 minutes ago — past the 5-min staleness threshold.
+    let old = SystemTime::now() - Duration::from_secs(600);
+    let times = std::fs::FileTimes::new().set_modified(old);
+    std::fs::File::open(&lock_path)
+        .unwrap()
+        .set_times(times)
+        .unwrap();
+    let a = FileAdapter::new(&path);
+    a.write(&obj("recovered2", "obs", "2024-01-01T00:00:00Z"))
+        .unwrap();
+    let got = a.read("recovered2").unwrap().unwrap();
+    assert_eq!(got.kind, "obs");
+}
+
 // ── SqliteAdapter ──────────────────────────────────────────────────────────
 
 #[test]

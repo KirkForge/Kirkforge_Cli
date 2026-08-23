@@ -2214,6 +2214,7 @@ dependencies = [
  "anyhow",
  "hex",
  "kf-routing",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

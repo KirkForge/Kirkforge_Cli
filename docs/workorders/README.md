@@ -900,3 +900,26 @@ tree, ~11 stale claims corrected in-line. See
 | 43.29 | [Prompt-compaction out-of-bounds panic (minify_old_messages)](43.29-prompt-compaction-oob-panic.md) | Done |
 | 43.30 | [Pre-tool hook veto for file tools](43.30-file-tool-hook-veto.md) | Done |
 
+### Series 43.25-43.39 — Round-4 full-coverage segment sweep
+
+15 workorders from a full-coverage segment audit; tracked in
+[WO 43.0](43.0-wo43-overview.md). All findings re-verified against source.
+
+| WO | Title | Status |
+|----|-------|--------|
+| 43.25 | [UTF-8 byte-slice panic hardening](43.25-utf8-byte-slice-panic-hardening.md) | Planned |
+| 43.26 | [Unguarded subprocess spawns](43.26-unguarded-subprocess-workflow-pluginbus.md) | Planned |
+| 43.27 | [Atomic-write permission preservation + undo-ordering](43.27-atomic-write-permissions-undo-order.md) | Planned |
+| 43.28 | [Background/PTY bash secret leakage](43.28-background-pty-bash-secret-leak.md) | Planned |
+| 43.29 | [Prompt-compaction out-of-bounds panic](43.29-prompt-compaction-oob-panic.md) | Planned |
+| 43.30 | [Pre-tool hook veto ineffective for file tools](43.30-file-tool-hook-veto.md) | Planned |
+| 43.31 | [Doom-loop banner renders wrong selection](43.31-doom-loop-banner-selection.md) | Done |
+| 43.32 | [Config env-override layer dead](43.32-config-env-override-layer-dead.md) | Planned |
+| 43.33 | [jobd stop/auth/timeout + pid-removal-on-reject](43.33-jobd-stop-auth-timeout.md) | Planned |
+| 43.34 | [Context-index retrieval smears unresolved edges](43.34-context-index-retrieve-smear.md) | Planned |
+| 43.35 | [kf-memory-store stale-lock latch after crash](43.35-memory-store-stale-lock.md) | Planned |
+| 43.36 | [kf-compress-core Lite mode is a no-op](43.36-compress-core-lite-noop.md) | Planned |
+| 43.37 | [Verifier corrections dead-queue + MCP leak](43.37-verifier-corrections-queue-mcp-leak.md) | Planned |
+| 43.38 | [Async blocking + glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Planned |
+| 43.39 | [kf-bench markdown-delta rate contradiction](43.39-bench-delta-rate.md) | Planned |
+

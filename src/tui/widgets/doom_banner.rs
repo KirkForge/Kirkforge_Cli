@@ -169,7 +169,7 @@ pub fn render_doom_banner(
 pub fn render_if_active(f: &mut Frame, area: Rect, app_state: &AppState) -> bool {
     if let Some(ref dl) = app_state.doom.doom_loop {
         if dl.count >= crate::session::executor::DoomLoopTracker::THRESHOLD && !dl.acknowledged {
-            render_doom_banner(f, area, dl, DoomLoopSelection { index: 0 });
+            render_doom_banner(f, area, dl, app_state.doom.doom_loop_selection);
             return true;
         }
     }
@@ -223,6 +223,112 @@ mod tests {
         assert_eq!(
             DoomLoopSelection { index: 2 }.selected(),
             DoomLoopAction::Continue
+        );
+    }
+
+    /// Pinning render test: the banner highlights the action at the
+    /// stored selection index, NOT a hardcoded index 0. Regression pin
+    /// for the WO 43.31 bug where `render_if_active` passed
+    /// `DoomLoopSelection { index: 0 }` and the banner always showed
+    /// "Break" highlighted while Enter ran the user's hidden choice.
+    #[test]
+    fn doom_banner_highlights_stored_selection_not_hardcoded_zero() {
+        use crate::tui::app::DoomLoopState;
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let state = DoomLoopState {
+            count: 5,
+            tool: "bash".into(),
+            last_error: "boom".into(),
+            acknowledged: false,
+        };
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // index 1 → Plan highlighted. The highlighted form is "[ Plan".
+        terminal
+            .draw(|f| {
+                render_doom_banner(f, f.area(), &state, DoomLoopSelection { index: 1 });
+            })
+            .unwrap();
+        let buf = buffer_to_string(&terminal);
+        assert!(
+            buf.contains("[ Plan"),
+            "selection index 1 must highlight Plan: {buf}"
+        );
+        assert!(
+            !buf.contains("[ Break"),
+            "selection index 1 must NOT highlight Break: {buf}"
+        );
+
+        // index 2 → Continue highlighted.
+        terminal
+            .draw(|f| {
+                render_doom_banner(f, f.area(), &state, DoomLoopSelection { index: 2 });
+            })
+            .unwrap();
+        let buf = buffer_to_string(&terminal);
+        assert!(
+            buf.contains("[ Continue"),
+            "selection index 2 must highlight Continue: {buf}"
+        );
+        assert!(
+            !buf.contains("[ Break"),
+            "selection index 2 must NOT highlight Break: {buf}"
+        );
+    }
+
+    /// Snapshot the whole terminal buffer into a flat `String`. Borrow-
+    /// checker-safe: clones the buffer once instead of capturing
+    /// `&terminal` in a closure over its own dimensions.
+    fn buffer_to_string(terminal: &ratatui::Terminal<ratatui::backend::TestBackend>) -> String {
+        let buf = terminal.backend().buffer();
+        let area = buf.area();
+        let mut out = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                out.push_str(buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "));
+            }
+        }
+        out
+    }
+
+    /// End-to-end pin for the WO 43.31 fix: `render_if_active` must pass
+    /// the stored `app_state.doom.doom_loop_selection` into the banner,
+    /// not a hardcoded `DoomLoopSelection { index: 0 }`. Fails on the old
+    /// code (which always highlighted Break) because the banner would
+    /// show "[ Break" even though the stored selection is Plan.
+    #[test]
+    fn render_if_active_highlights_stored_app_state_selection() {
+        use crate::shared::test_util::app_state;
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let mut state = app_state();
+        state.doom.doom_loop = Some(crate::tui::app::DoomLoopState {
+            count: crate::session::executor::DoomLoopTracker::THRESHOLD,
+            tool: "bash".into(),
+            last_error: "boom".into(),
+            acknowledged: false,
+        });
+        state.doom.doom_loop_selection = DoomLoopSelection { index: 1 };
+
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                render_if_active(f, f.area(), &state);
+            })
+            .unwrap();
+        let buf = buffer_to_string(&terminal);
+        assert!(
+            buf.contains("[ Plan"),
+            "render_if_active must highlight the stored Plan selection: {buf}"
+        );
+        assert!(
+            !buf.contains("[ Break"),
+            "render_if_active must NOT highlight Break when selection is Plan: {buf}"
         );
     }
 }

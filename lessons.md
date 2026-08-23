@@ -85,3 +85,28 @@
   README row is what makes the "Done" status enforceable. The task's
   explicit instruction to add the README row was load-bearing for the
   drift guard, not cosmetic.
+
+## WO 43.15 — machine-greppable ADR predicate blocks
+
+- The `implemented` vs compound-status cross-check was the trickiest part.
+  "Accepted (amended)" does NOT mean partially implemented — an amendment
+  replaces the original decision and is fully in force. Map "amended" →
+  true, "partially implemented" → partial, "fully implemented" → true,
+  "Superseded" → false. 004 and 054 both carry amendments but are fully
+  implemented as amended; only 0044/073 are genuinely partial.
+- `supersedes` is what THIS ADR replaces, not what replaces THIS ADR.
+  048/049 are *superseded by* a removal decision, not by a named ADR, so
+  their `supersedes: []`. Don't invert the direction.
+- `crates/kf-budget-core/README.md` `| Tests | N passing |` was stale by
+  32 on origin/dev (882 claimed, 914 actual) — `readme_drift` test was
+  ALREADY red before my change. Bumped to 914 (accurate incl. my +1 test).
+  This was pre-existing breakage, not mine, but leaving it red while
+  adding a test would've made drift worse. AGENTS.md says bump the count
+  when adding tests to crates/ — doing so also fixed the pre-existing
+  red. Worth grepping `readme_drift` state before assuming a clean tree.
+- The drift test build is slow (~18s) but the full `cargo clippy --all-
+  targets` is 5-6 min even cached, and competes with other worktrees'
+  builds for CPU. Budget 15+ min for the full gate when wo43.19 is active.
+- `cargo fmt` reformatted my multi-line `panic!` into one line and rewrapped
+  a long `unwrap_or_else` — run fmt before clippy, not after, or clippy
+  passes then fmt fails CI.

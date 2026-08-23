@@ -1,5 +1,12 @@
 # ADR-044: Computer-use depth (multi-step browser flows)
 
+<!-- adr-predicates
+status: accepted
+implemented: partial
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted (partially implemented)
 
 ## Context

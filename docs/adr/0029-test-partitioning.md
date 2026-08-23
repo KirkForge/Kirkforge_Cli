@@ -1,5 +1,12 @@
 # ADR-0029: Test partitioning — fast / full / coverage suites
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-testdoctor]
+-->
+
 - **Status:** Accepted (per-test timings + flaky-test detection shipped, WO 12.5; smart suggest + apply shipped, WO 12.6)
 - **Date:** 2026-07-21
 - **Related:** [ADR-0016](./0016-test-strategy.md) (test categories),

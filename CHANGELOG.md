@@ -11,6 +11,11 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 43.15: machine-greppable `<!-- adr-predicates -->` block (status,
+  implemented, supersedes, affects-crates) added to 8 pilot ADRs (compound-
+  status: 004, 025, 0029, 0044, 048, 049, 054, 073); `adr_xref_drift` test
+  cross-checks status↔header, implemented↔compound suffix, crate existence,
+  and supersedes resolution. [43.15](docs/workorders/43.15-machine-greppable-adrs.md)
 - WO 43.1: typed `AdapterError` (Unreachable/ModelNotFound/Denied/Other) for
   ollama stream errors — `KirkForgeError::from` downcasts before the
   string-probe fallback (fallback kept for unmigrated adapters). [43.1](docs/workorders/43.1-typed-adapter-errors.md)

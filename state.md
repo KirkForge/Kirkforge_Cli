@@ -4,6 +4,15 @@
 
 ## Shipped (closed this session)
 
+- **WO 43.15**: Done. Machine-greppable `<!-- adr-predicates -->` block
+  (status, implemented, supersedes, affects-crates) added to 8 pilot ADRs
+  (compound-status: 004, 025, 0029, 0044, 048, 049, 054, 073).
+  `adr_xref_drift` test extended with `parse_predicate_block` +
+  `implemented_from_header` cross-checks (status↔header keyword,
+  implemented↔compound suffix, affects-crates dir existence, supersedes
+  ADR-file resolution). Block is opt-in; backfill + require-on-all is a
+  follow-up. Also bumped `crates/kf-budget-core/README.md` test count
+  882→914 (was stale by 32 on origin/dev; `readme_drift` now green).
 - **WO 43.25-43.39**: ALL Done (15 workorders, round-4 full-coverage segment
   sweep). UTF-8 byte-slice panic hardening (43.25); unguarded subprocess
   spawns (43.26); atomic-write permissions + undo ordering (43.27);

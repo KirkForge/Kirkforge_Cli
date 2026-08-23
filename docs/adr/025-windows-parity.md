@@ -1,5 +1,12 @@
 # ADR-025: Windows parity approach
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted (fully implemented)
 - **Date:** 2026-07-19
 

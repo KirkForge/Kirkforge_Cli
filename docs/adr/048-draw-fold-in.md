@@ -1,5 +1,12 @@
 # ADR-048: Draw Fold-In
 
+<!-- adr-predicates
+status: superseded
+implemented: false
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Superseded (draw removed from workspace in 21.11-R0)

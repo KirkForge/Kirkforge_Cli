@@ -1,5 +1,12 @@
 # ADR-054: rlimit sandbox hardening for the non-Docker bash path
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted (WO 27.1 landlock + WO 30.4 seccomp — see amendments below)
 - **Date:** 2026-07-26
 

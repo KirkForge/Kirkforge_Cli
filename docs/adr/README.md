@@ -19,6 +19,10 @@ The Index table below lists every ADR across both series, sorted by ADR
 number (ascending). The `adr_xref_drift` test in `crates/kf-budget-core`
 verifies the table and the file headers agree.
 
+Some ADRs carry a machine-greppable `<!-- adr-predicates … -->` block at
+the top of the file (status, implemented, supersedes, affects-crates) —
+the drift test cross-checks it against the Status header and filesystem.
+
 ## Index
 
 | ADR | Title | Status | Series |

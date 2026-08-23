@@ -219,6 +219,65 @@ pub fn summary_to_json(summary: &kf_workflow::WorkflowSummary) -> String {
     .to_string()
 }
 
+/// Step-level timeout for workflow bash steps. Mirrors the foreground
+/// bash tool's default 30s (`bash.rs`), since template bash steps should
+/// be quick build/grep style commands — anything longer is a hang, not
+/// slowness. `ceiling:` a template that genuinely needs longer should
+/// surface a per-step timeout knob on `Step`; upgrade path is a
+/// `step.timeout_secs` field.
+const WORKFLOW_BASH_TIMEOUT_SECS: u64 = 30;
+
+/// Outcome of a bounded workflow bash spawn. Distinguishes timeout and
+/// cancellation from a normal exit so the caller can produce a
+/// step-specific error message.
+enum BashOutcome {
+    Output(std::process::Output),
+    SpawnError(std::io::Error),
+    Timeout,
+    Cancelled,
+}
+
+/// Spawn `sh -c <command>` with `kill_on_drop`, bounded by both a wall
+/// timeout and the workflow cancel token. On timeout or cancel the
+/// `Child` is dropped, and `kill_on_drop` reaps the process group.
+///
+/// Mirrors the foreground `run_shell_with_token` pattern (`bash_runner`
+/// /mod.rs:629) but in the simpler `output()` form, since workflow
+/// steps don't need the capped-stream drain machinery.
+async fn run_bounded_bash(command: &str, cancel_token: &CancellationToken) -> BashOutcome {
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg(command)
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return BashOutcome::SpawnError(e),
+    };
+    let out_fut = child.wait_with_output();
+    let timeout_fut =
+        tokio::time::sleep(std::time::Duration::from_secs(WORKFLOW_BASH_TIMEOUT_SECS));
+    tokio::pin!(out_fut);
+    tokio::pin!(timeout_fut);
+    let cancel_fut = cancel_token.cancelled();
+    tokio::pin!(cancel_fut);
+    tokio::select! {
+        biased;
+        result = &mut out_fut => match result {
+            Ok(o) => BashOutcome::Output(o),
+            Err(e) => BashOutcome::SpawnError(e),
+        },
+        _ = &mut timeout_fut => BashOutcome::Timeout,
+        _ = &mut cancel_fut => BashOutcome::Cancelled,
+    }
+    // On timeout/cancel the `child` (still owned here) is dropped, and
+    // `kill_on_drop` issues the kill. `out_fut` held a `&mut` borrow on
+    // `child`, so the borrow must end before drop — `tokio::pin!` keeps
+    // the future alive but the borrow is released when the select
+    // returns and `out_fut` goes out of scope at the function's tail.
+}
+
 /// Adapter that presents a `TaskSpawner` as a `StepRunner`. Each agent step
 /// becomes a `TaskRequest` with the step's persona; bash steps run via
 /// `tokio::process::Command`; tool steps are dispatched via the tool registry.
@@ -263,28 +322,31 @@ impl StepRunner for TaskSpawnerStepRunner {
         ) {
             bail!("step '{name}': bash command denied: {denied}");
         }
-        let output = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
-            .await
-            .with_context(|| format!("step '{name}': failed to spawn bash for: {command}"))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if !output.status.success() {
-            bail!(
-                "step '{name}': bash exited {} — stderr: {}",
-                output
-                    .status
-                    .code()
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "signal".into()),
-                stderr.trim()
-            );
+        let output = run_bounded_bash(command, &self.cancel_token).await;
+        match output {
+            BashOutcome::Output(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !output.status.success() {
+                    bail!(
+                        "step '{name}': bash exited {} — stderr: {}",
+                        output
+                            .status
+                            .code()
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "signal".into()),
+                        stderr.trim()
+                    );
+                }
+                Ok(format!("{stdout}{stderr}").trim_end().to_string())
+            }
+            BashOutcome::SpawnError(e) => Err(e)
+                .with_context(|| format!("step '{name}': failed to spawn bash for: {command}")),
+            BashOutcome::Timeout => {
+                bail!("step '{name}': bash timed out after {WORKFLOW_BASH_TIMEOUT_SECS}s")
+            }
+            BashOutcome::Cancelled => bail!("step '{name}': bash cancelled"),
         }
-        Ok(format!("{stdout}{stderr}").trim_end().to_string())
     }
 
     async fn run_tool(
@@ -362,34 +424,36 @@ impl StepRunner for TaskSpawnerStepRunner {
                         ) {
                             bail!("step '{}': bash command denied: {denied}", req.name);
                         }
-                        let output = tokio::process::Command::new("sh")
-                            .arg("-c")
-                            .arg(&req.command)
-                            .stdout(std::process::Stdio::piped())
-                            .stderr(std::process::Stdio::piped())
-                            .output()
-                            .await
-                            .with_context(|| {
+                        match run_bounded_bash(&req.command, &cancel_token).await {
+                            BashOutcome::Output(output) => {
+                                let stdout = String::from_utf8_lossy(&output.stdout);
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                if !output.status.success() {
+                                    bail!(
+                                        "step '{}': bash exited {} — stderr: {}",
+                                        req.name,
+                                        output
+                                            .status
+                                            .code()
+                                            .map(|c| c.to_string())
+                                            .unwrap_or_else(|| "signal".into()),
+                                        stderr.trim()
+                                    );
+                                }
+                                Ok((req.name, format!("{stdout}{stderr}").trim_end().to_string()))
+                            }
+                            BashOutcome::SpawnError(e) => Err(e).with_context(|| {
                                 format!(
                                     "step '{}': failed to spawn bash for: {}",
                                     req.name, req.command
                                 )
-                            })?;
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        if !output.status.success() {
-                            bail!(
-                                "step '{}': bash exited {} — stderr: {}",
-                                req.name,
-                                output
-                                    .status
-                                    .code()
-                                    .map(|c| c.to_string())
-                                    .unwrap_or_else(|| "signal".into()),
-                                stderr.trim()
-                            );
+                            }),
+                            BashOutcome::Timeout => bail!(
+                                "step '{}': bash timed out after {WORKFLOW_BASH_TIMEOUT_SECS}s",
+                                req.name
+                            ),
+                            BashOutcome::Cancelled => bail!("step '{}': bash cancelled", req.name),
                         }
-                        Ok((req.name, format!("{stdout}{stderr}").trim_end().to_string()))
                     }
                     kf_workflow::StepKind::Tool => {
                         let toolset = toolset.as_ref().ok_or_else(|| {
@@ -815,5 +879,76 @@ mod tests {
     async fn default_impl_produces_workflow_tool() {
         let tool = WorkflowTool::new(DenyList::default(), PathGuard::default(), false);
         assert_eq!(tool.def().name, "workflow_run");
+    }
+
+    // WO 43.26: a workflow bash step must honour the workflow cancel
+    // token — a cancelled token aborts the spawn instead of hanging the
+    // workflow. Bounded by an outer 10s wall: if the cancel path
+    // regresses (the old `output().await` had no cancel select), the
+    // test fails fast instead of hanging the suite for 30s.
+    #[tokio::test]
+    async fn run_bash_cancelled_token_returns_error_not_hang() {
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(EchoSpawner {
+            calls: Arc::new(StdMutex::new(Vec::new())),
+        });
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let runner = TaskSpawnerStepRunner {
+            spawner,
+            toolset: None,
+            deny_list: DenyList::default(),
+            path_guard: PathGuard::default(),
+            bash_sandbox_workdir: false,
+            cancel_token: cancel,
+            dry_run: false,
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            runner.run_bash("s", "sleep 60"),
+        )
+        .await;
+        let err = match result {
+            Ok(Err(e)) => e,
+            Ok(Ok(_)) => panic!("cancelled bash step must error, not succeed"),
+            Err(_) => panic!("run_bash hung past 10s — cancel token not honoured"),
+        };
+        assert!(
+            err.to_string().contains("cancelled"),
+            "error must name the cancellation, got: {err}"
+        );
+    }
+
+    // WO 43.26: a stuck workflow bash step must hit the step timeout,
+    // not hang until the executor's outer tool timeout. Bounded by an
+    // outer 45s wall (timeout is 30s): if the timeout path regresses,
+    // the test fails instead of hanging indefinitely.
+    #[tokio::test]
+    async fn run_bash_stuck_step_times_out() {
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(EchoSpawner {
+            calls: Arc::new(StdMutex::new(Vec::new())),
+        });
+        let runner = TaskSpawnerStepRunner {
+            spawner,
+            toolset: None,
+            deny_list: DenyList::default(),
+            path_guard: PathGuard::default(),
+            bash_sandbox_workdir: false,
+            cancel_token: CancellationToken::new(),
+            dry_run: false,
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(45),
+            runner.run_bash("s", "sleep 60"),
+        )
+        .await;
+        let err = match result {
+            Ok(Err(e)) => e,
+            Ok(Ok(_)) => panic!("stuck bash step must error, not succeed"),
+            Err(_) => panic!("run_bash hung past 45s — step timeout not honoured"),
+        };
+        assert!(
+            err.to_string().contains("timed out"),
+            "error must name the timeout, got: {err}"
+        );
     }
 }

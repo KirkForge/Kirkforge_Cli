@@ -28,7 +28,8 @@ why, and the gate evidence.
 - WO 38.9/42.6 items 4-6: memory mtime cache, CachedIndex embeddings in query path, prompt stem stability — [38.9](docs/workorders/38.9-session-performance.md), [42.6](docs/workorders/42.6-performance-items.md)
 
 ### Fixed
-- WO 43.25: char-boundary-safe truncation at 3 byte-slice panic sites (loop_.rs:72, stream.rs:111, events.rs:477) — non-ASCII error text / file content / PTY output with a multibyte char straddling the cut point no longer panics the turn (two sites were outside catch_unwind) — [43.25](docs/workorders/43.25-utf8-byte-slice-panic-hardening.md)
+- WO 43.25: char-boundary-safe truncation at 3 byte-slice panic sites (loop_.rs:72, stream.rs:111, events.rs:477) — non-ASCII Error text / file content / PTY output with a multibyte char straddling the cut point no longer panics the turn (two sites were outside catch_unwind) — [43.25](docs/workorders/43.25-utf8-byte-slice-panic-hardening.md)
+- WO 43.26: guard workflow bash steps + plugin-bus verifier subprocesses — workflow `run_bash`/`run_batch` Bash arm now set `kill_on_drop` + 30s step timeout + cancel-token select; plugin-bus verifier timeout (WO 38.3 watchdog) pinned by a bus-wrapper test — [43.26](docs/workorders/43.26-unguarded-subprocess-workflow-pluginbus.md)
 - WO 42.11 / WO 42.6 item 2: wire content_hash into verifier path — verdict cache keyed by (file, content_hash); skip re-running cargo build/clippy/test for unchanged file content across correction iterations — [42.11](docs/workorders/42.11-content-hash-wiring.md)
 - WO 42.5: MCP .mcp.json content-based re-approval — approvals now store a sha256 content hash; a modified `.mcp.json` under an approved path re-gates — [42.5](docs/workorders/42.5-mcp-content-approval.md)
 - WO 42.7: offload store FIFO eviction + byte cap — replace random-order HashMap eviction with insertion-ordered VecDeque, add `max_bytes` cap — [42.7](docs/workorders/42.7-offload-fifo.md)

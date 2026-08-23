@@ -28,6 +28,14 @@
 - **WO 43.4**: Done. Property-based tests for `kf-routing` path-safety
   (proptest suite: traversal, absolute injection, no-panic, NFC/NFD, symlink
   fixtures) covering 5 branches that had zero tests.
+- **WO 43.19**: Done. Fixed `set_cursor_line_col` byte/char index mismatch
+  (click in prompt with multibyte char on earlier line landed wrong —
+  `char_indices()` byte offset + char-index `cursor_position`). Fixed to
+  count chars per line. Added emoji/CJK/combining-char regression tests,
+  5 selftest unicode render scenarios (wide + narrow geometry), and direct
+  unit tests for 3 zero-test render modules (`chat/lines.rs` grouped_tool_header
+  + render_entry_lines, `rendering/format.rs` format_duration/token_count/
+  budget_pct, `rendering/table.rs` render_table).
 - **WO 41.0-41.9**: ALL Done (series complete).
 - **WO 42.0-42.12**: ALL Done (series complete). 42.0 overview closed.
 - **WO 38.9**: items 1-6 all done (was 30%, now 100%). Closed.

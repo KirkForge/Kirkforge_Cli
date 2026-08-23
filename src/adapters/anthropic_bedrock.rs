@@ -142,6 +142,11 @@ pub(super) async fn parse_bedrock_event_stream<B, E>(
     E: std::fmt::Display + Send + 'static,
 {
     let mut envelope_buffer: Vec<u8> = Vec::new();
+    // [DONE] is only forwarded when the model actually finished
+    // (WO 43.22). Injecting it on every stream end laundered mid-turn
+    // transport drops into Done{Stop}; without a terminal frame the
+    // parser's EOF path emits Done{Error} like every other adapter.
+    let mut saw_message_stop = false;
     let (inner_tx, inner_rx) =
         tokio::sync::mpsc::channel::<Result<Vec<u8>, std::convert::Infallible>>(4096);
 
@@ -177,6 +182,9 @@ pub(super) async fn parse_bedrock_event_stream<B, E>(
                 // A single chunk may carry multiple event-stream frames; the
                 // previous `if let` + `clear()` discarded all but the first.
                 while let Some((inner, end)) = extract_payload(&envelope_buffer) {
+                    if is_message_stop(&inner) {
+                        saw_message_stop = true;
+                    }
                     let _ = inner_tx
                         .send(Ok(format!("data: {inner}\n\n").into_bytes()))
                         .await;
@@ -196,9 +204,25 @@ pub(super) async fn parse_bedrock_event_stream<B, E>(
             }
         }
     }
-    let _ = inner_tx.send(Ok(b"data: [DONE]\n\n".to_vec())).await;
+    if saw_message_stop {
+        let _ = inner_tx.send(Ok(b"data: [DONE]\n\n".to_vec())).await;
+    }
     drop(inner_tx);
     let _ = parser_handle.await;
+}
+
+/// True when a payload is the terminal `message_stop` event. The cheap
+/// substring pre-check avoids re-parsing large delta frames; the JSON
+/// verify stops prose containing the literal `"message_stop"` from
+/// counting as a terminal frame.
+fn is_message_stop(payload: &str) -> bool {
+    if !payload.contains("\"message_stop\"") {
+        return false;
+    }
+    match serde_json::from_str::<serde_json::Value>(payload) {
+        Ok(v) => v.get("type").and_then(|t| t.as_str()) == Some("message_stop"),
+        Err(_) => false,
+    }
 }
 
 /// Ceiling on the outer Bedrock envelope buffer. Matches the inner
@@ -372,6 +396,99 @@ mod tests {
     #[test]
     fn extract_payload_returns_none_for_plain_text() {
         assert!(extract_payload(b"just some text").is_none());
+    }
+
+    #[test]
+    fn is_message_stop_matches_terminal_frame() {
+        assert!(is_message_stop(r#"{"type":"message_stop"}"#));
+    }
+
+    #[test]
+    fn is_message_stop_ignores_literal_in_nested_field() {
+        // A delta whose payload mentions "message_stop" as a JSON value
+        // of another key must not count as the terminal frame.
+        assert!(!is_message_stop(
+            r#"{"type":"content_block_delta","delta":{"type":"message_stop"}}"#
+        ));
+        assert!(!is_message_stop(
+            r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"no stop here"}}"#
+        ));
+    }
+
+    /// WO 43.22: a mid-stream transport drop must surface as Done{Error},
+    /// not be laundered into Done{Stop} by an injected [DONE]. The old
+    /// wrapper forwarded [DONE] on every stream end.
+    #[tokio::test]
+    async fn parse_bedrock_event_stream_transport_drop_yields_done_error() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
+        let frame =
+            br#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}"#;
+        let stream = tokio_stream::iter(vec![
+            Ok::<Vec<u8>, String>(frame.to_vec()),
+            Err("connection reset by peer".to_string()),
+        ]);
+
+        parse_bedrock_event_stream(tx, stream, super::super::STREAM_IDLE_TIMEOUT).await;
+
+        let mut finish_reason = None;
+        let mut saw_error = false;
+        while let Ok(Some(ev)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await
+        {
+            match ev {
+                StreamEvent::Done { finish_reason: fr, .. } => {
+                    finish_reason = Some(fr);
+                    break;
+                }
+                StreamEvent::Error(_) => saw_error = true,
+                _ => {}
+            }
+        }
+        assert!(saw_error, "transport error frame must be forwarded");
+        assert_eq!(
+            finish_reason,
+            Some(crate::shared::FinishReason::Error),
+            "mid-stream drop must yield Done{{Error}}, got {finish_reason:?}"
+        );
+    }
+
+    /// WO 43.22: a complete stream (terminal message_stop seen) still gets
+    /// [DONE] forwarded → Done{Stop} with the accumulated text.
+    #[tokio::test]
+    async fn parse_bedrock_event_stream_complete_stream_yields_done_stop() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
+        let frames = [
+            r#"{"type":"message_start","message":{}}"#.as_bytes(),
+            br#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#,
+            br#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
+            br#"{"type":"message_stop"}"#,
+        ];
+        let chunk: Vec<u8> = frames.concat();
+        let stream = tokio_stream::iter(vec![Ok::<Vec<u8>, std::convert::Infallible>(chunk)]);
+
+        parse_bedrock_event_stream(tx, stream, super::super::STREAM_IDLE_TIMEOUT).await;
+
+        let mut texts = Vec::new();
+        let mut finish_reason = None;
+        while let Ok(Some(ev)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await
+        {
+            match ev {
+                StreamEvent::Done { finish_reason: fr, .. } => {
+                    finish_reason = Some(fr);
+                    break;
+                }
+                StreamEvent::Error(e) => panic!("stream error: {e}"),
+                StreamEvent::Text(t) => texts.push(t),
+                _ => {}
+            }
+        }
+        assert_eq!(texts, vec!["hi".to_string()]);
+        assert_eq!(
+            finish_reason,
+            Some(crate::shared::FinishReason::Stop),
+            "complete stream must yield Done{{Stop}}, got {finish_reason:?}"
+        );
     }
 
     #[test]

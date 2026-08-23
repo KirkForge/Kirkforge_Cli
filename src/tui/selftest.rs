@@ -695,6 +695,180 @@ fn streaming_heading_renders_incrementally() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Unicode render scenarios (WO 43.19).
+//
+// The render path was extracted into pure modules (chat/lines.rs,
+// rendering/format.rs, rendering/table.rs) that never got direct tests
+// because the god-functions they were split from never had any either.
+// These scenarios feed emoji/CJK/combining-char content through the
+// FULL `render_app` pipeline at both a typical (120×40) and a narrow
+// (20×8) geometry, catching wrap/overflow/panic on multibyte content
+// and verifying the content survives into the rendered buffer.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Emoji in a user message must survive `render_app` at 120×40 and at
+/// the narrow 20×8 geometry without panic or missing content. The
+/// narrow case stresses the textwrap `.max(1)` guards (WO 38.11) on
+/// multibyte input. At 20×8 the chat panel is only ~2 rows tall, so a
+/// long message scrolls — we assert emoji presence on the wide render
+/// and use the narrow render only for the no-panic contract.
+#[test]
+fn emoji_chat_renders_at_wide_and_narrow_geometry() {
+    let wide = {
+        let mut h = TuiTestHarness::new().connected("qwen2.5");
+        h.state
+            .conversation
+            .messages
+            .push_back(ConversationEntry::new("user", "hello 🎉 world 🌍 done"));
+        h.render()
+    };
+    assert!(
+        wide.contains("🎉"),
+        "emoji must survive wide render; got:\n{wide}"
+    );
+    assert!(
+        wide.contains("🌍"),
+        "second emoji must survive wide render; got:\n{wide}"
+    );
+
+    // Narrow geometry: the contract is NO PANIC on multibyte content
+    // at degenerate dimensions. render_to_string would have panicked
+    // on overflow; reaching this line means the render path held.
+    let mut h2 = TuiTestHarness::new().connected("qwen2.5");
+    h2.state
+        .conversation
+        .messages
+        .push_back(ConversationEntry::new("user", "hello 🎉 world 🌍 done"));
+    let _narrow = render_to_string(&mut h2.state, 20, 8);
+}
+
+/// CJK content (no spaces) must wrap and render at 120×40 and 20×8
+/// without panic. CJK has no word boundaries, so textwrap falls back
+/// to char-level wrapping — the narrow pane must not panic on the
+/// multibyte boundary walk. Note: textwrap inserts spaces between
+/// CJK chars (its CJK-aware spacing), so we assert on individual
+/// chars, not the contiguous substring.
+#[test]
+fn cjk_chat_renders_at_wide_and_narrow_geometry() {
+    let wide = {
+        let mut h = TuiTestHarness::new().connected("qwen2.5");
+        h.state
+            .conversation
+            .messages
+            .push_back(ConversationEntry::new(
+                "user",
+                "这是一段中文消息用于测试渲染路径不会在窄宽度下崩溃",
+            ));
+        h.render()
+    };
+    assert!(
+        wide.contains('中') && wide.contains('文') && wide.contains('消') && wide.contains('息'),
+        "CJK chars must survive wide render; got:\n{wide}"
+    );
+
+    // Narrow geometry: the contract is NO PANIC on multibyte content
+    // at degenerate dimensions. At 20×8 the chat panel is ~1 row tall,
+    // so a long message scrolls off — we only assert the render path
+    // did not panic (reaching this line means it held).
+    let mut h2 = TuiTestHarness::new().connected("qwen2.5");
+    h2.state
+        .conversation
+        .messages
+        .push_back(ConversationEntry::new(
+            "user",
+            "这是一段中文消息用于测试渲染路径不会在窄宽度下崩溃",
+        ));
+    let _narrow = render_to_string(&mut h2.state, 20, 8);
+}
+
+/// A combining character (é as 'e' + U+0301) in chat content must
+/// render without panic at both geometries. Guards against a render
+/// path that splits a base char from its combining mark (which would
+/// produce a stray accent and a bare 'e').
+#[test]
+fn combining_char_chat_renders_without_panic() {
+    let mut h = TuiTestHarness::new().connected("qwen2.5");
+    h.state
+        .conversation
+        .messages
+        .push_back(ConversationEntry::new(
+            "assistant",
+            "cafe\u{0301} — the combining acute must stay on the 'e'",
+        ));
+    let wide = h.render();
+    assert!(
+        wide.contains("cafe\u{0301}") || wide.contains('é'),
+        "combining char must survive render; got:\n{wide}"
+    );
+    // Narrow geometry must not panic on the combining char boundary.
+    let mut h2 = TuiTestHarness::new().connected("qwen2.5");
+    h2.state
+        .conversation
+        .messages
+        .push_back(ConversationEntry::new("assistant", "cafe\u{0301}"));
+    let _narrow = render_to_string(&mut h2.state, 20, 8);
+}
+
+/// Search highlight query overlapping a multibyte chat char must not
+/// panic and must still render the chat. The search highlighter
+/// (`highlight_line_spans`) does a substring match; a query that lands
+/// inside a multibyte sequence exercises the byte-vs-char boundary in
+/// the matcher. We pick a query that is a valid substring of the
+/// rendered (pre-highlight) text. Note: textwrap inserts spaces
+/// between CJK chars, so we assert on individual chars, not the
+/// contiguous substring.
+#[test]
+fn search_highlight_over_multibyte_chat_renders() {
+    let mut h = TuiTestHarness::new().connected("qwen2.5");
+    h.state
+        .conversation
+        .messages
+        .push_back(ConversationEntry::new("user", "找到 the needle here"));
+    h.state.search.mode = true;
+    // "needle" is ASCII, present in the message — the highlighter must
+    // find it next to the CJK chars without panic.
+    h.state.search.query = "needle".into();
+    let rendered = h.render();
+    assert!(
+        rendered.contains("needle"),
+        "search query text must be present in render; got:\n{rendered}"
+    );
+    // The CJK chars must also survive alongside the highlight (textwrap
+    // may space them, so check each char individually).
+    assert!(
+        rendered.contains('找') && rendered.contains('到'),
+        "CJK chars around the search hit must survive; got:\n{rendered}"
+    );
+}
+
+/// A tool card with emoji in its output must render the card (header
+/// and expanded body) without panic, and the emoji must be visible in
+/// the expanded body. Exercises `tool_card_lines` → textwrap on
+/// multibyte tool output.
+#[test]
+fn tool_card_with_emoji_output_renders() {
+    let mut h = TuiTestHarness::new().connected("qwen2.5");
+    // Finalized (non-streaming) tool entry with emoji in the full output.
+    let mut entry = ConversationEntry::new("tool", "🔧 bash done");
+    entry.tool_output = Some("result: 🎉 success 🌍\n".into());
+    h.state.conversation.messages.push_back(entry);
+    // Default tool_collapsed is true → expand it so the body renders.
+    h.state.conversation.expanded_tools.insert(0);
+    let rendered = h.render();
+    assert!(
+        rendered.contains("🎉"),
+        "emoji in tool output must be visible when expanded; got:\n{rendered}"
+    );
+    // The narrow geometry must also not panic on the emoji tool card.
+    let mut h2 = TuiTestHarness::new().connected("qwen2.5");
+    let mut entry = ConversationEntry::new("tool", "🔧 bash done");
+    entry.tool_output = Some("result: 🎉 success 🌍\n".into());
+    h2.state.conversation.messages.push_back(entry);
+    h2.state.conversation.expanded_tools.insert(0);
+    let _narrow = render_to_string(&mut h2.state, 20, 8);
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Key-dispatch scenarios.
 //
 // The render scenarios above cover the paint path; these cover the

@@ -371,7 +371,9 @@ pub fn render_chat(f: &mut Frame, area: Rect, state: &mut AppState) {
 
 #[cfg(test)]
 mod tests {
-    use super::lines::{message_header, role_badge, tool_card_lines};
+    use super::lines::{
+        grouped_tool_header, message_header, render_entry_lines, role_badge, tool_card_lines,
+    };
     use super::*;
     use crate::shared::test_util::app_state;
     use crate::tui::theme::Theme;
@@ -1159,5 +1161,179 @@ mod tests {
                 "no hidden marker when thinking buffer is empty, got: {text:?}"
             );
         }
+    }
+
+    // ── grouped_tool_header direct tests (WO 43.19) ─────────────────
+    //
+    // `grouped_tool_header` collapses consecutive non-streaming tool
+    // entries into one "🔧 name ×N" header. It was only exercised
+    // indirectly via selftest `tool_call_grouping`. These call it
+    // directly to pin the edge cases: single tool (no group),
+    // streaming tool (no group), expanded member (no group), and the
+    // grouped-label format (same-name vs mixed-names).
+
+    #[test]
+    fn grouped_tool_header_single_tool_returns_none() {
+        let mut state = make_state(ConnectionState::Connected {
+            model: "t".into(),
+            since: std::time::Instant::now(),
+        });
+        state.conversation.tool_collapsed = true;
+        state
+            .conversation
+            .messages
+            .push_back(tool_entry("🔧 bash", "out", 9, 14));
+        // A single tool call is NOT a group — the caller renders it as a
+        // normal tool card.
+        assert!(grouped_tool_header(&state, 0).is_none());
+    }
+
+    #[test]
+    fn grouped_tool_header_streaming_tool_returns_none() {
+        let mut state = make_state(ConnectionState::Connected {
+            model: "t".into(),
+            since: std::time::Instant::now(),
+        });
+        state.conversation.tool_collapsed = true;
+        let mut streaming = tool_entry("🔧 bash", "partial", 9, 14);
+        streaming.streaming = true;
+        state.conversation.messages.push_back(streaming);
+        state
+            .conversation
+            .messages
+            .push_back(tool_entry("🔧 bash", "done", 9, 14));
+        // The first entry is streaming → grouping must NOT start at idx 0.
+        assert!(grouped_tool_header(&state, 0).is_none());
+    }
+
+    #[test]
+    fn grouped_tool_header_expanded_member_returns_none() {
+        let mut state = make_state(ConnectionState::Connected {
+            model: "t".into(),
+            since: std::time::Instant::now(),
+        });
+        state.conversation.tool_collapsed = true;
+        state
+            .conversation
+            .messages
+            .push_back(tool_entry("🔧 bash", "out0", 9, 14));
+        state
+            .conversation
+            .messages
+            .push_back(tool_entry("🔧 bash", "out1", 9, 14));
+        // Expand the second member → the group must un-group.
+        state.conversation.expanded_tools.insert(1);
+        assert!(grouped_tool_header(&state, 0).is_none());
+    }
+
+    #[test]
+    fn grouped_tool_header_collapses_same_name_with_count() {
+        let mut state = make_state(ConnectionState::Connected {
+            model: "t".into(),
+            since: std::time::Instant::now(),
+        });
+        state.conversation.tool_collapsed = true;
+        for i in 0..3 {
+            let out = format!("out{i}");
+            state
+                .conversation
+                .messages
+                .push_back(tool_entry("🔧 bash", &out, 9, 14));
+        }
+        let (end, lines) = grouped_tool_header(&state, 0).expect("group of 3");
+        assert_eq!(end, 2, "group spans idx 0..=2");
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("🔧"), "grouped header carries the wrench");
+        assert!(
+            text.contains("bash ×3"),
+            "same-name group shows 'bash ×3', got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn grouped_tool_header_mixed_names_shows_generic_label() {
+        let mut state = make_state(ConnectionState::Connected {
+            model: "t".into(),
+            since: std::time::Instant::now(),
+        });
+        state.conversation.tool_collapsed = true;
+        state
+            .conversation
+            .messages
+            .push_back(tool_entry("🔧 bash", "out0", 9, 14));
+        state
+            .conversation
+            .messages
+            .push_back(tool_entry("🔧 grep", "out1", 9, 14));
+        let (_end, lines) = grouped_tool_header(&state, 0).expect("group of 2");
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("2 tool calls"),
+            "mixed-name group shows generic '2 tool calls', got: {text:?}"
+        );
+    }
+
+    // ── render_entry_lines direct tests (WO 43.19) ──────────────────
+    //
+    // `render_entry_lines` is the per-message unit the chat render
+    // cache stores. It dispatches by role (tool → tool_card_lines,
+    // assistant → markdown, else → textwrap). It was only exercised
+    // indirectly through `render_chat`. These call it directly to pin
+    // the dispatch and the collapsed-message one-line form.
+
+    #[test]
+    fn render_entry_lines_tool_routes_to_tool_card() {
+        let e = tool_entry("🔧 bash", "body", 9, 14);
+        let lines = render_entry_lines(&e, None, 0, 80, "", true, false, "▁", &default_theme());
+        // Collapsed tool card is exactly one line (the header).
+        assert_eq!(lines.len(), 1);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("bash"));
+    }
+
+    #[test]
+    fn render_entry_lines_collapsed_non_tool_is_one_line_with_hint() {
+        let e = entry_at("assistant", "long body that would wrap", 9, 14);
+        let lines = render_entry_lines(&e, None, 0, 80, "", true, false, "▁", &default_theme());
+        assert_eq!(lines.len(), 1, "collapsed non-tool is one header line");
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("Enter to expand"),
+            "collapsed hint must be present, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn render_entry_lines_user_message_is_textwrapped() {
+        let e = entry_at("user", "short", 9, 14);
+        let lines = render_entry_lines(&e, None, 0, 80, "", false, false, "▁", &default_theme());
+        // Header (USER badge) + one body line.
+        assert!(lines.len() >= 2);
+        let header: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(header.contains("USER"));
+        let body: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            body.contains("short"),
+            "body text must survive, got: {body:?}"
+        );
+    }
+
+    #[test]
+    fn render_entry_lines_streaming_assistant_uses_textwrap_not_markdown() {
+        // While streaming, a lone '#' must NOT be parsed as a heading
+        // (WO 30.0.13). The body is plain textwrap output.
+        let e = entry_at("assistant", "#", 9, 14);
+        let lines = render_entry_lines(&e, None, 0, 80, "", false, true, "▁", &default_theme());
+        // Header + body. The '#' must appear as literal text, not a
+        // styled heading span.
+        let body: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
+        assert!(
+            body.contains('#'),
+            "lone '#' must survive as text, got: {body:?}"
+        );
     }
 }

@@ -1882,6 +1882,75 @@ mod tests {
         assert_eq!(s.conversation.cursor_position, 12);
     }
 
+    /// Multibyte regression (WO 43.19): `cursor_position` is a CHAR
+    /// index everywhere (cursor_byte:808, keys:1299, apply_paste:839).
+    /// The previous `set_cursor_line_col` used `char_indices()` (BYTE
+    /// offsets), so a multibyte char on an earlier line made the
+    /// cursor land wrong. On ASCII the byte and char offsets are
+    /// identical, which is why the test above passed but this one fails
+    /// on the pre-fix code.
+    #[test]
+    fn set_cursor_line_col_handles_multibyte_on_earlier_line() {
+        let mut s = app_state();
+        // "🎉" is 1 char, 4 bytes. Line 0 has 3 chars (a,🎉,b); line 1
+        // starts at CHAR index 4 (after the \n).
+        s.conversation.input = "a🎉b\nc".to_string();
+        // Click line 1, col 0 → char index 4 (the 'c'). Pre-fix returned
+        // 7 (byte offset of 'c'), which is past the 5-char input → the
+        // `input.chars().count()` fall-through? No: 7 > 5 so it clamped
+        // to end (5). Either way, wrong.
+        s.set_cursor_line_col(1, 0);
+        assert_eq!(
+            s.conversation.cursor_position, 4,
+            "cursor must be char index 4 ('c'), not byte offset 7"
+        );
+        // col 1 on line 1 is past 'c' → clamp to end of line 1 = 5.
+        s.set_cursor_line_col(1, 1);
+        assert_eq!(s.conversation.cursor_position, 5);
+        // Click line 0, col 1 → between 'a' and '🎉' = char index 1.
+        s.set_cursor_line_col(0, 1);
+        assert_eq!(s.conversation.cursor_position, 1);
+        // Click line 0, col 2 → after '🎉' = char index 2.
+        s.set_cursor_line_col(0, 2);
+        assert_eq!(s.conversation.cursor_position, 2);
+    }
+
+    /// CJK multibyte (3 bytes/char) on an earlier line. Same bug class:
+    /// byte offset > char index. Two CJK chars on line 0 = 6 bytes but
+    /// 2 chars; line 1 starts at char index 3 (after \n at char 2).
+    #[test]
+    fn set_cursor_line_col_handles_cjk_multibyte() {
+        let mut s = app_state();
+        s.conversation.input = "你好\nx".to_string();
+        // line 1 starts at char index 3 (你,好,\n). col 0 → 3.
+        s.set_cursor_line_col(1, 0);
+        assert_eq!(s.conversation.cursor_position, 3);
+        // line 0, col 1 → after '你' = char index 1.
+        s.set_cursor_line_col(0, 1);
+        assert_eq!(s.conversation.cursor_position, 1);
+        // line 0, col 2 → after '好' = char index 2 (the \n).
+        s.set_cursor_line_col(0, 2);
+        assert_eq!(s.conversation.cursor_position, 2);
+    }
+
+    /// Combining character (é as 'e' + combining acute U+0301) on an
+    /// earlier line. Rust `chars()` yields both code points, so
+    /// `cursor_position` counts them as 2 chars. The bug treated the
+    /// 2-byte 'e' + 2-byte combiner as 4 bytes, landing the cursor off
+    /// by 2 on the next line.
+    #[test]
+    fn set_cursor_line_col_handles_combining_char_on_earlier_line() {
+        let mut s = app_state();
+        // "e\u{0301}" = é (2 code points, 4 bytes). Line 0 = "e\u{0301}z"
+        // (3 chars, 6 bytes); line 1 starts at char index 4.
+        s.conversation.input = "e\u{0301}z\nw".to_string();
+        s.set_cursor_line_col(1, 0);
+        assert_eq!(s.conversation.cursor_position, 4);
+        // col 1 on line 0 = after 'e' = char index 1.
+        s.set_cursor_line_col(0, 1);
+        assert_eq!(s.conversation.cursor_position, 1);
+    }
+
     /// PTY tail cut at 64 KiB with a multibyte char straddling the cut
     /// point must not panic and must produce char-aligned output
     /// (WO 43.25). Before the fix, `&last.content[start..]` panicked

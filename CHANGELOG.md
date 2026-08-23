@@ -11,6 +11,10 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 43.19: fixed `set_cursor_line_col` byte/char index mismatch (click in
+  prompt with multibyte char on earlier line landed wrong) + added
+  emoji/CJK/combining-char regression tests, selftest render scenarios, and
+  direct unit tests for 3 zero-test render modules. [43.19](docs/workorders/43.19-tui-panic-hardening.md)
 - WO 43.1: typed `AdapterError` (Unreachable/ModelNotFound/Denied/Other) for
   ollama stream errors — `KirkForgeError::from` downcasts before the
   string-probe fallback (fallback kept for unmigrated adapters). [43.1](docs/workorders/43.1-typed-adapter-errors.md)

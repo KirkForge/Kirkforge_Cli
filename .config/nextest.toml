@@ -26,6 +26,12 @@ fail-fast = true
 default-filter = "not test(#ignore)"
 slow-timeout = { period = "30s", terminate-after = 1, grace-period = "10s" }
 
+# WO 43.26: this test waits for the 30s workflow step timeout to fire — it
+# needs a longer per-test budget than the 30s ci-fast slow-timeout.
+[[profile.ci-fast.overrides]]
+filter = 'test(run_bash_stuck_step_times_out)'
+slow-timeout = { period = "60s", terminate-after = 1, grace-period = "15s" }
+
 [profile.ci-full]
 # Post-merge: collect all failures, skip ignored tests.
 fail-fast = false

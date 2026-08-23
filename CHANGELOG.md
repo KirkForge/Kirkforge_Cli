@@ -11,44 +11,9 @@ why, and the gate evidence.
 
 ### Changed
 
-- WO 43.6: wired `kf-rbac` permission tiers into the daemon — token mapped
-  to an `Actor` via `KF_CODE_DAEMON_ROLE` (fallback admin), per-op permission
-  check after `check_auth` (Shutdown/QuitAll→OperatorRestart,
-  List/Resolve/Touch/Claim→ViewerResults, Ping/NotifyJobsChanged/
-  InstanceRegister→ViewerStatus). Single-token deployments unchanged.
-  [43.6](docs/workorders/43.6-wire-kf-rbac.md)
-- WO 43.7: ADR-0018 amendment — `JobKind::Skill` (stubbed) superseded by `JobKind::Workflow { template, vars }`, fully executed via `kf_workflow::WorkflowExecutor` (WO 17.7); ADR-0011/0012 "placeholder"/"promoted" prose softened to match Rejected status. [43.7](docs/workorders/43.7-placeholder-adr-triage.md)
-- WO 43.10: cross-session state preservation policy — field-classification
-  table in `state.md` (every store classified as survives/ephemeral);
-  background bash job exit summaries now persisted on session teardown to
-  `<jobs_dir>/bg-exits.ndjson` so `--resume` can report died-with-session
-  jobs; AgentRun-bound fields marked blocked on WO 41.5 Phase 3 — [43.10](docs/workorders/43.10-cross-session-state-policy.md)
-- WO 43.11: graduated landlock FS confinement to the plugin tool spawn path
-  (`PluginToolWrapper::run` now resolves landlock paths for the sandbox cwd +
-  plugin root + config extra paths and passes `Some(paths)` to `setup_rlimits`
-  instead of `None`). Plugin tool subprocesses on Linux are FS-confined like
-  bash children. Stale `ponytail:` comment in `kf-plugin-host/src/sandbox.rs`
-  corrected. Seccomp stays opt-in per ADR-054. [43.11](docs/workorders/43.11-os-sandbox-graduation.md)
-- WO 43.13: triaged the 19 unimplemented bench spec tasks (TECHNICAL.md count
-  drift 18→19 fixed). Each of 19 rows + 3 unmapped tasks classified
-  implement (4) / deferred→ADR-077 (12) / dropped (6). Triage column added;
-  ADR-077 pins the concrete blocker per deferral. [43.13](docs/workorders/43.13-spec-task-triage.md)
-- WO 43.15: machine-greppable `<!-- adr-predicates -->` block (status,
-  implemented, supersedes, affects-crates) added to 8 pilot ADRs (compound-
-  status: 004, 025, 0029, 0044, 048, 049, 054, 073); `adr_xref_drift` test
-  cross-checks status↔header, implemented↔compound suffix, crate existence,
-  and supersedes resolution. [43.15](docs/workorders/43.15-machine-greppable-adrs.md)
-- WO 43.19: fixed `set_cursor_line_col` byte/char index mismatch (click in
-  prompt with multibyte char on earlier line landed wrong) + added
-  emoji/CJK/combining-char regression tests, selftest render scenarios, and
-  direct unit tests for 3 zero-test render modules. [43.19](docs/workorders/43.19-tui-panic-hardening.md)
 - WO 43.1: typed `AdapterError` (Unreachable/ModelNotFound/Denied/Other) for
   ollama stream errors — `KirkForgeError::from` downcasts before the
   string-probe fallback (fallback kept for unmigrated adapters). [43.1](docs/workorders/43.1-typed-adapter-errors.md)
-- WO 43.2: bounded EINTR retry on the atomic-write primitive —
-  `retry_interrupted` helper (10 attempts, 1ms backoff) wraps `open`,
-  `sync_all`, and Unix `rename` in `write_fsync_rename`; spurious signal
-  interruption no longer fails a tool write. [43.2](docs/workorders/43.2-atomic-write-retry.md)
 - WO 43.0-43.17 — serialized the honest-assessment backlog into 17 verified
   workorders (6 analysis agents; ~11 stale claims corrected in-line).
 - WO 43.18-43.24 — round-3 fresh segment audit: 7 workorders of NEW findings
@@ -65,17 +30,12 @@ why, and the gate evidence.
   test.
 - WO 43.38: spawn_blocking for glob walks, tokio::time::sleep for
   computer_use wait, glob-metacharacter redirection gate — [43.38](docs/workorders/43.38-async-blocking-glob-sleep-redirection.md)
-- WO 43.9: per-failure-class correction prompts in `kf-routing` —
-  `correction_prompt()` now matches security → broken_edges → lint → types
-  → fallback (mirrors `decide_correction` precedence) with class-specific
-  guidance and counts, instead of one generic line for every failure — [43.9](docs/workorders/43.9-correction-prompt-guidance.md)
 - WO 43.18-43.24 — fresh segment audit round: abrupt-exit safety, TUI
   hardening, dep/size audit, persistence crash-robustness, adapter
   transport, subprocess lifecycle, test quality (7 analysis agents).
 - docs: update stale WO statuses — 14 WOs marked Done (shipped but never updated): 14.6, 27.0-27.7, 28.6, 31.0, 32.3, 32.4, 33.0, 33.4, 33.9
 - WO 43.4: property-based tests for `kf-routing` path-safety — proptest suite (traversal, absolute injection, no-panic, NFC/NFD, symlink fixtures) covering 5 branches that had zero tests — [43.4](docs/workorders/43.4-path-safety-proptest.md)
-- WO 43.12: Windows doctests now run in CI (added `--doc` step to ci-merge.yml windows job); audited 205 `cfg(unix)` sites / 90 gated test fns, ungated 8 platform-agnostic tests (TUI path-completion, symlink_swap_denied non-symlink cases, drain_capped Cursor tests) — [43.12](docs/workorders/43.12-windows-test-parity-finish.md)
-- WO 43.17: plugin content-hash consent ledger — `approved_plugins.json` stores `{ name, root, content_hash }` per approved plugin; hash mismatch (script edited after approval) skips the plugin with a `/plugins approve <name>` hint. Gated by `plugin_consent_ledger` config flag (default off). Signature-verified plugins opt out. Mirrors MCP 42.5 — [43.17](docs/workorders/43.17-content-hash-consent.md)
+- WO 43.14: cargo-mutants nightly job for security-critical modules (path_safety, secret scrubbing, audit chain, sandbox) — informational baseline via `continue-on-error`; `scripts/run-mutants.sh` local wrapper; nightly-only per ADR-074 — [43.14](docs/workorders/43.14-mutation-testing.md)
 ### Performance
 - WO 38.9/42.6 items 4-6: memory mtime cache, CachedIndex embeddings in query path, prompt stem stability — [38.9](docs/workorders/38.9-session-performance.md), [42.6](docs/workorders/42.6-performance-items.md)
 
@@ -91,11 +51,7 @@ why, and the gate evidence.
 - WO 43.36: kf-compress-core Lite mode now applies transforms (was a no-op identical to Off) — `Pipeline::run` gate short-circuited on `!offloads_bloat()` before the transform loop; restructured to independent gates — [43.36](docs/workorders/43.36-compress-core-lite-noop.md)
 - WO 43.37: remove dead `pending_corrections` queue (write-only state; correction loop applies fixes directly) + fix MCP `stdio_send_request` `Ok(Err(_))` branch leaking pending-map entry on channel-close — [43.37](docs/workorders/43.37-verifier-corrections-queue-mcp-leak.md)
 - WO 43.39: kf-bench markdown-delta uses summary rates, not recomputed union-set rates — [43.39](docs/workorders/43.39-bench-delta-rate.md)
-- WO 43.5: actionable PlaceholderTab errors (9 methods now name cause + remedy: "Chrome/Chromium not available; computer_use requires a local install or `computer_use.hosted = true`") + 8 adapter no-op trait defaults now `tracing::warn!` when called with a non-default value instead of silently discarding; scout.rs `unimplemented!` confirmed test-only (no action) — [43.5](docs/workorders/43.5-panic-path-elimination.md)
-- WO 43.21: crash-robust persistence — audit log per-entry flush+fsync (survives SIGKILL/panic-abort); FileAuditSink torn-tail truncation + Drop flush + verify_chain skips torn final line; session log UTF-8 tolerance (skip bad line, not whole file); task.rs + CachedIndex atomic temp+rename writes; CachedIndex format_version stamp (mismatch → rebuild) — [43.21](docs/workorders/43.21-persistence-crash-robustness.md)
 - WO 43.3: scrub secrets from audit log free-text fields (bash command, plugin args_summary, hook reason) — `scrub_free_text` strips `NAME=value` tokens matching credential shapes + token literals (Bearer, sk-, ghp_, AKIA, xox[bp]-) — [43.3](docs/workorders/43.3-audit-redaction.md)
-- WO 43.8: triage 5 risky silent-error sites — audit-log `data_dir().ok()` now warns on None; sqlite `read`/`stats` separate `QueryReturnedNoRows` from DB/IO errors; bash_jobs drain records `[drain timeout]`/`[drain join error]` markers instead of empty output; anthropic SSE `debug!`s unknown event types; MCP sampling bails on first stream error instead of returning partial text as complete — [43.8](docs/workorders/43.8-silent-error-triage.md)
-- WO 43.18: line-mode SIGINT handler (cancel executor + carryover save + kill_on_drop children), audit per-entry flush (survives panic=abort), grep spawn_blocking (no async runtime stall) — [43.18](docs/workorders/43.18-concurrency-shutdown-safety.md)
 - WO 42.11 / WO 42.6 item 2: wire content_hash into verifier path — verdict cache keyed by (file, content_hash); skip re-running cargo build/clippy/test for unchanged file content across correction iterations — [42.11](docs/workorders/42.11-content-hash-wiring.md)
 - WO 42.5: MCP .mcp.json content-based re-approval — approvals now store a sha256 content hash; a modified `.mcp.json` under an approved path re-gates — [42.5](docs/workorders/42.5-mcp-content-approval.md)
 - WO 42.7: offload store FIFO eviction + byte cap — replace random-order HashMap eviction with insertion-ordered VecDeque, add `max_bytes` cap — [42.7](docs/workorders/42.7-offload-fifo.md)

@@ -854,28 +854,28 @@ tree, ~11 stale claims corrected in-line. See
 
 | WO | Title | Status |
 |----|-------|--------|
-| 43.0 | [Series 43 overview: honest-assessment backlog serialization](43.0-wo43-overview.md) | Done |
+| 43.0 | [Series 43 overview: honest-assessment backlog serialization](43.0-wo43-overview.md) | Planned |
 | 43.1 | [Retire string-probe error classification](43.1-typed-adapter-errors.md) | Done (ollama migrated; openai/anthropic/bedrock/vertex deferred) |
-| 43.2 | [Bounded EAGAIN/EINTR retry on the atomic-write primitive](43.2-atomic-write-retry.md) | Done |
+| 43.2 | [Bounded EAGAIN/EINTR retry on the atomic-write primitive](43.2-atomic-write-retry.md) | Planned |
 | 43.3 | [Audit-log redaction residual gap](43.3-audit-redaction.md) | Done |
 | 43.4 | [Property-based tests for the path-safety surface](43.4-path-safety-proptest.md) | Done |
-| 43.5 | [Eliminate live panic paths and honored no-op stubs](43.5-panic-path-elimination.md) | Done |
-| 43.6 | [Wire kf-rbac into the daemon](43.6-wire-kf-rbac.md) | Done |
-| 43.7 | [Placeholder ADR triage (0011 persistent knowledge, 0012 speculative priming, 0018 scheduled jobs)](43.7-placeholder-adr-triage.md) | Done |
-| 43.8 | [Silent error-handling triage (.ok(), unwrap_or_else, catch-all arms)](43.8-silent-error-triage.md) | Done |
-| 43.9 | [Per-failure correction prompt guidance](43.9-correction-prompt-guidance.md) | Done |
-| 43.10 | [Cross-session state preservation policy](43.10-cross-session-state-policy.md) | Done |
-| 43.11 | [Landlock/seccomp sandbox graduation decision](43.11-os-sandbox-graduation.md) | Done |
-| 43.12 | [Finish Windows test parity](43.12-windows-test-parity-finish.md) | Done |
-| 43.13 | [Triage the 19 unimplemented spec tasks (TECHNICAL.md)](43.13-spec-task-triage.md) | Done |
-| 43.14 | [cargo-mutants nightly gate (targeted modules)](43.14-mutation-testing.md) | Planned |
-| 43.15 | [Machine-greppable ADR predicate blocks](43.15-machine-greppable-adrs.md) | Done |
+| 43.5 | [Eliminate live panic paths and honored no-op stubs](43.5-panic-path-elimination.md) | Planned |
+| 43.6 | [Wire kf-rbac into the daemon](43.6-wire-kf-rbac.md) | Planned |
+| 43.7 | [Placeholder ADR triage (0011 persistent knowledge, 0012 speculative priming, 0018 scheduled jobs)](43.7-placeholder-adr-triage.md) | Planned |
+| 43.8 | [Silent error-handling triage (.ok(), unwrap_or_else, catch-all arms)](43.8-silent-error-triage.md) | Planned |
+| 43.9 | [Per-failure correction prompt guidance](43.9-correction-prompt-guidance.md) | Planned |
+| 43.10 | [Cross-session state preservation policy](43.10-cross-session-state-policy.md) | Planned |
+| 43.11 | [Landlock/seccomp sandbox graduation decision](43.11-os-sandbox-graduation.md) | Planned |
+| 43.12 | [Finish Windows test parity](43.12-windows-test-parity-finish.md) | Planned |
+| 43.13 | [Triage the 18 unimplemented spec tasks (TECHNICAL.md)](43.13-spec-task-triage.md) | Planned |
+| 43.14 | [cargo-mutants nightly gate (targeted modules)](43.14-mutation-testing.md) | Done |
+| 43.15 | [Machine-greppable ADR predicate blocks](43.15-machine-greppable-adrs.md) | Planned |
 | 43.16 | [No-throw dispatch hub (Result-typed)](43.16-no-throw-dispatch.md) | Planned |
-| 43.17 | [Content-hash consent binding for plugin trust](43.17-content-hash-consent.md) | Done |
-| 43.18 | [Abrupt-exit safety: line-mode SIGINT, audit flush, grep blocking](43.18-concurrency-shutdown-safety.md) | Done |
-| 43.19 | [TUI unicode-cursor fix + render-path test coverage](43.19-tui-panic-hardening.md) | Done |
-| 43.20 | [Dependency and binary-size audit](43.20-dep-size-audit.md) | Cancelled (deferred) |
-| 43.21 | [Persistence crash-robustness: audit flush policy, torn-tail tolerance, atomic cache writes](43.21-persistence-crash-robustness.md) | Done |
+| 43.17 | [Content-hash consent binding for plugin trust](43.17-content-hash-consent.md) | Planned |
+| 43.18 | [Abrupt-exit safety: line-mode SIGINT, audit flush, grep blocking](43.18-concurrency-shutdown-safety.md) | Planned |
+| 43.19 | [TUI unicode-cursor fix + render-path test coverage](43.19-tui-panic-hardening.md) | Planned |
+| 43.20 | [Dependency and binary-size audit](43.20-dep-size-audit.md) | Planned |
+| 43.21 | [Persistence crash-robustness: audit flush policy, torn-tail tolerance, atomic cache writes](43.21-persistence-crash-robustness.md) | Planned |
 | 43.22 | [Adapter transport/streaming robustness residual](43.22-adapter-transport-robustness.md) | Planned |
 | 43.23 | [Subprocess lifecycle: parent-death orphans, MCP idle-kill, unguarded host-crate spawns](43.23-subprocess-lifecycle.md) | Planned |
 | 43.24 | [Test assertion-quality triage (assert-free, tautological, stale ignores)](43.24-test-assertion-quality.md) | Planned |

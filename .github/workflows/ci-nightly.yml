@@ -167,6 +167,79 @@ jobs:
         continue-on-error: true
         run: cargo audit
 
+  # Mutation testing for assertion strength on security-critical modules
+  # (ADR-074 tiering: nightly-only, slow). Informational baseline first —
+  # continue-on-error per run so a surviving mutant does not fail the job.
+  # Ratchet to blocking per-module only after a baseline exists. cargo-mutants
+  # is a dev tool installed here via install-action; NOT in any Cargo.toml.
+  mutants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly-mutants
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      # One --file run per security-critical module. --file scopes mutants
+      # to the named source file. -j 2 keeps CI runners responsive. Each run
+      # is informational (continue-on-error) — we record the survival score,
+      # not a pass/fail. Ratchet to blocking per-module after a baseline.
+      - name: Mutants — path_safety (kf-routing)
+        continue-on-error: true
+        run: cargo mutants --file crates/kf-routing/src/path_safety.rs -j 2
+
+      - name: Mutants — secret scrubbing (bash_runner)
+        continue-on-error: true
+        run: cargo mutants --file src/session/bash_runner/mod.rs -j 2
+
+      - name: Mutants — audit chain (shared/audit)
+        continue-on-error: true
+        run: cargo mutants --file src/shared/audit.rs -j 2
+
+      - name: Mutants — sandbox (executor/sandbox)
+        continue-on-error: true
+        run: cargo mutants --file src/session/executor/sandbox.rs -j 2
+
+      - name: Upload mutants artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-report
+          path: |
+            mutants.out.json
+            mutants.out.txt
+
+      - name: Record baseline survival score
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Mutation testing baseline"
+            echo
+            echo "Per-module survival score (informational; ratchet to blocking after baseline):"
+            echo
+            if [ -f mutants.out.json ]; then
+              echo '```json'
+              cat mutants.out.json
+              echo '```'
+            else
+              echo "_mutants.out.json not produced — see job logs_"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Release compile validation on linux + windows. The tag-triggered
   # release.yml does the actual publish; this just verifies the release
   # profile compiles on both platforms overnight (ADR-074: release-build

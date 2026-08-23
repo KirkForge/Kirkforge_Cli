@@ -18,6 +18,11 @@ why, and the gate evidence.
   InstanceRegister→ViewerStatus). Single-token deployments unchanged.
   [43.6](docs/workorders/43.6-wire-kf-rbac.md)
 - WO 43.7: ADR-0018 amendment — `JobKind::Skill` (stubbed) superseded by `JobKind::Workflow { template, vars }`, fully executed via `kf_workflow::WorkflowExecutor` (WO 17.7); ADR-0011/0012 "placeholder"/"promoted" prose softened to match Rejected status. [43.7](docs/workorders/43.7-placeholder-adr-triage.md)
+- WO 43.10: cross-session state preservation policy — field-classification
+  table in `state.md` (every store classified as survives/ephemeral);
+  background bash job exit summaries now persisted on session teardown to
+  `<jobs_dir>/bg-exits.ndjson` so `--resume` can report died-with-session
+  jobs; AgentRun-bound fields marked blocked on WO 41.5 Phase 3 — [43.10](docs/workorders/43.10-cross-session-state-policy.md)
 - WO 43.1: typed `AdapterError` (Unreachable/ModelNotFound/Denied/Other) for
   ollama stream errors — `KirkForgeError::from` downcasts before the
   string-probe fallback (fallback kept for unmigrated adapters). [43.1](docs/workorders/43.1-typed-adapter-errors.md)

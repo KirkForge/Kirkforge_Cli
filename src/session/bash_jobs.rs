@@ -12,7 +12,9 @@ use crate::session::process_group::{
     kill_process_group, kill_process_group_by_pid, reap_child, setup_process_group,
 };
 use crate::shared::SandboxConfig;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -27,6 +29,23 @@ pub enum JobStatus {
     Completed(i32), // exit code
     Failed(String), // error message
     Cancelled,
+}
+
+/// One line in the session-exit summary log (`bg-exits.ndjson`).
+/// Persisted on session teardown for every still-Running job so
+/// `--resume` can report "these jobs died with the session" (WO 43.10).
+/// Jobs that already reached a terminal state are not written — only
+/// the ones the process is about to kill.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BgJobExitSummary {
+    pub id: u64,
+    pub command: String,
+    /// Human-readable status-at-exit. Always "died-with-session" for
+    /// the summary written at teardown; the watcher never runs after
+    /// the process exits, so the real exit code is unknowable.
+    pub status_at_exit: String,
+    pub session_id: String,
+    pub started_at: chrono::DateTime<chrono::Local>,
 }
 
 /// A background bash job.
@@ -568,6 +587,67 @@ impl BashJobRegistry {
         jobs.values()
             .filter(|j| j.status == JobStatus::Running)
             .count()
+    }
+
+    /// Persist a one-line NDJSON summary for every still-Running job to
+    /// `<jobs_dir>/bg-exits.ndjson` so `--resume` can report "these jobs
+    /// died with the session" (WO 43.10). Reuses the existing jobs-dir
+    /// layout; no new subsystem. Best-effort: errors are logged, not
+    /// propagated (teardown must not fail).
+    ///
+    /// Terminal-state jobs are skipped — only the ones the process is
+    /// about to kill get a summary line.
+    pub async fn persist_exit_summaries(&self, session_id: &str) {
+        let running: Vec<BashJob> = {
+            let jobs = self.jobs.lock().await;
+            jobs.values()
+                .filter(|j| j.status == JobStatus::Running)
+                .cloned()
+                .collect()
+        };
+        if running.is_empty() {
+            return;
+        }
+        let dir = match crate::session::jobs_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot resolve jobs dir for bg-exit summary");
+                return;
+            }
+        };
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(error = %e, "cannot create jobs dir for bg-exit summary");
+            return;
+        }
+        let path = dir.join("bg-exits.ndjson");
+        let mut file = match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(), "cannot open bg-exits.ndjson");
+                return;
+            }
+        };
+        for job in running {
+            let summary = BgJobExitSummary {
+                id: job.id,
+                command: job.command,
+                status_at_exit: "died-with-session".to_string(),
+                session_id: session_id.to_string(),
+                started_at: job.started_at,
+            };
+            match serde_json::to_string(&summary) {
+                Ok(line) => {
+                    if let Err(e) = writeln!(file, "{line}") {
+                        tracing::warn!(error = %e, "failed to write bg-exit summary line");
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "failed to serialize bg-exit summary"),
+            }
+        }
     }
 
     /// Clear all completed/failed/cancelled jobs.
@@ -1400,5 +1480,94 @@ mod tests {
             "failed spawn must leave no phantom job"
         );
         assert_eq!(reg.running_count().await, 0);
+    }
+
+    // ── WO 43.10: persist_exit_summaries ──
+
+    /// A still-Running job gets a summary line in bg-exits.ndjson; a
+    /// Completed job does not. The summary carries the id, command, and
+    /// "died-with-session" status so --resume can report what died.
+    #[tokio::test]
+    async fn test_persist_exit_summaries_writes_running_only() {
+        let temp = std::env::temp_dir().join(format!(
+            "kf-wo43-10-bg-exit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _dd = crate::session::DataDirGuard::set(temp.clone());
+
+        let reg = BashJobRegistry::new();
+        let running_id = reg
+            .spawn(
+                "sleep 30",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let done_id = reg
+            .spawn(
+                "echo done",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        wait_for_job_done(&reg, done_id, Duration::from_secs(5)).await;
+
+        reg.persist_exit_summaries("test-session-1").await;
+
+        let path = crate::session::jobs_dir().unwrap().join("bg-exits.ndjson");
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 1, "only the running job should get a line");
+
+        let summary: BgJobExitSummary = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(summary.id, running_id);
+        assert_eq!(summary.command, "sleep 30");
+        assert_eq!(summary.status_at_exit, "died-with-session");
+        assert_eq!(summary.session_id, "test-session-1");
+
+        // Cleanup: cancel the running job so the test leaves no child.
+        reg.cancel(running_id).await;
+        crate::shared::test_util::remove_test_dir(&temp);
+    }
+
+    /// With no running jobs, persist_exit_summaries writes nothing
+    /// (and does not even create the file).
+    #[tokio::test]
+    async fn test_persist_exit_summaries_noop_when_empty() {
+        let temp = std::env::temp_dir().join(format!(
+            "kf-wo43-10-bg-empty-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _dd = crate::session::DataDirGuard::set(temp.clone());
+
+        let reg = BashJobRegistry::new();
+        reg.persist_exit_summaries("test-session-2").await;
+
+        let path = crate::session::jobs_dir().unwrap().join("bg-exits.ndjson");
+        assert!(
+            !path.exists(),
+            "no running jobs means no file should be created"
+        );
+        crate::shared::test_util::remove_test_dir(&temp);
     }
 }

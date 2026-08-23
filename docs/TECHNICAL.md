@@ -1315,7 +1315,63 @@ this packet into `decide_correction`, so clean delegations accept on turn
 0 instead of cycling corrections until exhaustion, and
 `execute_decomposition` subtask verdicts become real. Deterministic
 lint/types/graph emitters remain unported; wiring the binary's
-`plugin_verify_workspace` tool to the crate reducer is follow-up work.
+ `plugin_verify_workspace` tool to the crate reducer is follow-up work.
+
+---
+
+## Cross-session state management (WO 43.10)
+
+KirkForge's state is split into **durable** (survives session death, on
+disk) and **ephemeral** (process-bound, dies with the session). The full
+field-classification table lives in [`state.md`](../state.md) under
+"Cross-session state preservation policy"; this section summarizes the
+architecture.
+
+### Durable stores
+
+All durable state lives under `data_dir()` (`~/.local/share/kf-code/` on
+Linux, resolved via `directories::ProjectDirs`; overridable via
+`KF_CODE_DATA_DIR`):
+
+- `sessions/<id>.conv.ndjson` — conversation transcript (append-only
+  NDJSON with checkpoint rotation; `ConversationLog::Drop` flushes).
+- `sessions/.index.ndjson` — session index cache (id, path, message
+  count, started_at; rebuilt if missing).
+- `undo/<session_id>/<n>.snap` — per-edit undo snapshots.
+- `carryover.json` — carryover profile (model, persona, cost, flags);
+  saved in TUI `teardown()`.
+- `tasks/<id>.json` — subagent task summaries (WO 41.5 Phase 1;
+  `PersistedTask` serde struct).
+- `jobs/<id>/` — scheduled job store (`job.json` + `runs/` per job;
+  atomic write + rename).
+- `jobs/bg-exits.ndjson` — background bash exit summary (WO 43.10);
+  one NDJSON line per still-Running job appended on session teardown so
+  `--resume` can report "these jobs died with the session".
+- `logs/usage.jsonl` — token usage log (budget guard writes; `kf-code
+  metrics` reads).
+- `audit.jsonl` — tamper-evident audit log (hash chain; hook/verifier
+  events).
+
+### Ephemeral stores (intentionally process-bound)
+
+- `SLICED_LISTENERS` (`session/budget.rs`) — session-keyed budget
+  listener HashMap; cleared in `Executor::Drop` (WO 38.8).
+- `GLOBAL_REGISTRY` (`session/bash_jobs.rs`) — background bash job
+  registry + child process handles; children use `kill_on_drop`, and an
+  exit summary is persisted before the process dies (above).
+- Cancel tokens (`tokio_util::sync::CancellationToken`) — turn/task/
+  workflow-scoped; dropped with the owning scope.
+- `ReadGate` (`shared/access.rs`) — per-session "files read" set for
+  the edit-before-read policy; lives on `Executor`.
+- `VerifierSlots` (`session/verifier/slots.rs`) — per-executor verifier
+  instances; lives on `VerifierHandler`.
+
+### Blocked on WO 41.5 Phase 3
+
+The full `AgentRun` object (transcript, artifacts, verifier results) is
+the convergence point where `/jobs`, replay, metrics, correction, and
+orchestration all operate on the same persistent object. Phase 1
+(summaries) shipped; Phase 3 is deferred.
 
 ---
 

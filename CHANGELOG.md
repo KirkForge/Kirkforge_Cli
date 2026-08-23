@@ -41,6 +41,7 @@ why, and the gate evidence.
 - WO 43.32: wire `apply_env_overrides` into production `load_config` — `KF_CODE_*` env vars were documented as layer-2 overrides but only applied under `#[cfg(test)]`; the shipped binary silently ignored them — [43.32](docs/workorders/43.32-config-env-override-layer-dead.md)
 - WO 43.33: jobd `--stop` sends auth token, validates response, 30s timeout, conditional pid removal — `kf-code jobd --stop` was rejected by auth-enabled daemons, returned Ok on Error, hung on unresponsive daemons, and deleted a live daemon's pid file; now reads the token, bails on Error/Busy/timeout, and only removes the pid on confirmed stop — [43.33](docs/workorders/43.33-jobd-stop-auth-timeout.md)
 - WO 43.34: `retrieve()` no longer smears unresolved import edges into all matched symbols — filter now `resolved_file == Some(sym.file)`, matching the already-fixed `to_retrieval_result`; fixes multi-MB system-prompt inflation (7MB / >1M tokens observed) — [43.34](docs/workorders/43.34-context-index-retrieve-smear.md)
+- WO 43.36: kf-compress-core Lite mode now applies transforms (was a no-op identical to Off) — `Pipeline::run` gate short-circuited on `!offloads_bloat()` before the transform loop; restructured to independent gates — [43.36](docs/workorders/43.36-compress-core-lite-noop.md)
 - WO 42.11 / WO 42.6 item 2: wire content_hash into verifier path — verdict cache keyed by (file, content_hash); skip re-running cargo build/clippy/test for unchanged file content across correction iterations — [42.11](docs/workorders/42.11-content-hash-wiring.md)
 - WO 42.5: MCP .mcp.json content-based re-approval — approvals now store a sha256 content hash; a modified `.mcp.json` under an approved path re-gates — [42.5](docs/workorders/42.5-mcp-content-approval.md)
 - WO 42.7: offload store FIFO eviction + byte cap — replace random-order HashMap eviction with insertion-ordered VecDeque, add `max_bytes` cap — [42.7](docs/workorders/42.7-offload-fifo.md)
@@ -118,6 +119,7 @@ Release prep — version bump only. WO 33-34 series highlights:
 ### Added
 - GitHub Discussions enabled.
 - WO 32.16-32.20: Windows stub tests, computer_use beta, security emitter, multi-language verifiers, parallel orchestration, self-update.
+
 
 
 

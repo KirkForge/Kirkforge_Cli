@@ -159,18 +159,16 @@ impl CompressionPipeline {
         cfg: &PipelineConfig,
         mode: Mode,
     ) -> String {
-        if !mode.runs_transforms() || !mode.offloads_bloat() {
+        if !mode.runs_transforms() {
             return content.to_string();
         }
 
         let mut working = content.to_string();
-        if mode.runs_transforms() {
-            for transform in &self.content_transforms {
-                working = transform.apply(&working, content_type);
-            }
+        for transform in &self.content_transforms {
+            working = transform.apply(&working, content_type);
         }
 
-        if ctx.is_bloated(&working, content_type, cfg) {
+        if mode.offloads_bloat() && ctx.is_bloated(&working, content_type, cfg) {
             let key = store.put(&working);
             format!("[offloaded: {key}]")
         } else {
@@ -382,6 +380,47 @@ mod tests {
         );
 
         assert_eq!(out, input);
+        assert!(store.is_empty());
+    }
+
+    // ponytail: pin — Lite must run transforms (runs_transforms==true) even
+    // though offloads_bloat()==false. If this fails, the gate at run()
+    // regressed to skipping Lite before the transform loop (WO 43.36).
+    #[test]
+    fn lite_mode_applies_transforms() {
+        let mut pipeline = CompressionPipeline::new();
+        pipeline.register_content_transform(Arc::new(StripCommentsTransform));
+        let store = InMemoryOffloadStore::new();
+        let input = "fn main() {\n    // comment\n    println!(\"hi\");\n}";
+        let out = pipeline.run(
+            input,
+            ContentType::SourceCode,
+            &CompressionContext::default(),
+            &store,
+            &PipelineConfig::default(),
+            Mode::Lite,
+        );
+        assert_ne!(out, input, "Lite must apply transforms, not act like Off");
+        assert!(!out.contains("// comment"));
+        assert!(out.contains("println"));
+        assert!(store.is_empty(), "Lite must not offload");
+    }
+
+    #[test]
+    fn off_mode_returns_content_unchanged_even_with_transforms() {
+        let mut pipeline = CompressionPipeline::new();
+        pipeline.register_content_transform(Arc::new(StripCommentsTransform));
+        let store = InMemoryOffloadStore::new();
+        let input = "fn main() {\n    // comment\n    println!(\"hi\");\n}";
+        let out = pipeline.run(
+            input,
+            ContentType::SourceCode,
+            &CompressionContext::default(),
+            &store,
+            &PipelineConfig::default(),
+            Mode::Off,
+        );
+        assert_eq!(out, input, "Off must skip transforms entirely");
         assert!(store.is_empty());
     }
 

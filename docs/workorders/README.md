@@ -945,4 +945,5 @@ session/mcp/prompt/verifier, TUI, sandbox/security, daemon/jobs/cli, and
 | WO | Title | Status |
 |----|-------|--------|
 | 43.35 | [Memory store stale-lock latch after crash](43.35-memory-store-stale-lock.md) | Done |
+| 43.36 | [kf-compress-core Lite mode is a no-op (identical to Off)](43.36-compress-core-lite-noop.md) | Done |
 

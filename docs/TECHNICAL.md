@@ -1693,10 +1693,12 @@ The root `Cargo.toml` exposes these features:
   `hosted_def()` and dispatches to `run_hosted_action()` which translates
   Anthropic's action vocabulary to CDP + always captures a screenshot for
   the next model turn. Opt in via `--features computer_use`; default OFF
-  so zero computer_use wire bytes reach the API in a default build. The
-  local headless-Chrome CDP `computer_use` tool
-  (`src/tools/computer_use.rs`) is a separate capability and is
-  unaffected.
+  so zero computer_use wire bytes reach the API in a default build. Since
+  WO 43.20 the feature also gates the local headless-Chrome path: it is
+  `computer_use = ["dep:headless_chrome"]`, so default builds do not
+  compile `headless_chrome` / `chrome_launcher.rs` at all — the local
+  `computer_use` tool (`src/tools/computer_use.rs`) falls back to
+  `PlaceholderTab` (fails gracefully at runtime) when the feature is off.
 - `landlock` – no longer a Cargo feature (WO 27.1). There is no `landlock`
   feature key in `[features]` at all; the landlock module is compiled
   unconditionally on Linux via `cfg(target_os = "linux")` and applied by

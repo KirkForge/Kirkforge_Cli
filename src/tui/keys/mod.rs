@@ -1795,16 +1795,15 @@ fn complete_slash(state: &mut AppState, prefix: &str) -> bool {
 // the last path component. The directory portion of the typed prefix is
 // preserved so `@src/ma` → `@src/main.rs` (not `@main.rs`).
 fn complete_mention(state: &mut AppState, prefix: &str) -> bool {
-    let (path_part, suffix) = match prefix.split_once(':') {
-        Some((p, s)) => (p, format!(":{s}")),
-        None => (prefix, String::new()),
-    };
+    let (path_part, suffix) = split_range_suffix(prefix);
     let (dir, _last) = split_path_prefix(path_part);
     let entries = complete_path(prefix);
     let dir_prefix = if dir == "." {
         String::new()
     } else {
-        format!("{dir}/")
+        // Keep the typed dir and re-attach the OS-native separator so the
+        // completed mention round-trips on Windows (`C:\...\dir\file`).
+        format!("{dir}{}", std::path::MAIN_SEPARATOR_STR)
     };
     let matches: Vec<String> = entries
         .into_iter()
@@ -1846,10 +1845,11 @@ fn apply_completion(state: &mut AppState, trigger: &str, matches: Vec<String>) -
 //
 // Capped at a small constant so a giant directory never floods the
 // suggestion line. Entries are sorted for a stable display.
-fn complete_path(prefix: &str) -> Vec<String> {
-    // Strip an `@path:10-20:raw` range suffix. The delimiter is a `:`
-    // followed by a digit — a plain `split(':')` would also cut Windows
-    // drive letters (`C:\...` → `C`) and complete against the CWD.
+// Split an `@path:10-20:raw` range suffix off a typed prefix. The
+// delimiter is a `:` followed by a digit — a plain cut at the first `:`
+// would also split Windows drive letters (`C:\...` → `C`). Returns
+// (path_part, suffix) where suffix is "" or starts with the `:`.
+fn split_range_suffix(prefix: &str) -> (&str, String) {
     let bytes = prefix.as_bytes();
     let mut cut = prefix.len();
     for (i, &b) in bytes.iter().enumerate() {
@@ -1858,7 +1858,11 @@ fn complete_path(prefix: &str) -> Vec<String> {
             break;
         }
     }
-    let path_part = &prefix[..cut];
+    (&prefix[..cut], prefix[cut..].to_string())
+}
+
+fn complete_path(prefix: &str) -> Vec<String> {
+    let (path_part, _suffix) = split_range_suffix(prefix);
     let (dir, last) = split_path_prefix(path_part);
     let mut out = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {

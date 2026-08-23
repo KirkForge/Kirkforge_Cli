@@ -1577,7 +1577,11 @@ command = "hooks/pre-tool-bash.sh"
             ..Default::default()
         };
         runner.run_with_context("post-turn", &ctx, &default_config());
-        assert_eq!(fired.load(Ordering::SeqCst), 1, "in-process hook must fire exactly once");
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            1,
+            "in-process hook must fire exactly once"
+        );
         assert_eq!(
             seen_event.lock().unwrap().as_deref(),
             Some("post-turn"),

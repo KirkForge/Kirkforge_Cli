@@ -235,6 +235,10 @@ percent-encoding = "2"
 # Budget guard (optional — feature-gated behind "budget").
 kf-budget-core = { workspace = true, optional = true }
 tempfile.workspace = true
+# RBAC permission tiers for the daemon (WO 43.6). Maps the daemon auth token
+# to an Actor with a role (KF_CODE_DAEMON_ROLE, fallback admin) and checks
+# per-op permissions. Single-token deployments keep admin behavior.
+kf-rbac = { workspace = true }
 
 # PTY support for interactive bash commands (WO 21.5-R2, feature-gated).
 # ponytail: ~2 MB binary cost; opt-in via --features pty.

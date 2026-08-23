@@ -679,6 +679,22 @@ Session daemon (background process tracking recent sessions), scheduled-job
 daemon (cron-style, Unix-only), non-interactive line mode, and the binary entry
 point.
 
+**RBAC permission tiers (WO 43.6):** the daemon maps its bearer token to a
+`kf_rbac::Actor` with a role read from `KF_CODE_DAEMON_ROLE` (fallback
+`admin`). After the existing constant-time `check_auth` token gate, each
+request op is checked against `kf_rbac::has_permission`:
+
+| Op | Permission |
+|----|-----------|
+| `Shutdown`, `QuitAll` | `OperatorRestart` |
+| `List`, `Resolve`, `Touch`, `Claim` | `ViewerResults` |
+| `Ping`, `NotifyJobsChanged`, `InstanceRegister` | `ViewerStatus` |
+
+Admin satisfies all tiers. Single-token deployments (no `KF_CODE_DAEMON_ROLE`
+set) keep today's all-access behavior via the admin fallback. Setting
+`KF_CODE_DAEMON_ROLE=viewer` produces a read-only token that can list/resolve
+but cannot shut down the daemon.
+
 **CLI first-run + scriptability (WO 38.10):**
 
 - *Exit codes* (stable, pinned by `KirkForgeError` in `src/main/error.rs`):

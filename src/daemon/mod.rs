@@ -25,6 +25,11 @@ use std::os::unix::process::CommandExt;
 
 use anyhow::Context;
 
+// RBAC permission tiers (WO 43.6). The daemon maps its auth token to an
+// `Actor` with a role and checks a per-op `Permission` after the existing
+// `check_auth` token gate. Single-token deployments default to admin.
+use kf_rbac::{Actor, AuthMethod, Permission, Role};
+
 /// Read the auth token from the `KF_CODE_DAEMON_TOKEN_FILE` env var.
 /// Returns `None` if the env var is not set or the file cannot be read.
 pub fn read_auth_token() -> Option<String> {
@@ -33,6 +38,19 @@ pub fn read_auth_token() -> Option<String> {
         .and_then(|path| std::fs::read_to_string(&path).ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+/// Read the daemon role from `KF_CODE_DAEMON_ROLE` (WO 43.6). Falls back
+/// to `admin` when unset or unparseable, so single-token deployments keep
+/// today's all-access behavior. Unknown values are denied by
+/// `Role::from_str`; we fall back to admin (not viewer) because the
+/// existing single-token contract granted full access — downgrading
+/// silently would be a behavior change.
+pub fn read_daemon_role() -> Role {
+    std::env::var("KF_CODE_DAEMON_ROLE")
+        .ok()
+        .and_then(|s| s.parse::<Role>().ok())
+        .unwrap_or(Role::Admin)
 }
 
 /// Spawn SIGINT/SIGHUP/SIGTERM handlers that all notify the same `shutdown`
@@ -367,6 +385,10 @@ pub struct DaemonState {
     /// Auth token loaded from `KF_CODE_DAEMON_TOKEN_FILE`. `None` means
     /// auth is disabled (legacy, no-auth mode).
     pub expected_token: Option<String>,
+    /// Role assigned to the token bearer (WO 43.6). Read from
+    /// `KF_CODE_DAEMON_ROLE` (fallback `admin`). Single-token
+    /// deployments keep admin behavior.
+    pub role: Role,
     /// Set of session ids currently claimed by an active connection.
     /// Released automatically when the owning connection closes.
     pub open_sessions: HashSet<String>,
@@ -395,6 +417,7 @@ impl DaemonState {
         Self {
             recent: VecDeque::with_capacity(RECENT_SESSIONS_LIMIT + 1),
             expected_token,
+            role: read_daemon_role(),
             open_sessions: HashSet::new(),
             instances: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
@@ -437,6 +460,42 @@ impl DaemonState {
             },
         }
     }
+
+    /// Build the `Actor` for a request, for the RBAC permission check
+    /// (WO 43.6). Call after `check_auth` has succeeded: when auth is off
+    /// the actor is admin (preserves today's all-access behavior); when
+    /// auth is on the actor carries the configured `role`. The token
+    /// value is not re-validated here — `check_auth` is the gate.
+    pub fn actor_for_token(&self, supplied: Option<&str>) -> Actor {
+        let id = match supplied {
+            Some(_) => format!("daemon:{}", self.role.as_str()),
+            None => "daemon:unauthenticated".to_string(),
+        };
+        Actor {
+            id,
+            role: self.role,
+            tenant_id: String::new(),
+            auth_method: AuthMethod::ApiKey,
+            verified_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        }
+    }
+
+    /// Map a request op to the `Permission` it requires (WO 43.6).
+    /// Shutdown/QuitAll → OperatorRestart; List/Resolve/Touch/Claim →
+    /// ViewerResults; Ping/NotifyJobsChanged/InstanceRegister →
+    /// ViewerStatus. Admin satisfies all of these (see ADMIN_PERMS).
+    pub fn required_permission(req: &Request) -> Permission {
+        match req {
+            Request::Shutdown { .. } | Request::QuitAll { .. } => Permission::OperatorRestart,
+            Request::List { .. }
+            | Request::Resolve { .. }
+            | Request::Touch { .. }
+            | Request::Claim { .. } => Permission::ViewerResults,
+            Request::Ping { .. }
+            | Request::NotifyJobsChanged { .. }
+            | Request::InstanceRegister { .. } => Permission::ViewerStatus,
+        }
+    }
 }
 
 #[cfg(not(unix))]
@@ -457,6 +516,7 @@ impl DaemonState {
         Self {
             recent: VecDeque::with_capacity(RECENT_SESSIONS_LIMIT + 1),
             expected_token,
+            role: read_daemon_role(),
             open_sessions: HashSet::new(),
         }
     }

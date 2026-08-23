@@ -11,6 +11,12 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 43.6: wired `kf-rbac` permission tiers into the daemon — token mapped
+  to an `Actor` via `KF_CODE_DAEMON_ROLE` (fallback admin), per-op permission
+  check after `check_auth` (Shutdown/QuitAll→OperatorRestart,
+  List/Resolve/Touch/Claim→ViewerResults, Ping/NotifyJobsChanged/
+  InstanceRegister→ViewerStatus). Single-token deployments unchanged.
+  [43.6](docs/workorders/43.6-wire-kf-rbac.md)
 - WO 43.1: typed `AdapterError` (Unreachable/ModelNotFound/Denied/Other) for
   ollama stream errors — `KirkForgeError::from` downcasts before the
   string-probe fallback (fallback kept for unmigrated adapters). [43.1](docs/workorders/43.1-typed-adapter-errors.md)

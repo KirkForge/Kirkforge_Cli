@@ -225,6 +225,19 @@ async fn handle_client(
                     }
                     continue;
                 }
+                if !kf_rbac::has_permission(
+                    &s.actor_for_token(auth_token.as_deref()),
+                    kf_rbac::Permission::ViewerStatus,
+                ) {
+                    let resp = Response::error(format!(
+                        "forbidden: requires {}",
+                        kf_rbac::Permission::ViewerStatus.as_str()
+                    ));
+                    if write_response(&mut stream, resp).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
                 if let Some(ref cv) = client_version {
                     let daemon_version = env!("CARGO_PKG_VERSION");
                     if cv != daemon_version {
@@ -300,6 +313,9 @@ async fn handle_request(
     claimed: &mut Vec<String>,
 ) -> Response {
     let version = env!("CARGO_PKG_VERSION");
+    // WO 43.6: permission tier for this op. Computed once before the match
+    // consumes `req`; checked after `check_auth` succeeds in each arm.
+    let perm = DaemonState::required_permission(&req);
     match req {
         Request::Ping {
             version: client_version,
@@ -308,6 +324,9 @@ async fn handle_request(
             let s = state.lock().await;
             if let Err(e) = s.check_auth(auth_token.as_deref()) {
                 return e;
+            }
+            if !kf_rbac::has_permission(&s.actor_for_token(auth_token.as_deref()), perm) {
+                return Response::error(format!("forbidden: requires {}", perm.as_str()));
             }
             if let Some(ref cv) = client_version {
                 if cv != version {
@@ -324,6 +343,9 @@ async fn handle_request(
             if let Err(e) = s.check_auth(auth_token.as_deref()) {
                 return e;
             }
+            if !kf_rbac::has_permission(&s.actor_for_token(auth_token.as_deref()), perm) {
+                return Response::error(format!("forbidden: requires {}", perm.as_str()));
+            }
             s.refresh();
             let sessions: Vec<_> = s.recent.iter().cloned().collect();
             let arr: Vec<serde_json::Value> = sessions
@@ -337,6 +359,9 @@ async fn handle_request(
             let s = state.lock().await;
             if let Err(e) = s.check_auth(auth_token.as_deref()) {
                 return e;
+            }
+            if !kf_rbac::has_permission(&s.actor_for_token(auth_token.as_deref()), perm) {
+                return Response::error(format!("forbidden: requires {}", perm.as_str()));
             }
             match s.resolve(&id) {
                 Some(entry) => Response::ok_json(serde_json::json!({
@@ -356,6 +381,9 @@ async fn handle_request(
             if let Err(e) = s.check_auth(auth_token.as_deref()) {
                 return e;
             }
+            if !kf_rbac::has_permission(&s.actor_for_token(auth_token.as_deref()), perm) {
+                return Response::error(format!("forbidden: requires {}", perm.as_str()));
+            }
             s.touch(&id, path.path);
             s.broadcast(InstanceEvent::ThreadsChanged);
             Response::ok_empty()
@@ -366,6 +394,9 @@ async fn handle_request(
             if let Err(e) = s.check_auth(auth_token.as_deref()) {
                 return e;
             }
+            if !kf_rbac::has_permission(&s.actor_for_token(auth_token.as_deref()), perm) {
+                return Response::error(format!("forbidden: requires {}", perm.as_str()));
+            }
             tracing::info!("daemon received shutdown request");
             s.broadcast(InstanceEvent::Quit);
             Response::ok_empty()
@@ -375,6 +406,9 @@ async fn handle_request(
             let mut s = state.lock().await;
             if let Err(e) = s.check_auth(auth_token.as_deref()) {
                 return e;
+            }
+            if !kf_rbac::has_permission(&s.actor_for_token(auth_token.as_deref()), perm) {
+                return Response::error(format!("forbidden: requires {}", perm.as_str()));
             }
             if s.open_sessions.contains(&id) {
                 return Response::Busy {
@@ -391,6 +425,9 @@ async fn handle_request(
             if let Err(e) = s.check_auth(auth_token.as_deref()) {
                 return e;
             }
+            if !kf_rbac::has_permission(&s.actor_for_token(auth_token.as_deref()), perm) {
+                return Response::error(format!("forbidden: requires {}", perm.as_str()));
+            }
             tracing::info!("daemon received quit_all request");
             s.broadcast(InstanceEvent::Quit);
             Response::ok_empty()
@@ -400,6 +437,9 @@ async fn handle_request(
             let s = state.lock().await;
             if let Err(e) = s.check_auth(auth_token.as_deref()) {
                 return e;
+            }
+            if !kf_rbac::has_permission(&s.actor_for_token(auth_token.as_deref()), perm) {
+                return Response::error(format!("forbidden: requires {}", perm.as_str()));
             }
             s.broadcast(InstanceEvent::JobsChanged);
             Response::ok_empty()
@@ -824,5 +864,102 @@ mod tests {
             state.check_auth(None).is_ok(),
             "no auth should be required when no token configured"
         );
+    }
+
+    // WO 43.6: RBAC permission tiers. A viewer-role token can List
+    // (ViewerResults) but cannot Shutdown (requires OperatorRestart).
+    #[tokio::test]
+    async fn viewer_role_can_list_but_not_shutdown() {
+        let _guard = crate::session::test_data_dir_lock().lock().await;
+        let dir = tempfile::tempdir().unwrap();
+
+        let token_path = dir.path().join("token");
+        std::fs::write(&token_path, "viewer-secret").unwrap();
+        let _env_token = EnvGuard::set(
+            "KF_CODE_DAEMON_TOKEN_FILE",
+            token_path.to_string_lossy().as_ref(),
+        );
+        let _env_role = EnvGuard::set("KF_CODE_DAEMON_ROLE", "viewer");
+
+        let socket = dir.path().join("rbac.sock");
+        let pid = dir.path().join("rbac.pid");
+        let server_handle = tokio::spawn(run_daemon_at(socket.clone(), pid.clone()));
+        wait_for_socket(&socket).await;
+
+        // connect_at does a version-gated ping (ViewerStatus) — viewer has it.
+        let mut client = DaemonClient::connect_at(socket.clone()).await.unwrap();
+
+        // List (ViewerResults) — viewer has it. Should succeed.
+        let list_result = client.list_recent().await;
+        assert!(
+            list_result.is_ok(),
+            "viewer should be able to List, got: {list_result:?}"
+        );
+
+        // Shutdown (OperatorRestart) — viewer lacks it. Should fail with
+        // "forbidden" in the error message.
+        let shutdown_result = client.shutdown().await;
+        assert!(
+            shutdown_result.is_err(),
+            "viewer should NOT be able to Shutdown, got Ok"
+        );
+        let msg = match shutdown_result {
+            Err(e) => format!("{e}"),
+            Ok(_) => unreachable!(),
+        };
+        assert!(
+            msg.contains("forbidden"),
+            "shutdown denial should mention forbidden, got: {msg}"
+        );
+
+        drop(client);
+        server_handle.abort();
+        let _ = std::fs::remove_file(&socket);
+        let _ = std::fs::remove_file(&pid);
+    }
+
+    // WO 43.6: no-token behavior unchanged. With no auth configured, the
+    // actor defaults to admin (KF_CODE_DAEMON_ROLE unset), so both List
+    // and Shutdown succeed — today's all-access behavior.
+    #[tokio::test]
+    async fn no_token_admin_fallback_allows_all() {
+        let _guard = crate::session::test_data_dir_lock().lock().await;
+        let dir = tempfile::tempdir().unwrap();
+
+        let _env_no_token = EnvGuard::remove("KF_CODE_DAEMON_TOKEN_FILE");
+        let _env_no_role = EnvGuard::remove("KF_CODE_DAEMON_ROLE");
+
+        let socket = dir.path().join("nofallback.sock");
+        let pid = dir.path().join("nofallback.pid");
+        let server_handle = tokio::spawn(run_daemon_at(socket.clone(), pid.clone()));
+        wait_for_socket(&socket).await;
+
+        let mut client = DaemonClient::connect_at(socket.clone()).await.unwrap();
+
+        // Both List and Shutdown should succeed — admin fallback.
+        assert!(
+            client.list_recent().await.is_ok(),
+            "admin fallback should allow List"
+        );
+        assert!(
+            client.shutdown().await.is_ok(),
+            "admin fallback should allow Shutdown"
+        );
+
+        server_handle.await.unwrap().unwrap();
+        assert!(!socket.exists(), "daemon left stale socket");
+        assert!(!pid.exists(), "daemon left stale pid file");
+    }
+
+    // Helper: poll for the daemon socket to appear (1s budget).
+    async fn wait_for_socket(socket: &std::path::Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while std::time::Instant::now() < deadline {
+            if socket.exists() {
+                return;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+        panic!("daemon did not bind socket in time at {}", socket.display());
     }
 }

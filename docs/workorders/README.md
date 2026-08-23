@@ -947,4 +947,19 @@ session/mcp/prompt/verifier, TUI, sandbox/security, daemon/jobs/cli, and
 | 43.35 | [Memory store stale-lock latch after crash](43.35-memory-store-stale-lock.md) | Done |
 | 43.36 | [kf-compress-core Lite mode is a no-op (identical to Off)](43.36-compress-core-lite-noop.md) | Done |
 | 43.37 | [Verifier corrections dead-queue + MCP pending-map leak](43.37-verifier-corrections-queue-mcp-leak.md) | Done |
+| 43.25 | [UTF-8 byte-slice panic hardening (executor + TUI streaming)](43.25-utf8-byte-slice-panic-hardening.md) | Planned |
+| 43.26 | [Unguarded subprocess spawns (workflow bash, plugin-bus verifier)](43.26-unguarded-subprocess-spawns.md) | Planned |
+| 43.27 | [Atomic-write permission preservation + undo-ordering bug](43.27-atomic-write-permission.md) | Planned |
+| 43.28 | [Background/PTY bash secret leakage (env scrub gap)](43.28-background-pty-secret-leak.md) | Planned |
+| 43.29 | [Prompt-compaction out-of-bounds panic (minify_old_messages)](43.29-prompt-compaction-oob.md) | Planned |
+| 43.30 | [Pre-tool hook veto ineffective for file tools](43.30-file-tool-hook-veto.md) | Planned |
+| 43.31 | [Doom-loop banner renders wrong selection](43.31-doom-loop-banner-selection.md) | Planned |
+| 43.32 | [Config env-override layer dead in production](43.32-config-env-override-layer-dead.md) | Planned |
+| 43.33 | [jobd stop/auth/timeout + pid-removal-on-reject](43.33-jobd-stop-auth-timeout.md) | Planned |
+| 43.34 | [Context-index retrieval smears unresolved edges](43.34-context-index-retrieve-smear.md) | Planned |
+| 43.35 | [kf-memory-store stale-lock latch after crash](43.35-memory-store-stale-lock.md) | Planned |
+| 43.36 | [kf-compress-core Lite mode is a no-op](43.36-compress-core-lite-noop.md) | Planned |
+| 43.37 | [Verifier corrections dead-queue + MCP pending-map leak](43.37-verifier-corrections-queue-mcp-leak.md) | Planned |
+| 43.38 | [Async blocking (glob, computer_use) + glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Done |
+| 43.39 | [kf-bench markdown-delta rate contradiction](43.39-bench-delta-rate.md) | Planned |
 

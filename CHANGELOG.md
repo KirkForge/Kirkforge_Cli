@@ -25,6 +25,8 @@ why, and the gate evidence.
   the foreground-only scrub leaked provider secrets to the model via
   `bash(background=true)` + `bash_status`. Added `pub(crate)` helper + pinning
   test.
+- WO 43.38: spawn_blocking for glob walks, tokio::time::sleep for
+  computer_use wait, glob-metacharacter redirection gate — [43.38](docs/workorders/43.38-async-blocking-glob-sleep-redirection.md)
 - WO 43.18-43.24 — fresh segment audit round: abrupt-exit safety, TUI
   hardening, dep/size audit, persistence crash-robustness, adapter
   transport, subprocess lifecycle, test quality (7 analysis agents).
@@ -120,6 +122,7 @@ Release prep — version bump only. WO 33-34 series highlights:
 ### Added
 - GitHub Discussions enabled.
 - WO 32.16-32.20: Windows stub tests, computer_use beta, security emitter, multi-language verifiers, parallel orchestration, self-update.
+
 
 
 

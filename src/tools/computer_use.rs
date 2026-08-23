@@ -427,7 +427,7 @@ async fn run_hosted_action(
         "screenshot" => Ok(()),
         "wait" => {
             let secs = args.get("duration").and_then(|d| d.as_f64()).unwrap_or(1.0);
-            std::thread::sleep(Duration::from_secs_f64(secs.max(0.0)));
+            tokio::time::sleep(Duration::from_secs_f64(secs.max(0.0))).await;
             Ok(())
         }
         "click" | "left_click" | "double_click" | "triple_click" => tab.click_xy(x, y),

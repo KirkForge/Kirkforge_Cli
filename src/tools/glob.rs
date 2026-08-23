@@ -79,35 +79,46 @@ impl Tool for Glob {
         }
         let glob_set = builder.build().unwrap_or_else(|_| GlobSet::empty());
 
-        let mut matches = Vec::new();
+        // Walk the filesystem on a blocking thread — `ignore::WalkBuilder` is
+        // synchronous `std::fs` traversal and would stall the tokio worker
+        // for a large `base_dir` (e.g. model-supplied `base_dir="/"`).
+        // `path_guard` is `Clone`; clone it into the `'static` closure.
+        // `base_path` is cloned so the original remains for the result header.
+        let path_guard = self.path_guard.clone();
+        let walk_base = base_path.clone();
+        let mut matches = tokio::task::spawn_blocking(move || {
+            let mut out = Vec::new();
+            let walker = ignore::WalkBuilder::new(&walk_base)
+                .git_ignore(true)
+                .git_global(true)
+                .git_exclude(true)
+                .build();
 
-        let walker = ignore::WalkBuilder::new(&base_path)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .build();
+            for entry in walker.flatten() {
+                let entry_path = entry.path();
+                if entry_path.is_dir() {
+                    continue;
+                }
 
-        for entry in walker.flatten() {
-            let entry_path = entry.path();
-            if entry_path.is_dir() {
-                continue;
+                // Per-file traversal guard: the walker may have followed a
+                // symlink from inside the base_dir to outside it, or the file
+                // may sit on a denied path. `check_traversal` is the
+                // lightweight deny-list + symlink + sandbox check (no
+                // size/binary gate, because we are only listing paths).
+                if let GuardVerdict::Denied(_) = path_guard.check_traversal(entry_path) {
+                    continue;
+                }
+
+                // Relative path matching
+                let rel = entry_path.strip_prefix(&walk_base).unwrap_or(entry_path);
+                if glob_set.is_match(rel) {
+                    out.push(rel.to_string_lossy().to_string());
+                }
             }
-
-            // Per-file traversal guard: the walker may have followed a
-            // symlink from inside the base_dir to outside it, or the file
-            // may sit on a denied path. `check_traversal` is the lightweight
-            // deny-list + symlink + sandbox check (no size/binary gate,
-            // because we are only listing paths).
-            if let GuardVerdict::Denied(_) = self.path_guard.check_traversal(entry_path) {
-                continue;
-            }
-
-            // Relative path matching
-            let rel = entry_path.strip_prefix(&base_path).unwrap_or(entry_path);
-            if glob_set.is_match(rel) {
-                matches.push(rel.to_string_lossy().to_string());
-            }
-        }
+            out
+        })
+        .await
+        .unwrap_or_default();
 
         matches.sort();
         let total = matches.len();

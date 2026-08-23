@@ -4,6 +4,42 @@
 
 ## Shipped (closed this session)
 
+- **WO 43 SERIES COMPLETE** (all 43.x Done). Closed this session:
+  - **WO 43.22**: adapter transport robustness — Bedrock forwards `[DONE]`
+    only after terminal `message_stop` (mid-turn drop → Done{Error}, not
+    laundered Done{Stop}); send_with_retry honors `Retry-After` (seconds);
+    retry_backoff jitter wall-clock-seeded (no synchronized retry waves);
+    turn.rs estimates tokens from the 42.12 cache when Done arrives
+    usage-less (logged, not yet flagged — see pending); disclosure comments
+    at SSE/openai_compat silent drops; connect_timeout(10s) on the model
+    client; vertex caches OAuth tokens (vertex_auth returns AccessToken).
+  - **WO 43.23**: subprocess lifecycle — `PR_SET_PDEATHSIG` in
+    setup_process_group pre_exec (Linux) so abort/SIGKILL can't orphan
+    children; `sweep_on_session_exit` cancels running bash jobs (TUI +
+    line-mode, persists 43.10 exit summaries first); MCP reader idle
+    timeout armed only while requests are pending (idle server stays
+    connected; 300ms under cfg(test)); kf-plugin-host tool.rs/hook.rs got
+    the verifier watchdog (killpg + deadline; hook fails open, pinned by
+    module doc).
+  - **WO 43.24**: test assertion quality — named weak tests now assert
+    observable state (client roundtrip, hook marker, captured tracing,
+    pending-untouched, glob determinism); 2 can't-fail noop tests deleted;
+    stale kf-rbac ignore reason repointed at state.md pending.
+  - **WO 43.20** (finished after interruption): handlebars replaced by a
+    ~100-line stand-alone-tag-faithful mini renderer (golden-tested against
+    real handlebars 6; fixed latent `{{!` comment leak poisoning every
+    system prompt); arboard default-features off; aws stack refreshed to
+    sigv4 1.3.8 (MSRV-pinned set); rustyline 16; `computer_use` now a real
+    feature gating headless_chrome (default builds lose local Chrome
+    execution — DEFERRED by design, see pending); lock graph 572 → 549
+    packages; binary 17,212,536 → 17,200,248 B.
+- **WO 44 series created** (25 workorders + 44.0 overview): full WO 43
+  regression audit (36 WOs verified — 34 clean, 2 findings) + five-area
+  fresh sweep (adapters/shared, session, tui/main/daemon, tools/crates,
+  tests/CI). Start at [44.0](docs/workorders/44.0-wo44-overview.md).
+- **README drift fix**: 17 stale WO 43 status rows synced to file-header
+  truth (left red by the interrupted prior session).
+
 - **WO 43.16**: Done. No-throw dispatch hub — eliminated 3 remaining panic
   sites in dispatch-reachable code (dispatch.rs:421 deferred-file `expect` →
   guarded `Failure(Internal)`; mod.rs:380 `stratum_store` `expect` →
@@ -47,6 +83,27 @@
 
 ## Pending / Deferred (open)
 
+- **WO 44 series (25 items)**: the next phase. Highest risk first: 44.20
+  (bash `&` allowlist bypass), 44.22 (Anthropic key → ollama_host), 44.36
+  (executor death-spin), 44.52 (PR CI silent skip). Full list in
+  [44.0](docs/workorders/44.0-wo44-overview.md).
+- **WO 43.20 (deferred tail)**: http 0.2/http-body 0.4 dedup NOT achievable —
+  aws `sign-http` itself needs http 0.2 and the newer crate set needs rustc
+  ≥1.91 (toolchain is 1.88). Remaining: revisit at toolchain ≥1.94. Also
+  base64 0.22 copy persists transitively (hyper-util + jsonwebtoken).
+  Wayland clipboard path (arboard without image-data) unverified — manual
+  check: Wayland session → TUI → select → Ctrl+Shift+C → `wl-paste`.
+- **WO 43.22 (deferred tail)**: (a) `estimated: bool` on TurnEvent::CostStats
+  for the usage-less fallback (interim: comment + tracing line); (b) unit
+  tests for the usage fallback + vertex token cache (need executor harness /
+  Authenticator injection — pre-existing `ponytail:` ceiling in vertex_auth).
+- **kf-lsp PDEATHSIG gap**: `crates/kf-lsp/src/lib.rs:1059` has its own
+  `setup_process_group` duplicate without the new PDEATHSIG call. Remaining:
+  one prctl line or dedupe onto the session helper.
+- **WO 43.24 (deferred tail)**: kf-testdoctor assert-free-body heuristic —
+  needs a source-scan pass in suggest.rs (~150+ lines), not the cheap
+  version hoped for.
+
 - **WO 43.1 (deferred tail)**: migrate the remaining model adapters to return
   typed `AdapterError` from their `stream()` error paths so the string-probe
   fallback in `src/main/error.rs` can be deleted. Deferred because 43.1 scoped
@@ -56,15 +113,9 @@
   `send_with_retry(...).await?` call, then remove the `contains()` block in
   `error.rs:49-73` once all producers are typed. Tracked in
   [43.1](docs/workorders/43.1-typed-adapter-errors.md).
-- **WO 43.2, 43.5-43.17**: honest-assessment backlog (rounds 1-2), all Planned.
-  6 analysis agents verified every claim; ~11 stale claims corrected in-line.
-  Start at [43.0](docs/workorders/43.0-wo43-overview.md).
-- **WO 43.18-43.24**: round-3 fresh segment audit (concurrency/shutdown,
-  TUI, deps/size, persistence crash-robustness, adapter transport,
-  subprocess lifecycle, test quality). NEW findings — top risks: line-mode
-  Ctrl-C orphans bash children; audit BufWriter lost on panic-abort; no
-  PDEATHSIG (parent abort orphans all subprocesses); Bedrock `[DONE]`
-  injection bypasses truncation; headless_chrome ungated (~1-2 MB).
+- **WO 43.2, 43.5-43.19, 43.21**: honest-assessment backlog (rounds 1-4) —
+  ALL Done (verified by the WO 44 regression audit; stale "Planned" claims
+  corrected). Series closed.
 - **WO 43.26 DEFERRED**: the bus-path blocking-on-async-worker concern
   (`dispatch.rs:185` holds `Mutex<VerifierBus>` while calling sync
   `verify()` → `PluginVerifier::run()` on the tokio worker, blocking it

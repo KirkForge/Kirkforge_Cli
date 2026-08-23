@@ -28,7 +28,9 @@ use anyhow::Context;
 // RBAC permission tiers (WO 43.6). The daemon maps its auth token to an
 // `Actor` with a role and checks a per-op `Permission` after the existing
 // `check_auth` token gate. Single-token deployments default to admin.
-use kf_rbac::{Actor, AuthMethod, Permission, Role};
+use kf_rbac::Role;
+#[cfg(unix)]
+use kf_rbac::{Actor, AuthMethod, Permission};
 
 /// Read the auth token from the `KF_CODE_DAEMON_TOKEN_FILE` env var.
 /// Returns `None` if the env var is not set or the file cannot be read.

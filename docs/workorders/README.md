@@ -874,11 +874,11 @@ tree, ~11 stale claims corrected in-line. See
 | 43.17 | [Content-hash consent binding for plugin trust](43.17-content-hash-consent.md) | Done |
 | 43.18 | [Abrupt-exit safety: line-mode SIGINT, audit flush, grep blocking](43.18-concurrency-shutdown-safety.md) | Done |
 | 43.19 | [TUI unicode-cursor fix + render-path test coverage](43.19-tui-panic-hardening.md) | Done |
-| 43.20 | [Dependency and binary-size audit](43.20-dep-size-audit.md) | Cancelled (deferred) |
+| 43.20 | [Dependency and binary-size audit](43.20-dep-size-audit.md) | Done |
 | 43.21 | [Persistence crash-robustness: audit flush policy, torn-tail tolerance, atomic cache writes](43.21-persistence-crash-robustness.md) | Done |
-| 43.22 | [Adapter transport/streaming robustness residual](43.22-adapter-transport-robustness.md) | Planned |
-| 43.23 | [Subprocess lifecycle: parent-death orphans, MCP idle-kill, unguarded host-crate spawns](43.23-subprocess-lifecycle.md) | Planned |
-| 43.24 | [Test assertion-quality triage (assert-free, tautological, stale ignores)](43.24-test-assertion-quality.md) | Planned |
+| 43.22 | [Adapter transport/streaming robustness residual](43.22-adapter-transport-robustness.md) | Done |
+| 43.23 | [Subprocess lifecycle: parent-death orphans, MCP idle-kill, unguarded host-crate spawns](43.23-subprocess-lifecycle.md) | Done |
+| 43.24 | [Test assertion-quality triage (assert-free, tautological, stale ignores)](43.24-test-assertion-quality.md) | Done |
 | 43.25 | [UTF-8 byte-slice panic hardening (executor + TUI streaming)](43.25-utf8-byte-slice-panic-hardening.md) | Done |
 | 43.26 | [Unguarded subprocess spawns (workflow bash, plugin-bus verifier)](43.26-unguarded-subprocess-workflow-pluginbus.md) | Done |
 | 43.27 | [Atomic-write permission preservation + undo-ordering bug](43.27-atomic-write-permissions-undo-order.md) | Done |
@@ -894,4 +894,30 @@ tree, ~11 stale claims corrected in-line. See
 | 43.37 | [Verifier pending_corrections dead-queue growth + MCP pending-map leak](43.37-verifier-corrections-queue-mcp-leak.md) | Done |
 | 43.38 | [Async blocking in tools (glob walk, computer_use sleep) + shell-glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Done |
 | 43.39 | [kf-bench markdown-delta baseline computation contradicts the regression signal](43.39-bench-delta-rate.md) | Done |
+| 44.0 | [Series 44 overview: regression audit + five-area fresh sweep](44.0-wo44-overview.md) | Done |
+| 44.1 | [Line-mode Ctrl-C does not cancel the in-flight turn](44.1-line-mode-ctrl-c-turn-cancel.md) | Planned |
+| 44.2 | [Finish the ADR predicate-block backfill (43.15 step 4)](44.2-adr-predicate-backfill.md) | Planned |
+| 44.20 | [Split compound clauses on background `&` (allow-rule/allowlist bypass)](44.20-bash-background-separator-bypass.md) | Planned |
+| 44.21 | [Permission bash rules match raw text: whitespace/quote evasion of deny rules](44.21-permission-bash-rule-normalization.md) | Planned |
+| 44.22 | [First-party Anthropic sends `x-api-key` to the Ollama default host](44.22-anthropic-base-url-key-destination.md) | Planned |
+| 44.23 | [Bedrock error frames interpolate transport errors into JSON unescaped](44.23-bedrock-error-frame-json-escaping.md) | Planned |
+| 44.24 | [Audit scrubber misses github_pat_/glpat-/AIza/ya29 token literals](44.24-audit-token-literal-gaps.md) | Planned |
+| 44.28 | [Phase 2.5 symlink-swap re-verification is unreachable on the allowed path](44.28-symlink-swap-check-dead-on-allowed-path.md) | Planned |
+| 44.29 | [`/plugins` reload silently drops the Node/Go/Generic verifiers](44.29-plugin-reload-drops-node-go-verifiers.md) | Planned |
+| 44.30 | [`max_tool_result_chars` never applies to file tools (read_file can flood the context)](44.30-file-tool-result-truncation-bypass.md) | Planned |
+| 44.31 | [Budget guard compares result bytes against the token budget (unit mismatch)](44.31-budget-slice-byte-token-unit-mismatch.md) | Planned |
+| 44.36 | [Surface executor-task death: event loop busy-spins on closed channel and drops all user input silently](44.36-executor-death-spin.md) | Planned |
+| 44.37 | [Scheduled-job completion poll does blocking disk I/O (chmod + full dir walk) on every event-loop iteration](44.37-job-poll-disk-throttle.md) | Planned |
+| 44.38 | [PTY streaming appends to the wrong chat entry (ToolStart is emitted at record time, not run time)](44.38-pty-stream-wrong-entry.md) | Planned |
+| 44.39 | [Terminal left in raw mode when TUI setup fails between enable_raw_mode and the TerminalGuard](44.39-raw-mode-restore-window.md) | Planned |
+| 44.44 | [Workflow/jobd bash spawns skip env scrub, PATH pin, output cap, process-group kill](44.44-workflow-bash-spawn-hygiene.md) | Planned |
+| 44.45 | [Workflow engine error/budget semantics: unguarded eval_condition, dead on_exceeded route, batch-error mislabels siblings](44.45-workflow-engine-error-budget-semantics.md) | Planned |
+| 44.46 | [Stratum mode config is dead wiring: config/env/stratum_mode tool never set the session mode](44.46-stratum-mode-dead-wiring.md) | Planned |
+| 44.47 | [bench verify_task runs unbounded, blocking sh -c with no timeout](44.47-bench-verify-unbounded.md) | Planned |
+| 44.48 | [Docker bash path maps failing exit codes to success on non-Unix (Windows)](44.48-docker-exit-code-windows.md) | Planned |
+| 44.52 | [PR CI silently skips all Rust checks when package classification fails](44.52-pr-ci-silent-skip-on-classifier-failure.md) | Planned |
+| 44.53 | [Nightly ollama job runs every kf-code #[ignore] test and is red-by-construction](44.53-nightly-ollama-runs-all-ignored-unit-tests.md) | Planned |
+| 44.54 | [Nightly mutants job overwrites its baseline; only the last module survives](44.54-mutants-baseline-overwritten-per-module.md) | Planned |
+| 44.55 | [e2e test target is invisible to the PR gate and locally downgraded to a warning](44.55-e2e-compile-gate-invisible-on-pr.md) | Planned |
+| 44.56 | [impact-fallback.sh runs uncapped workspace tests; documented OOM hazard](44.56-impact-fallback-uncapped-test-threads-oom.md) | Planned |
 

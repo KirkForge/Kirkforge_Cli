@@ -233,3 +233,26 @@
   so docs/workorders/README.md row 43.20 still says "Planned" while the
   WO header says "Done". adr_xref_drift isn't in this task's gate list;
   flag for the merger.
+
+# Coordinator session — WO 43 closeout + WO 44 generation
+
+- Interrupted sessions leave three-part residue: uncommitted worktree diffs,
+  WO files flipped Done without README rows (drift test red), and state.md
+  "Pending" sections contradicting their own commit messages. Check all
+  three before trusting any of them.
+- Pre-assigning WO number ranges to parallel auditors (44.1-19, 44.20-27,
+  ...) gave zero file collisions and zero coordination traffic; the gaps
+  are cosmetic. README rows are safe to add centrally afterwards because
+  the drift test skips unindexed files.
+- Worktree prompts must forbid README/state.md/CHANGELOG edits AND tell the
+  agent its WO file is the ONE doc it owns — merges then stay code-only and
+  docs consolidate in one commit.
+- lessons.md IS tracked on dev (AGENTS.md says gitignored — stale); four
+  branches appending to it conflicted on every merge. Concatenate-and-keep
+  resolves cleanly.
+- Detect_changes/detect-changes tooling doesn't see worktree branches from
+  the main-checkout MCP server; agents ran their own verification. Trust
+  but spot-check: their per-file diff stats matched the merge diffs.
+- Same load-flake hit 3 of 4 worktrees (attached_cancel_token... at
+  load>10). With ≥3 concurrent full-suite gates on 8 cores, budget for one
+  re-run or serialize the final gate runs.

@@ -11,6 +11,25 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 43.20 — deps/binary-size: handlebars → in-tree stand-alone-tag-faithful
+  renderer (fixes latent `{{!` comment leak in every system prompt), arboard
+  slimmed, aws-sigv4 1.3.8, rustyline 16, `computer_use` feature gates
+  headless_chrome (default builds lose local Chrome execution); lock graph
+  572→549 packages. [43.20](docs/workorders/43.20-dep-size-audit.md)
+- WO 43.22 — adapter transport: Bedrock `[DONE]` no longer launders mid-turn
+  drops into success; `Retry-After` honored; wall-clock jitter; usage-less
+  Done → estimated CostStats; connect_timeout 10s; vertex token cache.
+  [43.22](docs/workorders/43.22-adapter-transport-robustness.md)
+- WO 43.23 — subprocess lifecycle: PDEATHSIG kills children on parent
+  abort/SIGKILL; background jobs cancelled on session exit; MCP reader idle
+  timeout only while requests pending; kf-plugin-host tool/hook watchdogs.
+  [43.23](docs/workorders/43.23-subprocess-lifecycle.md)
+- WO 43.24 — test quality: named assertion-free tests now assert; 2
+  can't-fail tests deleted. [43.24](docs/workorders/43.24-test-assertion-quality.md)
+- WO 44.0-44.56 — WO 43 regression audit (36 WOs verified, 34 clean) +
+  five-area fresh sweep → 25 planned workorders mapping the next phase.
+  [44.0](docs/workorders/44.0-wo44-overview.md)
+
 - WO 43.1: typed `AdapterError` (Unreachable/ModelNotFound/Denied/Other) for
   ollama stream errors — `KirkForgeError::from` downcasts before the
   string-probe fallback (fallback kept for unmigrated adapters). [43.1](docs/workorders/43.1-typed-adapter-errors.md)

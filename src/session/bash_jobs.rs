@@ -1601,6 +1601,7 @@ mod tests {
     /// killed — verified structurally via kill(pid, 0) → ESRCH) and
     /// writes the WO 43.10 exit summary for each, so --resume keeps its
     /// "died with the session" report.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_sweep_on_session_exit_cancels_running_jobs() {
         let temp = std::env::temp_dir().join(format!(

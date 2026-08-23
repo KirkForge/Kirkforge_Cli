@@ -129,9 +129,10 @@ Positive:
 
 ## Implementation notes
 
-This ADR is a placeholder. No code lands in the MVP for
-speculative priming. The `PreWarmCache` struct is not
-implemented.
+This ADR is a rejected design sketch (see the rejection note at the
+top). No code lands in the MVP for speculative priming, and the
+`PreWarmCache` struct is not implemented. The design questions below
+remain open for any future contributor who revisits the idea.
 
 A future contributor who picks up this ADR should:
 
@@ -145,9 +146,9 @@ A future contributor who picks up this ADR should:
 4. Benchmark: does the pre-warm save more wall-clock than
    it costs?
 
-The ADR will be promoted from `Deferred` to `Accepted` once
-the design questions above are answered and a measurement
-shows a positive trade.
+The ADR will remain Rejected until the design questions above are
+answered, a measurement shows a positive trade, and a future
+contributor proposes re-accepting it via a new ADR.
 
 ### Open questions for the future contributor
 

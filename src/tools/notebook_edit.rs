@@ -176,6 +176,15 @@ impl Tool for NotebookEdit {
             }
         };
 
+        if let Err(e) = atomic_write::atomic_write(&path, &new_bytes) {
+            return ToolOutcome::Failure(ToolError::Internal {
+                message: format!("failed to write notebook: {e}"),
+            });
+        }
+
+        // Push the undo snapshot only after the write succeeds. If we pushed
+        // before and the write failed, the stack would hold an entry for an
+        // edit that never happened (matching edit_file/write_file ordering).
         if let Some(undo) = &self.undo {
             match undo.lock() {
                 Ok(mut s) => {
@@ -191,12 +200,6 @@ impl Tool for NotebookEdit {
                     );
                 }
             }
-        }
-
-        if let Err(e) = atomic_write::atomic_write(&path, &new_bytes) {
-            return ToolOutcome::Failure(ToolError::Internal {
-                message: format!("failed to write notebook: {e}"),
-            });
         }
 
         ToolOutcome::Success {
@@ -610,5 +613,64 @@ mod tests {
         assert!(required.iter().any(|v| v.as_str() == Some("path")));
         assert!(required.iter().any(|v| v.as_str() == Some("index")));
         assert!(required.iter().any(|v| v.as_str() == Some("source")));
+    }
+
+    // WO 43.27: a failed write must not leave a phantom undo entry. The
+    // undo push must happen AFTER atomic_write succeeds, matching
+    // edit_file/write_file. We force a write failure by placing the notebook
+    // in a read-only directory: the read + parse + mutate succeed, but
+    // atomic_write cannot create its temp file in the read-only parent.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_write_leaves_no_undo_entry() {
+        use crate::session::undo::UndoStack;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.ipynb");
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "cells": [{ "cell_type": "code", "metadata": {}, "source": ["x"] }],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 5
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        // Read-only parent: read succeeds, temp-file create fails.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let id = format!(
+            "test-nb-fail-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let stack =
+            std::sync::Arc::new(std::sync::Mutex::new(UndoStack::for_session(&id).unwrap()));
+        let tool = NotebookEdit::new(Some(stack.clone()), guard());
+
+        let outcome = tool
+            .run(
+                &ToolContext::default(),
+                serde_json::json!({ "path": path, "index": 0, "source": "y" }),
+            )
+            .await;
+
+        // Restore perms so TempDir cleanup works.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(_)),
+            "expected write to fail in read-only dir, got {outcome:?}"
+        );
+        assert_eq!(
+            stack.lock().unwrap().len(),
+            0,
+            "failed write must not push an undo entry"
+        );
     }
 }

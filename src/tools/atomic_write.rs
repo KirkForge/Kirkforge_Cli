@@ -55,6 +55,18 @@ fn write_fsync_rename(tmp: &Path, target: &Path, contents: &[u8]) -> std::io::Re
     // exists, preventing a symlink at the temp path from redirecting the
     // write to an arbitrary file.
     let mut file = OpenOptions::new().write(true).create_new(true).open(tmp)?;
+
+    // Preserve the target's existing mode on Unix. The temp file was
+    // created with the umask default (typically 0644); without this copy,
+    // renaming over the target would silently clobber permissions — editing
+    // an executable strips its exec bit (0755→0644), editing a 0600 secret
+    // widens it to world-readable. Missing target = first write = keep the
+    // umask default, so a stat error is ignored.
+    #[cfg(unix)]
+    if let Ok(meta) = std::fs::metadata(target) {
+        let _ = std::fs::set_permissions(tmp, meta.permissions());
+    }
+
     file.write_all(contents)?;
     file.sync_all()?;
     drop(file);
@@ -194,6 +206,53 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let err = rename_with_retry(&dir.path().join("nope"), &dir.path().join("dst")).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    // Permission preservation is Unix-only: the bug is umask-default temp
+    // file clobbering the target mode on rename. Windows ACLs don't model
+    // this as a mode bits problem.
+    #[cfg(unix)]
+    fn unix_mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_preserves_executable_mode_0755() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("script.sh");
+        std::fs::write(&path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(unix_mode(&path) & 0o777, 0o755);
+
+        atomic_write(&path, "#!/bin/sh\necho hi\n").unwrap();
+
+        assert_eq!(
+            unix_mode(&path) & 0o777,
+            0o755,
+            "exec bit must survive overwrite"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_preserves_secret_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "SECRET=old\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(unix_mode(&path) & 0o777, 0o600);
+
+        atomic_write(&path, "SECRET=new\n").unwrap();
+
+        assert_eq!(
+            unix_mode(&path) & 0o777,
+            0o600,
+            "0600 secret must not widen on overwrite"
+        );
     }
 
     #[test]

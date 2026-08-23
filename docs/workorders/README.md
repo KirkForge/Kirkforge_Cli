@@ -881,3 +881,6 @@ tree, ~11 stale claims corrected in-line. See
 | 43.24 | [Test assertion quality triage](43.24-test-assertion-quality.md) | Planned |
 | 43.25 | [UTF-8 byte-slice panic hardening (executor + TUI streaming)](43.25-utf8-byte-slice-panic-hardening.md) | Done |
 | 43.26 | [Unguarded subprocess spawns (workflow bash, plugin-bus verifier)](43.26-unguarded-subprocess-workflow-pluginbus.md) | Done |
+| 43.27 | [Atomic-write permission preservation + undo-ordering bug](43.27-atomic-write-permissions-undo-order.md) | Done |
+
+

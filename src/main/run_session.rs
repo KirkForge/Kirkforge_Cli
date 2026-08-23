@@ -787,7 +787,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         && prompt.is_none()
         && !term_dumb
         && std::io::stdout().is_terminal();
-    if use_tui {
+    let result = if use_tui {
         tui::run_tui(
             shared_config,
             adapter,
@@ -822,7 +822,16 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             prompt,
         )
         .await
-    }
+    };
+
+    // WO 43.10: persist a summary line for every still-running background
+    // bash job so --resume can report "these jobs died with the session".
+    // Best-effort; must not fail the session return.
+    session::bash_jobs::global_registry()
+        .persist_exit_summaries(&session_id.to_string())
+        .await;
+
+    result
 }
 
 async fn federate_index_with_lsp(

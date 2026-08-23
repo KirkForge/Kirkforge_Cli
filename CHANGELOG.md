@@ -11,6 +11,11 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 43.10: cross-session state preservation policy — field-classification
+  table in `state.md` (every store classified as survives/ephemeral);
+  background bash job exit summaries now persisted on session teardown to
+  `<jobs_dir>/bg-exits.ndjson` so `--resume` can report died-with-session
+  jobs; AgentRun-bound fields marked blocked on WO 41.5 Phase 3 — [43.10](docs/workorders/43.10-cross-session-state-policy.md)
 - WO 43.1: typed `AdapterError` (Unreachable/ModelNotFound/Denied/Other) for
   ollama stream errors — `KirkForgeError::from` downcasts before the
   string-probe fallback (fallback kept for unmigrated adapters). [43.1](docs/workorders/43.1-typed-adapter-errors.md)

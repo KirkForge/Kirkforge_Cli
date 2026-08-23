@@ -4,6 +4,16 @@
 
 ## Shipped (closed this session)
 
+- **WO 43.21**: Done. Persistence crash-robustness. AuditLog per-entry
+  flush+fsync (survives SIGKILL/panic-abort — the audit trail is now the
+  MOST durable store, not the least). FileAuditSink torn-tail tolerance
+  (`impl Drop`→flush; `new` truncates unparseable final line + resumes
+  chain from last intact hash, not genesis; `verify_chain` skips torn
+  final line). Session log UTF-8 tolerance (`load_messages` reads via
+  `read_until(b'\n')`+`from_utf8_lossy` — a mid-file invalid UTF-8 byte
+  skips that line instead of failing the whole file). Atomic temp+rename
+  writes for `task.rs` persist + `CachedIndex` save. `CachedIndex`
+  `format_version` stamp (mismatch → Err → rebuild).
 - **WO 43.25-43.39**: ALL Done (15 workorders, round-4 full-coverage segment
   sweep). UTF-8 byte-slice panic hardening (43.25); unguarded subprocess
   spawns (43.26); atomic-write permissions + undo ordering (43.27);

@@ -540,7 +540,11 @@ when keyed via `KIRKFORGE_AUDIT_KEY`), `MemoryAuditSink`, `FileAuditSink`
 `create_audit_sink` factory for `{memory, file}`. WO 42.2: `FileAuditSink::new`
 resumes `last_hash` from the last on-disk event so the chain continues across
 restarts, and `verify_chain` replays the file to detect tampering;
-`create_audit_sink` calls it on construction and warns on a broken chain. The `event_bus` module
+`create_audit_sink` calls it on construction and warns on a broken chain. WO
+43.21: `AuditLog::write_entry` flushes + `sync_data` per entry (survives
+SIGKILL / panic-abort), and `FileAuditSink` truncates a torn final line on
+`new` (torn tail ≠ tamper), has `impl Drop` → flush, and `verify_chain`
+skips an unparseable final line. The `event_bus` module
 ports `@kirkforge/core-events`'s `EventBus`: async `emit` with idempotency
 cache (TTL + size cap) and bounded buffer, `on` returning an unsub
 callable, `drain_buffer`, `shutdown`, and `graceful_shutdown`. Dead sinks
@@ -857,8 +861,10 @@ call-graph index. For a given symbol, the agent can retrieve:
 
 Four languages: Rust, TypeScript (including tsx), Python, Go. The index is
 cached as JSON at `.kf-code/context-index/cache.json`, keyed on git HEAD for
-invalidation. This gives the agent graph-grounded context instead of relying on
-plain-text search.
+invalidation and stamped with a `format_version` (WO 43.21) so a format
+change invalidates old caches. The cache is written atomically (temp + rename)
+so a crash mid-write cannot leave it truncated. This gives the agent
+graph-grounded context instead of relying on plain-text search.
 
 The index is built synchronously at session startup for interactive (TUI) runs.
 `--non-interactive` skips the build: the tree-sitter walk is unbounded on large

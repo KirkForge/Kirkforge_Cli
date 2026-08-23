@@ -500,9 +500,12 @@ impl ConversationLog {
 /// fall back to checkpoint recovery. A file that is empty or contains only
 /// whitespace is treated as an empty log.
 ///
-/// Parses line-by-line from a buffered reader instead of slurping the whole
-/// file into a single `String`, so opening a very large log does not allocate
-/// more than one line at a time (P9).
+/// Reads via `read_until(b'\n')` + `String::from_utf8_lossy` so a single
+/// invalid UTF-8 byte mid-file skips that line (corrupt = true) instead of
+/// failing the whole file (WO 43.21). Parses line-by-line from a buffered
+/// reader instead of slurping the whole file into a single `String`, so
+/// opening a very large log does not allocate more than one line at a time
+/// (P9).
 fn load_messages(path: &std::path::Path) -> anyhow::Result<(Vec<Message>, bool)> {
     use std::io::{BufRead, BufReader};
     let file = std::fs::File::open(path)
@@ -510,16 +513,31 @@ fn load_messages(path: &std::path::Path) -> anyhow::Result<(Vec<Message>, bool)>
     let mut reader = BufReader::new(file);
     let mut messages = Vec::new();
     let mut corrupt = false;
-    let mut line = String::new();
+    let mut raw: Vec<u8> = Vec::new();
     loop {
-        line.clear();
+        raw.clear();
         let n = reader
-            .read_line(&mut line)
+            .read_until(b'\n', &mut raw)
             .with_context(|| format!("read conversation log {}", path.display()))?;
         if n == 0 {
             break;
         }
+        // from_utf8_lossy turns invalid byte sequences into U+FFFD. If the
+        // lossy conversion differs from a strict UTF-8 parse, the line had
+        // bad bytes — treat it as corrupt (skip) rather than failing the
+        // whole file.
+        let had_bad_utf8 = std::str::from_utf8(&raw).is_err();
+        let line = String::from_utf8_lossy(&raw);
         if line.trim().is_empty() {
+            continue;
+        }
+        if had_bad_utf8 {
+            corrupt = true;
+            tracing::warn!(
+                path = %path.display(),
+                line = %line.trim(),
+                "skipping conversation log line with invalid UTF-8"
+            );
             continue;
         }
         match serde_json::from_str::<Message>(&line) {
@@ -1378,5 +1396,35 @@ mod tests {
         })
         .unwrap();
         assert_eq!(log.messages[0].token_count, Some(api_value));
+    }
+
+    // ── WO 43.21: UTF-8 tolerance ─────────────────────────────────────────
+
+    #[test]
+    fn load_messages_survives_mid_file_invalid_utf8() {
+        // A file with a valid line, a line containing an invalid UTF-8 byte,
+        // and another valid line. The invalid line is skipped (corrupt=true);
+        // the earlier and later valid lines survive.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("utf8.ndjson");
+        let line1 = r#"{"role":"user","content":"before"}"#;
+        let line3 = r#"{"role":"assistant","content":"after"}"#;
+        // Build raw bytes: line1\n + invalid-utf8-line\n + line3\n
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(line1.as_bytes());
+        bytes.push(b'\n');
+        // A line that is valid JSON structure but contains 0xFF (invalid UTF-8).
+        bytes.extend_from_slice(b"{\"role\":\"user\",\"content\":\"bad");
+        bytes.push(0xFF); // invalid UTF-8 byte
+        bytes.extend_from_slice(b"\"}\n");
+        bytes.extend_from_slice(line3.as_bytes());
+        bytes.push(b'\n');
+        std::fs::write(&path, &bytes).unwrap();
+
+        let (messages, corrupt) = load_messages(&path).unwrap();
+        assert!(corrupt, "corrupt flag must be set for invalid-UTF8 line");
+        assert_eq!(messages.len(), 2, "before + after valid lines must survive");
+        assert_eq!(messages[0].content, "before");
+        assert_eq!(messages[1].content, "after");
     }
 }

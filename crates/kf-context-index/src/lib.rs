@@ -99,9 +99,19 @@ pub struct RetrievalResult {
 ///
 /// Stored as JSON at `.kf-code/context-index/cache.json`. The HEAD field
 /// enables cache invalidation: if the current HEAD differs from the stored
-/// HEAD, the cache is stale and must be rebuilt.
+/// HEAD, the cache is stale and must be rebuilt. The `format_version` field
+/// (WO 43.21) invalidates the cache when the on-disk format changes — a
+/// mismatch causes `load` to return `Err`, which callers treat as "rebuild".
+pub const CURRENT_FORMAT_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CachedIndex {
+    /// Format version stamp. A mismatch with [`CURRENT_FORMAT_VERSION`]
+    /// causes `load` to return `Err` (rebuild signal) so an old cache never
+    /// silently feeds a new code path. `#[serde(default)]` so caches written
+    /// before this field existed (version 0) load and then trigger a rebuild.
+    #[serde(default)]
+    pub format_version: u32,
     /// The git HEAD SHA when this cache was written.
     pub head: String,
     /// The indexed symbols.
@@ -1204,6 +1214,7 @@ impl ContextIndex {
             }
         }
         let cached = CachedIndex {
+            format_version: CURRENT_FORMAT_VERSION,
             head: head.to_string(),
             symbols: self.symbols.clone(),
             edges: self.edges.clone(),
@@ -1215,15 +1226,28 @@ impl ContextIndex {
             std::fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_string(&cached)?;
-        std::fs::write(path, json)?;
+        // Atomic write: temp + rename so a crash mid-write cannot leave the
+        // cache truncated (WO 43.21). Mirrors carryover.rs:247-251.
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, &json)?;
+        std::fs::rename(&tmp, path)?;
         Ok(())
     }
 
     /// Load a cached index from a JSON file. Returns the cached index
-    /// if the file exists and is valid JSON.
+    /// if the file exists, parses as JSON, AND has a matching
+    /// `format_version`. A version mismatch returns `Err` so the caller
+    /// rebuilds from scratch instead of trusting an old format (WO 43.21).
     pub fn load(path: &std::path::Path) -> anyhow::Result<CachedIndex> {
         let json = std::fs::read_to_string(path)?;
         let cached: CachedIndex = serde_json::from_str(&json)?;
+        if cached.format_version != CURRENT_FORMAT_VERSION {
+            anyhow::bail!(
+                "context index cache format_version {} != current {}; rebuilding",
+                cached.format_version,
+                CURRENT_FORMAT_VERSION
+            );
+        }
         Ok(cached)
     }
 
@@ -1763,6 +1787,7 @@ mod tests {
         let loaded = ContextIndex::load(&cache_path).unwrap();
         // Simulate a HEAD mismatch by checking against a different head
         let cached = CachedIndex {
+            format_version: CURRENT_FORMAT_VERSION,
             head: "old_head_sha".to_string(),
             symbols: loaded.symbols,
             edges: loaded.edges,
@@ -2581,6 +2606,7 @@ mod tests {
     #[test]
     fn from_cached_drops_out_of_bounds_embeddings() {
         let cached = CachedIndex {
+            format_version: CURRENT_FORMAT_VERSION,
             head: "test".to_string(),
             symbols: vec![Symbol {
                 name: "foo".to_string(),
@@ -2607,5 +2633,74 @@ mod tests {
         let idx = ContextIndex::from_cached(cached);
         assert_eq!(idx.embeddings.len(), 1, "out-of-bounds embedding dropped");
         assert_eq!(idx.embeddings[0].symbol_idx, 0);
+    }
+
+    // ── WO 43.21: atomic write + format_version ──────────────────────────
+
+    #[test]
+    fn cache_atomic_write_partial_leaves_old_intact() {
+        // save() writes to a temp file then renames. If the write dies after
+        // creating the temp but before rename, the old cache.json is intact.
+        let dir = std::env::temp_dir().join(format!(
+            "kf-code-context-atomic-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut idx = ContextIndex::new();
+        let src = dir.join("lib.rs");
+        fs::write(&src, "fn old_fn() {}\n").unwrap();
+        idx.index_file(&src, &fs::read_to_string(&src).unwrap())
+            .unwrap();
+
+        let cache_path = dir.join(".kf-code/context-index/cache.json");
+        idx.save(&cache_path, "head_v1").unwrap();
+        let old_loaded = ContextIndex::load(&cache_path).unwrap();
+        assert_eq!(old_loaded.head, "head_v1");
+
+        // Simulate a crash mid-save: write a partial temp file but DON'T rename.
+        let tmp = cache_path.with_extension("json.tmp");
+        fs::write(&tmp, b"{\"truncated").unwrap();
+        // The old cache.json must still be intact and loadable.
+        let still_intact = ContextIndex::load(&cache_path).unwrap();
+        assert_eq!(
+            still_intact.head, "head_v1",
+            "old cache must survive a partial temp write"
+        );
+        assert_eq!(still_intact.symbols.len(), old_loaded.symbols.len());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_format_version_mismatch_triggers_rebuild() {
+        // A cache with format_version 0 (pre-versioning) or a future version
+        // must cause load() to return Err so the caller rebuilds.
+        let dir = std::env::temp_dir().join(format!(
+            "kf-code-context-fv-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let cache_path = dir.join(".kf-code/context-index/cache.json");
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        // Write a cache with format_version = 0 (old format).
+        let old_json = r#"{"format_version":0,"head":"x","symbols":[],"edges":[],"call_edges":[]}"#;
+        fs::write(&cache_path, old_json).unwrap();
+        let result = ContextIndex::load(&cache_path);
+        assert!(
+            result.is_err(),
+            "format_version mismatch must return Err (rebuild signal)"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

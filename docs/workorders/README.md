@@ -875,7 +875,7 @@ tree, ~11 stale claims corrected in-line. See
 | 43.18 | [Abrupt-exit safety: line-mode SIGINT, audit flush, grep blocking](43.18-concurrency-shutdown-safety.md) | Planned |
 | 43.19 | [TUI unicode-cursor fix + render-path test coverage](43.19-tui-panic-hardening.md) | Planned |
 | 43.20 | [Dependency and binary-size audit](43.20-dep-size-audit.md) | Planned |
-| 43.21 | [Persistence crash-robustness: audit flush policy, torn-tail tolerance, atomic cache writes](43.21-persistence-crash-robustness.md) | Planned |
+| 43.21 | [Persistence crash-robustness: audit flush policy, torn-tail tolerance, atomic cache writes](43.21-persistence-crash-robustness.md) | Done |
 | 43.22 | [Adapter transport/streaming robustness residual](43.22-adapter-transport-robustness.md) | Planned |
 | 43.23 | [Subprocess lifecycle: parent-death orphans, MCP idle-kill, unguarded host-crate spawns](43.23-subprocess-lifecycle.md) | Planned |
 | 43.24 | [Test assertion-quality triage (assert-free, tautological, stale ignores)](43.24-test-assertion-quality.md) | Planned |

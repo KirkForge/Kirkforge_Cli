@@ -53,6 +53,35 @@
 ## Round 4 — WO 43.26 (workflow bash + plugin-bus verifier)
 
 - Premise drift caught before code: the task claimed PluginBusVerifier had
+
+- The `audit BufWriter` + `panic = "abort"` combo from WO 43.18 round-3
+  notes was the real deal: audit was the LEAST durable store (buffered
+  until Drop, which panic-abort skips). Per-entry flush+sync_data fixes
+  it; the BufWriter is now a 1-line always-flushed buffer (harmless,
+  keeping the type avoids touching the struct).
+- `resume_chain` doesn't need the `hmac_key`: the `chain_hash` is stored
+  IN the parsed event (computed at write time with the key), so reading
+  it back gives the correct resume point without recomputing. Only
+  `initial_hash`/`chain_hash_of` need the key.
+- nextest filter syntax gotcha bit again (round-4 lessons): `-E
+  'test(/regex/)'` with `|` alternation INSIDE the regex works; the
+  task's quoted `-- "a\|b"` syntax matched 0. Always write a script file
+  for complex nextest filters — inline bash quoting is fragile.
+- `CachedIndex::load` returning `Err` on format_version mismatch is the
+  ponytail path: the caller (run_session.rs:507-508) already treats
+  `Err` as "corrupt, rebuilding". Zero caller changes — the new field
+  just makes "old format" look like "corrupt" to existing code.
+- Build throughput is STILL the bottleneck (parallel worktrees). A
+  single `cargo check --lib` took 15min, `cargo nextest run --lib` took
+  40min (test profile compiles more). The `nohup` + `kill -0` polling
+  pattern from round-4 lessons is essential — the bash 120s/300s/540s
+  timeouts kill the wrapper, not the build.
+- `std::mem::forget(log)` is the clean way to simulate SIGKILL in a
+  test: skips Drop without aborting the process, so assertions can run
+  after. The test verifies the per-entry flush landed on disk without
+  relying on the Drop-based flush.
+
+- Premise drift caught before code: the task claimed PluginBusVerifier had
   "NO timeout, NO kill_on_drop" but WO 38.3 (already in-branch) added a 5s
   killpg watchdog inside `kf-plugin-host/verifier.rs::PluginVerifier::run`
   itself. Verified via `git merge-base --is-ancestor 0ad1929e HEAD` AND by
@@ -85,3 +114,32 @@
   README row is what makes the "Done" status enforceable. The task's
   explicit instruction to add the README row was load-bearing for the
   drift guard, not cosmetic.
+
+## Round 5 — WO 43.21 (persistence crash-robustness)
+
+- The `audit BufWriter` + `panic = "abort"` combo from WO 43.18 round-3
+  notes was the real deal: audit was the LEAST durable store (buffered
+  until Drop, which panic-abort skips). Per-entry flush+sync_data fixes
+  it; the BufWriter is now a 1-line always-flushed buffer (harmless,
+  keeping the type avoids touching the struct).
+- `resume_chain` doesn't need the `hmac_key`: the `chain_hash` is stored
+  IN the parsed event (computed at write time with the key), so reading
+  it back gives the correct resume point without recomputing. Only
+  `initial_hash`/`chain_hash_of` need the key.
+- nextest filter syntax gotcha bit again (round-4 lessons): `-E
+  'test(/regex/)'` with `|` alternation INSIDE the regex works; the
+  task's quoted `-- "a\|b"` syntax matched 0. Always write a script file
+  for complex nextest filters — inline bash quoting is fragile.
+- `CachedIndex::load` returning `Err` on format_version mismatch is the
+  ponytail path: the caller (run_session.rs:507-508) already treats
+  `Err` as "corrupt, rebuilding". Zero caller changes — the new field
+  just makes "old format" look like "corrupt" to existing code.
+- Build throughput is STILL the bottleneck (parallel worktrees). A
+  single `cargo check --lib` took 15min, `cargo nextest run --lib` took
+  40min (test profile compiles more). The `nohup` + `kill -0` polling
+  pattern from round-4 lessons is essential — the bash 120s/300s/540s
+  timeouts kill the wrapper, not the build.
+- `std::mem::forget(log)` is the clean way to simulate SIGKILL in a
+  test: skips Drop without aborting the process, so assertions can run
+  after. The test verifies the per-entry flush landed on disk without
+  relying on the Drop-based flush.

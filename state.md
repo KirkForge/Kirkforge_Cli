@@ -4,6 +4,14 @@
 
 ## Shipped (closed this session)
 
+- **WO 43.16**: Done. No-throw dispatch hub — eliminated 3 remaining panic
+  sites in dispatch-reachable code (dispatch.rs:421 deferred-file `expect` →
+  guarded `Failure(Internal)`; mod.rs:380 `stratum_store` `expect` →
+  `unwrap_or_else` + `tracing::error!` + skip; mod.rs:494 RwLock `unwrap` →
+  poison pattern `into_inner`). Added grep gate in `scripts/ci-local.sh`
+  rejecting new non-test `unwrap`/`expect`/`panic!` in `dispatch.rs`. Pinned
+  the catch_unwind contract with `test_panicking_tool_yields_failure_internal`.
+  Refactor-on-touch policy for top-5 long functions added to AGENTS.md §7.
 - **WO 43.25-43.39**: ALL Done (15 workorders, round-4 full-coverage segment
   sweep). UTF-8 byte-slice panic hardening (43.25); unguarded subprocess
   spawns (43.26); atomic-write permissions + undo ordering (43.27);

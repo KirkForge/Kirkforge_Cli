@@ -268,6 +268,13 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
         }
     }
 
+    // KF_CODE_PLUGIN_CONSENT_LEDGER (WO 43.17)
+    if let Ok(val) = std::env::var("KF_CODE_PLUGIN_CONSENT_LEDGER") {
+        if let Some(b) = parse_bool_env(&val) {
+            cfg.tools.plugin_consent_ledger = b;
+        }
+    }
+
     // KF_CODE_MAX_BACKGROUND_TASKS
     if let Ok(val) = std::env::var("KF_CODE_MAX_BACKGROUND_TASKS") {
         if let Ok(n) = val.parse::<usize>() {

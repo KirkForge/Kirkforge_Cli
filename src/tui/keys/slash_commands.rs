@@ -160,7 +160,7 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         triggers: &["/plugins"],
         description: "Plugin management",
-        usage: "/plugins list | enable <n> | disable <n> | toggle <n> | reload | trust <n> <tier> | setup | sources | add <n> <path> | remove <n>",
+        usage: "/plugins list | enable <n> | disable <n> | toggle <n> | reload | trust <n> <tier> | approve <n> | setup | sources | add <n> <path> | remove <n>",
         group: "Advanced",
     },
     SlashCommand {

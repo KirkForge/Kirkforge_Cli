@@ -1,5 +1,28 @@
 # Lessons — WO 43 session
 
+## WO 43.23 (subprocess lifecycle)
+
+- libtest `--exact` does NOT match names built from `module_path!()` (it
+  includes the crate prefix; harness names don't). Use a unique substring
+  filter + `--ignored` for re-exec helper tests.
+- tokio `Child::id()` returns Option<u32>; std `Child::id()` returns u32.
+- PDEATHSIG fires on death of the *forking thread*. Tokio worker threads
+  live for the runtime, so async-context spawns are safe; beware ever
+  moving a setup_process_group spawn into `spawn_blocking` (thread exits
+  after the task -> premature child kill).
+- `same_ms_double_spawn_gets_distinct_worktrees` flakes under full-suite
+  parallel load (documented state.md:98) — passes 3/3 isolated; its git
+  spawns use plain std Command, unaffected by process_group.rs changes.
+- Teardown sweep must persist exit summaries (WO 43.10) BEFORE cancelling,
+  else run_session's later persist finds no Running jobs and --resume
+  loses the died-with-session report.
+- cfg(test) const override (READER_IDLE_TIMEOUT 10s -> 300ms) is the sane
+  way to timing-test reader policy under the 30s ci-fast per-test cap.
+- kf-lsp has a DUPLICATE setup_process_group (lib.rs:1059) without
+  PDEATHSIG — flagged in WO 43.23 Done for a future WO.
+- Cold `cargo check --workspace --all-targets` in a fresh worktree: 10-20+
+  min; budget gate time accordingly.
+
 - Backlog dumps from earlier assessments drift FAST in this repo. ~11 of the
   user's ~25 claims were stale (test code mistaken for prod, shipped features
   re-listed as gaps, moved files). Always re-verify file:line before writing

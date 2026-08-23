@@ -203,7 +203,9 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
                                         return;
                                     }
                                 }
-                                _ => {}
+                                _ => {
+                                    tracing::debug!(event_type, "unknown SSE event type");
+                                }
                             }
                         }
                         Err(e) => {

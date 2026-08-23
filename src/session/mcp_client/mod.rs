@@ -797,6 +797,7 @@ impl McpClient {
                 StreamEvent::Text(t) => text.push_str(&t),
                 StreamEvent::Error(e) => {
                     tracing::warn!(server = %server_name, error = %e, "sampling stream error");
+                    anyhow::bail!("sampling stream error: {e}");
                 }
                 _ => {}
             }

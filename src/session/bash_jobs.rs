@@ -354,21 +354,22 @@ impl BashJobRegistry {
 
             // Join the drain tasks to capture output (or partial output on
             // timeout). A short timeout prevents a stuck pipe from wedging
-            // cleanup.
-            let (stdout_buf, stdout_dropped) = match drain_stdout {
-                Some(h) => tokio::time::timeout(std::time::Duration::from_secs(2), h)
-                    .await
-                    .ok()
-                    .and_then(|r| r.ok())
-                    .unwrap_or_else(|| (Vec::new(), 0)),
+            // cleanup. When the drain times out or the join fails, record a
+            // marker instead of silently returning empty output (WO 43.8).
+            let (stdout_buf, stdout_dropped): (Vec<u8>, u64) = match drain_stdout {
+                Some(h) => match tokio::time::timeout(std::time::Duration::from_secs(2), h).await {
+                    Ok(Ok(buf)) => buf,
+                    Ok(Err(_)) => (b"[drain join error]".to_vec(), 0),
+                    Err(_) => (b"[drain timeout]".to_vec(), 0),
+                },
                 None => (Vec::new(), 0),
             };
-            let (stderr_buf, stderr_dropped) = match drain_stderr {
-                Some(h) => tokio::time::timeout(std::time::Duration::from_secs(2), h)
-                    .await
-                    .ok()
-                    .and_then(|r| r.ok())
-                    .unwrap_or_else(|| (Vec::new(), 0)),
+            let (stderr_buf, stderr_dropped): (Vec<u8>, u64) = match drain_stderr {
+                Some(h) => match tokio::time::timeout(std::time::Duration::from_secs(2), h).await {
+                    Ok(Ok(buf)) => buf,
+                    Ok(Err(_)) => (b"[drain join error]".to_vec(), 0),
+                    Err(_) => (b"[drain timeout]".to_vec(), 0),
+                },
                 None => (Vec::new(), 0),
             };
 

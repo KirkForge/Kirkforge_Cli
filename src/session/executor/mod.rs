@@ -210,10 +210,12 @@ impl Executor {
             .audit_log_path
             .clone()
             .filter(|p| !p.as_os_str().is_empty())
-            .or_else(|| {
-                crate::session::data_dir()
-                    .ok()
-                    .map(|d| d.join("audit.ndjson"))
+            .or_else(|| match crate::session::data_dir() {
+                Ok(d) => Some(d.join("audit.ndjson")),
+                Err(e) => {
+                    tracing::warn!(error = %e, "audit log disabled: data_dir unavailable");
+                    None
+                }
             });
         let audit_log = Arc::new(AuditLog::new(audit_log_path));
 

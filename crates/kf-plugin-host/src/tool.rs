@@ -9,12 +9,23 @@
 use crate::env::curated_env;
 use kf_plugin_sdk::{Capability, ResourceLimits};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+#[cfg(unix)]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(unix)]
+use std::sync::Arc;
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 /// Environment variable used to pass tool arguments to a v1 plugin tool.
 pub const KF_CODE_TOOL_ARGS: &str = "KF_CODE_TOOL_ARGS";
 /// Canonical JSON args variable consumed by all plugin scripts.
 pub const KF_CODE_TOOL_ARGS_JSON: &str = "KIRKFORGE_TOOL_ARGS_JSON";
+
+/// Default wall-clock bound on a plugin tool run, mirroring the bin
+/// wrapper's `tool_timeout_secs` default (WO 43.23).
+const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A plugin tool that can be executed.
 #[derive(Debug, Clone)]
@@ -29,6 +40,10 @@ pub struct PluginTool {
     /// the OS default; `Some` installs `RLIMIT_CPU` / `RLIMIT_AS` /
     /// `RLIMIT_FSIZE` in a `pre_exec` hook (Unix only; Windows no-op).
     pub resource_limits: Option<ResourceLimits>,
+    /// Wall-clock bound on one `execute` run; a hung tool is killed —
+    /// whole process group — and fails with `ToolError::TimedOut`
+    /// (WO 43.23).
+    pub timeout: Duration,
 }
 
 /// Errors that can occur when running a plugin tool.
@@ -38,6 +53,8 @@ pub enum ToolError {
     NotFound(PathBuf),
     #[error("tool failed to execute: {0}")]
     Io(#[from] std::io::Error),
+    #[error("tool timed out after {}s (process group killed)", _0.as_secs())]
+    TimedOut(Duration),
 }
 
 impl PluginTool {
@@ -69,6 +86,7 @@ impl PluginTool {
                     command,
                     plugin_root: plugin_root.to_path_buf(),
                     resource_limits,
+                    timeout: DEFAULT_TOOL_TIMEOUT,
                 })
             }
             _ => None,
@@ -86,6 +104,13 @@ impl PluginTool {
         self
     }
 
+    /// Override the wall-clock bound on one `execute` run (WO 43.23).
+    /// Mirrors the bin wrapper's `tool_timeout_secs` knob.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     /// Execute the tool with the given JSON arguments.
     pub fn execute(&self, args: serde_json::Value) -> Result<String, ToolError> {
         let cmd_path = self.plugin_root.join(&self.command);
@@ -94,26 +119,78 @@ impl PluginTool {
         }
 
         let mut attempts = 0;
-        let output = loop {
+        let child = loop {
             let mut command = Command::new(&cmd_path);
             command
                 .env_clear()
                 .envs(curated_env(&std::collections::HashMap::new()))
                 .env(KF_CODE_TOOL_ARGS, args.to_string())
                 .env(KF_CODE_TOOL_ARGS_JSON, args.to_string())
-                .current_dir(&self.plugin_root);
+                .current_dir(&self.plugin_root)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
             // WO 15.11 (ADR-060): apply rlimits to the host-crate
             // spawn path too, mirroring the bin's `PluginToolWrapper`.
             crate::rlimits::setup_rlimits(&mut command, self.resource_limits.as_ref());
-            match command.output() {
+            // WO 43.23: own process group so the timeout watchdog's
+            // kill reaches any children the script spawned.
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                command.process_group(0);
+            }
+            match command.spawn() {
                 Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 3 => {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    std::thread::sleep(Duration::from_millis(10));
                     attempts += 1;
                     continue;
                 }
                 other => break other?,
             }
         };
+
+        // WO 43.23 (unix): watchdog thread kills the process group at
+        // the deadline — the verifier pattern (verifier.rs). `execute`
+        // is sync, so a tokio timeout is not an option here.
+        // ceiling: non-unix targets have no watchdog — the wait is
+        // unbounded there. Upgrade path: a thread + TerminateProcess
+        // dance if this crate ever needs first-class Windows support.
+        #[cfg(unix)]
+        let (done, killed, watchdog) = {
+            let done = Arc::new(AtomicBool::new(false));
+            let killed = Arc::new(AtomicBool::new(false));
+            let pid = child.id();
+            let timeout = self.timeout;
+            let handle = {
+                let done = done.clone();
+                let killed = killed.clone();
+                std::thread::spawn(move || {
+                    let deadline = Instant::now() + timeout;
+                    while !done.load(Ordering::Acquire) {
+                        let now = Instant::now();
+                        if now >= deadline {
+                            // ESRCH (already dead) is the benign case.
+                            unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+                            killed.store(true, Ordering::Release);
+                            return;
+                        }
+                        std::thread::sleep((deadline - now).min(Duration::from_millis(50)));
+                    }
+                })
+            };
+            (done, killed, handle)
+        };
+
+        let output = child.wait_with_output()?;
+        #[cfg(unix)]
+        {
+            done.store(true, Ordering::Release);
+            let _ = watchdog.join();
+            if killed.load(Ordering::Acquire) {
+                return Err(ToolError::TimedOut(self.timeout));
+            }
+        }
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -156,6 +233,7 @@ mod tests {
             command,
             plugin_root: root,
             resource_limits: None,
+            timeout: DEFAULT_TOOL_TIMEOUT,
         };
         (tmp, tool)
     }
@@ -218,5 +296,74 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("7"), "expected exit 7, got {err}");
+    }
+
+    // WO 43.23: a hung tool is killed at its deadline — whole process
+    // group — and the run fails with `TimedOut`. Structural kill
+    // verification mirroring `hung_verifier_is_killed_and_times_out`
+    // (verifier.rs): the script writes its own pid, then sleeps; after
+    // execute() returns we poll kill(pid, 0) until ESRCH.
+    #[cfg(unix)]
+    #[test]
+    fn hung_tool_is_killed_at_deadline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let pidfile = root.join("tool.pid");
+        let script_path = root.join("hang.sh");
+        std::fs::write(
+            &script_path,
+            format!("#!/bin/sh\necho $$ > {}\nsleep 60\n", pidfile.display()),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script_path, perms).unwrap();
+        }
+        let tool = PluginTool {
+            name: "hang".into(),
+            description: "hangs".into(),
+            schema: serde_json::Value::Null,
+            command: PathBuf::from("hang.sh"),
+            plugin_root: root.clone(),
+            resource_limits: None,
+            timeout: Duration::from_secs(2),
+        };
+
+        let start = Instant::now();
+        let err = tool
+            .execute(serde_json::Value::Null)
+            .expect_err("hung tool must err");
+        assert!(
+            matches!(err, ToolError::TimedOut(d) if d.as_secs() == 2),
+            "got: {err:?}"
+        );
+        // Internal 2s deadline + kill margin; far below the 60s sleep.
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "kill took {:?}",
+            start.elapsed()
+        );
+
+        // The script's pid (its process-group leader) is gone.
+        let pid: i32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let rc = unsafe { libc::kill(pid, 0) };
+            let gone = rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(3); // ESRCH
+            if gone {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "hung tool pid {pid} still alive after kill"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 }

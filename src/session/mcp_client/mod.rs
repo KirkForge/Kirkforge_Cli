@@ -99,11 +99,19 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Maximum time the reader task waits for a single line from the MCP
-/// server's stdout before treating the connection as dead. This prevents a
-/// server that emits partial output and never sends a newline from hanging
-/// the reader forever. A well-behaved server should emit responses and
-/// keepalives far more frequently than this.
+/// server's stdout while a request is in flight before treating the
+/// connection as dead (WO 43.23: armed only while `pending` is
+/// non-empty — stdio MCP has no keepalive requirement, so an
+/// idle-but-healthy server stays connected, but a hung in-flight
+/// request is still bounded). Also prevents a server that emits
+/// partial output and never sends a newline from hanging the reader
+/// forever.
+#[cfg(not(test))]
 const READER_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+// Shortened in test builds so the idle-policy tests run well inside the
+// 30s ci-fast per-test budget; the mechanism under test is unchanged.
+#[cfg(test)]
+const READER_IDLE_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// Maximum length of a single JSON-RPC line accepted from the server.
 /// Anything longer is treated as a misbehaving server and disconnects.
@@ -600,9 +608,17 @@ impl McpClient {
                                 break;
                             }
                             Err(_) => {
+                                // WO 43.23: "silent" is not "dead" — only
+                                // disconnect while a request is in flight.
+                                // An idle-but-healthy stdio server has no
+                                // keepalive duty, so the reader loops and
+                                // re-checks instead of disconnecting.
+                                if pending.lock().await.is_empty() {
+                                    continue;
+                                }
                                 tracing::warn!(
                                     server = %server_name,
-                                    "MCP reader idle timeout; disconnecting"
+                                    "MCP reader idle timeout with request in flight; disconnecting"
                                 );
                                 break;
                             }
@@ -847,9 +863,9 @@ impl McpClient {
     }
 
     /// Wake every in-flight request with `error`. Called when the reader
-    /// exits (EOF, read error, idle timeout, oversized line) so callers do
-    /// not wait the full `REQUEST_TIMEOUT` before discovering the client is
-    /// dead.
+    /// exits (EOF, read error, idle timeout with a request in flight,
+    /// oversized line) so callers do not wait the full `REQUEST_TIMEOUT`
+    /// before discovering the client is dead.
     pub(super) async fn fail_all_pending(pending: PendingMap) {
         let waiters: Vec<_> = {
             let mut guard = pending.lock().await;
@@ -2138,5 +2154,64 @@ mod tests {
             !msg.contains("denied"),
             "approved sampling must not report denial: {msg}"
         );
+    }
+
+    // ── WO 43.23: reader idle timeout armed only while requests are
+    // in flight ──
+
+    /// An idle-but-healthy server (no pending requests) stays connected
+    /// past the reader idle timeout — silence is not death.
+    #[tokio::test]
+    async fn test_idle_server_stays_connected_without_pending_requests() {
+        let config = make_mcp_config("idle-test", "sleep");
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("sleep failed");
+        let stdout = child.stdout.take().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let mut client = McpClient::from_pipes(stdin, stdout, config);
+
+        // 4x the (test-shortened) idle bound: enough idle cycles that
+        // the old unconditional disconnect would have fired repeatedly.
+        tokio::time::sleep(READER_IDLE_TIMEOUT * 4).await;
+        assert!(
+            client.is_alive(),
+            "idle server with no in-flight request must stay connected"
+        );
+
+        client.disconnect().await;
+        let _ = child.kill().await;
+    }
+
+    /// A hung in-flight request is still bounded: the reader
+    /// disconnects when the idle timeout fires with a pending entry,
+    /// and the request fails instead of waiting out REQUEST_TIMEOUT.
+    #[tokio::test]
+    async fn test_hung_pending_request_is_bounded() {
+        let config = make_mcp_config("hung-test", "sleep");
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("sleep failed");
+        let stdout = child.stdout.take().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let client = McpClient::from_pipes(stdin, stdout, config);
+
+        let req = serde_json::json!({ "jsonrpc": "2.0", "method": "tools/list", "params": {} });
+        let result = tokio::time::timeout(Duration::from_secs(5), client.send_request(&req)).await;
+        let inner = result.expect("request must resolve without hitting the outer 5s bound");
+        assert!(inner.is_err(), "hung request must fail, got {inner:?}");
+        assert!(
+            !client.is_alive(),
+            "reader must disconnect after idle timeout with a pending request"
+        );
+
+        drop(client);
+        let _ = child.kill().await;
     }
 }

@@ -709,6 +709,13 @@ pub async fn run_tui(
     )
     .await;
 
+    // WO 43.23: kill still-running background jobs on session teardown
+    // (persisting their exit summaries first, WO 43.10) so a normal
+    // quit leaves no live orphaned process groups behind.
+    crate::session::bash_jobs::global_registry()
+        .sweep_on_session_exit(&state.session.session_id)
+        .await;
+
     teardown(
         &shared_config,
         &saved_profile,

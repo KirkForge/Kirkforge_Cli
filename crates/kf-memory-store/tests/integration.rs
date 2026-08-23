@@ -197,9 +197,13 @@ fn file_adapter_reclaims_lock_with_unreadable_pid_via_age_fallback() {
     };
     std::fs::write(&lock_path, "not-a-number\n").unwrap();
     // Set mtime to 10 minutes ago — past the 5-min staleness threshold.
+    // Open with write access: on Windows, SetFileTime needs
+    // FILE_WRITE_ATTRIBUTES, which a read-only File::open handle lacks.
     let old = SystemTime::now() - Duration::from_secs(600);
     let times = std::fs::FileTimes::new().set_modified(old);
-    std::fs::File::open(&lock_path)
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&lock_path)
         .unwrap()
         .set_times(times)
         .unwrap();

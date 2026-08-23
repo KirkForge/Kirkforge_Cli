@@ -219,7 +219,29 @@ fn pid_is_alive(pid: i32) -> bool {
         let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
         errno != libc::ESRCH
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // Mirror of the unix kill(pid, 0) probe: OpenProcess with query-only
+        // access, then check the exit code. ACCESS_DENIED means the process
+        // exists but belongs to another user — treat as alive, like EPERM.
+        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, STILL_ACTIVE};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        const ERROR_ACCESS_DENIED: u32 = 5;
+        // SAFETY: plain Win32 handle calls; the handle is closed on every path.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+            if handle.is_null() {
+                return GetLastError() == ERROR_ACCESS_DENIED;
+            }
+            let mut exit_code: u32 = 0;
+            let ok = GetExitCodeProcess(handle, &mut exit_code);
+            CloseHandle(handle);
+            ok != 0 && exit_code == STILL_ACTIVE as u32
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         // No portable liveness probe; rely on the age-based fallback.
         true

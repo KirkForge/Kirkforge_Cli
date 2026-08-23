@@ -539,13 +539,16 @@ pub fn write_artifacts(
         // 9. Write policy — deny_paths.
         if let Some(deny) = profile.and_then(|p| p.write_policy.as_ref()) {
             if !deny.deny_paths.is_empty() {
+                // deny_paths come from cross-platform config (forward-slash
+                // convention); `diff_paths` emits OS-native separators, so
+                // normalize both sides before comparing.
                 let rel = diff_paths(&full, Path::new(cwd))
-                    .map(|p| p.to_string_lossy().into_owned())
+                    .map(|p| p.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
                     .unwrap_or_default();
-                let hit = deny
-                    .deny_paths
-                    .iter()
-                    .any(|d| rel == *d || rel.starts_with(&format!("{d}/")));
+                let hit = deny.deny_paths.iter().any(|d| {
+                    let d = d.replace('\\', "/");
+                    rel == d || rel.starts_with(&format!("{d}/"))
+                });
                 if hit {
                     results.push(WriteResult::blocked(
                         &art.file_path,

@@ -859,7 +859,7 @@ tree, ~11 stale claims corrected in-line. See
 | 43.2 | [Bounded EAGAIN/EINTR retry on the atomic-write primitive](43.2-atomic-write-retry.md) | Planned |
 | 43.3 | [Audit-log redaction residual gap](43.3-audit-redaction.md) | Done |
 | 43.4 | [Property-based tests for the path-safety surface](43.4-path-safety-proptest.md) | Done |
-| 43.5 | [Eliminate live panic paths and honored no-op stubs](43.5-panic-path-elimination.md) | Planned |
+| 43.5 | [Eliminate live panic paths and honored no-op stubs](43.5-panic-path-elimination.md) | Done |
 | 43.6 | [Wire kf-rbac into the daemon](43.6-wire-kf-rbac.md) | Planned |
 | 43.7 | [Placeholder ADR triage (0011 persistent knowledge, 0012 speculative priming, 0018 scheduled jobs)](43.7-placeholder-adr-triage.md) | Planned |
 | 43.8 | [Silent error-handling triage (.ok(), unwrap_or_else, catch-all arms)](43.8-silent-error-triage.md) | Planned |

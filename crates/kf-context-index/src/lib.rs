@@ -1054,7 +1054,7 @@ impl ContextIndex {
                 let imported_by = self
                     .edges
                     .iter()
-                    .filter(|e| e.resolved_file.as_ref().is_none_or(|rf| rf == &sym.file))
+                    .filter(|e| e.resolved_file.as_ref() == Some(&sym.file))
                     .map(|e| e.source_file.clone())
                     .collect();
                 let called_by = self
@@ -2314,6 +2314,73 @@ mod tests {
         );
         let auth_result = results.iter().find(|r| r.symbol.name == "auth");
         assert!(auth_result.is_some(), "expected 'auth' symbol in results");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// WO 43.34: `retrieve()` must NOT smear unresolved import edges
+    /// (resolved_file == None — stdlib/external imports) into every
+    /// matched symbol's `imported_by`. Only edges that RESOLVED to the
+    /// symbol's file count as importers. The old
+    /// `is_none_or(rf == sym.file)` filter attributed every unresolved
+    /// edge in the index to every result, re-inflating `imported_by`
+    /// to near-whole-index size on a large repo (7MB / >1M tokens
+    /// observed). `other.rs` has only an unresolved stdlib import and
+    /// no relation to `auth.rs`; it must not appear in `auth`'s
+    /// `imported_by`.
+    #[test]
+    fn retrieve_does_not_smear_unresolved_edges() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kf-code-context-retrieve-smear-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        fs::create_dir_all(&src).unwrap();
+
+        // auth.rs lives at src/auth.rs so `use crate::auth;` resolves to it.
+        let auth = src.join("auth.rs");
+        fs::write(&auth, "fn auth() {}\n").unwrap();
+        // main.rs imports auth (resolves to src/auth.rs) AND std::fs
+        // (unresolved — resolved_file == None). Under the old smear,
+        // the std::fs edge would also add main.rs to auth's imported_by.
+        let main = src.join("main.rs");
+        fs::write(
+            &main,
+            "use crate::auth;\nuse std::fs;\nfn run() { auth(); }\n",
+        )
+        .unwrap();
+        // other.rs has only an unresolved stdlib import and no relation
+        // to auth.rs. Under the old smear, its unresolved edge would
+        // add other.rs to auth's imported_by — the regression.
+        let other = src.join("other.rs");
+        fs::write(&other, "use std::collections::HashMap;\nfn helper() {}\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_dir(&tmp).unwrap();
+
+        let results = idx.retrieve("auth", 10);
+        let auth_result = results
+            .iter()
+            .find(|r| r.symbol.name == "auth")
+            .expect("expected 'auth' symbol in results");
+
+        // The resolved importer (main.rs via `use crate::auth;`) is present.
+        let imported_by: Vec<String> = auth_result
+            .imported_by
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            imported_by.iter().any(|p| p.contains("main.rs")),
+            "resolved importer main.rs must be in imported_by, got {imported_by:?}"
+        );
+        // The unrelated file with only an unresolved stdlib import must
+        // NOT be smeared into auth's imported_by.
+        assert!(
+            !imported_by.iter().any(|p| p.contains("other.rs")),
+            "unresolved edge from other.rs must NOT smear into auth's imported_by, got {imported_by:?}"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }

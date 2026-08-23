@@ -879,3 +879,13 @@ tree, ~11 stale claims corrected in-line. See
 | 43.22 | [Adapter transport robustness](43.22-adapter-transport-robustness.md) | Planned |
 | 43.23 | [Subprocess lifecycle: PDEATHSIG, MCP idle, registry sweep](43.23-subprocess-lifecycle.md) | Planned |
 | 43.24 | [Test assertion quality triage](43.24-test-assertion-quality.md) | Planned |
+| 43.25 | [UTF-8 byte-slice panic hardening](43.25-utf8-byte-slice-panic-hardening.md) | Planned |
+| 43.26 | [Unguarded subprocess (workflow pluginbus)](43.26-unguarded-subprocess-workflow-pluginbus.md) | Planned |
+| 43.27 | [Atomic-write permissions undo order](43.27-atomic-write-permissions-undo-order.md) | Planned |
+| 43.28 | [Background pty bash secret leak](43.28-background-pty-bash-secret-leak.md) | Planned |
+| 43.29 | [Prompt compaction OOB panic](43.29-prompt-compaction-oob-panic.md) | Planned |
+| 43.30 | [File-tool hook veto](43.30-file-tool-hook-veto.md) | Planned |
+| 43.31 | [Doom-loop banner selection](43.31-doom-loop-banner-selection.md) | Planned |
+| 43.32 | [Config env-override layer dead](43.32-config-env-override-layer-dead.md) | Planned |
+| 43.33 | [jobd stop auth timeout](43.33-jobd-stop-auth-timeout.md) | Planned |
+| 43.34 | [Context-index retrieval smear (unresolved edges)](43.34-context-index-retrieve-smear.md) | Done |

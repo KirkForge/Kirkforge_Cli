@@ -67,6 +67,10 @@ pub(crate) fn anthropic_model_info(model_id: &str, image_prefix: &str) -> ModelI
 pub fn build_reqwest_client() -> reqwest::Client {
     reqwest::Client::builder()
         .tcp_nodelay(true)
+        // Bound the TCP connect phase so a SYN blackhole fails in 10s
+        // and enters retry classification instead of burning the full
+        // request timeout (WO 43.22).
+        .connect_timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap_or_else(|e| {
             tracing::warn!(error = %e, "failed to build custom reqwest client; falling back to default");

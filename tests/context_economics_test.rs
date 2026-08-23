@@ -268,7 +268,15 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
         "follow-up context must stay far below the raw corpus size"
     );
 
-    // ── Provider accounting: CostStats matches the mock's usage exactly. ──
+    // ── Provider accounting: CostStats matches the mock's usage exactly,
+    // and usage-less turns now report ESTIMATED counts (WO 43.22: providers
+    // that omit usage must not read zero-cost). The mock only stamps usage
+    // on the final text reply; the two tool turns before it fall back to
+    // token_count-cache estimates. Estimates are > 0 and grow with the
+    // context (turn 2 carries the sliced corpus). The estimated entries
+    // carry no flag yet — the `estimated: bool` field is a disclosed
+    // deferral in state.md pending; when it lands, tighten this to check
+    // it. ──
     let cost_stats: Vec<_> = events
         .iter()
         .filter_map(|e| match e {
@@ -281,9 +289,18 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
         })
         .collect();
     assert_eq!(
-        cost_stats,
-        vec![(7, 11)],
-        "token accounting must match the mock's emitted usage"
+        cost_stats.len(),
+        3,
+        "two estimated turns + one real-usage turn: {cost_stats:?}"
+    );
+    assert!(
+        cost_stats[0].0 > 0 && cost_stats[1].0 > cost_stats[0].0,
+        "estimated prompt tokens must be positive and grow with context: {cost_stats:?}"
+    );
+    assert_eq!(
+        cost_stats[2],
+        (7, 11),
+        "the real-usage turn must match the mock's emitted usage exactly"
     );
 
     // ── Verification leg: a verifier ran on the turn's file write and

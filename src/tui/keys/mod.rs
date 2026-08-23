@@ -1847,7 +1847,18 @@ fn apply_completion(state: &mut AppState, trigger: &str, matches: Vec<String>) -
 // Capped at a small constant so a giant directory never floods the
 // suggestion line. Entries are sorted for a stable display.
 fn complete_path(prefix: &str) -> Vec<String> {
-    let path_part = prefix.split(':').next().unwrap_or(prefix);
+    // Strip an `@path:10-20:raw` range suffix. The delimiter is a `:`
+    // followed by a digit — a plain `split(':')` would also cut Windows
+    // drive letters (`C:\...` → `C`) and complete against the CWD.
+    let bytes = prefix.as_bytes();
+    let mut cut = prefix.len();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b':' && bytes.get(i + 1).is_some_and(|c| c.is_ascii_digit()) {
+            cut = i;
+            break;
+        }
+    }
+    let path_part = &prefix[..cut];
     let (dir, last) = split_path_prefix(path_part);
     let mut out = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {

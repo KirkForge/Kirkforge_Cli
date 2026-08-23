@@ -835,6 +835,88 @@ async fn test_denied_edit_records_single_access_denied_result() {
     );
 }
 
+// WO 43.30: a pre-tool hook returning `deny` (exit 2) for a file tool
+// must block the spawn BEFORE the mutation is applied — the file on
+// disk must be unchanged. Pre-fix, file tools short-circuited to Spawn
+// in pre_run before the hook block, so the hook denial fired after the
+// write had already landed (silent security bypass).
+#[cfg(unix)]
+#[tokio::test]
+async fn test_pre_tool_hook_deny_blocks_edit_file_before_mutation() {
+    let tmp =
+        std::env::temp_dir().join(format!("kf_code_hook_veto_edit_{}.txt", std::process::id()));
+    std::fs::write(&tmp, "original").expect("seed existing file");
+    let _cleanup = CleanupFile(tmp.clone());
+
+    use crate::tools::edit_file::EditFile;
+    let edit_tool: Arc<dyn Tool> = Arc::new(EditFile::new(
+        None,
+        crate::session::access::PathGuard::default(),
+        false,
+        false,
+    ));
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-edit".into(),
+                name: "edit_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "old_string": "original",
+                    "new_string": "MUTATED",
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (_tmp, hooks_dir) = temp_hooks_dir();
+    // Exit 2 => HookDecision::Deny (see run_pre_tool_hook / hook_runner).
+    std::fs::write(
+        hooks_dir.join("pre-tool-edit_file.sh"),
+        "#!/bin/bash\nexit 2",
+    )
+    .unwrap();
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut config = make_config(true);
+    config.tools.hooks_dir = Some(hooks_dir);
+    let mut exe = make_executor(Box::new(adapter), vec![edit_tool], config).unwrap();
+    // Mark read so the read-before-edit gate passes — the hook must be
+    // the only thing that blocks the edit.
+    exe.sandbox.mark_read(&tmp);
+
+    let events = exe
+        .run_turn_collecting("edit with hook deny", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    // The file on disk MUST be unchanged — the hook denied before spawn.
+    let on_disk = std::fs::read_to_string(&tmp).unwrap();
+    assert_eq!(
+        on_disk, "original",
+        "pre-tool hook deny must block the edit before mutation; \
+         disk now contains {on_disk:?}"
+    );
+
+    let denied = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, output, success: false }
+                if name == "edit_file" && output.contains("denied")
+        )
+    });
+    assert!(
+        denied,
+        "Expected a hook-denial ToolResult for edit_file, got events: {events:?}"
+    );
+}
+
 // WO 35.3: an executor with an attached root cancel token must kill an
 // in-flight bash child when the token fires + the flag is set — the
 // subagent cancellation path. Without the live child token (pre-WO 35.3

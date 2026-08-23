@@ -261,9 +261,14 @@ impl Executor {
         }
 
         // File tools: run path guard here so oversized reads never reach the
-        // tool body. Return the resolved path so Phase 3 can check the
-        // read-before-edit gate and mark reads without re-resolving.
-        if matches!(
+        // tool body. Resolve the path now so the pre-tool hook below (and
+        // Phase 3's read-before-edit gate) can see what file is being touched
+        // without re-resolving. A path-guard denial short-circuits; an
+        // allowed resolution falls through to the pre-tool hook so a `deny`
+        // there blocks the spawn BEFORE the mutation (WO 43.30 — previously
+        // file tools returned Spawn here, before the hook, so a hook deny
+        // fired after the write was already applied).
+        let file_resolved: Option<std::path::PathBuf> = if matches!(
             tc.name.as_str(),
             "read_file" | "read_image" | "write_file" | "edit_file"
         ) {
@@ -279,9 +284,7 @@ impl Executor {
                 self.sandbox.check_write(path).await
             };
             match verdict {
-                GuardVerdict::Allowed(resolved) => {
-                    return Ok(PreRunVerdict::Spawn(tool, Some(resolved)));
-                }
+                GuardVerdict::Allowed(resolved) => Some(resolved),
                 GuardVerdict::Denied(msg) => {
                     return Ok(PreRunVerdict::Skip {
                         events: vec![TurnEvent::ToolResult {
@@ -293,10 +296,13 @@ impl Executor {
                     });
                 }
             }
-        }
+        } else {
+            None
+        };
 
-        // Pre-tool hook for non-file tools. File-tool hooks run after path
-        // resolution in `record_tool_result` so they see resolved paths.
+        // Pre-tool hook for ALL tools, including file tools. A `deny` here
+        // blocks the spawn before the tool body runs — for file tools this
+        // means the write/edit never reaches disk (WO 43.30).
         let args_json = serde_json::to_string(&tc.arguments).unwrap_or_default();
         if let Some(reason) = self
             .run_pre_tool_hook(
@@ -317,7 +323,7 @@ impl Executor {
             });
         }
 
-        Ok(PreRunVerdict::Spawn(tool, None))
+        Ok(PreRunVerdict::Spawn(tool, file_resolved))
     }
 }
 

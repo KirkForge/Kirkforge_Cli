@@ -856,7 +856,7 @@ tree, ~11 stale claims corrected in-line. See
 |----|-------|--------|
 | 43.0 | [Series 43 overview: honest-assessment backlog serialization](43.0-wo43-overview.md) | Planned |
 | 43.1 | [Retire string-probe error classification](43.1-typed-adapter-errors.md) | Done (ollama migrated; openai/anthropic/bedrock/vertex deferred) |
-| 43.2 | [Bounded EAGAIN/EINTR retry on the atomic-write primitive](43.2-atomic-write-retry.md) | Planned |
+| 43.2 | [Bounded EAGAIN/EINTR retry on the atomic-write primitive](43.2-atomic-write-retry.md) | Done |
 | 43.3 | [Audit-log redaction residual gap](43.3-audit-redaction.md) | Done |
 | 43.4 | [Property-based tests for the path-safety surface](43.4-path-safety-proptest.md) | Done |
 | 43.5 | [Eliminate live panic paths and honored no-op stubs](43.5-panic-path-elimination.md) | Planned |

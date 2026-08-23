@@ -14,6 +14,10 @@ why, and the gate evidence.
 - WO 43.1: typed `AdapterError` (Unreachable/ModelNotFound/Denied/Other) for
   ollama stream errors — `KirkForgeError::from` downcasts before the
   string-probe fallback (fallback kept for unmigrated adapters). [43.1](docs/workorders/43.1-typed-adapter-errors.md)
+- WO 43.2: bounded EINTR retry on the atomic-write primitive —
+  `retry_interrupted` helper (10 attempts, 1ms backoff) wraps `open`,
+  `sync_all`, and Unix `rename` in `write_fsync_rename`; spurious signal
+  interruption no longer fails a tool write. [43.2](docs/workorders/43.2-atomic-write-retry.md)
 - WO 43.0-43.17 — serialized the honest-assessment backlog into 17 verified
   workorders (6 analysis agents; ~11 stale claims corrected in-line).
 - WO 43.18-43.24 — round-3 fresh segment audit: 7 workorders of NEW findings

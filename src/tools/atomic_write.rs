@@ -53,8 +53,9 @@ pub fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<
 fn write_fsync_rename(tmp: &Path, target: &Path, contents: &[u8]) -> std::io::Result<()> {
     // `create_new(true)` is `O_EXCL|O_CREAT`: it fails if `tmp` already
     // exists, preventing a symlink at the temp path from redirecting the
-    // write to an arbitrary file.
-    let mut file = OpenOptions::new().write(true).create_new(true).open(tmp)?;
+    // write to an arbitrary file. EINTR retry: `open` can return Interrupted
+    // under signal load.
+    let mut file = retry_interrupted(|| OpenOptions::new().write(true).create_new(true).open(tmp))?;
 
     // Preserve the target's existing mode on Unix. The temp file was
     // created with the umask default (typically 0644); without this copy,
@@ -68,9 +69,29 @@ fn write_fsync_rename(tmp: &Path, target: &Path, contents: &[u8]) -> std::io::Re
     }
 
     file.write_all(contents)?;
-    file.sync_all()?;
+    // `sync_all` (fsync) can return EINTR under signal load; retry it.
+    retry_interrupted(|| file.sync_all())?;
     drop(file);
     rename_with_retry(tmp, target)
+}
+
+/// Retry an `Interrupted` (EINTR) syscall a bounded number of times.
+///
+/// `open`, `fsync`, and Unix `rename` can all surface EINTR under signal
+/// load; without a retry the tool write fails spuriously. The cap matches
+/// the house precedent `MAX_ATTEMPTS = 10` in `rename_with_retry`.
+fn retry_interrupted<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    const MAX_ATTEMPTS: usize = 10;
+    for attempt in 0..MAX_ATTEMPTS {
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted && attempt + 1 < MAX_ATTEMPTS => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("retry loop returns or errors before exhausting attempts")
 }
 
 /// Rename with a bounded retry on Windows.
@@ -101,7 +122,7 @@ pub fn rename_with_retry(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
     #[cfg(not(windows))]
     {
-        std::fs::rename(src, dst)
+        retry_interrupted(|| std::fs::rename(src, dst))
     }
 }
 
@@ -266,5 +287,51 @@ mod tests {
     fn unique_timestamp_nanos_is_nonzero() {
         let ts = unique_timestamp_nanos();
         assert!(ts > 0, "timestamp should be nonzero on real hardware");
+    }
+
+    #[test]
+    fn retry_interrupted_succeeds_after_transient_eintr() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let result: std::io::Result<u32> = retry_interrupted(|| {
+            let n = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n < 4 {
+                Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
+            } else {
+                Ok(42)
+            }
+        });
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            5,
+            "should have tried 5 times (4 EINTR + 1 success)"
+        );
+    }
+
+    #[test]
+    fn retry_interrupted_passes_non_interrupted_error() {
+        let err = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let result: std::io::Result<()> =
+            retry_interrupted(|| Err(std::io::Error::new(err.kind(), err.to_string())));
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn retry_interrupted_caps_at_max_attempts() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let result: std::io::Result<()> = retry_interrupted(|| {
+            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
+        });
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::Interrupted,
+            "persistent EINTR surfaces after cap"
+        );
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            10,
+            "exactly MAX_ATTEMPTS tries"
+        );
     }
 }

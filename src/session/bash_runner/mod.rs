@@ -26,6 +26,12 @@ mod seccomp;
 #[cfg(target_os = "linux")]
 pub(crate) use landlock::resolve_paths;
 
+// WO 43.11: re-export landlock_usable so the plugin-tool wrapper test can
+// probe whether the kernel can actually confine (not just whether the
+// syscall exists).
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use landlock::landlock_usable;
+
 /// Per-stream cap for captured stdout / stderr from a single bash invocation.
 ///
 /// Without this, a single `cat /dev/urandom` or `find / -print` against a

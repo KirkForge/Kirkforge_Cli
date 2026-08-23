@@ -23,6 +23,12 @@ why, and the gate evidence.
   background bash job exit summaries now persisted on session teardown to
   `<jobs_dir>/bg-exits.ndjson` so `--resume` can report died-with-session
   jobs; AgentRun-bound fields marked blocked on WO 41.5 Phase 3 — [43.10](docs/workorders/43.10-cross-session-state-policy.md)
+- WO 43.11: graduated landlock FS confinement to the plugin tool spawn path
+  (`PluginToolWrapper::run` now resolves landlock paths for the sandbox cwd +
+  plugin root + config extra paths and passes `Some(paths)` to `setup_rlimits`
+  instead of `None`). Plugin tool subprocesses on Linux are FS-confined like
+  bash children. Stale `ponytail:` comment in `kf-plugin-host/src/sandbox.rs`
+  corrected. Seccomp stays opt-in per ADR-054. [43.11](docs/workorders/43.11-os-sandbox-graduation.md)
 - WO 43.1: typed `AdapterError` (Unreachable/ModelNotFound/Denied/Other) for
   ollama stream errors — `KirkForgeError::from` downcasts before the
   string-probe fallback (fallback kept for unmigrated adapters). [43.1](docs/workorders/43.1-typed-adapter-errors.md)

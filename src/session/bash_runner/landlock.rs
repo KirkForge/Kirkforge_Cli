@@ -293,23 +293,24 @@ pub(crate) fn apply_landlock(paths: &LandlockPaths) -> Result<(), String> {
     Ok(())
 }
 
+// `landlock_available()` only proves the ruleset syscall exists. Real
+// confinement additionally needs `restrict_self`, which requires
+// CAP_SYS_ADMIN. Probe both so tests skip cleanly on kernels/caps that
+// can't actually confine (e.g. unprivileged CI containers).
+#[cfg(test)]
+pub(crate) fn landlock_usable() -> bool {
+    let Some(fd) = landlock_available() else {
+        return false;
+    };
+    let ok = unsafe { landlock_restrict(fd) };
+    unsafe { libc::close(fd) };
+    ok
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::process::CommandExt;
-
-    // `landlock_available()` only proves the ruleset syscall exists. Real
-    // confinement additionally needs `restrict_self`, which requires
-    // CAP_SYS_ADMIN. Probe both so tests skip cleanly on kernels/caps that
-    // can't actually confine (e.g. unprivileged CI containers).
-    fn landlock_usable() -> bool {
-        let Some(fd) = landlock_available() else {
-            return false;
-        };
-        let ok = unsafe { landlock_restrict(fd) };
-        unsafe { libc::close(fd) };
-        ok
-    }
 
     #[test]
     fn landlock_probe_does_not_crash() {

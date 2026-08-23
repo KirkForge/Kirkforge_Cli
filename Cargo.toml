@@ -220,10 +220,14 @@ kf-compress-core = { workspace = true, optional = true }
 # `computer_use` feature enables it. Default builds exclude it (~1-2 MB
 # saved). PlaceholderTab (pure Rust) keeps the tool compiling without it.
 headless_chrome = { version = "1", default-features = false, optional = true }
-# SigV4 signing for Anthropic-on-Bedrock requests.
-# 1.3+ requires http ^1.x (drops the http 0.2 + http-body 0.4 duplicate
-# dragged in by aws-smithy-http 0.60 under aws-sigv4 1.2).
-aws-sigv4 = { version = "1.3", default-features = false, features = ["sign-http"] }
+# SigV4 signing for Anthropic-on-Bedrock requests. 1.3+ modernizes the
+# smithy stack (aws-smithy-http 0.63 / runtime-api 1.11). NOTE: `sign-http`
+# (the `http_request` module our Bedrock signing uses) still requires http 0.2
+# for its canonical-request internals, and aws-smithy-http's default features
+# keep http-body 0.4 alive via aws-smithy-types — the http 0.2/http-body 0.4
+# dedup hoped for in WO 43.20 is NOT achievable while using `http_request`;
+# `http1` is enabled so the module's http 1.x types resolve.
+aws-sigv4 = { version = "1.3", default-features = false, features = ["sign-http", "http1"] }
 aws-credential-types = { version = "1.2", default-features = false }
 aws-smithy-runtime-api = { version = "1.7.3", default-features = false }
 futures-util = "0.3"

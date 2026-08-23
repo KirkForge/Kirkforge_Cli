@@ -858,7 +858,7 @@ tree, ~11 stale claims corrected in-line. See
 | 43.1 | [Typed adapter errors (retire string probe)](43.1-typed-adapter-errors.md) | Planned |
 | 43.2 | [Atomic-write EINTR retry (open/fsync)](43.2-atomic-write-retry.md) | Planned |
 | 43.3 | [Audit-log redaction residual gap](43.3-audit-redaction.md) | Planned |
-| 43.4 | [Path-safety property tests](43.4-path-safety-proptest.md) | Planned |
+| 43.4 | [Path-safety property tests](43.4-path-safety-proptest.md) | Done |
 | 43.5 | [PlaceholderTab + adapter no-op disclosure](43.5-panic-path-elimination.md) | Planned |
 | 43.6 | [Wire kf-rbac into the daemon](43.6-wire-kf-rbac.md) | Planned |
 | 43.7 | [Placeholder-ADR prose triage](43.7-placeholder-adr-triage.md) | Planned |

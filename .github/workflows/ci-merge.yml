@@ -219,6 +219,14 @@ jobs:
         # e2e-tests); e2e runs in the dedicated job below (Linux).
         run: cargo nextest run --profile ci-full --workspace --no-fail-fast --locked
 
+      - name: Run doctests on Windows
+        # WO 43.12: mirror of the Linux full-tests :186 doctest step.
+        # nextest does not collect doctests, so plain `cargo test --doc`.
+        # If doctests can't pass on Windows, document the exclusion here
+        # (none today — this step is the parity close).
+        shell: bash
+        run: cargo test --locked --doc --workspace --no-fail-fast
+
   # Dedicated e2e suite. The e2e integration test crate is feature-gated
   # (required-features = e2e-tests) so --workspace runs above skip it. This
   # job turns the feature on so the full e2e suite runs on every push to

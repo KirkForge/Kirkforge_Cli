@@ -1765,7 +1765,7 @@ mod tests {
         assert_eq!(format!("{e}"), "cancelled");
     }
 
-    #[cfg(unix)]
+    // WO 43.12: ungated — pure async over std::io::Cursor, no Unix API.
     #[tokio::test]
     async fn test_drain_capped_zero_cap_drains_all() {
         use std::io::Cursor;
@@ -1775,7 +1775,7 @@ mod tests {
         assert_eq!(dropped as usize, payload.len());
     }
 
-    #[cfg(unix)]
+    // WO 43.12: ungated — pure async over std::io::Cursor, no Unix API.
     #[tokio::test]
     async fn test_drain_capped_exact_cap_keeps_all() {
         use std::io::Cursor;
@@ -1789,7 +1789,7 @@ mod tests {
         assert_eq!(&kept[..], &payload[..]);
     }
 
-    #[cfg(unix)]
+    // WO 43.12: ungated — pure async over std::io::Cursor, no Unix API.
     #[tokio::test]
     async fn test_drain_capped_empty_input_returns_zero_dropped() {
         use std::io::Cursor;

@@ -1890,7 +1890,8 @@ fn split_path_prefix(prefix: &str) -> (String, String) {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
+    // WO 43.12: ungated — complete_path is cross-platform (splits on both
+    // `/` and `\`, uses std::fs::read_dir only).
     use super::complete_path;
     use super::{delete_word_backward, search_nav_direction, split_path_prefix, SearchDirection};
     use crate::session::prompt::CompactRequest;
@@ -2205,7 +2206,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    // WO 43.12: ungated — complete_path splits on both `/` and `\`, so the
+    // test is platform-agnostic (uses std::env::temp_dir + std::fs only).
     #[test]
     fn complete_path_completes_against_temp_dir() {
         // Use an absolute path prefix so the test does not depend on
@@ -2234,7 +2236,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    // WO 43.12: ungated — pure std::fs + complete_path (platform-agnostic).
     #[test]
     fn complete_path_strips_range_suffix_before_completing() {
         // `@foo.rs:10-20:raw` — only the path portion before the first
@@ -2300,7 +2302,8 @@ mod tests {
             .all(|t| t.starts_with("/p")));
     }
 
-    #[cfg(unix)]
+    // WO 43.12: ungated — uses std::env::temp_dir + std::path::MAIN_SEPARATOR_STR
+    // + complete_path (splits on both `/` and `\`); no Unix-only API.
     #[tokio::test]
     async fn tab_on_at_mention_completes_path() {
         // Use an absolute @-mention so the test doesn't depend on the

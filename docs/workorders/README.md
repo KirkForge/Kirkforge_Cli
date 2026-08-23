@@ -866,7 +866,7 @@ tree, ~11 stale claims corrected in-line. See
 | 43.9 | [Per-failure correction prompt guidance](43.9-correction-prompt-guidance.md) | Planned |
 | 43.10 | [Cross-session state preservation policy](43.10-cross-session-state-policy.md) | Planned |
 | 43.11 | [Landlock/seccomp sandbox graduation decision](43.11-os-sandbox-graduation.md) | Planned |
-| 43.12 | [Finish Windows test parity](43.12-windows-test-parity-finish.md) | Planned |
+| 43.12 | [Finish Windows test parity](43.12-windows-test-parity-finish.md) | Done |
 | 43.13 | [Triage the 18 unimplemented spec tasks (TECHNICAL.md)](43.13-spec-task-triage.md) | Planned |
 | 43.14 | [cargo-mutants nightly gate (targeted modules)](43.14-mutation-testing.md) | Planned |
 | 43.15 | [Machine-greppable ADR predicate blocks](43.15-machine-greppable-adrs.md) | Planned |

@@ -127,6 +127,21 @@ The largest module (~30 submodules). It owns:
 - **Executor** (`executor/`): the turn loop. Dispatches tool calls (serial or
   parallel batches per ADR-0020), collects stream events, emits plan-reason
   trace events (ADR-0032), checkpoints after each tool result (ADR-0034).
+  **Dispatch no-throw contract (WO 43.16)**: the dispatch hub
+  (`executor/dispatch.rs`) is Result-typed end-to-end — `prepare_batch`,
+  `spawn_batch`, `collect_batch` all return `anyhow::Result`. Tool bodies are
+  wrapped in `AssertUnwindSafe(...).catch_unwind()` under timeout, so a
+  panicking tool becomes `ToolOutcome::Failure(ToolError::Internal { "tool
+  panicked: …" })` instead of unwinding through the executor loop. A
+  `JoinError` (spawned task panicked/cancelled) leaves the index unrecorded
+  and Phase 3 appends a placeholder result. The three remaining reachable
+  panic sites in dispatch-reachable code were converted to guarded branches:
+  the Phase-2.5 deferred-file `expect` is a `Failure(Internal)` outcome, the
+  `stratum_store` local invariant uses `unwrap_or_else` + `tracing::error!` +
+  skip, and the `build_task_spawner` RwLock read uses the repo's poison
+  pattern (`.unwrap_or_else(|e| e.into_inner())`). A grep gate in
+  `scripts/ci-local.sh` rejects new non-test `unwrap`/`expect`/`panic!` in
+  `dispatch.rs`.
 - **Verifiers** (`verifier/`): the verification bus and correction loop (see
   [Verification](#verification)).
 - **Plugin tools** (`plugin_tools/`): loads plugin manifests. External plugins

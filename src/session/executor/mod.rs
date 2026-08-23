@@ -377,11 +377,22 @@ impl Executor {
         if cfg.tools.enabled_plugins.iter().any(|n| n == "stratum")
             && !cfg.tools.disabled_plugins.contains("stratum")
         {
-            crate::session::stratum::register_default_budget_listener(
-                &sid,
-                self.stratum_store.clone().expect("stratum_store set above"),
-            );
-            tracing::info!("stratum->budget slice listener registered for session {sid}");
+            // WO 43.16 no-throw: `stratum_store` is set at :369 above, so
+            // this is a local invariant. Previously an `expect` panic; now
+            // a guarded branch that logs + skips listener registration so
+            // a dispatch bug becomes a missing slice hook, not an unwind.
+            match self.stratum_store.clone() {
+                Some(store) => {
+                    crate::session::stratum::register_default_budget_listener(&sid, store);
+                    tracing::info!("stratum->budget slice listener registered for session {sid}");
+                }
+                None => {
+                    tracing::error!(
+                        "stratum_store missing in attach_session_stores; \
+                         skipping slice listener registration for session {sid}"
+                    );
+                }
+            }
         }
 
         // Budget hooks.
@@ -493,7 +504,17 @@ impl Executor {
         let shared_cfg: crate::shared::SharedConfig =
             std::sync::Arc::new(std::sync::RwLock::new(cfg));
         let model_name = self.model_name.clone();
-        let ollama_host = shared_cfg.read().unwrap().model.ollama_host.clone();
+        // WO 43.16 no-throw: the RwLock was just constructed two lines
+        // above, so the only failure mode is poison (unreachable here;
+        // no write happens between construction and this read). Use the
+        // repo's established poison-recovery pattern (budget.rs:131) so
+        // a future refactor that moves a write earlier can't panic.
+        let ollama_host = shared_cfg
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .model
+            .ollama_host
+            .clone();
         let undo_stack = self.undo_stack.clone();
         let supports_images = self.adapter.model_info().supports_images;
         self.task_spawner = Some(Arc::new(

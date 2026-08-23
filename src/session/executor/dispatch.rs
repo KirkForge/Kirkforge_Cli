@@ -415,11 +415,28 @@ impl Executor {
             }
             let idx = prep.idx;
             let name = prep.invocation.name.clone();
-            let path = prep
-                .resolved_path
-                .as_ref()
-                .expect("file call has resolved path")
-                .clone();
+            // WO 43.16 no-throw: `pre_run_verdict` guarantees file tools
+            // return `Spawn(tool, Some(resolved))` — a `None` here means
+            // the invariant broke. Previously an `expect` panic; now a
+            // guarded Failure(Internal) so a dispatch bug becomes a tool
+            // error the model can react to, not an executor unwind.
+            let Some(path) = prep.resolved_path.as_ref().cloned() else {
+                let invocation = prep.invocation.clone();
+                results.insert(
+                    idx,
+                    (
+                        invocation,
+                        ToolOutcome::Failure(crate::shared::ToolError::Internal {
+                            message: format!(
+                                "file call '{name}' reached Phase 2.5 without a resolved path"
+                            ),
+                        }),
+                        None,
+                        0,
+                    ),
+                );
+                continue;
+            };
 
             let path_arg = prep
                 .invocation

@@ -9,7 +9,7 @@ use crate::shared::metrics::{read_events, MetricEvent, PlanDecisionKind};
 #[cfg(unix)]
 use crate::shared::test_util::remove_test_file;
 use crate::shared::{FinishReason, ModelInfo, StreamEvent, TokenUsage, ToolDef, ToolOutcome};
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolContext};
 use std::sync::Mutex;
 #[tokio::test]
 async fn test_basic_text_response() {
@@ -1094,5 +1094,87 @@ async fn test_file_tool_receives_resolved_path() {
         got.as_deref(),
         Some(canonical.as_str()),
         "tool body must receive the canonical resolved path"
+    );
+}
+
+/// WO 43.16 no-throw contract: a registered tool that panics must yield a
+/// clean `ToolOutcome::Failure(ToolError::Internal { "tool panicked: …" })`,
+/// not unwind through the executor loop. The catch_unwind wrapper in
+/// `run_prepared_call` (dispatch.rs:677-698) is the guard; this test pins it.
+struct PanickingTool {
+    def: ToolDef,
+}
+
+#[async_trait::async_trait]
+impl Tool for PanickingTool {
+    fn def(&self) -> ToolDef {
+        self.def.clone()
+    }
+
+    async fn run(&self, _ctx: &ToolContext, _args: serde_json::Value) -> ToolOutcome {
+        panic!("boom from PanickingTool");
+    }
+}
+
+#[tokio::test]
+async fn test_panicking_tool_yields_failure_internal() {
+    let tool = PanickingTool {
+        def: ToolDef {
+            name: "boom",
+            description: "always panics",
+            parameters: serde_json::json!({"type": "object"}),
+        },
+    };
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-1".into(),
+                name: "boom".into(),
+                arguments: serde_json::json!({}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
+
+    // A panic in the tool body would propagate and abort the test task;
+    // reaching the assertion itself proves catch_unwind contained it.
+    let events = exe
+        .run_turn_collecting("call boom", &approval_tx, never_cancelled())
+        .await
+        .expect("panicking tool must not unwind the executor");
+
+    let failure = events.iter().find_map(|e| match e {
+        TurnEvent::ToolResult {
+            name,
+            output,
+            success: false,
+        } if name == "boom" => Some(output),
+        _ => None,
+    });
+    let msg = failure.expect("boom tool must emit a failed ToolResult");
+    assert!(
+        msg.contains("tool panicked: boom from PanickingTool"),
+        "expected Internal panic message, got: {msg}"
+    );
+
+    // The conversation must carry the Internal error text for the model.
+    let has_panic_msg = exe
+        .conversation
+        .all()
+        .iter()
+        .filter(|m| m.role == Role::Tool)
+        .any(|m| m.content.contains("tool panicked: boom from PanickingTool"));
+    assert!(
+        has_panic_msg,
+        "conversation must carry the panic text in a tool-role message"
     );
 }

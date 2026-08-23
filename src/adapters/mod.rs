@@ -1010,25 +1010,30 @@ mod tests {
 
     /// WO 43.22: Retry-After (seconds form) wins over the computed
     /// backoff when it asks for a longer wait; a shorter or absent/
-    /// unparseable header falls back to the computed backoff.
+    /// unparseable header falls back to the computed backoff. Compared
+    /// by bounds, not equality — retry_backoff jitter is wall-clock
+    /// seeded, so two samples differ.
     #[test]
     fn retry_delay_honors_retry_after_over_computed_backoff() {
-        let backoff = retry_backoff(1);
+        use std::time::Duration;
 
-        // Header asks for longer than the backoff → header wins.
-        assert_eq!(
-            retry_delay(Some("30"), 1),
-            std::time::Duration::from_secs(30)
-        );
+        // Header longer than any possible backoff → header wins exactly.
+        assert_eq!(retry_delay(Some("30"), 1), Duration::from_secs(30));
+        assert_eq!(retry_delay(Some("3"), 2), Duration::from_secs(3)); // backoff(2) ≤ 2.5s
 
-        // Header shorter than the backoff → backoff wins.
-        assert_eq!(retry_delay(Some("0"), 1), backoff);
-        assert_eq!(retry_delay(Some("2"), 3), retry_backoff(3));
+        // Header shorter than any possible backoff → backoff wins:
+        // result stays inside the attempt-2 backoff bounds.
+        let d = retry_delay(Some("0"), 2);
+        assert!(d >= Duration::from_secs(2) && d <= Duration::from_millis(2500));
 
-        // Absent / non-seconds forms → computed backoff.
-        assert_eq!(retry_delay(None, 1), backoff);
-        assert_eq!(retry_delay(Some("Wed, 21 Oct 2015 07:28:00 GMT"), 1), backoff);
-        assert_eq!(retry_delay(Some("garbage"), 1), backoff);
+        // Absent / non-seconds forms → backoff bounds.
+        for hdr in [None, Some("Wed, 21 Oct 2015 07:28:00 GMT"), Some("garbage")] {
+            let d = retry_delay(hdr, 2);
+            assert!(
+                d >= Duration::from_secs(2) && d <= Duration::from_millis(2500),
+                "expected attempt-2 backoff bounds for {hdr:?}, got {d:?}"
+            );
+        }
     }
 
     #[test]

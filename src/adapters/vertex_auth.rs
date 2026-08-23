@@ -21,10 +21,13 @@ use anyhow::Context;
 ///
 /// `service_account_path` is the user-configured path; if `None`, the
 /// `GOOGLE_APPLICATION_CREDENTIALS` environment variable is used.
+/// Returns the full `AccessToken` so callers can consult `is_expired()`
+/// (which carries a 1-minute safety margin) instead of re-fetching per
+/// request.
 pub async fn service_account_token(
     service_account_path: Option<&std::path::Path>,
     scopes: &[&str],
-) -> anyhow::Result<String> {
+) -> anyhow::Result<yup_oauth2::AccessToken> {
     let path = service_account_path
         .map(|p| p.to_path_buf())
         .or_else(|| {
@@ -47,10 +50,7 @@ pub async fn service_account_token(
         .token(scopes)
         .await
         .context("failed to fetch GCP access token")?;
-    Ok(token
-        .token()
-        .ok_or_else(|| anyhow::anyhow!("service account token endpoint returned None"))?
-        .to_string())
+    Ok(token)
 }
 
 #[cfg(test)]

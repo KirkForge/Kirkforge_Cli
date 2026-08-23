@@ -374,7 +374,7 @@ async fn test_correction_loop_unfixable_stops() {
 }
 
 #[tokio::test]
-async fn test_verifier_handler_drain_corrections() {
+async fn test_verifier_handler_returns_fixable_suggestion() {
     let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::new()));
     let handler = VerifierHandler::new(slots.clone(), crate::session::access::PathGuard::default());
 
@@ -397,15 +397,16 @@ async fn test_verifier_handler_drain_corrections() {
     }
 
     let event = make_edit_event();
-    let _ = handler.verify_event(&event).await;
+    let (verdict, name) = handler.verify_event(&event).await;
 
-    let corrections = handler.drain_corrections().await;
-    assert_eq!(corrections.len(), 1);
-    assert_eq!(corrections[0].description, "test fix");
-
-    // Second drain should be empty
-    let empty = handler.drain_corrections().await;
-    assert!(empty.is_empty());
+    // WO 43.37: pending_corrections queue was removed (write-only dead state).
+    // The real contract is that verify_event returns the Fixable verdict
+    // carrying the suggestion — the correction loop consumes this directly.
+    assert_eq!(name, "lint");
+    match verdict {
+        Verdict::Fixable(fix) => assert_eq!(fix.description, "test fix"),
+        other => panic!("expected Fixable, got {other:?}"),
+    }
 }
 
 /// A verifier that checks the actual file content and only returns Fixable
@@ -598,7 +599,7 @@ async fn handler_tool_error_event_short_circuits_without_fanout() {
 }
 
 #[tokio::test]
-async fn handler_drain_corrections_returns_fixable() {
+async fn handler_verify_event_returns_fixable_suggestion() {
     let mut s = VerifierSlots::new();
     let _ = s.register(Arc::new(MockVerifier {
         name: "fix-verifier".into(),
@@ -617,14 +618,19 @@ async fn handler_drain_corrections_returns_fixable() {
     let guard = PathGuard::default();
     let handler = VerifierHandler::new(slots, guard);
     let event = make_edit_event();
-    let _ = handler.verify_event(&event).await;
-    let corrections = handler.drain_corrections().await;
-    assert_eq!(corrections.len(), 1);
-    assert_eq!(corrections[0].description, "unused import");
+    let (verdict, name) = handler.verify_event(&event).await;
+    assert_eq!(name, "fix-verifier");
+    match verdict {
+        Verdict::Fixable(fix) => assert_eq!(fix.description, "unused import"),
+        other => panic!("expected Fixable, got {other:?}"),
+    }
 }
 
 #[tokio::test]
-async fn handler_drain_corrections_empty_after_drain() {
+async fn handler_verify_event_fixable_is_not_cached() {
+    // WO 43.37: Fixable/Unfixable verdicts are never cached (disk content
+    // changes after a correction). Re-running verify_event on the same
+    // event must re-run the verifier, not return a stale verdict.
     let mut s = VerifierSlots::new();
     let _ = s.register(Arc::new(MockVerifier {
         name: "fix-verifier".into(),
@@ -643,10 +649,13 @@ async fn handler_drain_corrections_empty_after_drain() {
     let guard = PathGuard::default();
     let handler = VerifierHandler::new(slots, guard);
     let event = make_edit_event();
-    let _ = handler.verify_event(&event).await;
-    let _ = handler.drain_corrections().await;
-    let corrections = handler.drain_corrections().await;
-    assert!(corrections.is_empty(), "second drain should be empty");
+    let (first, _) = handler.verify_event(&event).await;
+    let (second, _) = handler.verify_event(&event).await;
+    assert!(matches!(first, Verdict::Fixable(_)));
+    assert!(
+        matches!(second, Verdict::Fixable(_)),
+        "Fixable must not be cached"
+    );
 }
 
 // A verifier that never resolves — simulates a wedged `cargo build`. The

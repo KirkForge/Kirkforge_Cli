@@ -971,6 +971,11 @@ impl StdioMcpClient {
         match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => {
+                // WO 43.37: match the timeout branches — drop the pending-map
+                // entry so an abandoned request (receiver dropped without the
+                // reader exiting) doesn't leak the sender until the next
+                // response or fail_all_pending.
+                self.pending.lock().await.remove(&id);
                 tracing::warn!(id = id, "MCP response channel closed");
                 Err(McpError::ChannelClosed)
             }
@@ -1438,6 +1443,74 @@ mod tests {
         let resp = serde_json::json!({ "jsonrpc": "2.0", "id": 99, "result": {} });
         // Should not panic and should not block.
         McpClient::dispatch_response("99".to_string(), resp, &pending, "test").await;
+    }
+
+    /// WO 43.37: the `Ok(Err(_))` branch (oneshot sender dropped without a
+    /// response) must remove the pending-map entry, matching the timeout
+    /// branches. We drive the branch by polling the request future alongside a
+    /// pending-entry check until the entry appears, then dropping the sender so
+    /// the request's `rx` sees a closed channel. The test asserts the future
+    /// completes with `ChannelClosed` and the pending map is empty (no leaked
+    /// entry, no panic).
+    #[tokio::test]
+    async fn test_stdio_send_request_channel_close_removes_pending_entry() {
+        let config = make_mcp_config("chan-close-test", "true");
+        // Use `sleep` (not `cat`) so nothing echoes back to stdout — the reader
+        // task stays parked and never dispatches a response that would race
+        // with our manual pending removal.
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("sleep failed");
+        let stdout = child.stdout.take().unwrap();
+        let real_stdin = child.stdin.take().unwrap();
+        let client = McpClient::from_pipes(real_stdin, stdout, config);
+        let pending = match &client {
+            McpClient::Stdio(c) => c.pending.clone(),
+            _ => unreachable!(),
+        };
+
+        let req = serde_json::json!({ "jsonrpc": "2.0", "method": "tools/list", "params": {} });
+        let mut request_fut = Box::pin(client.send_request(&req));
+
+        // Drive the future forward until stdio_send_request has written the
+        // line and inserted its sender into pending (id "1"). Each iteration:
+        // briefly poll the request, then check whether pending is populated.
+        // The lock is released before yielding so the request can take it.
+        let mut entry_appeared = false;
+        for _ in 0..200 {
+            let pending_has_entry = !pending.lock().await.is_empty();
+            if pending_has_entry {
+                entry_appeared = true;
+                break;
+            }
+            // Poll the request for up to 10ms so it can run its write + insert.
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_millis(10), &mut request_fut).await;
+        }
+        assert!(
+            entry_appeared,
+            "stdio_send_request never inserted a pending entry"
+        );
+
+        // Drop the sender without sending — closes the oneshot so the
+        // request's rx yields Err(RecvError) → the Ok(Err(_)) branch.
+        drop(pending.lock().await.remove("1"));
+
+        let result = request_fut.await;
+        assert!(
+            matches!(result, Err(McpError::ChannelClosed)),
+            "expected ChannelClosed, got {result:?}"
+        );
+        assert!(
+            pending.lock().await.is_empty(),
+            "pending map must be empty after channel-close"
+        );
+
+        drop(client);
+        let _ = child.kill().await;
     }
 
     /// `McpError` renders a human-readable message so operators can

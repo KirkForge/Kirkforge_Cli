@@ -1,5 +1,5 @@
 use super::slots::VerifierSlots;
-use super::types::{FixSuggestion, Verdict, Verifier};
+use super::types::{Verdict, Verifier};
 use crate::session::verifier::types::{BusEvent, EventKind, FileWriteEvent};
 use crate::shared::metrics::{record, MetricEvent};
 
@@ -28,8 +28,6 @@ const VERIFIER_TIMEOUT: Duration = Duration::from_millis(50);
 /// Called directly by the dispatch layer — no intermediate pub/sub bus.
 pub struct VerifierHandler {
     slots: Arc<std::sync::RwLock<VerifierSlots>>,
-    /// Correction results that verifiers produced — consumed by correction loop.
-    pub(crate) pending_corrections: Arc<tokio::sync::Mutex<Vec<FixSuggestion>>>,
     /// Path guard used when applying auto-fixes.
     pub(crate) path_guard: crate::session::access::PathGuard,
     /// Verdict cache keyed by `(file_path, content_hash)`. Only `Clean`/`Skipped`
@@ -50,7 +48,6 @@ impl VerifierHandler {
     ) -> Self {
         Self {
             slots,
-            pending_corrections: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             path_guard,
             verdict_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
@@ -59,12 +56,6 @@ impl VerifierHandler {
     /// Access the underlying verifier slots.
     pub fn slots(&self) -> Arc<std::sync::RwLock<VerifierSlots>> {
         self.slots.clone()
-    }
-
-    /// Drain pending corrections (consumed by the correction loop).
-    pub async fn drain_corrections(&self) -> Vec<FixSuggestion> {
-        let mut pending = self.pending_corrections.lock().await;
-        std::mem::take(&mut *pending)
     }
 
     /// Drop cached verdicts for `path`. Called by the correction loop after a
@@ -178,17 +169,7 @@ impl VerifierHandler {
                         .find(|(_, v)| matches!(v, Verdict::Fixable(_)))
                 });
             match decisive {
-                Some((name, v)) => {
-                    // Push ALL FixSuggestion entries so downstream can act on
-                    // every finding, not just the decisive one.
-                    let mut pending = self.pending_corrections.lock().await;
-                    for (_, verdict) in &all_findings {
-                        if let Verdict::Fixable(fix) = verdict {
-                            pending.push(fix.clone());
-                        }
-                    }
-                    (v.clone(), name.clone())
-                }
+                Some((name, v)) => (v.clone(), name.clone()),
                 None => (Verdict::Clean, "aggregate".to_string()),
             }
         };

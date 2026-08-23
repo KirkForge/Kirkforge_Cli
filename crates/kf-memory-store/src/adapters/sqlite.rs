@@ -357,7 +357,11 @@ impl MemoryAdapter for SqliteAdapter {
             "SELECT id, kind, task_id, timestamp, description, properties, tags
              FROM observations WHERE id = ?1",
         )?;
-        let obj = stmt.query_row(params![id], Self::row_to_object).ok();
+        let obj = match stmt.query_row(params![id], Self::row_to_object) {
+            Ok(o) => Some(o),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.into()),
+        };
         Ok(obj)
     }
 
@@ -403,13 +407,15 @@ impl MemoryAdapter for SqliteAdapter {
     fn stats(&self) -> Result<MemoryStats> {
         let conn = self.conn.lock().expect("sqlite lock poisoned");
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM observations", [], |r| r.get(0))?;
-        let last: Option<String> = conn
-            .query_row(
-                "SELECT timestamp FROM observations ORDER BY timestamp DESC LIMIT 1",
-                [],
-                |r| r.get(0),
-            )
-            .ok();
+        let last: Option<String> = match conn.query_row(
+            "SELECT timestamp FROM observations ORDER BY timestamp DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        ) {
+            Ok(s) => Some(s),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.into()),
+        };
         Ok(MemoryStats {
             total_objects: count as usize,
             last_write: last.unwrap_or_else(|| "never".to_string()),

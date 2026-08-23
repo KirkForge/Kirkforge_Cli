@@ -897,4 +897,5 @@ tree, ~11 stale claims corrected in-line. See
 | 43.37 | [Verifier pending_corrections dead-queue growth + MCP pending-map leak](43.37-verifier-corrections-queue-mcp-leak.md) | Planned |
 | 43.38 | [Async blocking in tools (glob walk, computer_use sleep) + shell-glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Planned |
 | 43.39 | [kf-bench markdown-delta baseline computation contradicts the regression signal](43.39-bench-delta-rate.md) | Planned |
+| 43.29 | [Prompt-compaction out-of-bounds panic (minify_old_messages)](43.29-prompt-compaction-oob-panic.md) | Done |
 

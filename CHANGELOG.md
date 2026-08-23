@@ -58,6 +58,7 @@ why, and the gate evidence.
 - WO 40.4: sleep elimination — all gratuitous test-sync sleeps eliminated; 2 residual sleeps documented (mock behavior + unconvertible race) — [40.4](docs/workorders/40.4-sleep-elimination.md)
 - WO 42.1: delete dead testdoctor test referencing deleted ci.yml — [42.1](docs/workorders/42.1-dead-testdoctor.md)
 - WO 42.2: audit chain resumes on restart + `FileAuditSink::verify_chain` — [42.2](docs/workorders/42.2-audit-chain-verify.md)
+- WO 43.29: guard OOB write in `minify_old_messages` on over-budget path — index-out-of-bounds panic when microcompaction collapsed the middle and the compacted form still exceeded budget — [43.29](docs/workorders/43.29-prompt-compaction-oob-panic.md)
 
 
 ### Added

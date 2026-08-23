@@ -849,7 +849,7 @@ impl PromptBuilder {
             let minified = crate::shared::minify::minify_source_safe(&path, &msg.content);
             if minified.len() < msg.content.len() {
                 let savings = msg.content.len() - minified.len();
-                if savings > 20 {
+                if savings > 20 && i < adjusted.len() {
                     adjusted[i].content = minified;
                     adjusted[i].token_count = None;
                     minified_any = true;
@@ -1227,6 +1227,46 @@ mod tests {
             !assistant_content.contains("this comment adds tokens"),
             "minified code should strip comments"
         );
+    }
+
+    // WO 43.29: pin the over-budget continuation path where microcompaction
+    // collapses the middle (adjusted.len() ≈ anchor+summary+tail) while
+    // `messages` retains the full history. Before the guard, minify_old_messages
+    // indexed the shorter `adjusted` with indices from the longer `messages`
+    // and panicked at i >= adjusted.len() whenever a high-index message held
+    // minifiable Rust code. budget=0 forces the over-budget route; the middle
+    // messages carry code blocks at indices beyond the compacted tail.
+    #[test]
+    fn test_minify_old_messages_no_panic_when_adjusted_shorter_than_messages() {
+        let mut builder = PromptBuilder::new();
+        let system = Message {
+            role: Role::System,
+            content: "S".into(),
+            ..Default::default()
+        };
+        let code_block = "```rs\nfn main() {\n    // a long comment that minification strips to save tokens\n    let x = 1;\n    let y = 2;\n    let z = 3;\n    println!(\"{}\", x + y + z);\n}\n```\n";
+        // Build >keep_tail+1 middle messages with minifiable content at indices
+        // that land beyond the compacted tail (keep_tail=5 → adjusted ≈ 7).
+        let mut history = Vec::new();
+        for i in 0..20 {
+            history.push(Message {
+                role: Role::User,
+                content: format!("{code_block} // turn {i}"),
+                ..Default::default()
+            });
+        }
+        // budget=0 forces microcompaction AND the over-budget continuation.
+        let result = builder.build_messages_with_compaction(
+            system,
+            &history,
+            0, // budget = 0 → microcompact + over-budget route
+            &[],
+            false,
+            0.5,
+        );
+        // No panic is the assertion; the compaction fallback still returns a vec.
+        assert!(!result.is_empty());
+        assert_eq!(result[0].content, "S");
     }
 
     #[test]

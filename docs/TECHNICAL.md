@@ -50,7 +50,7 @@ kf-code (root bin)          ← the CLI the user runs
 │   ├── kf-orchestrator ← orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of @kirkforge/orchestrator (WO 29.7)
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── benches/tasks/             ← 30 benchmark task definitions (TOML)
-└── docs/adr/                  ← 93 Architecture Decision Records
+└── docs/adr/                  ← 94 Architecture Decision Records
 ```
 
  The workspace has ~4,550 test functions (~3,600 under `src/`,
@@ -1499,35 +1499,47 @@ removed when the draw plugin was deleted; it is no longer in the task set.
 | `use_workflow_run.toml` | 31 Multi-file Feature | G | partial |
 | `token_budget_challenge.toml` | 30 Budget Enforcement | F | full (signature) |
 
-### Planned tasks (honest deferral)
+### Planned tasks (honest deferral, triaged in ADR-077)
 
-18 spec tasks are not yet implemented. Each exercises a specific feature
-and is a future workorder.
+19 spec tasks are not yet implemented. ADR-077 triaged each row (plus the 3
+unmapped tasks below) into **implement** (4 — deterministic verify, cheap),
+**deferred** (12 — real but blocked on a concrete missing capability), and
+**dropped** (6 — no longer a differentiating capability). The Triage column
+below carries the verdict; deferrals point at ADR-077 for the named blocker.
 
-| Spec task | Category | Exercises |
-|---|---|---|
-| 1 Find Dead Code | A | tree-sitter symbol graph + unreferenced-symbol query |
-| 2 Dependency Graph Accuracy | A | crate-level dep graph generation |
-| 3 Call Graph Generation | A | per-symbol call graph |
-| 4 Explain Module | A | module summarisation without hallucination |
-| 5 Cross-Repository Search | A | trait-impl search across workspace |
-| 9 Split Giant File | B | 2500-line file split |
-| 18 Add REST Endpoint | D | non-Rust task setup |
-| 22 Build Verification | E | standalone build-verify task |
-| 23 Formatter Verification | E | standalone fmt-verify task |
-| 24 Lint Verification | E | standalone lint-verify task |
-| 27 Large Repository Navigation | F | context index at Linux-scale |
-| 32 Large Refactor | G | 50+ files |
-| 33 Merge Conflict Resolution | G | realistic conflict resolution |
-| 35 Regression Detection | G | PR regression prediction |
-| 36 Token Efficiency | H | standalone token-efficiency task |
-| 37 Dollar Cost | H | standalone cost task |
-| 38 Time | H | standalone latency task |
-| 39 Retry Count | H | standalone retry-count task |
-| 40 Human Intervention | H | standalone intervention task |
+| Spec task | Category | Exercises | Triage |
+|---|---|---|---|
+| 1 Find Dead Code | A | tree-sitter symbol graph + unreferenced-symbol query | deferred → ADR-077 |
+| 2 Dependency Graph Accuracy | A | crate-level dep graph generation | deferred → ADR-077 |
+| 3 Call Graph Generation | A | per-symbol call graph | deferred → ADR-077 |
+| 4 Explain Module | A | module summarisation without hallucination | deferred → ADR-077 |
+| 5 Cross-Repository Search | A | trait-impl search across workspace | deferred → ADR-077 |
+| 9 Split Giant File | B | 2500-line file split | deferred → ADR-077 |
+| 18 Add REST Endpoint | D | non-Rust task setup | deferred → ADR-077 |
+| 22 Build Verification | E | standalone build-verify task | implement |
+| 23 Formatter Verification | E | standalone fmt-verify task | implement |
+| 24 Lint Verification | E | standalone lint-verify task | implement |
+| 27 Large Repository Navigation | F | context index at Linux-scale | deferred → ADR-077 |
+| 32 Large Refactor | G | 50+ files | deferred → ADR-077 |
+| 33 Merge Conflict Resolution | G | realistic conflict resolution | deferred → ADR-077 |
+| 35 Regression Detection | G | PR regression prediction | deferred → ADR-077 |
+| 36 Token Efficiency | H | standalone token-efficiency task | dropped (ADR-077) |
+| 37 Dollar Cost | H | standalone cost task | dropped (ADR-077) |
+| 38 Time | H | standalone latency task | dropped (ADR-077) |
+| 39 Retry Count | H | standalone retry-count task | dropped (ADR-077) |
+| 40 Human Intervention | H | standalone intervention task | dropped (ADR-077) |
 
-3 spec tasks (Fix Compilation Error, Fix Integration Test, Implement Missing
-Trait) have no mapping yet — a known gap.
+3 spec tasks had no mapping yet — a known gap, now triaged in ADR-077:
+
+- **Implement Missing Trait** → implement (deterministic compile-check verify).
+- **Fix Integration Test** → deferred → ADR-077 (needs a live
+  integration-test fixture baked into the task).
+- **Fix Compilation Error** → dropped (ADR-077) — subsumed by the existing
+  slot-16 tasks (`fix_borrow_error.toml`, `fix_lifetime_error.toml`).
+
+Reconciled arithmetic: 30 implemented tasks cover 18 of the 40 spec slots;
+4 implement-backlog; 12 deferred (→ ADR-077); 6 dropped (→ ADR-077) → 40
+slots accounted for.
 
 The harness (`kf-bench` crate + `src/session/bench.rs`) spins up a
 headless agent session with a real model adapter, auto-approves all tool calls,
@@ -1799,15 +1811,15 @@ not the root binary.
 
 ## ADRs
 
-93 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
+94 Architecture Decision Records live in [docs/adr/](docs/adr/). They pin
 load-bearing decisions: token budget (0005), slicing orchestrator (0007),
 verifier bus (0028, 0043), context index (037), benchmark harness (038),
 execution replay (039), VFS minification (053), coverage-gate threshold
 policy (065), CI architecture reset (074), Emission flattening for the
 executor-backed ModelClient (075), the reducer contract for
-`DelegationResult.packet` (076), and many more. A drift test
-(`adr_xref_drift`) enforces that ADR file headers and the README index
-table agree.
+`DelegationResult.packet` (076), the bench spec task triage (077), and many
+more. A drift test (`adr_xref_drift`) enforces that ADR file headers and
+the README index table agree.
 
 Conventions: `ponytail:` annotations pin spec literals (if a ponytail test
 fails, the spec and impl drifted, not the test). `ceiling:` and `upgrade path:`

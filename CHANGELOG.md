@@ -29,6 +29,10 @@ why, and the gate evidence.
   instead of `None`). Plugin tool subprocesses on Linux are FS-confined like
   bash children. Stale `ponytail:` comment in `kf-plugin-host/src/sandbox.rs`
   corrected. Seccomp stays opt-in per ADR-054. [43.11](docs/workorders/43.11-os-sandbox-graduation.md)
+- WO 43.13: triaged the 19 unimplemented bench spec tasks (TECHNICAL.md count
+  drift 18→19 fixed). Each of 19 rows + 3 unmapped tasks classified
+  implement (4) / deferred→ADR-077 (12) / dropped (6). Triage column added;
+  ADR-077 pins the concrete blocker per deferral. [43.13](docs/workorders/43.13-spec-task-triage.md)
 - WO 43.1: typed `AdapterError` (Unreachable/ModelNotFound/Denied/Other) for
   ollama stream errors — `KirkForgeError::from` downcasts before the
   string-probe fallback (fallback kept for unmigrated adapters). [43.1](docs/workorders/43.1-typed-adapter-errors.md)

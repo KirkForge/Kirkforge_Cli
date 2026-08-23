@@ -116,6 +116,7 @@ verifies the table and the file headers agree.
 | [074](./074-ci-architecture-reset.md) | CI architecture reset — PR / merge / nightly tiers | Accepted | CLI |
 | [075](./075-emission-final-assistant-message.md) | Emission flattening for the executor-backed ModelClient | Accepted | CLI |
 | [076](./076-reducer-contract.md) | Reducer contract — fold verification state into `DelegationResult.packet` | Accepted | CLI |
+| [077](./077-bench-spec-task-triage.md) | Bench spec task triage — implement / defer / drop | Accepted | CLI |
 
 ## Cross-references
 

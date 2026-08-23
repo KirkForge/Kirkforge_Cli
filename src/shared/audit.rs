@@ -218,22 +218,17 @@ impl AuditLog {
                     tracing::warn!(error = %e, "failed to write audit entry");
                     return;
                 }
-<<<<<<< HEAD
-                // Flush after each entry so the audit trail survives abrupt
-                // exits (panic=abort skips Drop, SIGKILL skips everything).
-                // Audit writes are low-frequency (one line per destructive
-                // call); per-entry flush is the whole fix for buffer loss.
-                if let Err(e) = w.flush() {
-                    tracing::warn!(error = %e, "failed to flush audit entry");
-||||||| f457c69c
-=======
+                // Flush + sync_data after each entry so the audit trail
+                // survives abrupt exits (panic=abort skips Drop, SIGKILL
+                // skips everything). Audit writes are low-frequency (one
+                // line per destructive call); per-entry flush+fsync is the
+                // whole fix for buffer loss.
                 if let Err(e) = w.flush() {
                     tracing::warn!(error = %e, "failed to flush audit entry");
                     return;
                 }
                 if let Err(e) = w.get_ref().sync_data() {
                     tracing::warn!(error = %e, "failed to fsync audit entry");
->>>>>>> origin/wo/wo43.21
                 }
             }
         }

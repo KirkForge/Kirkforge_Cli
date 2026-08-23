@@ -1,5 +1,12 @@
 # ADR 004: Tool Use — Client-Side Tool Dispatch with Approval Gates
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted (amended)

@@ -257,6 +257,245 @@ fn deferred_adrs_consistent_between_index_and_files() {
     );
 }
 
+// ── ADR predicate blocks (WO 43.15) ──────────────────────────────────────────
+//
+// ADRs carry an optional machine-greppable predicate block — an HTML comment
+// at the top of the file with exactly four keys:
+//
+//   <!-- adr-predicates
+//   status: accepted
+//   implemented: partial
+//   supersedes: []
+//   affects-crates: [kf-routing]
+//   -->
+//
+// When present, this test cross-checks the block against the file's own
+// Status header (status keyword), the filesystem (affects-crates dirs),
+// and the ADR directory (supersedes numbers resolve to existing files).
+// The block is opt-in: ADRs without one are skipped. Backfill + require-on-
+// all is a follow-up commit, not this one.
+//
+// ponytail: a four-key block parsed with split_once(':')/strip_prefix — no
+// schema, no regex, no new dep. The list forms (`[]`, `[kf-routing]`,
+// `[0012, 0013]`) are split on ``,` after stripping the brackets. An empty
+// list and a missing key both yield Vec::new() — the cross-checks treat
+// "absent" and "empty" identically, which is the YAGNI-correct behavior.
+
+/// Parsed predicate block. Every field defaults to "not declared" so a
+/// block that only carries `status:` still parses — the other checks
+/// simply have nothing to assert.
+#[derive(Default, Debug)]
+struct PredicateBlock {
+    status: Option<String>,
+    implemented: Option<String>,
+    supersedes: Vec<String>,
+    affects_crates: Vec<String>,
+}
+
+/// Parse a `<!-- adr-predicates … -->` block from an ADR body. Returns
+/// None when no block is present. Only the first block is read.
+fn parse_predicate_block(body: &str) -> Option<PredicateBlock> {
+    let start_marker = "<!-- adr-predicates";
+    let end_marker = "-->";
+    let start = body.find(start_marker)?;
+    let after_start = &body[start + start_marker.len()..];
+    let end = after_start.find(end_marker)?;
+    let inner = &after_start[..end];
+
+    let mut block = PredicateBlock::default();
+    for line in inner.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let Some((key, val)) = t.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        let val = val.trim();
+        match key {
+            "status" => block.status = Some(val.to_string()),
+            "implemented" => block.implemented = Some(val.to_string()),
+            "supersedes" => block.supersedes = parse_list_value(val),
+            "affects-crates" => block.affects_crates = parse_list_value(val),
+            _ => {}
+        }
+    }
+    Some(block)
+}
+
+/// Parse a `[a, b, c]` or `[]` list literal into owned strings. Empty or
+/// bare `[]` yields an empty Vec. Quoted entries (`"kf-routing"`) have
+/// their quotes stripped.
+fn parse_list_value(val: &str) -> Vec<String> {
+    let val = val.trim();
+    let Some(inner) = val.strip_prefix('[').and_then(|s| s.strip_suffix(']')) else {
+        return Vec::new();
+    };
+    let inner = inner.trim();
+    if inner.is_empty() {
+        return Vec::new();
+    }
+    inner
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Normalize a Status header value to its leading keyword (lowercase),
+/// matching `wo_status_keyword` semantics but scoped to ADR status forms:
+/// `accepted`, `rejected`, `superseded`, `deferred`. Compound suffixes
+/// like "Accepted (partially implemented)" reduce to "accepted".
+fn adr_status_keyword(s: &str) -> String {
+    let s = s.trim().to_lowercase();
+    for kw in ["accepted", "rejected", "superseded", "deferred"] {
+        if s.starts_with(kw) {
+            return kw.to_string();
+        }
+    }
+    s
+}
+
+/// Reduce a Status header value to the `implemented` keyword the block
+/// must carry. Rules (matched in order, lowercase):
+///   - "superseded"          → false (the decision is no longer in force)
+///   - "partially implemented" → partial
+///   - "fully implemented"     → true
+///   - "rejected"             → false
+///   - otherwise (plain "Accepted", "Accepted (amended)", etc.) → true
+///
+/// ponytail: a few `contains` checks over the lowercased header. The
+/// compound-status suffixes are the only place "implemented" state is
+/// encoded today; a plain "Accepted" with no suffix means the decision
+/// is in force and treated as fully implemented.
+fn implemented_from_header(header: &str) -> &'static str {
+    let h = header.to_lowercase();
+    if h.contains("superseded") {
+        return "false";
+    }
+    if h.contains("partially implemented") {
+        return "partial";
+    }
+    if h.contains("fully implemented") {
+        return "true";
+    }
+    if h.contains("rejected") {
+        return "false";
+    }
+    "true"
+}
+
+#[test]
+fn adr_predicate_blocks_cross_check_header_crates_and_supersedes() {
+    // WO 43.15: when an ADR carries an `<!-- adr-predicates … -->` block,
+    // (a) its `status` keyword must agree with the file's Status header,
+    // (b) every `affects-crates` entry must be a dir under `crates/`, and
+    // (c) every `supersedes` ADR number must resolve to an existing ADR file.
+    let dir = adr_dir();
+    let crates_dir = repo_root().join("crates");
+    let entries = std::fs::read_dir(&dir).expect("docs/adr/ readable");
+
+    // Build a set of known ADR numbers (leading digit run of every .md file
+    // except README) for the supersedes resolution check.
+    let mut known_nums = std::collections::BTreeSet::new();
+    {
+        let scan = std::fs::read_dir(&dir).expect("docs/adr/ readable");
+        for e in scan.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
+            }
+            let file = p.file_name().unwrap().to_string_lossy().to_string();
+            if file == "README.md" {
+                continue;
+            }
+            if let Some(n) = adr_number_from_stem(&file) {
+                known_nums.insert(n);
+            }
+        }
+    }
+
+    let mut failures = Vec::new();
+    let mut any_block_seen = false;
+
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let file = p.file_name().unwrap().to_string_lossy().to_string();
+        if file == "README.md" {
+            continue;
+        }
+        let body =
+            std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("ADR {file} readable: {e}"));
+        let Some(block) = parse_predicate_block(&body) else {
+            continue;
+        };
+        any_block_seen = true;
+
+        // (a) status keyword agrees with the file's Status header.
+        let header_status = parse_status_header(&body).unwrap_or_else(|| {
+            panic!("ADR {file} has a predicate block but no parseable Status header")
+        });
+        let header_kw = adr_status_keyword(&header_status);
+        if let Some(blk_status) = &block.status {
+            let blk_kw = adr_status_keyword(blk_status);
+            if blk_kw != header_kw {
+                failures.push(format!(
+                    "{file}: predicate status [{blk_status}] ({blk_kw}) != header [{header_status}] ({header_kw})"
+                ));
+            }
+        }
+
+        // (a') implemented agrees with the compound status suffix.
+        // The header may carry a parenthetical like "Accepted (partially
+        // implemented)", "Accepted (fully implemented)", or "Superseded".
+        // We reduce that to one of {true, partial, false} and require the
+        // block's `implemented` to match. A header with no suffix is treated
+        // as fully implemented ("true") — the default for a plain "Accepted".
+        if let Some(blk_impl) = &block.implemented {
+            let expected = implemented_from_header(&header_status);
+            if blk_impl.trim() != expected {
+                failures.push(format!(
+                    "{file}: predicate implemented [{blk_impl}] != header [{header_status}] (expected {expected})"
+                ));
+            }
+        }
+
+        // (b) every affects-crates entry is a dir under crates/.
+        for crate_name in &block.affects_crates {
+            let crate_path = crates_dir.join(crate_name);
+            if !crate_path.is_dir() {
+                failures.push(format!(
+                    "{file}: affects-crates [{crate_name}] is not a dir under crates/"
+                ));
+            }
+        }
+
+        // (c) every supersedes number resolves to an existing ADR file.
+        for num in &block.supersedes {
+            if !known_nums.contains(num) {
+                failures.push(format!(
+                    "{file}: supersedes [{num}] resolves to no ADR file in docs/adr/"
+                ));
+            }
+        }
+    }
+
+    // Guard: if no block was seen at all, the parser silently broke or every
+    // pilot block was deleted — either way the test stops being meaningful.
+    assert!(
+        any_block_seen,
+        "no ADR predicate blocks parsed — pilot blocks missing or parser drifted"
+    );
+
+    if !failures.is_empty() {
+        panic!("ADR predicate-block violations:\n{}", failures.join("\n"));
+    }
+}
+
 // ponytail: WO 22.12 requested extending this test to assert that every
 // crates/X path literal in ADR prose references an actual directory. The
 // ADR prose was fixed (28 files, commit ce3518b) but the path-literal check

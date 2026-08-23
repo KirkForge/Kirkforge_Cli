@@ -7,6 +7,6 @@ enforces a per-conversation token budget, and tracks cost per turn.
 
 | Metric | Value |
 |--------|-------|
-| Tests | 882 passing |
+| Tests | 914 passing |
 | Crates | `kf-budget-core` |
 | ADRs | 0017 (build features), 0016 (test strategy), 0015 (CLI design) |

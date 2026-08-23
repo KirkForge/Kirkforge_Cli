@@ -1,5 +1,12 @@
 # ADR-049: Video Fold-In (Non-Default Feature)
 
+<!-- adr-predicates
+status: superseded
+implemented: false
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Superseded

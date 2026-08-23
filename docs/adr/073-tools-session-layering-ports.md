@@ -1,5 +1,12 @@
 # ADR-073: Break the tools↔session Circular Dependency (Layering Ports)
 
+<!-- adr-predicates
+status: accepted
+implemented: partial
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted (partially implemented)
 - **Date:** 2026-08-12
 

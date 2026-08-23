@@ -4,13 +4,15 @@
 
 ## Shipped (closed this session)
 
-- **WO 43.12**: Done. Windows test parity finish — added `--doc` step to
-  ci-merge.yml windows job (mirror of Linux :186); audited 205 `cfg(unix)`
-  occurrences / 90 `#[cfg(unix)]`-gated test fns, ungated 8 platform-agnostic
-  tests (TUI path-completion, symlink_swap_denied non-symlink cases,
-  drain_capped Cursor tests). 82 stay Unix-only (Unix API, bash scripts,
-  setrlimit, process groups, UnixStream, module-gated, subprocess-dependent).
-  No PR-tier windows job (ADR-074 tier). Pushed to wo/wo43.12 (f7a0e035).
+- **WO 43.15**: Done. Machine-greppable `<!-- adr-predicates -->` block
+  (status, implemented, supersedes, affects-crates) added to 8 pilot ADRs
+  (compound-status: 004, 025, 0029, 0044, 048, 049, 054, 073).
+  `adr_xref_drift` test extended with `parse_predicate_block` +
+  `implemented_from_header` cross-checks (status↔header keyword,
+  implemented↔compound suffix, affects-crates dir existence, supersedes
+  ADR-file resolution). Block is opt-in; backfill + require-on-all is a
+  follow-up. Also bumped `crates/kf-budget-core/README.md` test count
+  882→914 (was stale by 32 on origin/dev; `readme_drift` now green).
 - **WO 43.25-43.39**: ALL Done (15 workorders, round-4 full-coverage segment
   sweep). UTF-8 byte-slice panic hardening (43.25); unguarded subprocess
   spawns (43.26); atomic-write permissions + undo ordering (43.27);
@@ -91,47 +93,6 @@
 - **WO 29.1**: fold bundled plugin into compiled-in Rust tools — Phase 1
   shipped; verify tools deferred to 29.7. Tracked in
   [29.1](docs/workorders/29.1-fold-bundled-plugin.md).
-- **Bench spec task triage (WO 43.13, ADR-077)** — 4 implement-backlog, 12
-  deferred, 6 dropped. The 12 deferrals and their concrete blockers:
-  - **1 Find Dead Code / 2 Dep Graph / 3 Call Graph / 4 Explain Module / 5
-    Cross-Repo Search** (A-category): blocked on `kf-context-index`
-    exposing symbol-graph queries (unreferenced-symbol, crate-level
-    dep-edge, per-symbol `call_graph()`, grounded module summarisation,
-    workspace/trait-impl search). Remaining: add the query APIs to
-    `kf-context-index`, then author the 5 task TOMLs. Tracked in
-    [ADR-077](docs/adr/077-bench-spec-task-triage.md).
-  - **9 Split Giant File / 32 Large Refactor**: blocked on fixture
-    authorship (2500-line and 50+ file crate fixtures). Remaining: author
-    the fixture crates + task TOMLs. Tracked in ADR-077.
-  - **18 Add REST Endpoint**: blocked on non-Rust task setup (harness is
-    Rust-only). Remaining: decide a non-Rust fixture path or a polyglot
-    task loader. Tracked in ADR-077.
-  - **27 Large Repository Navigation**: blocked on a Linux-scale
-    context-index fixture (~30k files) — no such fixture exists and the
-    index has not been load-tested at that scale. Remaining: build the
-    fixture + load-test the index. Tracked in ADR-077.
-  - **33 Merge Conflict Resolution**: blocked on a realistic
-    mid-merge/conflict fixture + non-deterministic verify. Remaining:
-    author the fixture + a deterministic verify block. Tracked in ADR-077.
-  - **35 Regression Detection**: blocked on non-deterministic scoring (PR
-    regression prediction is model-judgement, not `command_exits_zero`).
-    Remaining: decide a deterministic proxy or accept model-judgement
-    verify. Tracked in ADR-077.
-  - **Fix Integration Test** (unmapped): blocked on a live
-    integration-test fixture (Ollama + `qwen2.5:0.5b`) baked into the
-    task — `verify-only` skips `requires_model` tasks. Remaining: author
-    the fixture + wire a `requires_model` task. Tracked in ADR-077.
-  - The 4 implement-backlog items (22 Build, 23 Formatter, 24 Lint,
-    Implement Missing Trait) are NOT deferrals — they are future WOs
-    (43.40+) with cheap deterministic verify, no blocker. Tracked in
-    ADR-077 + the TECHNICAL.md "Planned tasks" Triage column.
-  - The 6 dropped items (36 Token Efficiency, 37 Dollar Cost, 38 Time,
-    39 Retry Count, 40 Human Intervention, Fix Compilation Error) are
-    removed from the bench backlog — replaced by Budget Challenge
-    telemetry (36/37), `TaskResult.duration` (38), ADR-0033 retry
-    telemetry (39), the headless harness contract (40), and existing
-    slot-16 tasks (Fix Compilation Error). Reversible only by a new ADR
-    superseding ADR-077. Tracked in ADR-077.
 
 ## Known flakes (pre-existing, not introduced this session)
 

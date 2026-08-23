@@ -97,36 +97,43 @@ impl ComputerUse {
 
 /// Placeholder returned when Chrome is unavailable. It keeps the toolset
 /// construction cheap and lets the tool fail gracefully at runtime.
+/// Pinned by ADR-0021: register cheap, fail at call time.
 #[derive(Debug, Clone, Copy)]
 pub struct PlaceholderTab;
 
+// ponytail: single const for all 9 methods; ceiling is a static message
+// (no runtime Chrome-path detail). Upgrade path: detect Chrome at startup
+// and report the specific missing binary / port instead.
+const PLACEHOLDER_ERR: &str =
+    "Chrome/Chromium not available; computer_use requires a local install or `computer_use.hosted = true`";
+
 impl ChromeTab for PlaceholderTab {
     fn navigate(&self, _url: &str) -> anyhow::Result<()> {
-        Err(anyhow::anyhow!("Chrome tab not initialized"))
+        Err(anyhow::anyhow!(PLACEHOLDER_ERR))
     }
     fn click(&self, _selector: &str) -> anyhow::Result<()> {
-        Err(anyhow::anyhow!("Chrome tab not initialized"))
+        Err(anyhow::anyhow!(PLACEHOLDER_ERR))
     }
     fn click_xy(&self, _x: f64, _y: f64) -> anyhow::Result<()> {
-        Err(anyhow::anyhow!("Chrome tab not initialized"))
+        Err(anyhow::anyhow!(PLACEHOLDER_ERR))
     }
     fn type_text(&self, _selector: &str, _text: &str) -> anyhow::Result<()> {
-        Err(anyhow::anyhow!("Chrome tab not initialized"))
+        Err(anyhow::anyhow!(PLACEHOLDER_ERR))
     }
     fn keypress(&self, _key: &str) -> anyhow::Result<()> {
-        Err(anyhow::anyhow!("Chrome tab not initialized"))
+        Err(anyhow::anyhow!(PLACEHOLDER_ERR))
     }
     fn scroll(&self, _amount: i32) -> anyhow::Result<()> {
-        Err(anyhow::anyhow!("Chrome tab not initialized"))
+        Err(anyhow::anyhow!(PLACEHOLDER_ERR))
     }
     fn screenshot(&self) -> anyhow::Result<Vec<u8>> {
-        Err(anyhow::anyhow!("Chrome tab not initialized"))
+        Err(anyhow::anyhow!(PLACEHOLDER_ERR))
     }
     fn wait_for(&self, _selector: &str, _timeout: Duration) -> anyhow::Result<()> {
-        Err(anyhow::anyhow!("Chrome tab not initialized"))
+        Err(anyhow::anyhow!(PLACEHOLDER_ERR))
     }
     fn evaluate(&self, _expression: &str) -> anyhow::Result<String> {
-        Err(anyhow::anyhow!("Chrome tab not initialized"))
+        Err(anyhow::anyhow!(PLACEHOLDER_ERR))
     }
 }
 
@@ -1194,7 +1201,10 @@ mod tests {
     async fn placeholder_tab_navigate_returns_error() {
         let tab: Arc<dyn ChromeTab> = Arc::new(PlaceholderTab);
         let err = tab.navigate("https://example.com").unwrap_err();
-        assert!(err.to_string().contains("not initialized"));
+        assert!(
+            err.to_string().contains("Chrome/Chromium not available"),
+            "placeholder error should name the cause and remedy: {err}"
+        );
     }
 
     #[tokio::test]

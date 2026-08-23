@@ -345,39 +345,71 @@ pub trait ModelAdapter: Send + Sync {
     /// breaking the trait, and a per-adapter field is the simplest
     /// place to remember the setting for the lifetime of the
     /// session.
-    fn set_json_mode(&mut self, _json_mode: bool) {}
+    fn set_json_mode(&mut self, json_mode: bool) {
+        if json_mode {
+            tracing::warn!("set_json_mode ignored — not supported by this adapter");
+        }
+    }
 
-    fn set_response_format(&mut self, _format: crate::shared::ResponseFormat) {}
+    fn set_response_format(&mut self, format: crate::shared::ResponseFormat) {
+        if format != crate::shared::ResponseFormat::default() {
+            tracing::warn!("set_response_format ignored — not supported by this adapter");
+        }
+    }
 
     /// Configure deterministic-mode seed. Default no-op; adapters
     /// that support a `seed` field in the request body override this.
     /// When set, the adapter should pin temperature=0 and pass the
     /// seed to the provider. Called once at construction by the
     /// executor with `config.model.seed`.
-    fn set_seed(&mut self, _seed: Option<u64>) {}
+    fn set_seed(&mut self, seed: Option<u64>) {
+        if seed.is_some() {
+            tracing::warn!("set_seed ignored — not supported by this adapter");
+        }
+    }
 
     /// Enable/disable extended thinking. Default no-op; adapters that
     /// support thinking blocks (e.g. Anthropic) override this.
-    fn set_extended_thinking(&mut self, _enabled: bool) {}
+    fn set_extended_thinking(&mut self, enabled: bool) {
+        if enabled {
+            tracing::warn!("set_extended_thinking ignored — not supported by this adapter");
+        }
+    }
 
     /// Set the budget_tokens for extended thinking. Default no-op.
-    fn set_budget_tokens(&mut self, _budget: usize) {}
+    fn set_budget_tokens(&mut self, budget: usize) {
+        if budget != 0 {
+            tracing::warn!("set_budget_tokens ignored — not supported by this adapter");
+        }
+    }
 
     /// Set max_tokens for completions. Default no-op (wo/20.2.0).
-    fn set_max_tokens(&mut self, _max_tokens: u32) {}
+    fn set_max_tokens(&mut self, max_tokens: u32) {
+        if max_tokens != 0 {
+            tracing::warn!("set_max_tokens ignored — not supported by this adapter");
+        }
+    }
 
     /// Set the per-adapter streaming idle timeout. Default no-op; adapters
     /// that drive a streaming body override this to store the value and pass
     /// it to `next_chunk_or_idle_timeout`. Called once at construction by
     /// the executor with `config.model.streaming_timeout_secs` (WO 32.13).
-    fn set_streaming_timeout(&mut self, _secs: u64) {}
+    fn set_streaming_timeout(&mut self, secs: u64) {
+        if secs != 0 {
+            tracing::warn!("set_streaming_timeout ignored — not supported by this adapter");
+        }
+    }
 
     /// Activate the Anthropic hosted computer_use beta (coordinate-vision
     /// model). `Some((w,h))` rewrites the `computer` tool to the hosted
     /// tool type and tags requests with the `computer-use-2025-01-24` beta
     /// header. `None` = off. Default no-op; only the Anthropic adapter
     /// honours it. Feature-gated behind `computer_use`. See WO 32.17.
-    fn set_computer_use_dims(&mut self, _dims: Option<(u32, u32)>) {}
+    fn set_computer_use_dims(&mut self, dims: Option<(u32, u32)>) {
+        if dims.is_some() {
+            tracing::warn!("set_computer_use_dims ignored — not supported by this adapter");
+        }
+    }
 
     async fn stream(
         &self,

@@ -20,6 +20,8 @@ why, and the gate evidence.
   findings (UTF-8 slice panics, prompt-compaction OOB, background-bash secret
   scrub, dead env-override layer, context-index retrieval smear, file-tool
   hook veto, unguarded subprocesses, crates bugs).
+- WO 43.38: spawn_blocking for glob walks, tokio::time::sleep for
+  computer_use wait, glob-metacharacter redirection gate — [43.38](docs/workorders/43.38-async-blocking-glob-sleep-redirection.md)
 - WO 43.18-43.24 — fresh segment audit round: abrupt-exit safety, TUI
   hardening, dep/size audit, persistence crash-robustness, adapter
   transport, subprocess lifecycle, test quality (7 analysis agents).

@@ -213,10 +213,32 @@ const DANGEROUS_REDIRECTION_TARGETS: &[&str] = &[
     "/mnt/c/windows/",
 ];
 
+/// Glob metacharacters that `/bin/sh` expands in an unquoted redirection
+/// target. A legitimate redirection target (`> /tmp/out.txt`, `> log.txt`)
+/// contains none of these; their presence means the target is a shell glob
+/// the static-prefix gate cannot expand — deny rather than risk a bypass
+/// where `> /e[t]c/hosts` expands to `/etc/hosts` at exec time.
+const GLOB_METACHARS: &[u8] = b"[]*?{}";
+
+/// Static label returned when a redirection target contains unexpanded glob
+/// metacharacters. Deny — the static gate cannot safely expand the glob, and
+/// a legitimate redirection target never contains these bytes.
+const GLOB_METACHAR_DENY: &str = "<glob-metacharacter>";
+
+/// True if `target` contains a shell glob metacharacter (`[`, `]`, `*`, `?`,
+/// `{`, `}`). Used to deny redirection/tee targets that would be expanded by
+/// `/bin/sh` at execution time, bypassing the literal-prefix dangerous-path
+/// gate (e.g. `> /e[t]c/hosts` → `/etc/hosts`).
+fn target_has_glob_metachar(target: &str) -> bool {
+    target.as_bytes().iter().any(|b| GLOB_METACHARS.contains(b))
+}
+
 /// True if the normalized command redirects output to a system-sensitive
 /// path. This catches `> /etc/hosts`, `>>  /root/.bashrc`, `>|"~/.ssh"`,
 /// `2>/etc/passwd`, `&> /dev/sda`, etc., including Windows paths seen
-/// through Git-Bash/WSL mounts.
+/// through Git-Bash/WSL mounts. Also denies any redirection target that
+/// contains shell-glob metacharacters, since `/bin/sh` would expand it at
+/// exec time and the static gate cannot safely do so.
 fn redirects_to_dangerous_path(cmd: &str) -> Option<&'static str> {
     let normalized = normalize_for_safety(cmd);
     let bytes = normalized.as_bytes();
@@ -256,6 +278,9 @@ fn redirects_to_dangerous_path(cmd: &str) -> Option<&'static str> {
         let target = std::str::from_utf8(&bytes[start..j])
             .unwrap_or("")
             .to_lowercase();
+        if target_has_glob_metachar(&target) {
+            return Some(GLOB_METACHAR_DENY);
+        }
         for prefix in DANGEROUS_REDIRECTION_TARGETS {
             if target.starts_with(prefix) || target == prefix.trim_end_matches('/') {
                 return Some(*prefix);
@@ -267,6 +292,7 @@ fn redirects_to_dangerous_path(cmd: &str) -> Option<&'static str> {
 }
 
 /// True if the command uses `tee` to write to a system-sensitive path.
+/// Also denies `tee` targets containing shell-glob metacharacters.
 fn tee_to_dangerous_path(cmd: &str) -> Option<&'static str> {
     let normalized = normalize_for_safety(cmd);
     // Tokenize naively and look for a `tee` word followed by a dangerous path.
@@ -279,6 +305,9 @@ fn tee_to_dangerous_path(cmd: &str) -> Option<&'static str> {
             || window[0].ends_with("||tee");
         if is_tee {
             let target = window[1].to_lowercase();
+            if target_has_glob_metachar(&target) {
+                return Some(GLOB_METACHAR_DENY);
+            }
             for prefix in DANGEROUS_REDIRECTION_TARGETS {
                 if target.starts_with(prefix) || target == prefix.trim_end_matches('/') {
                     return Some(*prefix);
@@ -802,6 +831,50 @@ mod private_tests {
     #[test]
     fn tee_to_dangerous_path_returns_none_for_no_tee() {
         assert_eq!(tee_to_dangerous_path("ls -la"), None);
+    }
+
+    // ponytail: pin the glob-metacharacter redirection bypass (WO 43.38).
+    // A shell-glob/character-class target like `> /e[t]c/hosts` or
+    // `> /etc/host*` does not start with a literal dangerous prefix, so the
+    // old gate missed it while `/bin/sh` expanded it to the real path at
+    // exec. The gate now denies any redirection/tee target containing glob
+    // metacharacters. If this test fails, the gate regressed to literal-prefix
+    // matching and the bypass is back.
+    #[test]
+    fn redirects_to_dangerous_path_denies_glob_charclass_target() {
+        assert_eq!(
+            redirects_to_dangerous_path("echo x > /e[t]c/hosts"),
+            Some("<glob-metacharacter>")
+        );
+    }
+
+    #[test]
+    fn redirects_to_dangerous_path_denies_glob_star_target() {
+        assert_eq!(
+            redirects_to_dangerous_path("echo x > /etc/host*"),
+            Some("<glob-metacharacter>")
+        );
+    }
+
+    #[test]
+    fn redirects_to_dangerous_path_denies_glob_brace_target() {
+        assert_eq!(
+            redirects_to_dangerous_path("echo x > /etc/{hosts,passwd}"),
+            Some("<glob-metacharacter>")
+        );
+    }
+
+    #[test]
+    fn redirects_to_dangerous_path_allows_safe_non_glob_target() {
+        assert_eq!(redirects_to_dangerous_path("echo x > /tmp/out.txt"), None);
+    }
+
+    #[test]
+    fn tee_to_dangerous_path_denies_glob_charclass_target() {
+        assert_eq!(
+            tee_to_dangerous_path("echo x | tee /e[t]c/hosts"),
+            Some("<glob-metacharacter>")
+        );
     }
 
     #[test]

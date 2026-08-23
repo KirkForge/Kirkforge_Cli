@@ -875,14 +875,44 @@ mod tests {
 
     // ── warn_if_unsandboxed ─────────────────────────────────────────
 
+    // Capture tracing output emitted by `f` via a scoped thread-local
+    // subscriber, so "quiet" claims are asserted rather than assumed.
+    fn capture_tracing_output(f: impl FnOnce()) -> String {
+        struct SharedBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
+            type Writer = SharedBuf;
+            fn make_writer(&'a self) -> Self::Writer {
+                SharedBuf(self.0.clone())
+            }
+        }
+
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(SharedBuf(buf.clone()))
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = buf.lock().unwrap().clone();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
     #[test]
-    fn test_warn_if_unsandboxed_default_guard_is_quiet_in_test() {
-        // We can't easily assert a tracing::warn! was emitted without
-        // installing a custom subscriber, but we can at least verify
-        // the function is callable on the default guard (no panic,
-        // no side effect beyond logging).
+    fn test_warn_if_unsandboxed_default_guard_emits_warning() {
         let guard = PathGuard::default();
-        warn_if_unsandboxed(&guard);
+        let out = capture_tracing_output(|| warn_if_unsandboxed(&guard));
+        assert!(
+            out.contains("unsandboxed"),
+            "default guard must emit the unsandboxed warning, got: {out}"
+        );
     }
 
     #[test]
@@ -892,7 +922,11 @@ mod tests {
             sandbox_dir: Some(PathBuf::from("/tmp")),
             ..Default::default()
         };
-        warn_if_unsandboxed(&guard);
+        let out = capture_tracing_output(|| warn_if_unsandboxed(&guard));
+        assert!(
+            !out.contains("unsandboxed"),
+            "sandboxed guard must be quiet, got: {out}"
+        );
     }
 
     #[test]
@@ -902,7 +936,11 @@ mod tests {
             allowed_write_dirs: vec![PathBuf::from("/tmp")],
             ..Default::default()
         };
-        warn_if_unsandboxed(&guard);
+        let out = capture_tracing_output(|| warn_if_unsandboxed(&guard));
+        assert!(
+            !out.contains("unsandboxed"),
+            "allowlisted guard must be quiet, got: {out}"
+        );
     }
 
     // ── Default contract (pinned by tests; changing these is a breaking change)

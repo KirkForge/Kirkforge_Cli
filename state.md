@@ -167,7 +167,14 @@
 
 ## CI / branch state
 
-- **CI: GREEN.** `cargo nextest run --profile ci-fast --workspace --lib --bins --locked`
-  → 4579 passed, 0 failed, 16 skipped. `cargo clippy --all-targets -- -D warnings`
-  clean. `cargo fmt --check` clean. `adr_xref_drift` 5/5 passed.
-- **main == dev** at SHA `7b19dca6`.
+- **CI: GREEN** (post-merge full local gate, head `65e726db`):
+  `scripts/test-fast.sh` → 4659 passed, 0 failed, 15 skipped.
+  `cargo clippy --all-targets -- -D warnings` clean.
+  `cargo clippy --target x86_64-pc-windows-gnu --workspace --all-targets -- -D warnings`
+  clean (fixed two pre-existing/un-gated breakages: 43.6 unix-only kf_rbac
+  imports, 43.23 libc::kill test probe). `cargo fmt --check` clean.
+  `cargo check --workspace --all-targets --locked` clean.
+  `adr_xref_drift` 6/6 passed. detect_changes vs `e1e5e6b2`: every changed
+  file maps to an intended WO scope (43.20/22/23/24).
+- **main** at `65e726db` (5 commits ahead of `e1e5e6b2` base). Not pushed —
+  user did not request push.

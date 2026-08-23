@@ -25,6 +25,7 @@ use kf_plugin_sdk::{Capability, Plugin};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::approval::{is_plugin_approved, plugin_approval_hint};
 use super::wrapper::PluginToolWrapper;
 
 /// Names of plugins that have been folded into core behind feature flags.
@@ -195,6 +196,19 @@ pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Ve
             ));
             continue;
         }
+        // WO 43.17: content-hash consent gate. When the ledger is enabled
+        // and signatures are not verified on this path, the plugin must be
+        // in the approved ledger with a matching bundle hash. A mismatch
+        // or missing entry skips the plugin with a warning. Signature-
+        // verified plugins (verify_signatures true + valid sig) opt out.
+        if cfg.tools.plugin_consent_ledger
+            && !ws_policy.verify_signatures
+            && !is_plugin_approved(name, &resolved)
+        {
+            tracing::warn!(plugin = %name, "plugin skipped by consent ledger");
+            warnings.push(plugin_approval_hint(name));
+            continue;
+        }
         match registry.load_one(&resolved, ws_policy.clone()) {
             Ok((_, plugin_warnings)) => warnings.extend(plugin_warnings),
             Err(e) => warnings.push(format!("{name}: {e}")),
@@ -212,7 +226,31 @@ pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Ve
 pub fn load_plugin_registry(cfg: &Config) -> anyhow::Result<(PluginRegistry, Vec<String>)> {
     let dir = plugins_dir();
     let mut registry = PluginRegistry::new();
-    let mut warnings = registry.load_from_dir(&dir, trust_policy_from_config(cfg))?;
+    let policy = trust_policy_from_config(cfg);
+    let mut warnings = registry.load_from_dir(&dir, policy.clone())?;
+    // WO 43.17: content-hash consent gate for data-dir plugins. The host
+    // already loaded everything under the data dir; if the ledger is on
+    // and signatures were not verified, remove any active plugin that is
+    // not in the ledger (or whose hash mismatched) and warn.
+    if cfg.tools.plugin_consent_ledger && !policy.verify_signatures {
+        let to_check: Vec<(String, PathBuf)> = registry
+            .active_plugins()
+            .into_iter()
+            .map(|h| {
+                (
+                    h.plugin.manifest.name.clone(),
+                    h.plugin.root().to_path_buf(),
+                )
+            })
+            .collect();
+        for (name, root) in to_check {
+            if !is_plugin_approved(&name, &root) {
+                tracing::warn!(plugin = %name, "plugin skipped by consent ledger");
+                registry.remove(&name);
+                warnings.push(plugin_approval_hint(&name));
+            }
+        }
+    }
     warnings.extend(load_workspace_plugins(&mut registry, cfg));
     Ok((registry, warnings))
 }
@@ -578,5 +616,119 @@ mod loader_tests {
         assert_eq!(local.max, base.max, "other fields must be preserved");
         assert_eq!(local.reject_on_excess, base.reject_on_excess);
         assert_eq!(local.signature_key_path, base.signature_key_path);
+    }
+
+    // ── WO 43.17: content-hash consent gate loader tests ────────────
+
+    fn make_demo_plugin(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("kf-code.toml"),
+            r#"
+name = "demo"
+version = "0.1.0"
+description = "demo"
+trust = "read-only"
+
+[[capabilities]]
+type = "skill"
+trigger = "/demo"
+prompt = "hi"
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn consent_ledger_off_loads_without_approval() {
+        // Default config (ledger off) → plugin loads even without approval.
+        let tmp = tempfile::tempdir().unwrap();
+        let _g = crate::session::DataDirGuard::set(tmp.path().to_path_buf());
+        let plugins = tmp.path().join("plugins");
+        let demo = plugins.join("demo");
+        make_demo_plugin(&demo);
+        let mut cfg = Config::default();
+        cfg.tools.plugin_signature_validation = false;
+        let (registry, warnings) = load_plugin_registry(&cfg).unwrap();
+        assert!(
+            registry.find_active_by_name("demo").is_some(),
+            "ledger off → plugin loads; warnings: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn consent_ledger_on_skips_unapproved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _g = crate::session::DataDirGuard::set(tmp.path().to_path_buf());
+        let plugins = tmp.path().join("plugins");
+        let demo = plugins.join("demo");
+        make_demo_plugin(&demo);
+        let mut cfg = Config::default();
+        cfg.tools.plugin_consent_ledger = true;
+        cfg.tools.plugin_signature_validation = false;
+        let (registry, warnings) = load_plugin_registry(&cfg).unwrap();
+        assert!(
+            registry.find_active_by_name("demo").is_none(),
+            "ledger on + unapproved → plugin skipped"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("/plugins approve demo")),
+            "warning must name the approve command; got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn consent_ledger_on_loads_after_approval() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _g = crate::session::DataDirGuard::set(tmp.path().to_path_buf());
+        let plugins = tmp.path().join("plugins");
+        let demo = plugins.join("demo");
+        make_demo_plugin(&demo);
+        super::super::approval::record_plugin_approval("demo", &demo);
+        let mut cfg = Config::default();
+        cfg.tools.plugin_consent_ledger = true;
+        cfg.tools.plugin_signature_validation = false;
+        let (registry, warnings) = load_plugin_registry(&cfg).unwrap();
+        assert!(
+            registry.find_active_by_name("demo").is_some(),
+            "ledger on + approved → plugin loads; warnings: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn consent_ledger_skips_after_script_edit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _g = crate::session::DataDirGuard::set(tmp.path().to_path_buf());
+        let plugins = tmp.path().join("plugins");
+        let demo = plugins.join("demo");
+        std::fs::create_dir_all(&demo).unwrap();
+        std::fs::write(demo.join("tool.sh"), "#!/bin/sh\nprintf ok").unwrap();
+        std::fs::write(
+            demo.join("kf-code.toml"),
+            r#"
+name = "demo"
+version = "0.1.0"
+description = "demo"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "demo/run"
+description = "run"
+command = "tool.sh"
+"#,
+        )
+        .unwrap();
+        super::super::approval::record_plugin_approval("demo", &demo);
+        // Edit the script → hash changes → re-gate.
+        std::fs::write(demo.join("tool.sh"), "#!/bin/sh\nprintf pwn").unwrap();
+        let mut cfg = Config::default();
+        cfg.tools.plugin_consent_ledger = true;
+        cfg.tools.plugin_signature_validation = false;
+        let (registry, _warnings) = load_plugin_registry(&cfg).unwrap();
+        assert!(
+            registry.find_active_by_name("demo").is_none(),
+            "edited script after approval → plugin skipped"
+        );
     }
 }

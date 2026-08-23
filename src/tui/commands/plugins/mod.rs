@@ -32,6 +32,7 @@ pub enum PluginsOp {
     Sources,
     Add { name: String, path: String },
     Remove { name: String },
+    Approve { name: String },
 }
 
 /// Parse `/plugins` arguments into an operation.
@@ -94,8 +95,15 @@ pub fn parse(args: &str) -> Result<PluginsOp, String> {
                 .to_string();
             Ok(PluginsOp::Trust { name, tier })
         }
+        "approve" => {
+            let name = tokens
+                .next()
+                .ok_or("Usage: /plugins approve <name>")?
+                .to_string();
+            Ok(PluginsOp::Approve { name })
+        }
         _ => Err(format!(
-            "Unknown /plugins subcommand '{cmd}'. Usage: /plugins list | enable <name> | disable <name> | toggle <name> | reload | trust <name> <tier> | setup | sources | add <name> <path> | remove <name>",
+            "Unknown /plugins subcommand '{cmd}'. Usage: /plugins list | enable <name> | disable <name> | toggle <name> | reload | trust <name> <tier> | approve <name> | setup | sources | add <name> <path> | remove <name>",
         )),
     }
 }
@@ -121,6 +129,7 @@ pub async fn handle_plugins_command(
             add_source(&name, &path, state, plugin_reload_tx).await
         }
         Ok(PluginsOp::Remove { name }) => remove_source(&name, state, plugin_reload_tx),
+        Ok(PluginsOp::Approve { name }) => approve_plugin(&name, state, plugin_reload_tx).await,
         Err(e) => e,
     }
 }
@@ -338,6 +347,53 @@ fn disable_plugin(
     );
 
     format!("🔌 Disabled plugin '{name}'.")
+}
+
+/// `approve <name>` — stamp the plugin's current bundle content hash into
+/// the consent ledger (WO 43.17), then reload so the gate lets it through.
+/// Resolves the plugin dir from workspace `plugin_sources` first, falling
+/// back to `data_dir/plugins/<name>` — matching the loader's resolution.
+async fn approve_plugin(
+    name: &str,
+    state: &mut AppState,
+    plugin_reload_tx: &mpsc::UnboundedSender<PluginRegistry>,
+) -> String {
+    // Resolve the plugin root the same way the loader does: workspace
+    // source first (if configured), then data-dir fallback.
+    let root = {
+        let cfg = read_shared_config(&state.services.config);
+        if let Some(src) = cfg.tools.plugin_sources.get(name) {
+            let resolved = if src.is_absolute() {
+                src.clone()
+            } else {
+                match std::env::current_dir() {
+                    Ok(cwd) => cwd.join(src),
+                    Err(_) => src.clone(),
+                }
+            };
+            if resolved.exists() {
+                resolved
+            } else {
+                plugin_dir(name)
+            }
+        } else {
+            plugin_dir(name)
+        }
+    };
+
+    if !root.exists() {
+        return format!("❌ Plugin '{name}' directory not found: {}", root.display());
+    }
+    if !root.join("kf-code.toml").exists() {
+        return format!(
+            "❌ Plugin '{name}' has no kf-code.toml at {}",
+            root.display()
+        );
+    }
+
+    crate::session::plugin_tools::record_plugin_approval(name, &root);
+    let reload = reload_plugins(state, plugin_reload_tx).await;
+    format!("🔌 Approved plugin '{name}'. {reload}")
 }
 
 /// `reload` — full rescan of the plugins directory.
@@ -993,5 +1049,84 @@ command = "hooks/post-turn.sh"
             list_msg.contains("filtered: 2 capabilities hidden by trust tier"),
             "expected filtered count of 2, got: {list_msg}"
         );
+    }
+
+    #[tokio::test]
+    async fn approve_plugin_stamps_ledger_and_reloads() {
+        let temp = tempfile::tempdir().unwrap();
+        let plugins_dir = temp.path().join("plugins");
+        let plugin_dir = plugins_dir.join("demo");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("kf-code.toml"),
+            r#"
+name = "demo"
+version = "0.1.0"
+description = "Demo plugin"
+trust = "read-only"
+
+[[capabilities]]
+type = "skill"
+trigger = "/demo"
+prompt = "Demo skill"
+"#,
+        )
+        .unwrap();
+
+        let _env = TempDataDir::new(temp.path()).await;
+        let mut state = app_state();
+        // Enable the consent ledger and disable signature validation so
+        // the gate is the only barrier.
+        {
+            let mut cfg = state
+                .services
+                .config
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            cfg.tools.plugin_consent_ledger = true;
+            cfg.tools.plugin_signature_validation = false;
+        }
+        let tx = dummy_reload_tx();
+
+        // Before approval: reload → plugin skipped by the gate.
+        let reload_msg = handle_plugins_command("reload", &mut state, &tx).await;
+        assert!(
+            state
+                .provider
+                .plugin_registry
+                .find_active_by_name("demo")
+                .is_none(),
+            "unapproved plugin must not load under consent ledger"
+        );
+        assert!(
+            reload_msg.contains("/plugins approve demo"),
+            "reload warning should name the approve command: {reload_msg}"
+        );
+
+        // Approve → plugin loads.
+        let approve_msg = handle_plugins_command("approve demo", &mut state, &tx).await;
+        assert!(
+            approve_msg.contains("Approved plugin 'demo'"),
+            "approve message: {approve_msg}"
+        );
+        assert!(
+            state
+                .provider
+                .plugin_registry
+                .find_active_by_name("demo")
+                .is_some(),
+            "approved plugin should be active after reload"
+        );
+    }
+
+    #[test]
+    fn parse_approve_subcommand() {
+        assert_eq!(
+            parse("approve demo").unwrap(),
+            PluginsOp::Approve {
+                name: "demo".to_string()
+            }
+        );
+        assert!(parse("approve").unwrap_err().contains("Usage:"));
     }
 }

@@ -24,12 +24,17 @@
 //!   `trust_policy_from_config`, `load_workspace_plugins`,
 //!   `load_plugin_registry`, and `all_plugin_tools`.
 
+pub mod approval;
 pub mod loader;
 pub mod wrapper;
 
 #[cfg(feature = "kf-plugin-tools")]
 pub mod native;
 
+pub use approval::{
+    bundle_hash as plugin_bundle_hash, is_plugin_approved, plugin_approval_hint,
+    record_plugin_approval,
+};
 pub use loader::{
     all_plugin_tools, folded_feature, folded_feature_enabled, is_folded, load_plugin_registry,
     load_workspace_plugins, plugins_dir, spawn_plugin_watcher, trust_policy_from_config,

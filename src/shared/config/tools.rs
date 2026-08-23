@@ -182,6 +182,12 @@ pub struct ToolConfig {
     // its servers merged into the MCP config (gated by first-load approval).
     #[serde(default = "default_load_project_mcp_json")]
     pub load_project_mcp_json: bool,
+    // WO 43.17: when true, plugins loaded from the data dir or workspace
+    // sources must be in the `approved_plugins.json` ledger with a matching
+    // content hash. Signature-verified plugins opt out (both gates
+    // independent). Defaults off so existing plugin loads are not broken.
+    #[serde(default)]
+    pub plugin_consent_ledger: bool,
 }
 
 fn default_plugin_signature_validation() -> bool {
@@ -233,6 +239,7 @@ impl Default for ToolConfig {
             doom_loop_max_hits: default_doom_loop_max_hits(),
             doom_loop_action: default_doom_loop_action(),
             load_project_mcp_json: default_load_project_mcp_json(),
+            plugin_consent_ledger: false,
         }
     }
 }
@@ -264,6 +271,10 @@ mod tests {
         assert!(
             cfg.load_project_mcp_json,
             "WO 39.2: project .mcp.json discovery defaults on"
+        );
+        assert!(
+            !cfg.plugin_consent_ledger,
+            "WO 43.17: plugin consent ledger defaults off"
         );
     }
 

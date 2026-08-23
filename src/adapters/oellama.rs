@@ -189,7 +189,8 @@ impl ModelAdapter for OellamaAdapter {
                 .send()
                 .await
         })
-        .await?;
+        .await
+        .map_err(super::classify_transport_error)?;
 
         // Channel size: 4096 events. The previous value of 128 was
         // too small for streaming responses from thinking models —

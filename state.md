@@ -18,6 +18,12 @@
   on all three spawn paths; pinning test added. Helper + `is_secret_env_name`
   now `pub(crate)` so PTY (separate `portable_pty::CommandBuilder` type)
   reuses the same name-match logic.
+- **WO 43.1 (partial)**: typed `AdapterError` (Unreachable/ModelNotFound/
+  Denied/Other) added in `src/adapters/error.rs`; ollama's `stream()` wraps its
+  `send_with_retry` error via `classify_transport_error`; `KirkForgeError::from`
+  downcasts `AdapterError` before the string-probe fallback. String-probe
+  fallback KEPT for unmigrated adapters (ponytail: comment). 4 new downcast
+  tests green; all `hint_*`/`downcast_*` tests stay green.
 - **WO 41.0-41.9**: ALL Done (series complete).
 - **WO 42.0-42.12**: ALL Done (series complete). 42.0 overview closed.
 - **WO 38.9**: items 1-6 all done (was 30%, now 100%). Closed.
@@ -29,6 +35,15 @@
 
 ## Pending / Deferred (open)
 
+- **WO 43.1 (deferred tail)**: migrate the remaining model adapters to return
+  typed `AdapterError` from their `stream()` error paths so the string-probe
+  fallback in `src/main/error.rs` can be deleted. Deferred because 43.1 scoped
+  to ollama only (it owns "model not found"); remaining: openai_compat,
+  anthropic, anthropic_bedrock, anthropic_vertex. Exact remaining work: add
+  `.map_err(super::classify_transport_error)` to each adapter's
+  `send_with_retry(...).await?` call, then remove the `contains()` block in
+  `error.rs:49-73` once all producers are typed. Tracked in
+  [43.1](docs/workorders/43.1-typed-adapter-errors.md).
 - **WO 43.0-43.17**: honest-assessment backlog serialized as the Series 43
   workorders (all Planned, no code yet). 6 analysis agents verified every
   claim; ~11 backlog claims were stale and corrected in-line (notably:
@@ -108,3 +123,4 @@
   → 4518 passed, 0 failed, 16 skipped. `cargo clippy --all-targets -- -D warnings`
   clean. `cargo fmt --check` clean. `adr_xref_drift` 5/5 passed.
 - **main == dev** at SHA `ff7d8132`.
+

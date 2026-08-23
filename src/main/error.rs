@@ -28,22 +28,37 @@ pub(super) enum KirkForgeError {
 
 impl From<anyhow::Error> for KirkForgeError {
     fn from(e: anyhow::Error) -> Self {
-        // Downcast migration (WO 14.3) — STARTED. These typed errors are now
-        // classified by type, not string. The string probes below remain the
-        // fallback for the categories that have no typed source yet:
-        //   - ModelUnreachable: adapters return bare `anyhow`, no typed error.
-        //   - AccessDenied (non-plugin): sandbox/path-policy denials from the
-        //     session layer are still `anyhow` with varied phrasing.
+        // Downcast migration (WO 14.3 / WO 43.1) — typed errors are classified
+        // by type, not by string. The string probes below remain the fallback
+        // for the categories whose producers have not been migrated yet:
+        // ponytail: string-probe fallback — kept for unmigrated adapters
+        // (openai_compat, anthropic, bedrock, vertex) and for the session-layer
+        // sandbox/path-policy denials that still arrive as bare anyhow. To be
+        // removed when every producer of those categories returns a typed
+        // error; tracked in WO 43.1 (ollama migrated, rest deferred).
         // Downcasted so far:
         //   - kf_plugin_sdk::ManifestError  -> ConfigParse
         //   - kf_plugin_host::ToolError -> AccessDenied (NotFound = the
         //     tool command isn't present at the sandboxed plugin root, i.e. a
         //     path-availability outcome after the root-gating policy).
+        //   - kf_code::adapters::AdapterError (WO 43.1) -> ModelUnreachable
+        //     (Unreachable/ModelNotFound) or AccessDenied (Denied). Currently
+        //     only the ollama adapter wraps its stream() errors this way.
         if e.downcast_ref::<kf_plugin_sdk::ManifestError>().is_some() {
             return KirkForgeError::ConfigParse(e);
         }
         if e.downcast_ref::<kf_plugin_host::ToolError>().is_some() {
             return KirkForgeError::AccessDenied(e);
+        }
+        if let Some(adapter_err) = e.downcast_ref::<kf_code::adapters::AdapterError>() {
+            if adapter_err.is_model_unreachable() {
+                return KirkForgeError::ModelUnreachable(e);
+            }
+            if matches!(adapter_err, kf_code::adapters::AdapterError::Denied(_)) {
+                return KirkForgeError::AccessDenied(e);
+            }
+            // AdapterError::Other falls through to the string probe below so
+            // the unmigrated categories (ConfigParse, General) still classify.
         }
 
         // TODO: as more library calls return typed errors, replace these
@@ -175,6 +190,56 @@ mod tests {
         match KirkForgeError::from(anyhow_err) {
             KirkForgeError::AccessDenied(_) => {}
             other => panic!("ToolError::NotFound must classify as AccessDenied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn downcast_adapter_unreachable_classifies_as_model_unreachable() {
+        let typed = kf_code::adapters::AdapterError::Unreachable(anyhow!("connection refused"));
+        let anyhow_err: anyhow::Error = typed.into();
+        match KirkForgeError::from(anyhow_err) {
+            KirkForgeError::ModelUnreachable(_) => {}
+            other => {
+                panic!("AdapterError::Unreachable must classify as ModelUnreachable, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn downcast_adapter_model_not_found_classifies_as_model_unreachable() {
+        let typed = kf_code::adapters::AdapterError::ModelNotFound(anyhow!("model not found"));
+        let anyhow_err: anyhow::Error = typed.into();
+        match KirkForgeError::from(anyhow_err) {
+            KirkForgeError::ModelUnreachable(_) => {}
+            other => panic!(
+                "AdapterError::ModelNotFound must classify as ModelUnreachable, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn downcast_adapter_denied_classifies_as_access_denied() {
+        let typed = kf_code::adapters::AdapterError::Denied(anyhow!("403 forbidden"));
+        let anyhow_err: anyhow::Error = typed.into();
+        match KirkForgeError::from(anyhow_err) {
+            KirkForgeError::AccessDenied(_) => {}
+            other => panic!("AdapterError::Denied must classify as AccessDenied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn downcast_adapter_other_falls_through_to_string_probe() {
+        // Other("model not found: qwen") carries a message the string probe
+        // knows, so it should still classify as ModelUnreachable even though
+        // the adapter tagged it Other. This keeps the transition safe: an
+        // adapter that can't pin a category still gets classified by message.
+        let typed = kf_code::adapters::AdapterError::Other(anyhow!("model not found: qwen"));
+        let anyhow_err: anyhow::Error = typed.into();
+        match KirkForgeError::from(anyhow_err) {
+            KirkForgeError::ModelUnreachable(_) => {}
+            other => panic!(
+                "AdapterError::Other with 'model not found' must fall through to ModelUnreachable, got {other:?}"
+            ),
         }
     }
 }

@@ -4,11 +4,14 @@ pub mod anthropic_vertex;
 pub mod auth;
 pub mod bedrock_signing;
 pub mod caching;
+pub mod error;
 pub mod oellama;
 pub mod ollama_ndjson;
 pub mod openai_compat;
 pub mod tool_call_markup;
 pub mod vertex_auth;
+
+pub use error::{classify_transport_error, AdapterError};
 
 use std::collections::HashMap;
 use std::str::FromStr;

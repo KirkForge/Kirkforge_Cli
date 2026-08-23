@@ -85,3 +85,34 @@
   README row is what makes the "Done" status enforceable. The task's
   explicit instruction to add the README row was load-bearing for the
   drift guard, not cosmetic.
+
+## Round 5 — WO 43.20 finish (salvage session)
+
+- Salvaged uncommitted work can be 90% right with a subtle 10%: the mini
+  renderer compiled and passed its own tests but lacked Handlebars
+  stand-alone-tag stripping. Ground-truth capture (scratch cargo project
+  in /tmp with the real handlebars 6) settled "render identically" in
+  minutes and doubles as the golden-test source. Always capture ground
+  truth EMPIRICALLY, don't trust spec memory.
+- The old system.hbs had a latent bug: {{! ... {{#if x}} ... }} comments
+  leak text (handlebars closes {{! at the first }}). It shipped junk into
+  every system prompt until the {{!-- --}} rewrite.
+- WO 43.20 item 1's premise was upstream-wrong: aws-sigv4 sign-http NEEDS
+  http 0.2 (canonical-request internals); the smithy-http default feature
+  set keeps http-body 0.4. Feature-structure reading > version-number
+  reading. Also: aws crates bump rust-version aggressively — the highest
+  MSRV-≤1.88 set had to be pinned crate-by-crate via cargo update
+  --precise (sigv4 1.3.8 / smithy-http 0.63.3 / runtime-api 1.11.3 /
+  types 1.4.3 / async 1.2.11 / credential-types 1.2.11).
+- base64 0.22 persists via hyper-util + jsonwebtoken (transitive) —
+  deduping direct deps is still right but the lock keeps both copies.
+- attached_cancel_token_kills_inflight_bash_promptly flakes under
+  concurrent-worktree load (10s bound, took 13.5s with a parallel nextest
+  running); passes in isolation at 7.25s. Not a WO-43.20 regression.
+- A `cargo test --release` flyby on a debug-tested repo rebuilds the world
+  (15 min wasted, timed out). Re-run flakes with `cargo nextest run -E`
+  to reuse artifacts.
+- Task explicitly forbade editing README/CHANGELOG/state.md/WO-README —
+  so docs/workorders/README.md row 43.20 still says "Planned" while the
+  WO header says "Done". adr_xref_drift isn't in this task's gate list;
+  flag for the merger.

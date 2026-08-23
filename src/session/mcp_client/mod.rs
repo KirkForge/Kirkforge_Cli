@@ -1819,8 +1819,20 @@ mod tests {
     #[tokio::test]
     async fn test_dispatch_response_null_id_is_routed_correctly() {
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, mut rx) = oneshot::channel();
+        pending.lock().await.insert("other".to_string(), tx);
         let resp = serde_json::json!({ "jsonrpc": "2.0", "id": null, "result": {} });
         McpClient::dispatch_response("null-id".to_string(), resp, &pending, "test").await;
+        // The null-id response must neither resolve nor steal the
+        // unrelated waiter's pending entry.
+        assert!(
+            pending.lock().await.contains_key("other"),
+            "null-id dispatch must leave unrelated pending entries untouched"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "null-id response must not be routed to an unrelated waiter"
+        );
     }
 
     #[test]

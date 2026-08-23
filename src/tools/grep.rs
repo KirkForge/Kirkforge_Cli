@@ -36,97 +36,319 @@ impl Grep {
         context_lines: usize,
         max_matches: usize,
     ) -> ToolOutcome {
+        let path_guard = self.path_guard.clone();
+        let pattern = pattern.to_string();
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || {
+            run_rg_blocking(&pattern, &path, context_lines, max_matches, &path_guard)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            ToolOutcome::Failure(ToolError::Internal {
+                message: format!("grep blocking task failed: {e}"),
+            })
+        })
+    }
+}
+
+fn run_rg_blocking(
+    pattern: &str,
+    path: &str,
+    context_lines: usize,
+    max_matches: usize,
+    path_guard: &PathGuard,
+) -> ToolOutcome {
+    let search_path = PathBuf::from(shellexpand::tilde(path).as_ref());
+
+    if !search_path.exists() {
+        return ToolOutcome::Failure(ToolError::Internal {
+            message: format!("Path not found: {}", search_path.display()),
+        });
+    }
+
+    if let GuardVerdict::Denied(msg) = path_guard.check_read(&search_path) {
+        return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
+    }
+
+    let mut cmd = Command::new("rg");
+    cmd.arg("--json");
+    cmd.arg("--context").arg(context_lines.to_string());
+    cmd.arg("--max-count").arg(max_matches.to_string());
+    cmd.arg("--");
+    cmd.arg(pattern);
+    cmd.arg(&search_path);
+
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            return ToolOutcome::Failure(ToolError::Internal {
+                message: format!("Failed to run rg: {e}"),
+            });
+        }
+    };
+
+    if !output.status.success() {
+        let code = output.status.code().unwrap_or(1);
+        if code == 1 {
+            return ToolOutcome::Success {
+                content: format!("No matches found for pattern: {pattern}"),
+            };
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return ToolOutcome::Failure(ToolError::Internal {
+            message: format!("rg error (exit {code}): {stderr}"),
+        });
+    }
+
+    let mut results = Vec::new();
+    let mut total = 0usize;
+
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(data) = entry.get("data") else {
+            continue;
+        };
+        let msg_type = entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if msg_type == "match" {
+            let line_num = data
+                .get("line_number")
+                .and_then(|n| n.as_u64())
+                .unwrap_or(0) as usize;
+            let line_text = data
+                .get("lines")
+                .and_then(|l| l.as_object())
+                .and_then(|o| o.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .trim_end_matches('\r')
+                .trim_end_matches('\n');
+
+            results.push(SearchMatch {
+                line_number: line_num,
+                line: line_text.to_string(),
+                context_before: Vec::new(),
+                context_after: Vec::new(),
+            });
+            total += 1;
+        }
+        if results.len() >= max_matches {
+            break;
+        }
+    }
+
+    if results.is_empty() {
+        return ToolOutcome::Success {
+            content: format!("No matches found for pattern: {pattern}"),
+        };
+    }
+
+    ToolOutcome::GrepMatches {
+        path: search_path,
+        matches: results,
+        total,
+    }
+}
+
+fn fallback_search_blocking(
+    pattern: &str,
+    path: &str,
+    context_lines: usize,
+    max_matches: usize,
+    use_literal: bool,
+    path_guard: &PathGuard,
+) -> ToolOutcome {
+    let use_regex = !use_literal;
+
+    if use_regex {
+        let re = match regex::Regex::new(pattern) {
+            Ok(r) => r,
+            Err(e) => {
+                return ToolOutcome::Failure(ToolError::invalid_args(format!(
+                    "Invalid regex pattern: {e}"
+                )));
+            }
+        };
         let search_path = PathBuf::from(shellexpand::tilde(path).as_ref());
 
-        if !search_path.exists() {
+        let mut results = Vec::new();
+        let mut total = 0usize;
+
+        if search_path.is_dir() {
+            let walker = ignore::WalkBuilder::new(&search_path)
+                .git_ignore(true)
+                .git_global(true)
+                .git_exclude(true)
+                .build();
+
+            for entry in walker.flatten() {
+                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let file_path = entry.path();
+                if is_binary_by_ext(file_path) {
+                    continue;
+                }
+                if let Ok(meta) = std::fs::metadata(file_path) {
+                    if meta.len() > MAX_GREP_FILE_SIZE {
+                        continue;
+                    }
+                }
+                if is_binary_content(file_path) {
+                    continue;
+                }
+                if let GuardVerdict::Denied(_) = path_guard.check_read(file_path) {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(file_path) {
+                    let matches = find_regex_matches(&content, &re, file_path, context_lines);
+                    let count = matches.len();
+                    if count > 0 {
+                        total += count;
+                        results.extend(matches);
+                    }
+                }
+            }
+        } else if search_path.is_file() {
+            if let Ok(meta) = std::fs::metadata(&search_path) {
+                if meta.len() > MAX_GREP_FILE_SIZE {
+                    return ToolOutcome::Failure(ToolError::Internal {
+                        message: format!(
+                            "File too large to search ({} bytes): {}",
+                            meta.len(),
+                            search_path.display()
+                        ),
+                    });
+                }
+            }
+            if is_binary_content(&search_path) {
+                return ToolOutcome::Failure(ToolError::Internal {
+                    message: format!("Cannot search binary file: {}", search_path.display()),
+                });
+            }
+            if let GuardVerdict::Denied(msg) = path_guard.check_read(&search_path) {
+                return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
+            }
+            if let Ok(content) = std::fs::read_to_string(&search_path) {
+                let matches = find_regex_matches(&content, &re, &search_path, context_lines);
+                total = matches.len();
+                results = matches;
+            }
+        } else {
             return ToolOutcome::Failure(ToolError::Internal {
                 message: format!("Path not found: {}", search_path.display()),
             });
         }
 
-        if let GuardVerdict::Denied(msg) = self.path_guard.check_read(&search_path) {
-            return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
-        }
-
-        let mut cmd = Command::new("rg");
-        cmd.arg("--json");
-        cmd.arg("--context").arg(context_lines.to_string());
-        cmd.arg("--max-count").arg(max_matches.to_string());
-        cmd.arg("--");
-        cmd.arg(pattern);
-        cmd.arg(&search_path);
-
-        let output = match cmd.output() {
-            Ok(o) => o,
-            Err(e) => {
-                return ToolOutcome::Failure(ToolError::Internal {
-                    message: format!("Failed to run rg: {e}"),
-                });
-            }
-        };
-
-        if !output.status.success() {
-            let code = output.status.code().unwrap_or(1);
-            if code == 1 {
-                return ToolOutcome::Success {
-                    content: format!("No matches found for pattern: {pattern}"),
-                };
-            }
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return ToolOutcome::Failure(ToolError::Internal {
-                message: format!("rg error (exit {code}): {stderr}"),
-            });
-        }
-
-        let mut results = Vec::new();
-        let mut total = 0usize;
-
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
-                continue;
-            };
-            let Some(data) = entry.get("data") else {
-                continue;
-            };
-            let msg_type = entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
-            if msg_type == "match" {
-                let line_num = data
-                    .get("line_number")
-                    .and_then(|n| n.as_u64())
-                    .unwrap_or(0) as usize;
-                let line_text = data
-                    .get("lines")
-                    .and_then(|l| l.as_object())
-                    .and_then(|o| o.get("text"))
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("")
-                    .trim_end_matches('\r')
-                    .trim_end_matches('\n');
-
-                results.push(SearchMatch {
-                    line_number: line_num,
-                    line: line_text.to_string(),
-                    context_before: Vec::new(),
-                    context_after: Vec::new(),
-                });
-                total += 1;
-            }
-            if results.len() >= max_matches {
-                break;
-            }
+        if results.len() > max_matches {
+            results.truncate(max_matches);
         }
 
         if results.is_empty() {
             return ToolOutcome::Success {
-                content: format!("No matches found for pattern: {pattern}"),
+                content: format!("No matches found for regex: {pattern}"),
             };
         }
 
-        ToolOutcome::GrepMatches {
+        return ToolOutcome::GrepMatches {
             path: search_path,
             matches: results,
             total,
+        };
+    }
+
+    let search_path = PathBuf::from(shellexpand::tilde(path).as_ref());
+
+    let mut results = Vec::new();
+    let mut total = 0usize;
+
+    if search_path.is_dir() {
+        let walker = ignore::WalkBuilder::new(&search_path)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .build();
+
+        for entry in walker.flatten() {
+            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                continue;
+            }
+
+            let file_path = entry.path();
+
+            if is_binary_by_ext(file_path) {
+                continue;
+            }
+
+            if let Ok(meta) = std::fs::metadata(file_path) {
+                if meta.len() > MAX_GREP_FILE_SIZE {
+                    continue;
+                }
+            }
+
+            if is_binary_content(file_path) {
+                continue;
+            }
+
+            if let GuardVerdict::Denied(_) = path_guard.check_read(file_path) {
+                continue;
+            }
+
+            if let Ok(content) = std::fs::read_to_string(file_path) {
+                let matches = find_matches(&content, pattern, file_path, context_lines, use_regex);
+                let count = matches.len();
+                if count > 0 {
+                    total += count;
+                    results.extend(matches);
+                }
+            }
         }
+    } else if search_path.is_file() {
+        if let Ok(meta) = std::fs::metadata(&search_path) {
+            if meta.len() > MAX_GREP_FILE_SIZE {
+                return ToolOutcome::Failure(ToolError::Internal {
+                    message: format!(
+                        "File too large to search ({} bytes): {}",
+                        meta.len(),
+                        search_path.display()
+                    ),
+                });
+            }
+        }
+        if is_binary_content(&search_path) {
+            return ToolOutcome::Failure(ToolError::Internal {
+                message: format!("Cannot search binary file: {}", search_path.display()),
+            });
+        }
+        if let GuardVerdict::Denied(msg) = path_guard.check_read(&search_path) {
+            return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
+        }
+        if let Ok(content) = std::fs::read_to_string(&search_path) {
+            let matches = find_matches(&content, pattern, &search_path, context_lines, use_regex);
+            total = matches.len();
+            results = matches;
+        }
+    } else {
+        return ToolOutcome::Failure(ToolError::Internal {
+            message: format!("Path not found: {}", search_path.display()),
+        });
+    }
+
+    if results.len() > max_matches {
+        results.truncate(max_matches);
+    }
+
+    if results.is_empty() {
+        return ToolOutcome::Success {
+            content: format!("No matches found for pattern: {pattern}"),
+        };
+    }
+
+    ToolOutcome::GrepMatches {
+        path: search_path,
+        matches: results,
+        total,
     }
 }
 
@@ -191,212 +413,36 @@ impl Tool for Grep {
             .and_then(|r| r.as_bool())
             .unwrap_or(false);
 
-        if rg_available() && !use_literal {
+        // rg_available spawns a subprocess — run it on the blocking pool.
+        let can_use_rg = !use_literal
+            && tokio::task::spawn_blocking(rg_available)
+                .await
+                .unwrap_or(false);
+        if can_use_rg {
             return self
                 .run_rg(&pattern, path, context_lines, max_matches)
                 .await;
         }
 
-        let use_regex = !use_literal;
-
-        if use_regex {
-            let re = match regex::Regex::new(&pattern) {
-                Ok(r) => r,
-                Err(e) => {
-                    return ToolOutcome::Failure(ToolError::invalid_args(format!(
-                        "Invalid regex pattern: {e}"
-                    )));
-                }
-            };
-            let search_path = PathBuf::from(shellexpand::tilde(path).as_ref());
-
-            let mut results = Vec::new();
-            let mut total = 0usize;
-
-            if search_path.is_dir() {
-                let walker = ignore::WalkBuilder::new(&search_path)
-                    .git_ignore(true)
-                    .git_global(true)
-                    .git_exclude(true)
-                    .build();
-
-                for entry in walker.flatten() {
-                    if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                        continue;
-                    }
-                    let file_path = entry.path();
-                    if is_binary_by_ext(file_path) {
-                        continue;
-                    }
-                    if let Ok(meta) = std::fs::metadata(file_path) {
-                        if meta.len() > MAX_GREP_FILE_SIZE {
-                            continue;
-                        }
-                    }
-                    if is_binary_content(file_path) {
-                        continue;
-                    }
-                    if let GuardVerdict::Denied(_) = self.path_guard.check_read(file_path) {
-                        continue;
-                    }
-                    if let Ok(content) = std::fs::read_to_string(file_path) {
-                        let matches = find_regex_matches(&content, &re, file_path, context_lines);
-                        let count = matches.len();
-                        if count > 0 {
-                            total += count;
-                            results.extend(matches);
-                        }
-                    }
-                }
-            } else if search_path.is_file() {
-                if let Ok(meta) = std::fs::metadata(&search_path) {
-                    if meta.len() > MAX_GREP_FILE_SIZE {
-                        return ToolOutcome::Failure(ToolError::Internal {
-                            message: format!(
-                                "File too large to search ({} bytes): {}",
-                                meta.len(),
-                                search_path.display()
-                            ),
-                        });
-                    }
-                }
-                if is_binary_content(&search_path) {
-                    return ToolOutcome::Failure(ToolError::Internal {
-                        message: format!("Cannot search binary file: {}", search_path.display()),
-                    });
-                }
-                if let GuardVerdict::Denied(msg) = self.path_guard.check_read(&search_path) {
-                    return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
-                }
-                if let Ok(content) = std::fs::read_to_string(&search_path) {
-                    let matches = find_regex_matches(&content, &re, &search_path, context_lines);
-                    total = matches.len();
-                    results = matches;
-                }
-            } else {
-                return ToolOutcome::Failure(ToolError::Internal {
-                    message: format!("Path not found: {}", search_path.display()),
-                });
-            }
-
-            if results.len() > max_matches {
-                results.truncate(max_matches);
-            }
-
-            if results.is_empty() {
-                return ToolOutcome::Success {
-                    content: format!("No matches found for regex: {pattern}"),
-                };
-            }
-
-            return ToolOutcome::GrepMatches {
-                path: search_path,
-                matches: results,
-                total,
-            };
-        }
-
-        let search_path = PathBuf::from(shellexpand::tilde(path).as_ref());
-
-        let mut results = Vec::new();
-        let mut total = 0usize;
-
-        if search_path.is_dir() {
-            let walker = ignore::WalkBuilder::new(&search_path)
-                .git_ignore(true)
-                .git_global(true)
-                .git_exclude(true)
-                .build();
-
-            for entry in walker.flatten() {
-                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                    continue;
-                }
-
-                let file_path = entry.path();
-
-                // ── Extension-based binary pre-check (fast path) ──
-                if is_binary_by_ext(file_path) {
-                    continue;
-                }
-
-                // ── Size check (skip files that are too large) ──
-                if let Ok(meta) = std::fs::metadata(file_path) {
-                    if meta.len() > MAX_GREP_FILE_SIZE {
-                        continue;
-                    }
-                }
-
-                // ── Content-based binary detection (read first 8K) ──
-                if is_binary_content(file_path) {
-                    continue;
-                }
-
-                // ── PathGuard read check per file (catches symlinks and
-                //    paths outside the sandbox that the walker may have
-                //    followed from an in-sandbox starting point).
-                if let GuardVerdict::Denied(_) = self.path_guard.check_read(file_path) {
-                    continue;
-                }
-
-                if let Ok(content) = std::fs::read_to_string(file_path) {
-                    let matches =
-                        find_matches(&content, &pattern, file_path, context_lines, use_regex);
-                    let count = matches.len();
-                    if count > 0 {
-                        total += count;
-                        results.extend(matches);
-                    }
-                }
-            }
-        } else if search_path.is_file() {
-            // ── Size + binary checks for single-file search ──
-            if let Ok(meta) = std::fs::metadata(&search_path) {
-                if meta.len() > MAX_GREP_FILE_SIZE {
-                    return ToolOutcome::Failure(ToolError::Internal {
-                        message: format!(
-                            "File too large to search ({} bytes): {}",
-                            meta.len(),
-                            search_path.display()
-                        ),
-                    });
-                }
-            }
-            if is_binary_content(&search_path) {
-                return ToolOutcome::Failure(ToolError::Internal {
-                    message: format!("Cannot search binary file: {}", search_path.display()),
-                });
-            }
-            if let GuardVerdict::Denied(msg) = self.path_guard.check_read(&search_path) {
-                return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
-            }
-            if let Ok(content) = std::fs::read_to_string(&search_path) {
-                let matches =
-                    find_matches(&content, &pattern, &search_path, context_lines, use_regex);
-                total = matches.len();
-                results = matches;
-            }
-        } else {
-            return ToolOutcome::Failure(ToolError::Internal {
-                message: format!("Path not found: {}", search_path.display()),
-            });
-        }
-
-        if results.len() > max_matches {
-            results.truncate(max_matches);
-        }
-
-        if results.is_empty() {
-            return ToolOutcome::Success {
-                content: format!("No matches found for pattern: {pattern}"),
-            };
-        }
-
-        ToolOutcome::GrepMatches {
-            path: search_path,
-            matches: results,
-            total,
-        }
+        // Fallback walk + reads are blocking fs ops — offload to the pool.
+        let path_guard = self.path_guard.clone();
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || {
+            fallback_search_blocking(
+                &pattern,
+                &path,
+                context_lines,
+                max_matches,
+                use_literal,
+                &path_guard,
+            )
+        })
+        .await
+        .unwrap_or_else(|e| {
+            ToolOutcome::Failure(ToolError::Internal {
+                message: format!("grep blocking task failed: {e}"),
+            })
+        })
     }
 }
 
@@ -1030,6 +1076,71 @@ mod tests {
                 assert_eq!(matches.len(), 1);
             }
             other => panic!("expected GrepMatches, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WO 43.18: the grep tool must run its blocking fs/process work on
+    /// `spawn_blocking` so it does not stall the async runtime worker.
+    /// This test confirms the blocking path still produces correct results
+    /// after the `spawn_blocking` refactor — the literal fallback walk
+    /// (which bypasses `rg`) exercises `fallback_search_blocking`.
+    #[tokio::test]
+    async fn grep_blocking_fallback_walk_returns_matches() {
+        let dir = std::env::temp_dir().join("kf_code_grep_blocking_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "line one\nneedle line\nline three\n").unwrap();
+
+        let grep = Grep::new(PathGuard::default());
+        // `literal: true` forces the fallback walk (bypasses rg).
+        let args = serde_json::json!({
+            "pattern": "needle",
+            "literal": true,
+            "path": dir.to_string_lossy(),
+        });
+        let outcome = grep.run(&ToolContext::default(), args).await;
+        match outcome {
+            ToolOutcome::GrepMatches { matches, total, .. } => {
+                assert_eq!(total, 1);
+                assert_eq!(matches.len(), 1);
+                assert!(matches[0].line.contains("needle"));
+            }
+            other => panic!("expected GrepMatches from blocking fallback, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WO 43.18: `run_rg_blocking` is the sync core extracted from the old
+    /// async `run_rg`. Calling it directly proves the blocking work (rg
+    /// subprocess + JSON parse) runs correctly off the async runtime.
+    #[tokio::test]
+    async fn grep_run_rg_blocking_returns_matches() {
+        // Skip if rg is not installed — the fallback path covers that.
+        if !tokio::task::spawn_blocking(rg_available)
+            .await
+            .unwrap_or(false)
+        {
+            return;
+        }
+        let dir = std::env::temp_dir().join("kf_code_grep_rgregress_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "hello world\n").unwrap();
+
+        let guard = PathGuard::default();
+        let path_str = dir.to_string_lossy().to_string();
+        let outcome =
+            tokio::task::spawn_blocking(move || run_rg_blocking("hello", &path_str, 2, 50, &guard))
+                .await
+                .expect("spawn_blocking task panicked");
+        match outcome {
+            ToolOutcome::GrepMatches { matches, total, .. } => {
+                assert_eq!(total, 1);
+                assert_eq!(matches.len(), 1);
+                assert!(matches[0].line.contains("hello"));
+            }
+            other => panic!("expected GrepMatches from run_rg_blocking, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

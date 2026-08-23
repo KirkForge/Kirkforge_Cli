@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use super::{expand_tilde_str, parse_bool_env, parse_plugin_sources_env};
 
 /// Apply environment variable overrides to a Config.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn apply_env_overrides(cfg: &mut Config) {
     // Helper for the repeated bool-override pattern: read a KF_CODE_*
     // env var, parse it as a bool, and write it to a config field.

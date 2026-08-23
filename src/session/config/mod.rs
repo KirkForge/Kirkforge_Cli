@@ -57,10 +57,8 @@ use crate::shared::Config;
 use anyhow::Context;
 use std::path::PathBuf;
 
-#[cfg_attr(not(test), allow(dead_code))]
 mod env_overrides;
 
-#[cfg(test)]
 use env_overrides::apply_env_overrides;
 
 /// Expand a leading `~` in a path string using `$HOME` (or the equivalent
@@ -74,7 +72,6 @@ fn expand_tilde_str(s: &str) -> String {
 /// Treats "true", "1", "yes" (case-insensitive) as true,
 /// "false", "0", "no" (case-insensitive) as false, and any other value as
 /// `None` so the config default is preserved.
-#[cfg_attr(not(test), allow(dead_code))]
 fn parse_bool_env(val: &str) -> Option<bool> {
     if val.eq_ignore_ascii_case("true")
         || val.eq_ignore_ascii_case("1")
@@ -127,6 +124,10 @@ pub fn load_config() -> (Config, Option<String>) {
             }
         }
     }
+
+    // Layer 2: environment variables (`KF_CODE_*`). Documented in the module
+    // header above. Only mutates fields whose env var is present.
+    apply_env_overrides(&mut cfg);
 
     (cfg, warning)
 }
@@ -1099,6 +1100,44 @@ mod tests {
         let _env = set_env("KF_CODE_AUTO_APPROVE", Some("false"));
         apply_env_overrides(&mut cfg);
         assert!(!cfg.security.auto_approve);
+    }
+
+    /// Pinning test for WO 43.32: `load_config` (the production path) must
+    /// honor `KF_CODE_*` env vars. Before the fix, `apply_env_overrides`
+    /// was `#[cfg(test)]`-only and `load_config` never called it, so every
+    /// documented env override was silently ignored in the shipped binary.
+    /// Uses a temp `KF_CODE_DATA_DIR` with no config.toml so the only layer
+    /// above defaults is the env var.
+    #[test]
+    fn load_config_honors_env_overrides() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = std::env::temp_dir().join(format!(
+            "kf_code_env_override_load_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let _data_env = set_env("KF_CODE_DATA_DIR", Some(dir.to_str().unwrap()));
+        let _approve_env = set_env("KF_CODE_AUTO_APPROVE", Some("true"));
+
+        assert!(
+            !super::super::config_path().exists(),
+            "precondition: no config.toml — env is the only override layer"
+        );
+
+        let (cfg, _warning) = load_config();
+        assert!(
+            cfg.security.auto_approve,
+            "load_config must apply KF_CODE_AUTO_APPROVE (WO 43.32)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

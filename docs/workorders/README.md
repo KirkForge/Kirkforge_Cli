@@ -922,4 +922,5 @@ tree, ~11 stale claims corrected in-line. See
 | 43.37 | [Verifier corrections dead-queue + MCP leak](43.37-verifier-corrections-queue-mcp-leak.md) | Planned |
 | 43.38 | [Async blocking + glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Planned |
 | 43.39 | [kf-bench markdown-delta rate contradiction](43.39-bench-delta-rate.md) | Planned |
+| 43.32 | [Config env-override layer dead in production](43.32-config-env-override-layer-dead.md) | Done |
 

@@ -854,116 +854,44 @@ tree, ~11 stale claims corrected in-line. See
 
 | WO | Title | Status |
 |----|-------|--------|
-| 43.0 | [Series overview + claim-drift corrections](43.0-wo43-overview.md) | Planned |
-| 43.1 | [Typed adapter errors (retire string probe)](43.1-typed-adapter-errors.md) | Done |
-| 43.2 | [Atomic-write EINTR retry (open/fsync)](43.2-atomic-write-retry.md) | Planned |
+| 43.0 | [Series 43 overview: honest-assessment backlog serialization](43.0-wo43-overview.md) | Planned |
+| 43.1 | [Retire string-probe error classification](43.1-typed-adapter-errors.md) | Done (ollama migrated; openai/anthropic/bedrock/vertex deferred) |
+| 43.2 | [Bounded EAGAIN/EINTR retry on the atomic-write primitive](43.2-atomic-write-retry.md) | Planned |
 | 43.3 | [Audit-log redaction residual gap](43.3-audit-redaction.md) | Done |
-| 43.4 | [Path-safety property tests](43.4-path-safety-proptest.md) | Planned |
-| 43.3 | [Audit-log redaction residual gap](43.3-audit-redaction.md) | Planned |
-| 43.4 | [Path-safety property tests](43.4-path-safety-proptest.md) | Done |
-| 43.5 | [PlaceholderTab + adapter no-op disclosure](43.5-panic-path-elimination.md) | Planned |
+| 43.4 | [Property-based tests for the path-safety surface](43.4-path-safety-proptest.md) | Done |
+| 43.5 | [Eliminate live panic paths and honored no-op stubs](43.5-panic-path-elimination.md) | Planned |
 | 43.6 | [Wire kf-rbac into the daemon](43.6-wire-kf-rbac.md) | Planned |
-| 43.7 | [Placeholder-ADR prose triage](43.7-placeholder-adr-triage.md) | Planned |
-| 43.8 | [Silent-error triage (.ok()/catch-alls)](43.8-silent-error-triage.md) | Planned |
-| 43.9 | [Per-failure correction prompts](43.9-correction-prompt-guidance.md) | Planned |
+| 43.7 | [Placeholder ADR triage (0011 persistent knowledge, 0012 speculative priming, 0018 scheduled jobs)](43.7-placeholder-adr-triage.md) | Planned |
+| 43.8 | [Silent error-handling triage (.ok(), unwrap_or_else, catch-all arms)](43.8-silent-error-triage.md) | Planned |
+| 43.9 | [Per-failure correction prompt guidance](43.9-correction-prompt-guidance.md) | Planned |
 | 43.10 | [Cross-session state preservation policy](43.10-cross-session-state-policy.md) | Planned |
-| 43.11 | [Landlock graduation to plugin path](43.11-os-sandbox-graduation.md) | Planned |
-| 43.12 | [Windows test parity residual](43.12-windows-test-parity-finish.md) | Planned |
-| 43.13 | [Spec-task triage (TECHNICAL.md)](43.13-spec-task-triage.md) | Planned |
-| 43.14 | [cargo-mutants nightly gate](43.14-mutation-testing.md) | Planned |
-| 43.15 | [Machine-greppable ADR predicates](43.15-machine-greppable-adrs.md) | Planned |
-| 43.16 | [No-throw dispatch finish + grep gate](43.16-no-throw-dispatch.md) | Planned |
-| 43.17 | [Plugin consent ledger (mirror 42.5)](43.17-content-hash-consent.md) | Planned |
+| 43.11 | [Landlock/seccomp sandbox graduation decision](43.11-os-sandbox-graduation.md) | Planned |
+| 43.12 | [Finish Windows test parity](43.12-windows-test-parity-finish.md) | Planned |
+| 43.13 | [Triage the 18 unimplemented spec tasks (TECHNICAL.md)](43.13-spec-task-triage.md) | Planned |
+| 43.14 | [cargo-mutants nightly gate (targeted modules)](43.14-mutation-testing.md) | Planned |
+| 43.15 | [Machine-greppable ADR predicate blocks](43.15-machine-greppable-adrs.md) | Planned |
+| 43.16 | [No-throw dispatch hub (Result-typed)](43.16-no-throw-dispatch.md) | Planned |
+| 43.17 | [Content-hash consent binding for plugin trust](43.17-content-hash-consent.md) | Planned |
 | 43.18 | [Abrupt-exit safety: line-mode SIGINT, audit flush, grep blocking](43.18-concurrency-shutdown-safety.md) | Planned |
-| 43.19 | [TUI panic hardening + multibyte cursor fix](43.19-tui-panic-hardening.md) | Planned |
+| 43.19 | [TUI unicode-cursor fix + render-path test coverage](43.19-tui-panic-hardening.md) | Planned |
 | 43.20 | [Dependency and binary-size audit](43.20-dep-size-audit.md) | Planned |
-| 43.21 | [Persistence crash robustness](43.21-persistence-crash-robustness.md) | Planned |
-| 43.22 | [Adapter transport robustness](43.22-adapter-transport-robustness.md) | Planned |
-| 43.23 | [Subprocess lifecycle: PDEATHSIG, MCP idle, registry sweep](43.23-subprocess-lifecycle.md) | Planned |
-| 43.24 | [Test assertion quality triage](43.24-test-assertion-quality.md) | Planned |
+| 43.21 | [Persistence crash-robustness: audit flush policy, torn-tail tolerance, atomic cache writes](43.21-persistence-crash-robustness.md) | Planned |
+| 43.22 | [Adapter transport/streaming robustness residual](43.22-adapter-transport-robustness.md) | Planned |
+| 43.23 | [Subprocess lifecycle: parent-death orphans, MCP idle-kill, unguarded host-crate spawns](43.23-subprocess-lifecycle.md) | Planned |
+| 43.24 | [Test assertion-quality triage (assert-free, tautological, stale ignores)](43.24-test-assertion-quality.md) | Planned |
 | 43.25 | [UTF-8 byte-slice panic hardening (executor + TUI streaming)](43.25-utf8-byte-slice-panic-hardening.md) | Done |
 | 43.26 | [Unguarded subprocess spawns (workflow bash, plugin-bus verifier)](43.26-unguarded-subprocess-workflow-pluginbus.md) | Done |
 | 43.27 | [Atomic-write permission preservation + undo-ordering bug](43.27-atomic-write-permissions-undo-order.md) | Done |
-| 43.25 | [UTF-8 byte-slice panic hardening (executor + TUI streaming)](43.25-utf8-byte-slice-panic-hardening.md) | Planned |
-| 43.26 | [Unguarded subprocess spawns (workflow bash, plugin-bus verifier)](43.26-unguarded-subprocess-workflow-pluginbus.md) | Planned |
-| 43.27 | [Atomic-write permission preservation + undo-ordering bug](43.27-atomic-write-permissions-undo-order.md) | Planned |
 | 43.28 | [Background/PTY bash secret leakage (env scrub gap)](43.28-background-pty-bash-secret-leak.md) | Done |
-| 43.29 | [Prompt-compaction out-of-bounds panic (minify_old_messages)](43.29-prompt-compaction-oob-panic.md) | Planned |
-| 43.30 | [Pre-tool hook veto ineffective for file tools](43.30-file-tool-hook-veto.md) | Planned |
-| 43.31 | [Doom-loop banner renders wrong selection](43.31-doom-loop-banner-selection.md) | Planned |
-| 43.32 | [Bash env-override layer dead in production](43.32-config-env-override-layer-dead.md) | Planned |
-| 43.33 | [jobd stop/pid hygiene (auth + no timeout + pid removal on reject)](43.33-jobd-stop-auth-timeout.md) | Planned |
-| 43.34 | [Context-index retrieval smears unresolved edges (inflated prompts)](43.34-context-index-retrieve-smear.md) | Planned |
-| 43.35 | [kf-memory-store stale-lock latch after crash](43.35-memory-store-stale-lock.md) | Planned |
-| 43.36 | [kf-compress-core Lite mode is a no-op (identical to Off)](43.36-compress-core-lite-noop.md) | Planned |
-| 43.37 | [Verifier pending_corrections dead-queue growth + MCP pending-map leak](43.37-verifier-corrections-queue-mcp-leak.md) | Planned |
-| 43.38 | [Async blocking in tools (glob walk, computer_use sleep) + shell-glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Planned |
-| 43.39 | [kf-bench markdown-delta baseline computation contradicts the regression signal](43.39-bench-delta-rate.md) | Planned |
 | 43.29 | [Prompt-compaction out-of-bounds panic (minify_old_messages)](43.29-prompt-compaction-oob-panic.md) | Done |
-| 43.30 | [Pre-tool hook veto for file tools](43.30-file-tool-hook-veto.md) | Done |
-
-### Series 43.25-43.39 — Round-4 full-coverage segment sweep
-
-15 workorders from a full-coverage segment audit; tracked in
-[WO 43.0](43.0-wo43-overview.md). All findings re-verified against source.
-
-| WO | Title | Status |
-|----|-------|--------|
-| 43.25 | [UTF-8 byte-slice panic hardening](43.25-utf8-byte-slice-panic-hardening.md) | Planned |
-| 43.26 | [Unguarded subprocess spawns](43.26-unguarded-subprocess-workflow-pluginbus.md) | Planned |
-| 43.27 | [Atomic-write permission preservation + undo-ordering](43.27-atomic-write-permissions-undo-order.md) | Planned |
-| 43.28 | [Background/PTY bash secret leakage](43.28-background-pty-bash-secret-leak.md) | Planned |
-| 43.29 | [Prompt-compaction out-of-bounds panic](43.29-prompt-compaction-oob-panic.md) | Planned |
-| 43.30 | [Pre-tool hook veto ineffective for file tools](43.30-file-tool-hook-veto.md) | Planned |
+| 43.30 | [Pre-tool hook veto ineffective for file tools](43.30-file-tool-hook-veto.md) | Done (`1d3cbdb4`) |
 | 43.31 | [Doom-loop banner renders wrong selection](43.31-doom-loop-banner-selection.md) | Done |
-| 43.32 | [Config env-override layer dead](43.32-config-env-override-layer-dead.md) | Planned |
-| 43.33 | [jobd stop/auth/timeout + pid-removal-on-reject](43.33-jobd-stop-auth-timeout.md) | Planned |
-| 43.34 | [Context-index retrieval smears unresolved edges](43.34-context-index-retrieve-smear.md) | Planned |
-| 43.35 | [kf-memory-store stale-lock latch after crash](43.35-memory-store-stale-lock.md) | Planned |
-| 43.36 | [kf-compress-core Lite mode is a no-op](43.36-compress-core-lite-noop.md) | Planned |
-| 43.37 | [Verifier corrections dead-queue + MCP leak](43.37-verifier-corrections-queue-mcp-leak.md) | Planned |
-| 43.38 | [Async blocking + glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Planned |
-| 43.39 | [kf-bench markdown-delta rate contradiction](43.39-bench-delta-rate.md) | Planned |
-| 43.32 | [Config env-override layer dead in production](43.32-config-env-override-layer-dead.md) | Done |
-| 43.33 | [jobd stop/auth/timeout + pid-removal-on-reject](43.33-jobd-stop-auth-timeout.md) | Done |
-| 43.25 | [UTF-8 byte-slice panic hardening](43.25-utf8-byte-slice-panic-hardening.md) | Planned |
-| 43.26 | [Unguarded subprocess (workflow pluginbus)](43.26-unguarded-subprocess-workflow-pluginbus.md) | Planned |
-| 43.27 | [Atomic-write permissions undo order](43.27-atomic-write-permissions-undo-order.md) | Planned |
-| 43.28 | [Background pty bash secret leak](43.28-background-pty-bash-secret-leak.md) | Planned |
-| 43.29 | [Prompt compaction OOB panic](43.29-prompt-compaction-oob-panic.md) | Planned |
-| 43.30 | [File-tool hook veto](43.30-file-tool-hook-veto.md) | Planned |
-| 43.31 | [Doom-loop banner selection](43.31-doom-loop-banner-selection.md) | Planned |
-| 43.32 | [Config env-override layer dead](43.32-config-env-override-layer-dead.md) | Planned |
-| 43.33 | [jobd stop auth timeout](43.33-jobd-stop-auth-timeout.md) | Planned |
-| 43.34 | [Context-index retrieval smear (unresolved edges)](43.34-context-index-retrieve-smear.md) | Done |
-
-### Series 43.25-43.39 — Round-4 full-coverage segment sweep
-
-15 workorders from 7 read-only analysis agents covering executor/turn, tools,
-session/mcp/prompt/verifier, TUI, sandbox/security, daemon/jobs/cli, and
-`crates/*`. 24 NEW verified findings. See
-[WO 43.0](43.0-wo43-overview.md) for the overview.
-
-| WO | Title | Status |
-|----|-------|--------|
-| 43.35 | [Memory store stale-lock latch after crash](43.35-memory-store-stale-lock.md) | Done |
+| 43.32 | [Bash env-override layer dead in production](43.32-config-env-override-layer-dead.md) | Done |
+| 43.33 | [jobd stop/pid hygiene (auth + no timeout + pid removal on reject)](43.33-jobd-stop-auth-timeout.md) | Done |
+| 43.34 | [Context-index retrieval smears unresolved edges (inflated prompts)](43.34-context-index-retrieve-smear.md) | Done |
+| 43.35 | [kf-memory-store stale-lock latch after crash](43.35-memory-store-stale-lock.md) | Done |
 | 43.36 | [kf-compress-core Lite mode is a no-op (identical to Off)](43.36-compress-core-lite-noop.md) | Done |
-| 43.37 | [Verifier corrections dead-queue + MCP pending-map leak](43.37-verifier-corrections-queue-mcp-leak.md) | Done |
-| 43.25 | [UTF-8 byte-slice panic hardening (executor + TUI streaming)](43.25-utf8-byte-slice-panic-hardening.md) | Planned |
-| 43.26 | [Unguarded subprocess spawns (workflow bash, plugin-bus verifier)](43.26-unguarded-subprocess-spawns.md) | Planned |
-| 43.27 | [Atomic-write permission preservation + undo-ordering bug](43.27-atomic-write-permission.md) | Planned |
-| 43.28 | [Background/PTY bash secret leakage (env scrub gap)](43.28-background-pty-secret-leak.md) | Planned |
-| 43.29 | [Prompt-compaction out-of-bounds panic (minify_old_messages)](43.29-prompt-compaction-oob.md) | Planned |
-| 43.30 | [Pre-tool hook veto ineffective for file tools](43.30-file-tool-hook-veto.md) | Planned |
-| 43.31 | [Doom-loop banner renders wrong selection](43.31-doom-loop-banner-selection.md) | Planned |
-| 43.32 | [Config env-override layer dead in production](43.32-config-env-override-layer-dead.md) | Planned |
-| 43.33 | [jobd stop/auth/timeout + pid-removal-on-reject](43.33-jobd-stop-auth-timeout.md) | Planned |
-| 43.34 | [Context-index retrieval smears unresolved edges](43.34-context-index-retrieve-smear.md) | Planned |
-| 43.35 | [kf-memory-store stale-lock latch after crash](43.35-memory-store-stale-lock.md) | Planned |
-| 43.36 | [kf-compress-core Lite mode is a no-op](43.36-compress-core-lite-noop.md) | Planned |
-| 43.37 | [Verifier corrections dead-queue + MCP pending-map leak](43.37-verifier-corrections-queue-mcp-leak.md) | Planned |
-| 43.38 | [Async blocking (glob, computer_use) + glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Done |
-| 43.39 | [kf-bench markdown-delta rate contradiction](43.39-bench-delta-rate.md) | Planned |
-| 43.39 | [kf-bench markdown-delta baseline rate](43.39-bench-delta-rate.md) | Done |
-
+| 43.37 | [Verifier pending_corrections dead-queue growth + MCP pending-map leak](43.37-verifier-corrections-queue-mcp-leak.md) | Done |
+| 43.38 | [Async blocking in tools (glob walk, computer_use sleep) + shell-glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Done |
+| 43.39 | [kf-bench markdown-delta baseline computation contradicts the regression signal](43.39-bench-delta-rate.md) | Done |
 

@@ -147,17 +147,45 @@ fn slot_policy(policy: Option<&VerifierPolicy>, slot: &str) -> SlotPolicy {
     }
 }
 
-// ponytail: placeholder prompt, not the real `buildCorrectionPrompt` template.
-// The real template lives in `correction-core` (TS, not ported — porting it
-// requires the orchestrator's model-call layer, which is WO 29.7 and hasn't
-// shipped). The pure decision function (`decide_correction`) only needs to
-// signal that a correction is required; tests assert `correction_prompt` is
-// truthy, which this non-empty string satisfies.
+// ponytail: class-specific guidance string, not the real `buildCorrectionPrompt`
+// template. The real template lives in `correction-core` (TS, not ported —
+// porting it requires the orchestrator's model-call layer, which is WO 29.7
+// and hasn't shipped). What this fn does now: pick the first matching failure
+// class from the packet's own fields (security → broken_edges → lint → types
+// → fallback) and emit a short, count-bearing instruction. This lifts the
+// previous "no per-failure guidance" ceiling; the model now gets a prompt
+// tailored to the specific verifier failure class.
 // DEFERRED to WO 32.11: port the `correction-core` template into
 // `kf-orchestrator` and wire it into the correction loop's prompt emission.
-// ceiling: placeholder string carries no per-failure guidance; the model gets
-// a generic prompt instead of one tailored to the specific verifier failure.
+// ceiling: this is still a one-line guidance string, not the full structured
+// template (which carries verifier names, rule ids, file:line refs, and the
+// diff context the TS template assembles). Upgrade path: WO 32.11.
 fn correction_prompt(packet: &ReducedStatePacket) -> String {
+    let sec = &packet.verification.security;
+    if sec.findings > 0 || sec.critical > 0 || sec.high > 0 {
+        return format!(
+            "address the reported security findings: {} critical, {} high",
+            sec.critical, sec.high
+        );
+    }
+    if packet.graph.broken_edges > 0 {
+        return format!(
+            "restore or update the broken imports ({} broken edges)",
+            packet.graph.broken_edges
+        );
+    }
+    if packet.verification.lint.errors > 0 {
+        return format!(
+            "fix the reported lints ({} errors)",
+            packet.verification.lint.errors
+        );
+    }
+    if packet.verification.types.errors > 0 {
+        return format!(
+            "fix the type errors ({} errors)",
+            packet.verification.types.errors
+        );
+    }
     format!(
         "targeted correction: overall={:?}, broken_edges={}, lint_errors={}",
         packet.verification.overall, packet.graph.broken_edges, packet.verification.lint.errors
@@ -623,6 +651,84 @@ mod tests {
         let d = decide_correction(&p, 0, 3, 100, 100, 0.0, None, None);
         assert_eq!(d.action, CorrectionAction::Correct);
         assert!(d.correction_prompt.is_some());
+    }
+
+    // ── per-failure-class prompt guidance (WO 43.9) ──
+
+    fn prompt_of(p: &ReducedStatePacket) -> String {
+        decide_correction(p, 0, 3, 100, 100, 0.0, None, None)
+            .correction_prompt
+            .expect("correct path sets a prompt")
+    }
+
+    #[test]
+    fn prompt_security_class_mentions_findings() {
+        let mut p = pass_packet();
+        p.verification.security.critical = 2;
+        p.verification.security.high = 5;
+        p.verification.security.findings = 7;
+        p.verification.overall = OverallVerdict::Fail;
+        p.verifier_policy = Some(VerifierPolicy {
+            required: vec!["lint".into(), "types".into()],
+            advisory: vec!["security".into()],
+            ..Default::default()
+        });
+        assert_eq!(
+            decide_correction(&p, 0, 3, 100, 100, 0.0, None, None).action,
+            CorrectionAction::Correct
+        );
+        assert!(prompt_of(&p).contains("security findings"));
+        assert!(prompt_of(&p).contains("2 critical"));
+        assert!(prompt_of(&p).contains("5 high"));
+    }
+
+    #[test]
+    fn prompt_broken_edges_class_mentions_imports() {
+        let mut p = pass_packet();
+        p.graph.broken_edges = 3;
+        p.verification.overall = OverallVerdict::Warn;
+        p.verifier_policy = Some(VerifierPolicy {
+            required: vec!["lint".into(), "types".into(), "security".into()],
+            advisory: vec!["graph".into()],
+            ..Default::default()
+        });
+        assert_eq!(
+            decide_correction(&p, 0, 3, 100, 100, 0.0, None, None).action,
+            CorrectionAction::Correct
+        );
+        assert!(prompt_of(&p).contains("broken imports"));
+        assert!(prompt_of(&p).contains("3 broken edges"));
+    }
+
+    #[test]
+    fn prompt_lint_class_mentions_lints() {
+        let mut p = pass_packet();
+        p.verification.lint.errors = 4;
+        p.verification.overall = OverallVerdict::Fail;
+        assert!(prompt_of(&p).contains("fix the reported lints"));
+        assert!(prompt_of(&p).contains("4 errors"));
+    }
+
+    #[test]
+    fn prompt_types_class_mentions_type_errors() {
+        let mut p = pass_packet();
+        p.verification.types.errors = 6;
+        p.verification.overall = OverallVerdict::Fail;
+        let s = prompt_of(&p);
+        assert!(s.contains("fix the type errors"), "got: {s}");
+        assert!(s.contains("6 errors"), "got: {s}");
+    }
+
+    #[test]
+    fn prompt_fallback_is_generic_when_no_class_signal() {
+        let mut p = pass_packet();
+        p.verification.overall = OverallVerdict::Fail;
+        let s = prompt_of(&p);
+        assert!(s.contains("targeted correction:"), "got: {s}");
+        assert!(!s.contains("security findings"));
+        assert!(!s.contains("broken imports"));
+        assert!(!s.contains("fix the reported lints"));
+        assert!(!s.contains("fix the type errors"));
     }
 
     #[test]

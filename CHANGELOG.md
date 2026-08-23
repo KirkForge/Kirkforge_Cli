@@ -41,6 +41,10 @@ why, and the gate evidence.
   test.
 - WO 43.38: spawn_blocking for glob walks, tokio::time::sleep for
   computer_use wait, glob-metacharacter redirection gate — [43.38](docs/workorders/43.38-async-blocking-glob-sleep-redirection.md)
+- WO 43.9: per-failure-class correction prompts in `kf-routing` —
+  `correction_prompt()` now matches security → broken_edges → lint → types
+  → fallback (mirrors `decide_correction` precedence) with class-specific
+  guidance and counts, instead of one generic line for every failure — [43.9](docs/workorders/43.9-correction-prompt-guidance.md)
 - WO 43.18-43.24 — fresh segment audit round: abrupt-exit safety, TUI
   hardening, dep/size audit, persistence crash-robustness, adapter
   transport, subprocess lifecycle, test quality (7 analysis agents).

@@ -4,26 +4,30 @@
 
 ## Shipped (closed this session)
 
-- **WO 43.26**: Done — workflow bash steps (`run_bash` + `run_batch` Bash arm)
-  now spawn with `kill_on_drop` + 30s step timeout + cancel-token select;
-  plugin-bus verifier timeout (WO 38.3 watchdog) pinned by a bus-wrapper
-  test. Premise that bus.rs had "NO timeout" was stale — the 5s killpg
-  watchdog lives in `kf-plugin-host/verifier.rs` (WO 38.3, in-branch);
-  the real gap was the workflow.rs spawns + the lack of a pinning test.
-- **WO 43.28**: Done. `scrub_secrets_from_child_env` (bash_runner/mod.rs)
-  was foreground-only; background/scheduled (`BashJobRegistry::spawn`,
-  covers jobs/runner.rs) and PTY (`pty::run_with_pty`) inherited the full
-  parent env and could leak `*_API_KEY`/`*_TOKEN` to the model via
-  `bash(background=true)` + `bash_status`. Helper made `pub(crate)`, applied
-  on all three spawn paths; pinning test added. Helper + `is_secret_env_name`
-  now `pub(crate)` so PTY (separate `portable_pty::CommandBuilder` type)
-  reuses the same name-match logic.
-- **WO 43.1 (partial)**: typed `AdapterError` (Unreachable/ModelNotFound/
-  Denied/Other) added in `src/adapters/error.rs`; ollama's `stream()` wraps its
-  `send_with_retry` error via `classify_transport_error`; `KirkForgeError::from`
-  downcasts `AdapterError` before the string-probe fallback. String-probe
-  fallback KEPT for unmigrated adapters (ponytail: comment). 4 new downcast
-  tests green; all `hint_*`/`downcast_*` tests stay green.
+- **WO 43.25-43.39**: ALL Done (15 workorders, round-4 full-coverage segment
+  sweep). UTF-8 byte-slice panic hardening (43.25); unguarded subprocess
+  spawns (43.26); atomic-write permissions + undo ordering (43.27);
+  background/PTY bash secret scrub (43.28); prompt-compaction OOB panic
+  (43.29); file-tool hook veto (43.30); doom-loop banner selection (43.31);
+  config env-override dead layer (43.32); jobd stop auth/timeout (43.33);
+  context-index retrieval smear (43.34); memory-store stale-lock (43.35);
+  compress-core Lite no-op (43.36); verifier dead-queue + MCP leak (43.37);
+  async blocking + glob redirection (43.38); bench markdown-delta rate
+  (43.39).
+- **WO 43.1**: Done (ollama migrated to typed `AdapterError`; other adapters
+  deferred — see pending). Typed `AdapterError`
+  (Unreachable/ModelNotFound/Denied/Other) in `src/adapters/error.rs`;
+  ollama's `stream()` wraps via `classify_transport_error`;
+  `KirkForgeError::from` downcasts before string-probe fallback (fallback kept
+  for unmigrated adapters).
+- **WO 43.3**: Done. Audit-log redaction — `scrub_free_text` strips
+  credential-shaped `NAME=value` tokens + token literals (Bearer, sk-, ghp_,
+  AKIA, xox[bp]-) from bash command, plugin args, hook reason free-text
+  fields. Shares `SECRET_ENV_SUFFIXES`/`SECRET_ENV_EXACT` consts with
+  `bash_runner/mod.rs` (single source of truth).
+- **WO 43.4**: Done. Property-based tests for `kf-routing` path-safety
+  (proptest suite: traversal, absolute injection, no-panic, NFC/NFD, symlink
+  fixtures) covering 5 branches that had zero tests.
 - **WO 41.0-41.9**: ALL Done (series complete).
 - **WO 42.0-42.12**: ALL Done (series complete). 42.0 overview closed.
 - **WO 38.9**: items 1-6 all done (was 30%, now 100%). Closed.
@@ -44,30 +48,15 @@
   `send_with_retry(...).await?` call, then remove the `contains()` block in
   `error.rs:49-73` once all producers are typed. Tracked in
   [43.1](docs/workorders/43.1-typed-adapter-errors.md).
-- **WO 43.0-43.17**: honest-assessment backlog serialized as the Series 43
-  workorders (all Planned, no code yet). 6 analysis agents verified every
-  claim; ~11 backlog claims were stale and corrected in-line (notably:
-  scout.rs:138 `unimplemented!()` is `#[cfg(test)]`-only, ADR 0011/0012
-  already Rejected, landlock already default-on for bash, Windows rename
-  retry already shipped). Start at [43.0](docs/workorders/43.0-wo43-overview.md).
+- **WO 43.2, 43.5-43.17**: honest-assessment backlog (rounds 1-2), all Planned.
+  6 analysis agents verified every claim; ~11 stale claims corrected in-line.
+  Start at [43.0](docs/workorders/43.0-wo43-overview.md).
 - **WO 43.18-43.24**: round-3 fresh segment audit (concurrency/shutdown,
   TUI, deps/size, persistence crash-robustness, adapter transport,
   subprocess lifecycle, test quality). NEW findings — top risks: line-mode
   Ctrl-C orphans bash children; audit BufWriter lost on panic-abort; no
   PDEATHSIG (parent abort orphans all subprocesses); Bedrock `[DONE]`
   injection bypasses truncation; headless_chrome ungated (~1-2 MB).
-- **WO 43.25-43.39**: round-4 full-coverage segment sweep (executor/turn,
-  tools, session/mcp/prompt/verifier, TUI widgets/commands,
-  sandbox/security, daemon/jobs/cli, `crates/*`). 7 fresh read-only agents,
-  24 NEW verified findings (no re-scoping of existing 43.x items). Top
-  risks: 3 raw UTF-8 byte-slice panics incl. two outside the tool
-  catch_unwind (43.25); prompt-compaction OOB panic on over-budget path
-  (43.29); background/PTY bash skip the secret env scrub (43.28 — DONE);
-  `KF_CODE_*` env overrides dead in production (43.32); context-index
-  `retrieve()` smears unresolved edges → multi-MB prompts (43.34); pre-tool
-  hook deny ineffective for file tools (43.30); workflow-bash/plugin-bus
-  subprocesses unguarded (43.26 — **43.26 Done this session**). See
-  [43.0](docs/workorders/43.0-wo43-overview.md).
 - **WO 43.26 DEFERRED**: the bus-path blocking-on-async-worker concern
   (`dispatch.rs:185` holds `Mutex<VerifierBus>` while calling sync
   `verify()` → `PluginVerifier::run()` on the tokio worker, blocking it
@@ -115,12 +104,11 @@
 - Budget guard wired in production (WO 38.8) — `set_budget_stores` + `set_stratum_store` called from `run_session.rs`. Listener registry is session-keyed `HashMap`, not the old append-only Vec.
 - Windows cross-compile gate in `scripts/ci-local.sh` — `cargo clippy --target x86_64-pc-windows-gnu` runs before every push. AGENTS.md §4 enforces it. This is the structural fix for the 25+ `fix(windows)` commit pattern.
 - WO drift test in `kf-budget-core/tests/adr_xref_drift.rs` — enforces WO file header ↔ README index agreement. Prevents future status drift. `wo_status_headers_match_readme_index` is one of its 5 checks.
-- `.config/nextest.toml` profiles: `ci-fast` (30s, fail-fast), `ci-full` (60s), `nightly` (600s). CI references by name, no inline `--config`.
+- `.config/nextest.toml` profiles: `ci-fast` (30s, fail-fast), `ci-full` (60s), `nightly` (600s). CI references by name, no inline `--config`. Per-test override for `run_bash_stuck_step_times_out` (60s budget — the 30s workflow step timeout exceeds the 30s ci-fast slow-timeout).
 
 ## CI / branch state
 
 - **CI: GREEN.** `cargo nextest run --profile ci-fast --workspace --lib --bins --locked`
-  → 4518 passed, 0 failed, 16 skipped. `cargo clippy --all-targets -- -D warnings`
+  → 4579 passed, 0 failed, 16 skipped. `cargo clippy --all-targets -- -D warnings`
   clean. `cargo fmt --check` clean. `adr_xref_drift` 5/5 passed.
-- **main == dev** at SHA `ff7d8132`.
-
+- **main == dev** at SHA `7b19dca6`.

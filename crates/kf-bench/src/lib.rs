@@ -264,6 +264,8 @@ pub struct DeltaReport {
     pub baseline_timestamp: String,
     pub current_timestamp: String,
     pub tasks: Vec<TaskDelta>,
+    pub baseline_success_rate: f64,
+    pub current_success_rate: f64,
     pub success_rate_delta: f64,
     pub total_tokens_in_delta: i64,
     pub total_tokens_out_delta: i64,
@@ -366,6 +368,8 @@ pub fn compare_reports(baseline: &BenchReport, current: &BenchReport) -> DeltaRe
         baseline_timestamp: baseline.timestamp.clone(),
         current_timestamp: current.timestamp.clone(),
         tasks,
+        baseline_success_rate: baseline_rate,
+        current_success_rate: current_rate,
         success_rate_delta: current_rate - baseline_rate,
         total_tokens_in_delta: current.summary.total_tokens_in as i64
             - baseline.summary.total_tokens_in as i64,
@@ -409,14 +413,14 @@ pub fn compare_with_threshold(
 
 /// Write a markdown delta table to disk.
 pub fn write_markdown_delta(delta: &DeltaReport, path: &Path) -> Result<()> {
-    let baseline_rate = delta.success_rate_delta
-        + if !delta.tasks.is_empty() {
-            let baseline_passed = delta.tasks.iter().filter(|t| t.baseline_success).count();
-            baseline_passed as f64 / delta.tasks.len() as f64
-        } else {
-            0.0
-        };
-    let current_rate = baseline_rate + delta.success_rate_delta;
+    // The rates come from the per-report summaries (carried in
+    // `DeltaReport` by `compare_reports`), NOT from recomputing over the
+    // union task set. A task present only in current has no baseline
+    // result, so counting it as a baseline failure would shift both
+    // rendered rates away from the true summaries — and away from the
+    // regression decision `compare_with_threshold` makes. See WO 43.39.
+    let baseline_rate = delta.baseline_success_rate;
+    let current_rate = delta.current_success_rate;
 
     let mut md = String::new();
     md.push_str(&format!(
@@ -926,6 +930,121 @@ mod tests {
         assert!(task2.current_success);
         assert_eq!(task2.difficulty, Difficulty::Medium);
         assert_eq!(task2.delta_tokens_in, 80);
+    }
+
+    // WO 43.39: write_markdown_delta must render the per-report summary
+    // rates, NOT rates recomputed from the union task set. When baseline
+    // and current task sets differ, a task only in current has no
+    // baseline result and would be miscounted as a baseline failure,
+    // shifting both rendered percentages away from the true summaries.
+    #[test]
+    fn write_markdown_delta_uses_summary_rates_not_union_set() {
+        // Baseline: tasks A (pass), B (fail) → 1/2 = 50%.
+        let baseline = BenchReport {
+            model: "base".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            results: vec![
+                TaskResult {
+                    task_name: "A".into(),
+                    difficulty: Difficulty::Easy,
+                    success: true,
+                    tokens_in: 100,
+                    tokens_out: 50,
+                    duration_secs: 1.0,
+                    cost_usd: 0.01,
+                    tool_calls: 1,
+                    compression_passes: 0,
+                    error: None,
+                },
+                TaskResult {
+                    task_name: "B".into(),
+                    difficulty: Difficulty::Easy,
+                    success: false,
+                    tokens_in: 100,
+                    tokens_out: 50,
+                    duration_secs: 1.0,
+                    cost_usd: 0.01,
+                    tool_calls: 1,
+                    compression_passes: 0,
+                    error: Some("fail".into()),
+                },
+            ],
+            summary: BenchSummary {
+                success_rate: 0.5,
+                total_tokens_in: 200,
+                total_tokens_out: 100,
+                total_cost_usd: 0.02,
+                total_duration_secs: 2.0,
+                total_tool_calls: 2,
+                tasks_run: 2,
+                tasks_passed: 1,
+            },
+        };
+        // Current: tasks B (pass), C (pass) → 2/2 = 100%.
+        let current = BenchReport {
+            model: "curr".into(),
+            timestamp: "2026-01-02T00:00:00Z".into(),
+            results: vec![
+                TaskResult {
+                    task_name: "B".into(),
+                    difficulty: Difficulty::Easy,
+                    success: true,
+                    tokens_in: 100,
+                    tokens_out: 50,
+                    duration_secs: 1.0,
+                    cost_usd: 0.01,
+                    tool_calls: 1,
+                    compression_passes: 0,
+                    error: None,
+                },
+                TaskResult {
+                    task_name: "C".into(),
+                    difficulty: Difficulty::Easy,
+                    success: true,
+                    tokens_in: 100,
+                    tokens_out: 50,
+                    duration_secs: 1.0,
+                    cost_usd: 0.01,
+                    tool_calls: 1,
+                    compression_passes: 0,
+                    error: None,
+                },
+            ],
+            summary: BenchSummary {
+                success_rate: 1.0,
+                total_tokens_in: 200,
+                total_tokens_out: 100,
+                total_cost_usd: 0.02,
+                total_duration_secs: 2.0,
+                total_tool_calls: 2,
+                tasks_run: 2,
+                tasks_passed: 2,
+            },
+        };
+
+        let delta = compare_reports(&baseline, &current);
+        // The regression signal uses summary rates.
+        assert!((delta.baseline_success_rate - 0.5).abs() < 1e-9);
+        assert!((delta.current_success_rate - 1.0).abs() < 1e-9);
+        assert!((delta.success_rate_delta - 0.5).abs() < 1e-9);
+
+        let dir = tempfile::tempdir().unwrap();
+        let md_path = dir.path().join("delta.md");
+        write_markdown_delta(&delta, &md_path).unwrap();
+        let md = std::fs::read_to_string(&md_path).unwrap();
+
+        // Rendered rates must match the true summaries (50% → 100%),
+        // not the union-set recomputation. The buggy version would
+        // compute baseline as 1/3 (only A passed among A,B,C) and
+        // current as 2/3 (B,C passed among A,B,C), rendering 33% → 67%.
+        assert!(
+            md.contains("Success rate:** 50% → 100%"),
+            "rendered rates must match summaries (50% → 100%), got:\n{md}"
+        );
+        assert!(
+            !md.contains("33%") && !md.contains("67%"),
+            "rendered rates must not be the union-set recomputation, got:\n{md}"
+        );
     }
 
     #[test]

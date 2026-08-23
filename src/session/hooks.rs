@@ -1545,13 +1545,52 @@ command = "hooks/pre-tool-bash.sh"
 
     #[tokio::test]
     async fn test_run_with_context_fires_in_process_hook() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct MarkerHook {
+            event: String,
+            fired: std::sync::Arc<AtomicUsize>,
+            seen_event: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+        }
+        impl PostHook for MarkerHook {
+            fn event(&self) -> &str {
+                &self.event
+            }
+            fn handle(&self, ctx: &HookContext) -> Result<(), String> {
+                self.fired.fetch_add(1, Ordering::SeqCst);
+                *self.seen_event.lock().unwrap() = Some(ctx.event.clone());
+                Ok(())
+            }
+        }
+
         let (_tmp, dir) = temp_hooks_dir();
-        let runner = HookRunner::new(dir);
+        let mut runner = HookRunner::new(dir);
+        let fired = std::sync::Arc::new(AtomicUsize::new(0));
+        let seen_event = std::sync::Arc::new(std::sync::Mutex::new(None));
+        runner.add_post_hook(Box::new(MarkerHook {
+            event: "post-turn".into(),
+            fired: fired.clone(),
+            seen_event: seen_event.clone(),
+        }));
         let ctx = HookContext {
             event: "post-turn".into(),
             ..Default::default()
         };
         runner.run_with_context("post-turn", &ctx, &default_config());
+        assert_eq!(fired.load(Ordering::SeqCst), 1, "in-process hook must fire exactly once");
+        assert_eq!(
+            seen_event.lock().unwrap().as_deref(),
+            Some("post-turn"),
+            "hook must receive the context of the fired event"
+        );
+
+        // A non-matching event must not fire the hook again.
+        runner.run_with_context("unrelated-event", &ctx, &default_config());
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            1,
+            "hook must not fire for a non-matching event"
+        );
     }
 
     #[tokio::test]

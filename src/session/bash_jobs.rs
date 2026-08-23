@@ -1633,15 +1633,16 @@ mod tests {
 
         let job = reg.get(id).await.unwrap();
         assert_eq!(job.status, JobStatus::Cancelled);
-        let pid = job
-            .pid
-            .expect("spawned job should have a pid recorded");
+        let pid = job.pid.expect("spawned job should have a pid recorded");
 
         // WO 43.10 preserved: the summary line was written before the kill.
         let path = crate::session::jobs_dir().unwrap().join("bg-exits.ndjson");
         let contents = std::fs::read_to_string(&path).unwrap();
         let summary: BgJobExitSummary = serde_json::from_str(
-            contents.lines().find(|l| !l.trim().is_empty()).expect("summary line"),
+            contents
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .expect("summary line"),
         )
         .unwrap();
         assert_eq!(summary.id, id);

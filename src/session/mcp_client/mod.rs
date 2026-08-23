@@ -2204,11 +2204,10 @@ mod tests {
             .expect("sleep failed");
         let stdout = child.stdout.take().unwrap();
         let stdin = child.stdin.take().unwrap();
-        let mut client = McpClient::from_pipes(stdin, stdout, config);
+        let client = McpClient::from_pipes(stdin, stdout, config);
 
         let req = serde_json::json!({ "jsonrpc": "2.0", "method": "tools/list", "params": {} });
-        let result =
-            tokio::time::timeout(Duration::from_secs(5), client.send_request(&req)).await;
+        let result = tokio::time::timeout(Duration::from_secs(5), client.send_request(&req)).await;
         let inner = result.expect("request must resolve without hitting the outer 5s bound");
         assert!(inner.is_err(), "hung request must fail, got {inner:?}");
         assert!(

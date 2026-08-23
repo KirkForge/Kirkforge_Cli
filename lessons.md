@@ -53,6 +53,35 @@
 ## Round 4 — WO 43.26 (workflow bash + plugin-bus verifier)
 
 - Premise drift caught before code: the task claimed PluginBusVerifier had
+
+- The `audit BufWriter` + `panic = "abort"` combo from WO 43.18 round-3
+  notes was the real deal: audit was the LEAST durable store (buffered
+  until Drop, which panic-abort skips). Per-entry flush+sync_data fixes
+  it; the BufWriter is now a 1-line always-flushed buffer (harmless,
+  keeping the type avoids touching the struct).
+- `resume_chain` doesn't need the `hmac_key`: the `chain_hash` is stored
+  IN the parsed event (computed at write time with the key), so reading
+  it back gives the correct resume point without recomputing. Only
+  `initial_hash`/`chain_hash_of` need the key.
+- nextest filter syntax gotcha bit again (round-4 lessons): `-E
+  'test(/regex/)'` with `|` alternation INSIDE the regex works; the
+  task's quoted `-- "a\|b"` syntax matched 0. Always write a script file
+  for complex nextest filters — inline bash quoting is fragile.
+- `CachedIndex::load` returning `Err` on format_version mismatch is the
+  ponytail path: the caller (run_session.rs:507-508) already treats
+  `Err` as "corrupt, rebuilding". Zero caller changes — the new field
+  just makes "old format" look like "corrupt" to existing code.
+- Build throughput is STILL the bottleneck (parallel worktrees). A
+  single `cargo check --lib` took 15min, `cargo nextest run --lib` took
+  40min (test profile compiles more). The `nohup` + `kill -0` polling
+  pattern from round-4 lessons is essential — the bash 120s/300s/540s
+  timeouts kill the wrapper, not the build.
+- `std::mem::forget(log)` is the clean way to simulate SIGKILL in a
+  test: skips Drop without aborting the process, so assertions can run
+  after. The test verifies the per-entry flush landed on disk without
+  relying on the Drop-based flush.
+
+- Premise drift caught before code: the task claimed PluginBusVerifier had
   "NO timeout, NO kill_on_drop" but WO 38.3 (already in-branch) added a 5s
   killpg watchdog inside `kf-plugin-host/verifier.rs::PluginVerifier::run`
   itself. Verified via `git merge-base --is-ancestor 0ad1929e HEAD` AND by
@@ -86,27 +115,31 @@
   explicit instruction to add the README row was load-bearing for the
   drift guard, not cosmetic.
 
-## WO 43.15 — machine-greppable ADR predicate blocks
+## Round 5 — WO 43.21 (persistence crash-robustness)
 
-- The `implemented` vs compound-status cross-check was the trickiest part.
-  "Accepted (amended)" does NOT mean partially implemented — an amendment
-  replaces the original decision and is fully in force. Map "amended" →
-  true, "partially implemented" → partial, "fully implemented" → true,
-  "Superseded" → false. 004 and 054 both carry amendments but are fully
-  implemented as amended; only 0044/073 are genuinely partial.
-- `supersedes` is what THIS ADR replaces, not what replaces THIS ADR.
-  048/049 are *superseded by* a removal decision, not by a named ADR, so
-  their `supersedes: []`. Don't invert the direction.
-- `crates/kf-budget-core/README.md` `| Tests | N passing |` was stale by
-  32 on origin/dev (882 claimed, 914 actual) — `readme_drift` test was
-  ALREADY red before my change. Bumped to 914 (accurate incl. my +1 test).
-  This was pre-existing breakage, not mine, but leaving it red while
-  adding a test would've made drift worse. AGENTS.md says bump the count
-  when adding tests to crates/ — doing so also fixed the pre-existing
-  red. Worth grepping `readme_drift` state before assuming a clean tree.
-- The drift test build is slow (~18s) but the full `cargo clippy --all-
-  targets` is 5-6 min even cached, and competes with other worktrees'
-  builds for CPU. Budget 15+ min for the full gate when wo43.19 is active.
-- `cargo fmt` reformatted my multi-line `panic!` into one line and rewrapped
-  a long `unwrap_or_else` — run fmt before clippy, not after, or clippy
-  passes then fmt fails CI.
+- The `audit BufWriter` + `panic = "abort"` combo from WO 43.18 round-3
+  notes was the real deal: audit was the LEAST durable store (buffered
+  until Drop, which panic-abort skips). Per-entry flush+sync_data fixes
+  it; the BufWriter is now a 1-line always-flushed buffer (harmless,
+  keeping the type avoids touching the struct).
+- `resume_chain` doesn't need the `hmac_key`: the `chain_hash` is stored
+  IN the parsed event (computed at write time with the key), so reading
+  it back gives the correct resume point without recomputing. Only
+  `initial_hash`/`chain_hash_of` need the key.
+- nextest filter syntax gotcha bit again (round-4 lessons): `-E
+  'test(/regex/)'` with `|` alternation INSIDE the regex works; the
+  task's quoted `-- "a\|b"` syntax matched 0. Always write a script file
+  for complex nextest filters — inline bash quoting is fragile.
+- `CachedIndex::load` returning `Err` on format_version mismatch is the
+  ponytail path: the caller (run_session.rs:507-508) already treats
+  `Err` as "corrupt, rebuilding". Zero caller changes — the new field
+  just makes "old format" look like "corrupt" to existing code.
+- Build throughput is STILL the bottleneck (parallel worktrees). A
+  single `cargo check --lib` took 15min, `cargo nextest run --lib` took
+  40min (test profile compiles more). The `nohup` + `kill -0` polling
+  pattern from round-4 lessons is essential — the bash 120s/300s/540s
+  timeouts kill the wrapper, not the build.
+- `std::mem::forget(log)` is the clean way to simulate SIGKILL in a
+  test: skips Drop without aborting the process, so assertions can run
+  after. The test verifies the per-entry flush landed on disk without
+  relying on the Drop-based flush.

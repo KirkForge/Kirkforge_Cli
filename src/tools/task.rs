@@ -504,7 +504,13 @@ impl PersistedTask {
         };
         match serde_json::to_string_pretty(self) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
+                // Atomic write: temp + rename so a crash mid-write cannot
+                // leave the task summary truncated (WO 43.21).
+                let tmp = path.with_extension("json.tmp");
+                if let Err(e) =
+                    std::fs::write(&tmp, &json).and_then(|()| std::fs::rename(&tmp, &path))
+                {
+                    let _ = std::fs::remove_file(&tmp);
                     tracing::warn!(
                         error = %e,
                         path = %path.display(),
@@ -1832,6 +1838,25 @@ mod tests {
         };
         persist_task_summary("task-99", &handle);
         assert!(load_persisted_tasks().is_empty());
+    }
+
+    // WO 43.21: atomic write leaves no .tmp file behind and the JSON is valid.
+    #[test]
+    fn persist_to_disk_uses_atomic_write_no_tmp_left() {
+        let (dir, _env) = env_guard_tmp();
+        let handle = terminal_handle(Some("done"), false, None, None);
+        persist_task_summary("task-atom", &handle);
+        let tasks_dir = dir.path().join("tasks");
+        // The final file exists and is valid JSON.
+        let path = tasks_dir.join("task-atom.json");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _: serde_json::Value = serde_json::from_str(&content).unwrap();
+        // No leftover temp file.
+        let tmp = tasks_dir.join("task-atom.json.tmp");
+        assert!(
+            !tmp.exists(),
+            "temp file must not remain after atomic write"
+        );
     }
 
     // End-to-end: the worker closure persists to disk when a background

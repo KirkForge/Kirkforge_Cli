@@ -200,6 +200,10 @@ impl AuditLog {
     }
 
     /// Serialize and append a single entry line.
+    ///
+    /// Flushes + `sync_data` after each entry so audit records survive
+    /// SIGKILL / panic-abort (WO 43.21). Audit volume is low (one line per
+    /// destructive call), so per-entry fsync is the point of an audit log.
     fn write_entry(&self, entry: &AuditEntry) {
         let line = match serde_json::to_string(entry) {
             Ok(s) => s,
@@ -214,12 +218,22 @@ impl AuditLog {
                     tracing::warn!(error = %e, "failed to write audit entry");
                     return;
                 }
+<<<<<<< HEAD
                 // Flush after each entry so the audit trail survives abrupt
                 // exits (panic=abort skips Drop, SIGKILL skips everything).
                 // Audit writes are low-frequency (one line per destructive
                 // call); per-entry flush is the whole fix for buffer loss.
                 if let Err(e) = w.flush() {
                     tracing::warn!(error = %e, "failed to flush audit entry");
+||||||| f457c69c
+=======
+                if let Err(e) = w.flush() {
+                    tracing::warn!(error = %e, "failed to flush audit entry");
+                    return;
+                }
+                if let Err(e) = w.get_ref().sync_data() {
+                    tracing::warn!(error = %e, "failed to fsync audit entry");
+>>>>>>> origin/wo/wo43.21
                 }
             }
         }
@@ -601,29 +615,13 @@ impl FileAuditSink {
         if let Some(parent) = file_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        // Resume the hash chain from the last event already on disk so a
-        // restart continues the chain instead of resetting to genesis (WO 42.2).
-        // Missing/empty file → genesis; unparseable last line → warn + genesis.
-        let resumed = match std::fs::read_to_string(&file_path) {
-            Ok(content) => {
-                let last_line = content.lines().rev().find(|l| !l.trim().is_empty());
-                match last_line {
-                    Some(line) => match serde_json::from_str::<AuditEvent>(line) {
-                        Ok(evt) => Some(evt.chain_hash),
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                path = %file_path.display(),
-                                "audit file last line unparseable; chain resumes from genesis"
-                            );
-                            None
-                        }
-                    },
-                    None => None,
-                }
-            }
-            Err(_) => None,
-        };
+        // Resume the hash chain from the last intact event on disk so a
+        // restart continues the chain instead of resetting to genesis
+        // (WO 42.2). A torn final line (partial write / SIGKILL mid-append)
+        // is truncated back to the last parseable line — torn tail ≠ tamper
+        // (WO 43.21). Only a parseable-but-mismatched line (true tamper)
+        // leaves the chain broken.
+        let resumed = resume_chain(&file_path);
         Self {
             file_path,
             buffer: Mutex::new(Vec::new()),
@@ -644,15 +642,25 @@ impl FileAuditSink {
     /// `chain_hash` matches a fresh computation. Mirrors
     /// `MemoryAuditSink::verify_chain` and the `verify_audit_jsonl` walker in
     /// `plugin_tools/native.rs`. A missing/empty file is an intact (trivial)
-    /// chain. A read or parse error returns false (cannot prove integrity).
+    /// chain. A read or parse error returns false (cannot prove integrity)
+    /// EXCEPT an unparseable **final** line, which is a torn tail (partial
+    /// write / SIGKILL mid-append) and is skipped — torn tail ≠ tamper
+    /// (WO 43.21). A parseable-but-mismatched line anywhere is real tamper.
     pub fn verify_chain(&self) -> bool {
         let Ok(content) = std::fs::read_to_string(&self.file_path) else {
             return true;
         };
         let key = self.hmac_key.as_deref();
         let mut prev = initial_hash(key);
-        for line in content.lines().filter(|l| !l.trim().is_empty()) {
+        let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+        for (i, line) in lines.iter().enumerate() {
             let Ok(event): std::result::Result<AuditEvent, _> = serde_json::from_str(line) else {
+                // Unparseable final line = torn tail; skip it. An
+                // unparseable line in the MIDDLE of the file is still fatal
+                // (that's real corruption, not a torn write).
+                if i == lines.len() - 1 {
+                    break;
+                }
                 return false;
             };
             let expected = chain_hash_of(&prev, &event, key);
@@ -740,10 +748,65 @@ impl FileAuditSink {
     }
 }
 
+impl Drop for FileAuditSink {
+    fn drop(&mut self) {
+        let _ = self.flush();
+    }
+}
+
 fn rotated_path(base: &Path, n: u32) -> PathBuf {
     let mut s = base.as_os_str().to_owned();
     s.push(format!(".{n}"));
     PathBuf::from(s)
+}
+
+/// Resume the hash chain from the last intact (parseable) event on disk.
+///
+/// If the final line is unparseable (torn tail from SIGKILL mid-append), the
+/// file is truncated back to the end of the last parseable line and that
+/// line's `chain_hash` is returned. An empty/missing file returns `None`
+/// (genesis). A file whose only non-empty line is unparseable also returns
+/// `None` (no intact event to resume from) and is truncated to empty.
+fn resume_chain(file_path: &Path) -> Option<String> {
+    let Ok(content) = std::fs::read_to_string(file_path) else {
+        return None;
+    };
+    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return None;
+    }
+    // Walk from the end to find the last parseable line.
+    let mut last_good_idx: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate().rev() {
+        if serde_json::from_str::<AuditEvent>(line).is_ok() {
+            last_good_idx = Some(i);
+            break;
+        }
+    }
+    match last_good_idx {
+        Some(i) => {
+            // Truncate the file to end of the last good line if there are
+            // trailing unparseable lines (torn tail).
+            if i < lines.len() - 1 {
+                let kept = lines[..=i].join("\n") + "\n";
+                if std::fs::write(file_path, kept).is_err() {
+                    tracing::warn!(
+                        path = %file_path.display(),
+                        "failed to truncate torn audit tail; chain may resume from genesis"
+                    );
+                    return None;
+                }
+            }
+            let evt: AuditEvent = serde_json::from_str(lines[i]).ok()?;
+            Some(evt.chain_hash)
+        }
+        None => {
+            // No parseable line at all. Truncate to empty so the chain
+            // starts fresh from genesis instead of keeping garbage.
+            let _ = std::fs::write(file_path, "");
+            None
+        }
+    }
 }
 
 /// Type of audit sink for [`create_audit_sink`]. Only `Memory` and `File`
@@ -1828,5 +1891,78 @@ mod tests {
             out, r#"{"a":[3,2,1],"b":{"x":1,"y":2}}"#,
             "object keys sort, array order preserves"
         );
+    }
+
+    // ── WO 43.21: crash-robustness ────────────────────────────────────────
+
+    #[test]
+    fn audit_log_crash_all_entries_present_without_drop() {
+        // Simulate SIGKILL: write N entries, then forget to drop the AuditLog
+        // (std::mem::forget). Per-entry flush+sync_data means all N must be
+        // on disk without relying on Drop.
+        let dir = fresh_audit_dir("crash_nodrop");
+        let path = dir.join("audit.ndjson");
+        let log = AuditLog::new(Some(path.clone()));
+        let args = serde_json::json!({"path": "/tmp/x"});
+        for i in 0..5 {
+            log.log_destructive("write_file", &args, true, None);
+            let _ = i; // suppress unused
+        }
+        // Deliberately skip drop — simulate abrupt exit.
+        std::mem::forget(log);
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let n = contents.trim().lines().filter(|l| !l.is_empty()).count();
+        assert_eq!(
+            n, 5,
+            "all 5 entries must be on disk without Drop: {contents}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_audit_sink_torn_tail_resumes_and_verify_chain_true() {
+        // Write 3 intact events, then append a torn (partial) final line.
+        // new() must truncate the torn tail and resume the chain; verify_chain
+        // must return true (torn tail ≠ tamper).
+        let dir = fresh_audit_dir("torn_tail");
+        let path = dir.join("audit.jsonl");
+        let sink = FileAuditSink::new(path.clone(), None, 50 * 1024 * 1024, 10, 1);
+        for i in 0..3u64 {
+            let mut e = base_event();
+            e.id = format!("evt-{i}");
+            e.sequence = i;
+            sink.write(e);
+        }
+        sink.flush();
+        // Append a torn tail: a partial JSON line (simulates SIGKILL mid-write).
+        let intact = std::fs::read_to_string(&path).unwrap();
+        let torn = format!("{intact}{{\"id\":\"evt-broken\",\"sequence\":99,\"ti");
+        std::fs::write(&path, &torn).unwrap();
+        // new() should truncate the torn tail and resume from the last good hash.
+        let sink2 = FileAuditSink::new(path.clone(), None, 50 * 1024 * 1024, 10, 1);
+        // verify_chain must be true — the torn tail is skipped, not treated as tamper.
+        assert!(
+            sink2.verify_chain(),
+            "torn final line must not break verify_chain"
+        );
+        // The file should now be truncated back to the 3 intact lines.
+        let after = std::fs::read_to_string(&path).unwrap();
+        let n = after.trim().lines().filter(|l| !l.is_empty()).count();
+        assert_eq!(
+            n, 3,
+            "torn tail should be truncated, got {n} lines: {after}"
+        );
+        // Chain continues correctly from the last intact hash.
+        let mut e4 = base_event();
+        e4.id = "evt-4".into();
+        e4.sequence = 3;
+        assert!(sink2.write(e4));
+        sink2.flush();
+        let sink3 = FileAuditSink::new(path.clone(), None, 50 * 1024 * 1024, 10, 1);
+        assert!(
+            sink3.verify_chain(),
+            "chain must verify after resume + new event"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

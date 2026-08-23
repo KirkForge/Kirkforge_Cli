@@ -4,15 +4,16 @@
 
 ## Shipped (closed this session)
 
-- **WO 43.15**: Done. Machine-greppable `<!-- adr-predicates -->` block
-  (status, implemented, supersedes, affects-crates) added to 8 pilot ADRs
-  (compound-status: 004, 025, 0029, 0044, 048, 049, 054, 073).
-  `adr_xref_drift` test extended with `parse_predicate_block` +
-  `implemented_from_header` cross-checks (status↔header keyword,
-  implemented↔compound suffix, affects-crates dir existence, supersedes
-  ADR-file resolution). Block is opt-in; backfill + require-on-all is a
-  follow-up. Also bumped `crates/kf-budget-core/README.md` test count
-  882→914 (was stale by 32 on origin/dev; `readme_drift` now green).
+- **WO 43.21**: Done. Persistence crash-robustness. AuditLog per-entry
+  flush+fsync (survives SIGKILL/panic-abort — the audit trail is now the
+  MOST durable store, not the least). FileAuditSink torn-tail tolerance
+  (`impl Drop`→flush; `new` truncates unparseable final line + resumes
+  chain from last intact hash, not genesis; `verify_chain` skips torn
+  final line). Session log UTF-8 tolerance (`load_messages` reads via
+  `read_until(b'\n')`+`from_utf8_lossy` — a mid-file invalid UTF-8 byte
+  skips that line instead of failing the whole file). Atomic temp+rename
+  writes for `task.rs` persist + `CachedIndex` save. `CachedIndex`
+  `format_version` stamp (mismatch → Err → rebuild).
 - **WO 43.25-43.39**: ALL Done (15 workorders, round-4 full-coverage segment
   sweep). UTF-8 byte-slice panic hardening (43.25); unguarded subprocess
   spawns (43.26); atomic-write permissions + undo ordering (43.27);
@@ -37,14 +38,6 @@
 - **WO 43.4**: Done. Property-based tests for `kf-routing` path-safety
   (proptest suite: traversal, absolute injection, no-panic, NFC/NFD, symlink
   fixtures) covering 5 branches that had zero tests.
-- **WO 43.19**: Done. Fixed `set_cursor_line_col` byte/char index mismatch
-  (click in prompt with multibyte char on earlier line landed wrong —
-  `char_indices()` byte offset + char-index `cursor_position`). Fixed to
-  count chars per line. Added emoji/CJK/combining-char regression tests,
-  5 selftest unicode render scenarios (wide + narrow geometry), and direct
-  unit tests for 3 zero-test render modules (`chat/lines.rs` grouped_tool_header
-  + render_entry_lines, `rendering/format.rs` format_duration/token_count/
-  budget_pct, `rendering/table.rs` render_table).
 - **WO 41.0-41.9**: ALL Done (series complete).
 - **WO 42.0-42.12**: ALL Done (series complete). 42.0 overview closed.
 - **WO 38.9**: items 1-6 all done (was 30%, now 100%). Closed.

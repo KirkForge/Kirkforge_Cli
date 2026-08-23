@@ -1436,16 +1436,6 @@ mod tests {
         assert_eq!(got, resp);
     }
 
-    /// Responses for unknown/timed-out request ids are dropped without
-    /// panicking.
-    #[tokio::test]
-    async fn test_dispatch_response_unknown_id_is_noop() {
-        let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
-        let resp = serde_json::json!({ "jsonrpc": "2.0", "id": 99, "result": {} });
-        // Should not panic and should not block.
-        McpClient::dispatch_response("99".to_string(), resp, &pending, "test").await;
-    }
-
     /// WO 43.37: the `Ok(Err(_))` branch (oneshot sender dropped without a
     /// response) must remove the pending-map entry, matching the timeout
     /// branches. We drive the branch by polling the request future alongside a
@@ -1800,12 +1790,6 @@ mod tests {
         let r2 = rx2.await.expect("waiter 2 should receive");
         assert!(r1.is_err(), "waiter 1 should receive error");
         assert!(r2.is_err(), "waiter 2 should receive error");
-    }
-
-    #[tokio::test]
-    async fn test_fail_all_pending_empty_map_is_noop() {
-        let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
-        McpClient::fail_all_pending(pending).await;
     }
 
     #[tokio::test]

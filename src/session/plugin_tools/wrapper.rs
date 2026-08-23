@@ -252,7 +252,30 @@ impl Tool for PluginToolWrapper {
         setup_process_group(&mut command);
         // WO 11.5 / H3: rlimits are always applied (the harden flag
         // controls only bash sandbox settings, not resource limits).
-        setup_rlimits(&mut command, &self.sandbox, None);
+        // WO 43.11: graduate landlock FS confinement to the plugin tool
+        // path. Resolve paths for the sandbox cwd (the workspace the tool
+        // operates on) plus the plugin root (so the tool script itself is
+        // readable/executable) plus operator-supplied extra paths. When
+        // landlock is unavailable (non-Linux, old kernel, no CAP_SYS_ADMIN)
+        // resolve_paths returns None and the spawn proceeds rlimits-only —
+        // fail-closed + accept_unsandboxed semantics come free from the
+        // existing pre_exec body (bash_runner/mod.rs:234-248).
+        #[cfg(target_os = "linux")]
+        let landlock_paths = {
+            let mut extra: Vec<PathBuf> = cfg
+                .security
+                .landlock_extra_paths
+                .iter()
+                .map(PathBuf::from)
+                .collect();
+            if !extra.contains(&self.plugin_root) {
+                extra.push(self.plugin_root.clone());
+            }
+            crate::session::bash_runner::resolve_paths(&cwd, &extra)
+        };
+        #[cfg(not(target_os = "linux"))]
+        let landlock_paths: Option<()> = None;
+        setup_rlimits(&mut command, &self.sandbox, landlock_paths);
 
         for (k, v) in self.curated_env(&cfg, &args) {
             command.env(k, v);
@@ -662,6 +685,79 @@ mod tests {
         match outcome {
             ToolOutcome::Failure(ToolError::Cancelled) => {}
             other => panic!("expected Cancelled failure, got {other:?}"),
+        }
+    }
+
+    // WO 43.11: plugin tool subprocesses are FS-confined like bash children.
+    // A plugin tool that tries to write outside its sandbox cwd + plugin root
+    // must be blocked by landlock. Mirrors landlock_blocks_write_outside_workspace
+    // in bash_runner/landlock.rs.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn plugin_tool_landlock_blocks_write_outside_workspace() {
+        if !crate::session::bash_runner::landlock_usable() {
+            eprintln!("skipping: landlock not available on this kernel");
+            return;
+        }
+
+        let plugin_dir = tempfile::tempdir().unwrap();
+        let ws_dir = tempfile::tempdir().unwrap();
+        let outside_dir = tempfile::tempdir().unwrap();
+
+        // Write a plugin tool script that writes inside the cwd AND outside.
+        let script = plugin_dir.path().join("write_tool.sh");
+        let outside_path = outside_dir.path().join("outside.txt");
+        let inside_path = ws_dir.path().join("inside.txt");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho ok > \"{}\" 2>/dev/null\necho bad > \"{}\" 2>/dev/null\n",
+                inside_path.display(),
+                outside_path.display(),
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        // Build a wrapper whose sandbox cwd is the workspace tempdir.
+        let cfg = Arc::new(std::sync::RwLock::new({
+            let mut c = Config::default();
+            c.security.sandbox_dir = Some(ws_dir.path().to_string_lossy().to_string());
+            c
+        }));
+        let wrapper = PluginToolWrapper::new(
+            "write_tool".into(),
+            "writes inside and outside".into(),
+            serde_json::json!({"type": "object"}),
+            plugin_dir.path().to_path_buf(),
+            PathBuf::from("write_tool.sh"),
+            cfg,
+            SandboxConfig::default(),
+            TrustTier::Shell,
+        );
+
+        let ctx = make_tool_ctx();
+        let outcome = wrapper.run(&ctx, serde_json::json!({})).await;
+
+        // The inside write should have succeeded (the workspace is allowed).
+        assert!(
+            inside_path.exists(),
+            "write inside sandbox cwd should succeed under landlock"
+        );
+        // The outside write must be blocked by landlock.
+        assert!(
+            !outside_path.exists(),
+            "write outside sandbox cwd + plugin root should be blocked by landlock, but file was created"
+        );
+        // The tool should report failure (non-zero exit from the failed write).
+        match outcome {
+            ToolOutcome::Failure(ToolError::Execution { .. }) => {}
+            other => {
+                panic!("expected Execution failure (blocked write), got {other:?}")
+            }
         }
     }
 }

@@ -923,4 +923,5 @@ tree, ~11 stale claims corrected in-line. See
 | 43.38 | [Async blocking + glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Planned |
 | 43.39 | [kf-bench markdown-delta rate contradiction](43.39-bench-delta-rate.md) | Planned |
 | 43.32 | [Config env-override layer dead in production](43.32-config-env-override-layer-dead.md) | Done |
+| 43.33 | [jobd stop/auth/timeout + pid-removal-on-reject](43.33-jobd-stop-auth-timeout.md) | Done |
 

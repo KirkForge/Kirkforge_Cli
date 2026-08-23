@@ -348,7 +348,14 @@ async fn stop_job_daemon(socket_path: &std::path::Path, pid_path: &std::path::Pa
             socket_path.display()
         );
     }
+    // Only remove the pid file once the daemon actually acknowledged the
+    // stop. `send_shutdown` returns Err on an auth rejection, a timeout, or
+    // an Error/Busy response — in all those cases the daemon may still be
+    // running, and deleting its pid file would orphan it.
     crate::jobs::client::send_shutdown(socket_path).await?;
+    // Best-effort cleanup mirroring the graceful-shutdown path at the end of
+    // `run_job_daemon_at`: if the pid file is already gone (daemon cleaned up
+    // after acking), removal is a no-op.
     let _ = std::fs::remove_file(pid_path);
     Ok(())
 }

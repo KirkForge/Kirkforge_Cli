@@ -854,7 +854,7 @@ tree, ~11 stale claims corrected in-line. See
 
 | WO | Title | Status |
 |----|-------|--------|
-| 43.0 | [Series 43 overview: honest-assessment backlog serialization](43.0-wo43-overview.md) | Planned |
+| 43.0 | [Series 43 overview: honest-assessment backlog serialization](43.0-wo43-overview.md) | Done |
 | 43.1 | [Retire string-probe error classification](43.1-typed-adapter-errors.md) | Done (ollama migrated; openai/anthropic/bedrock/vertex deferred) |
 | 43.2 | [Bounded EAGAIN/EINTR retry on the atomic-write primitive](43.2-atomic-write-retry.md) | Done |
 | 43.3 | [Audit-log redaction residual gap](43.3-audit-redaction.md) | Done |
@@ -874,7 +874,7 @@ tree, ~11 stale claims corrected in-line. See
 | 43.17 | [Content-hash consent binding for plugin trust](43.17-content-hash-consent.md) | Done |
 | 43.18 | [Abrupt-exit safety: line-mode SIGINT, audit flush, grep blocking](43.18-concurrency-shutdown-safety.md) | Done |
 | 43.19 | [TUI unicode-cursor fix + render-path test coverage](43.19-tui-panic-hardening.md) | Done |
-| 43.20 | [Dependency and binary-size audit](43.20-dep-size-audit.md) | Planned |
+| 43.20 | [Dependency and binary-size audit](43.20-dep-size-audit.md) | Cancelled (deferred) |
 | 43.21 | [Persistence crash-robustness: audit flush policy, torn-tail tolerance, atomic cache writes](43.21-persistence-crash-robustness.md) | Done |
 | 43.22 | [Adapter transport/streaming robustness residual](43.22-adapter-transport-robustness.md) | Planned |
 | 43.23 | [Subprocess lifecycle: parent-death orphans, MCP idle-kill, unguarded host-crate spawns](43.23-subprocess-lifecycle.md) | Planned |

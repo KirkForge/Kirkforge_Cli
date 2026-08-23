@@ -4,6 +4,22 @@
 
 ## Shipped (closed this session)
 
+- **WO 43.0**: Done (overview). Series 43 honest-assessment backlog
+  serialization — all sub-items shipped except 43.20 (deferred) and
+  43.22-43.24 (still planned, not implemented). Tracked in
+  [43.0](docs/workorders/43.0-wo43-overview.md).
+- **WO 43.1-43.19**: ALL Done (rounds 1-3). Typed `AdapterError` (43.1,
+  ollama migrated); atomic-write EINTR/EAGAIN retry (43.2); audit-log
+  redaction residual gap (43.3); path-safety proptest (43.4); panic-path
+  elimination + no-op stub removal (43.5); `kf-rbac` wired into the daemon
+  (43.6); placeholder ADR triage 0011/0012/0018 (43.7); silent
+  error-handling triage (43.8); per-failure correction prompt guidance
+  (43.9); cross-session state policy (43.10); Landlock/seccomp graduation
+  decision (43.11); Windows test parity finish (43.12); 19 unimplemented
+  spec task triage (43.13); machine-greppable ADR predicate blocks
+  (43.15); content-hash consent binding for plugin trust (43.17);
+  abrupt-exit safety — line-mode SIGINT, audit flush, grep blocking
+  (43.18); TUI unicode-cursor fix + render-path test coverage (43.19).
 - **WO 43.21**: Done. Persistence crash-robustness. AuditLog per-entry
   flush+fsync (survives SIGKILL/panic-abort — the audit trail is now the
   MOST durable store, not the least). FileAuditSink torn-tail tolerance
@@ -24,20 +40,6 @@
   compress-core Lite no-op (43.36); verifier dead-queue + MCP leak (43.37);
   async blocking + glob redirection (43.38); bench markdown-delta rate
   (43.39).
-- **WO 43.1**: Done (ollama migrated to typed `AdapterError`; other adapters
-  deferred — see pending). Typed `AdapterError`
-  (Unreachable/ModelNotFound/Denied/Other) in `src/adapters/error.rs`;
-  ollama's `stream()` wraps via `classify_transport_error`;
-  `KirkForgeError::from` downcasts before string-probe fallback (fallback kept
-  for unmigrated adapters).
-- **WO 43.3**: Done. Audit-log redaction — `scrub_free_text` strips
-  credential-shaped `NAME=value` tokens + token literals (Bearer, sk-, ghp_,
-  AKIA, xox[bp]-) from bash command, plugin args, hook reason free-text
-  fields. Shares `SECRET_ENV_SUFFIXES`/`SECRET_ENV_EXACT` consts with
-  `bash_runner/mod.rs` (single source of truth).
-- **WO 43.4**: Done. Property-based tests for `kf-routing` path-safety
-  (proptest suite: traversal, absolute injection, no-panic, NFC/NFD, symlink
-  fixtures) covering 5 branches that had zero tests.
 - **WO 41.0-41.9**: ALL Done (series complete).
 - **WO 42.0-42.12**: ALL Done (series complete). 42.0 overview closed.
 - **WO 38.9**: items 1-6 all done (was 30%, now 100%). Closed.
@@ -58,15 +60,20 @@
   `send_with_retry(...).await?` call, then remove the `contains()` block in
   `error.rs:49-73` once all producers are typed. Tracked in
   [43.1](docs/workorders/43.1-typed-adapter-errors.md).
-- **WO 43.2, 43.5-43.17**: honest-assessment backlog (rounds 1-2), all Planned.
-  6 analysis agents verified every claim; ~11 stale claims corrected in-line.
-  Start at [43.0](docs/workorders/43.0-wo43-overview.md).
-- **WO 43.18-43.24**: round-3 fresh segment audit (concurrency/shutdown,
-  TUI, deps/size, persistence crash-robustness, adapter transport,
-  subprocess lifecycle, test quality). NEW findings — top risks: line-mode
-  Ctrl-C orphans bash children; audit BufWriter lost on panic-abort; no
-  PDEATHSIG (parent abort orphans all subprocesses); Bedrock `[DONE]`
-  injection bypasses truncation; headless_chrome ungated (~1-2 MB).
+- **WO 43.20**: Cancelled (deferred). Dependency and binary-size audit.
+  Deferred — the release profile (`opt-level = "z"` + `lto = true` +
+  `codegen-units = 1`) already optimizes for binary size; a full dep audit
+  remains desirable but is not blocking. Exact remaining work: enumerate
+  every dep's binary-size contribution, drop/replace the heaviest that are
+  not load-bearing, measure the delta. Tracked in
+  [43.20](docs/workorders/43.20-dep-size-audit.md).
+- **WO 43.22, 43.23, 43.24**: Still Planned (not implemented). Round-3 fresh
+  segment audit findings that did not get a fix branch: adapter
+  transport/streaming robustness residual (43.22 — Bedrock `[DONE]`
+  injection bypasses truncation); subprocess lifecycle — parent-death
+  orphans, MCP idle-kill, unguarded host-crate spawns (43.23); test
+  assertion-quality triage — assert-free, tautological, stale ignores
+  (43.24). Tracked in their WO files under `docs/workorders/`.
 - **WO 43.26 DEFERRED**: the bus-path blocking-on-async-worker concern
   (`dispatch.rs:185` holds `Mutex<VerifierBus>` while calling sync
   `verify()` → `PluginVerifier::run()` on the tokio worker, blocking it
@@ -113,12 +120,12 @@
 - `panic = "abort"` in release — panic hook (WO 38.2) restores terminal before abort. Keep abort (binary size); don't switch to unwind without measuring.
 - Budget guard wired in production (WO 38.8) — `set_budget_stores` + `set_stratum_store` called from `run_session.rs`. Listener registry is session-keyed `HashMap`, not the old append-only Vec.
 - Windows cross-compile gate in `scripts/ci-local.sh` — `cargo clippy --target x86_64-pc-windows-gnu` runs before every push. AGENTS.md §4 enforces it. This is the structural fix for the 25+ `fix(windows)` commit pattern.
-- WO drift test in `kf-budget-core/tests/adr_xref_drift.rs` — enforces WO file header ↔ README index agreement. Prevents future status drift. `wo_status_headers_match_readme_index` is one of its 5 checks.
+- WO drift test in `kf-budget-core/tests/adr_xref_drift.rs` — enforces WO file header ↔ README index agreement. Prevents future status drift. `wo_status_headers_match_readme_index` is one of its 6 checks.
 - `.config/nextest.toml` profiles: `ci-fast` (30s, fail-fast), `ci-full` (60s), `nightly` (600s). CI references by name, no inline `--config`. Per-test override for `run_bash_stuck_step_times_out` (60s budget — the 30s workflow step timeout exceeds the 30s ci-fast slow-timeout).
 
 ## CI / branch state
 
 - **CI: GREEN.** `cargo nextest run --profile ci-fast --workspace --lib --bins --locked`
-  → 4579 passed, 0 failed, 16 skipped. `cargo clippy --all-targets -- -D warnings`
-  clean. `cargo fmt --check` clean. `adr_xref_drift` 5/5 passed.
-- **main == dev** at SHA `7b19dca6`.
+  → 4644 passed, 0 failed, 16 skipped. `cargo clippy --all-targets -- -D warnings`
+  clean. `cargo fmt --check` clean. `adr_xref_drift` 6/6 passed.
+- **main == dev** at SHA `3093f0da`.

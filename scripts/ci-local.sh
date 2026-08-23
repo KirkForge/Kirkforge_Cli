@@ -67,6 +67,19 @@ run_step "Run Clippy" cargo clippy --all-targets -- -D warnings
 # Requires the x86_64-pc-windows-gnu rustup target + mingw-w64 (x86_64-w64-mingw32-gcc).
 run_step "Run Clippy (Windows cross-compile)" cargo clippy --target x86_64-pc-windows-gnu --workspace --all-targets -- -D warnings
 
+# WO 43.16 no-throw dispatch gate: reject new non-test `unwrap`/`expect`/
+# `panic!` in `src/session/executor/dispatch.rs`. The dispatch hub must
+# return Result/Failure outcomes, not panic. Lines inside the inline
+# `#[cfg(test)] mod tests` block (from its opening to EOF) are exempt.
+run_step "Dispatch no-throw grep gate" bash -c '
+    awk "
+        /^#\[cfg\(test\)\]/ { in_test=1 }
+        in_test { next }
+        /\.unwrap\(|\.expect\(|panic!\(/ { print FILENAME\":\"NR\":\"\$0; bad=1 }
+        END { exit bad+0 }
+    " src/session/executor/dispatch.rs
+'
+
 if [ "$MODE" != "quick" ]; then
     run_step "Build release binary" cargo build --release --locked
 

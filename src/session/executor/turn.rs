@@ -6,7 +6,8 @@ use crate::session::error_recovery::RetryTracker;
 use crate::session::hooks::HookRunner;
 use crate::shared::metrics::{record, MetricEvent, PlanDecisionKind};
 use crate::shared::{
-    read_shared_config, Config, Message, Role, StreamEvent, ToolInvocation, ToolOutcome,
+    read_shared_config, Config, Message, Role, StreamEvent, TokenUsage, ToolInvocation,
+    ToolOutcome,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -1145,53 +1146,88 @@ impl Executor {
                         );
                     }
 
-                    if let Some(ref u) = usage {
-                        let prompt = u.prompt_tokens.unwrap_or(0);
-                        let completion = u.completion_tokens.unwrap_or(0);
-                        let cached = u.cached_tokens.unwrap_or(0);
-                        // WO 38.5: config-driven [price_overrides] win over
-                        // the built-in table (longest prefix), so unmapped
-                        // models can be priced without a code change.
-                        let cost = {
-                            let cfg = read_shared_config(&self.config);
-                            let overrides = &cfg.model.price_overrides;
-                            crate::shared::calculate_cost_with_overrides(
-                                &self.model_name,
-                                u,
-                                if overrides.is_empty() {
-                                    None
-                                } else {
-                                    Some(overrides)
-                                },
-                            )
-                        };
-                        self.cost.usage.record_turn(prompt, completion, cost);
-                        crate::send_or_warn!(
-                            event_tx
-                                .send(TurnEvent::CostStats {
-                                    prompt_tokens: prompt,
-                                    completion_tokens: completion,
-                                    turn_cost: cost,
-                                    cumulative_cost: self.cost.usage.cumulative_cost,
-                                })
-                                .await,
-                            "TurnEvent receiver dropped; discarding event"
-                        );
-                        // Emit cache stats whenever the provider reports
-                        // cache-read tokens. The stem size is the stable
-                        // prefix the adapter should be reusing; a positive
-                        // cached count is the KV-cache hit verification.
-                        crate::send_or_warn!(
-                            event_tx
-                                .send(TurnEvent::CacheStats {
-                                    cached_tokens: cached,
-                                    prompt_tokens: prompt,
-                                    stem_tokens,
-                                })
-                                .await,
-                            "TurnEvent receiver dropped; discarding event"
-                        );
-                    }
+                    // WO 43.22: providers that omit usage entirely must
+                    // not silently read as zero-cost. Estimate from the
+                    // local token cache (WO 42.12): completion from the
+                    // assistant message just appended (append_async
+                    // populated its token_count), prompt from the
+                    // request preamble's per-message counts. Estimated
+                    // numbers ride the same CostStats/record_turn path
+                    // as real ones — CostStats carries plain counts
+                    // (same convention as CacheStats' estimated
+                    // stem_tokens); the log line is the estimated flag.
+                    let usage = match usage {
+                        Some(u) => u,
+                        None => {
+                            let prompt: usize = messages
+                                .iter()
+                                .map(crate::session::prompt::estimate_message_tokens)
+                                .sum();
+                            let completion = self
+                                .conversation
+                                .all()
+                                .last()
+                                .and_then(|m| m.token_count)
+                                .unwrap_or(0);
+                            tracing::info!(
+                                prompt,
+                                completion,
+                                "provider omitted usage; reporting estimated token counts"
+                            );
+                            TokenUsage {
+                                prompt_tokens: Some(prompt),
+                                completion_tokens: Some(completion),
+                                cached_tokens: None,
+                                cache_write_tokens: None,
+                            }
+                        }
+                    };
+                    let u = &usage;
+                    let prompt = u.prompt_tokens.unwrap_or(0);
+                    let completion = u.completion_tokens.unwrap_or(0);
+                    let cached = u.cached_tokens.unwrap_or(0);
+                    // WO 38.5: config-driven [price_overrides] win over
+                    // the built-in table (longest prefix), so unmapped
+                    // models can be priced without a code change.
+                    let cost = {
+                        let cfg = read_shared_config(&self.config);
+                        let overrides = &cfg.model.price_overrides;
+                        crate::shared::calculate_cost_with_overrides(
+                            &self.model_name,
+                            u,
+                            if overrides.is_empty() {
+                                None
+                            } else {
+                                Some(overrides)
+                            },
+                        )
+                    };
+                    self.cost.usage.record_turn(prompt, completion, cost);
+                    crate::send_or_warn!(
+                        event_tx
+                            .send(TurnEvent::CostStats {
+                                prompt_tokens: prompt,
+                                completion_tokens: completion,
+                                turn_cost: cost,
+                                cumulative_cost: self.cost.usage.cumulative_cost,
+                            })
+                            .await,
+                        "TurnEvent receiver dropped; discarding event"
+                    );
+                    // Emit cache stats whenever the provider reports
+                    // cache-read tokens. The stem size is the stable
+                    // prefix the adapter should be reusing; a positive
+                    // cached count is the KV-cache hit verification.
+                    crate::send_or_warn!(
+                        event_tx
+                            .send(TurnEvent::CacheStats {
+                                cached_tokens: cached,
+                                prompt_tokens: prompt,
+                                stem_tokens,
+                            })
+                            .await,
+                        "TurnEvent receiver dropped; discarding event"
+                    );
 
                     if !tool_calls_out.is_empty() {
                         for tc in tool_calls_out.iter() {

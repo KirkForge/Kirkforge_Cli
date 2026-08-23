@@ -4,6 +4,12 @@
 
 ## Shipped (closed this session)
 
+- **WO 43.26**: Done — workflow bash steps (`run_bash` + `run_batch` Bash arm)
+  now spawn with `kill_on_drop` + 30s step timeout + cancel-token select;
+  plugin-bus verifier timeout (WO 38.3 watchdog) pinned by a bus-wrapper
+  test. Premise that bus.rs had "NO timeout" was stale — the 5s killpg
+  watchdog lives in `kf-plugin-host/verifier.rs` (WO 38.3, in-branch);
+  the real gap was the workflow.rs spawns + the lack of a pinning test.
 - **WO 41.0-41.9**: ALL Done (series complete).
 - **WO 42.0-42.12**: ALL Done (series complete). 42.0 overview closed.
 - **WO 38.9**: items 1-6 all done (was 30%, now 100%). Closed.
@@ -37,8 +43,18 @@
   `KF_CODE_*` env overrides dead in production (43.32); context-index
   `retrieve()` smears unresolved edges → multi-MB prompts (43.34); pre-tool
   hook deny ineffective for file tools (43.30); workflow-bash/plugin-bus
-  subprocesses unguarded (43.26). See
+  subprocesses unguarded (43.26 — **43.26 Done this session**). See
   [43.0](docs/workorders/43.0-wo43-overview.md).
+- **WO 43.26 DEFERRED**: the bus-path blocking-on-async-worker concern
+  (`dispatch.rs:185` holds `Mutex<VerifierBus>` while calling sync
+  `verify()` → `PluginVerifier::run()` on the tokio worker, blocking it
+  up to 5s) is real but out of scope for 43.26. Fixing it requires either
+  an async `BusVerifier` trait (AGENTS.md §7 forbids the unification) or
+  a `spawn_blocking` per verifier inside `VerifierBus::run` (changes the
+  bus's sync contract + the `catch_unwind` resilience model). Remaining
+  work: decide the contract change, then either make `BusVerifier::verify`
+  async or wrap each verifier in `spawn_blocking` inside `VerifierBus::run`.
+  Tracked here (pending) — no separate WO yet.
 - **WO 39.4**: Claude compat phase 3 (hook stdin-JSON contract + generic
   pre/post-tool events). Deferred — lowest wild frequency of the artifact
   classes. Tracked in [39.4](docs/workorders/39.4-claude-compat-phase3.md).

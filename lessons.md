@@ -49,3 +49,39 @@
 - cargo tree --duplicates + reading feature lists found 1-2MB of wins in
   30 min (ungated headless_chrome, arboard image-data). Empty cargo
   features that gate nothing are free money.
+
+## Round 4 — WO 43.26 (workflow bash + plugin-bus verifier)
+
+- Premise drift caught before code: the task claimed PluginBusVerifier had
+  "NO timeout, NO kill_on_drop" but WO 38.3 (already in-branch) added a 5s
+  killpg watchdog inside `kf-plugin-host/verifier.rs::PluginVerifier::run`
+  itself. Verified via `git merge-base --is-ancestor 0ad1929e HEAD` AND by
+  reading the WO 43.23 file (which the 43.26 WO itself references) — 43.23
+  line 41-42 explicitly acknowledges "PluginVerifier has a 5s killpg
+  watchdog". The honest fix for bus.rs was a pinning test locking the
+  watchdog behavior at the wrapper level, NOT re-adding a timeout that
+  already exists. Re-implementing it would have either (a) wrapped a
+  bounded call in a second bound (harmless but redundant) or (b) required
+  changing the sync `BusVerifier` trait to async — explicitly forbidden
+  by AGENTS.md §7 ("Don't try to unify them in one pass").
+- The genuinely-unguarded path was workflow.rs `run_bash` + `run_batch`
+  Bash arm: `Command::output().await` with no kill_on_drop, no timeout,
+  no cancel. That's where the real fix landed.
+- Build throughput is the bottleneck on this machine: `cargo check --lib`
+  took 13min, `cargo nextest run --lib` took 6min, `cargo clippy
+  --all-targets` took 10min — because parallel worktrees (wo43.30 etc.)
+  were compiling concurrently (load avg 26, 12 rustc processes). Used
+  `nohup ... > /tmp/...log &` + `kill -0 <pid>` polling to avoid the
+  120s/300s/540s bash timeouts. The "no output" symptom on the timed-out
+  commands was misleading — the process was alive, just slow; the
+  shell_metadata timeout killed the wrapper, not the build.
+- nextest filter gotcha: `-- "a\|b\|c"` (shell-escaped pipe regex) matched
+  0 tests. nextest wants `-E 'test(/regex/)'` filter expressions, or
+  multiple positional regexes. Switched to `-E 'test(/workflow/)'` and
+  `-E 'test(/bus/)'` separately.
+- `adr_xref_drift` only enforces WO file header ↔ README index agreement
+  for WOs ALREADY IN the README index. Round-4 WOs (43.25-43.39) had files
+  but no README rows, so the drift test silently skipped them. Adding a
+  README row is what makes the "Done" status enforceable. The task's
+  explicit instruction to add the README row was load-bearing for the
+  drift guard, not cosmetic.

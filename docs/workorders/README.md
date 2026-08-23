@@ -868,7 +868,7 @@ tree, ~11 stale claims corrected in-line. See
 | 43.11 | [Landlock/seccomp sandbox graduation decision](43.11-os-sandbox-graduation.md) | Planned |
 | 43.12 | [Finish Windows test parity](43.12-windows-test-parity-finish.md) | Planned |
 | 43.13 | [Triage the 18 unimplemented spec tasks (TECHNICAL.md)](43.13-spec-task-triage.md) | Planned |
-| 43.14 | [cargo-mutants nightly gate (targeted modules)](43.14-mutation-testing.md) | Planned |
+| 43.14 | [cargo-mutants nightly gate (targeted modules)](43.14-mutation-testing.md) | Done |
 | 43.15 | [Machine-greppable ADR predicate blocks](43.15-machine-greppable-adrs.md) | Planned |
 | 43.16 | [No-throw dispatch hub (Result-typed)](43.16-no-throw-dispatch.md) | Planned |
 | 43.17 | [Content-hash consent binding for plugin trust](43.17-content-hash-consent.md) | Planned |

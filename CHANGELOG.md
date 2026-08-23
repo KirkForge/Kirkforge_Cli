@@ -35,6 +35,7 @@ why, and the gate evidence.
   transport, subprocess lifecycle, test quality (7 analysis agents).
 - docs: update stale WO statuses — 14 WOs marked Done (shipped but never updated): 14.6, 27.0-27.7, 28.6, 31.0, 32.3, 32.4, 33.0, 33.4, 33.9
 - WO 43.4: property-based tests for `kf-routing` path-safety — proptest suite (traversal, absolute injection, no-panic, NFC/NFD, symlink fixtures) covering 5 branches that had zero tests — [43.4](docs/workorders/43.4-path-safety-proptest.md)
+- WO 43.14: cargo-mutants nightly job for security-critical modules (path_safety, secret scrubbing, audit chain, sandbox) — informational baseline via `continue-on-error`; `scripts/run-mutants.sh` local wrapper; nightly-only per ADR-074 — [43.14](docs/workorders/43.14-mutation-testing.md)
 ### Performance
 - WO 38.9/42.6 items 4-6: memory mtime cache, CachedIndex embeddings in query path, prompt stem stability — [38.9](docs/workorders/38.9-session-performance.md), [42.6](docs/workorders/42.6-performance-items.md)
 

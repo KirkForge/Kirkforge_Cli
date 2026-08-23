@@ -6,8 +6,7 @@ use crate::session::error_recovery::RetryTracker;
 use crate::session::hooks::HookRunner;
 use crate::shared::metrics::{record, MetricEvent, PlanDecisionKind};
 use crate::shared::{
-    read_shared_config, Config, Message, Role, StreamEvent, TokenUsage, ToolInvocation,
-    ToolOutcome,
+    read_shared_config, Config, Message, Role, StreamEvent, TokenUsage, ToolInvocation, ToolOutcome,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;

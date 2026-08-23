@@ -436,7 +436,9 @@ mod tests {
             tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await
         {
             match ev {
-                StreamEvent::Done { finish_reason: fr, .. } => {
+                StreamEvent::Done {
+                    finish_reason: fr, ..
+                } => {
                     finish_reason = Some(fr);
                     break;
                 }
@@ -474,7 +476,9 @@ mod tests {
             tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await
         {
             match ev {
-                StreamEvent::Done { finish_reason: fr, .. } => {
+                StreamEvent::Done {
+                    finish_reason: fr, ..
+                } => {
                     finish_reason = Some(fr);
                     break;
                 }

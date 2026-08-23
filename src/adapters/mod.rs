@@ -88,6 +88,18 @@ pub(crate) fn should_retry_status(status: u16) -> bool {
 
 pub use crate::shared::retry_backoff;
 
+/// Sleep duration for a retryable HTTP status: the larger of the
+/// computed backoff and the server's `Retry-After` header (seconds
+/// form only — the HTTP-date form is ignored; gateways that rate-limit
+/// bots send seconds).
+pub(crate) fn retry_delay(retry_after: Option<&str>, attempt: u32) -> std::time::Duration {
+    let backoff = retry_backoff(attempt);
+    match retry_after.and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(secs) => backoff.max(std::time::Duration::from_secs(secs)),
+        None => backoff,
+    }
+}
+
 /// Send a model request with retries for transient failures.
 ///
 /// Retries up to `MODEL_MAX_RETRIES` times on:
@@ -134,7 +146,11 @@ where
                         status = s,
                         "model returned transient error, retrying"
                     );
-                    tokio::time::sleep(retry_backoff(attempt)).await;
+                    let retry_after = r
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok());
+                    tokio::time::sleep(retry_delay(retry_after, attempt)).await;
                 } else {
                     return Ok(r.error_for_status()?);
                 }
@@ -986,6 +1002,29 @@ mod tests {
         assert!(!should_retry_status(403));
         assert!(!should_retry_status(404));
         assert!(!should_retry_status(422));
+    }
+
+    /// WO 43.22: Retry-After (seconds form) wins over the computed
+    /// backoff when it asks for a longer wait; a shorter or absent/
+    /// unparseable header falls back to the computed backoff.
+    #[test]
+    fn retry_delay_honors_retry_after_over_computed_backoff() {
+        let backoff = retry_backoff(1);
+
+        // Header asks for longer than the backoff → header wins.
+        assert_eq!(
+            retry_delay(Some("30"), 1),
+            std::time::Duration::from_secs(30)
+        );
+
+        // Header shorter than the backoff → backoff wins.
+        assert_eq!(retry_delay(Some("0"), 1), backoff);
+        assert_eq!(retry_delay(Some("2"), 3), retry_backoff(3));
+
+        // Absent / non-seconds forms → computed backoff.
+        assert_eq!(retry_delay(None, 1), backoff);
+        assert_eq!(retry_delay(Some("Wed, 21 Oct 2015 07:28:00 GMT"), 1), backoff);
+        assert_eq!(retry_delay(Some("garbage"), 1), backoff);
     }
 
     #[test]

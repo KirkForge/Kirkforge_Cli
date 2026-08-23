@@ -212,6 +212,14 @@ impl AuditLog {
             if let Some(ref mut w) = *guard {
                 if let Err(e) = writeln!(w, "{line}") {
                     tracing::warn!(error = %e, "failed to write audit entry");
+                    return;
+                }
+                // Flush after each entry so the audit trail survives abrupt
+                // exits (panic=abort skips Drop, SIGKILL skips everything).
+                // Audit writes are low-frequency (one line per destructive
+                // call); per-entry flush is the whole fix for buffer loss.
+                if let Err(e) = w.flush() {
+                    tracing::warn!(error = %e, "failed to flush audit entry");
                 }
             }
         }
@@ -1009,6 +1017,44 @@ mod tests {
             );
         }
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WO 43.18: an audit entry must be readable on disk immediately after
+    /// `write_entry` returns — no Drop needed. Release uses `panic = "abort"`
+    /// so Drop never runs; the per-entry flush is the whole fix for the
+    /// ≤8KB buffer that abrupt exits used to lose.
+    #[test]
+    fn audit_entry_flushed_before_drop() {
+        let dir = std::env::temp_dir().join(format!(
+            "kf_code_audit_flush_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("audit.ndjson");
+
+        let log = AuditLog::new(Some(path.clone()));
+        log.log_destructive("write_file", &serde_json::json!({"path": "/x"}), true, None);
+
+        // Read WITHOUT dropping `log` — the entry must already be on disk.
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !contents.trim().is_empty(),
+            "audit entry must be flushed before Drop, got empty file"
+        );
+        let entry: AuditEntry = serde_json::from_str(contents.trim()).unwrap();
+        assert!(
+            matches!(entry, AuditEntry::Tool { ref tool, .. } if tool == "write_file"),
+            "expected Tool/write_file, got {entry:?}"
+        );
+
+        // Keep `log` alive until here to prove Drop was not the flush path.
+        drop(log);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

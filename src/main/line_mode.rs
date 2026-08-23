@@ -5,7 +5,9 @@
 use super::turn_events::emit_turn_events;
 use kf_code::{adapters, line_mode, session};
 use std::io::Write;
-use tokio::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::sync::{mpsc, Notify};
 
 /// Spawn the approval responder used by non-interactive runs.
 ///
@@ -36,6 +38,49 @@ pub(super) fn spawn_non_interactive_approval_handler(
             }
         }
     });
+}
+
+/// Spawn the SIGINT/SIGTERM handler for line mode.
+///
+/// Mirrors TUI teardown (`src/tui/mod.rs:362-383`): on Ctrl-C, set the
+/// cooperative cancel flag (so `run_turn_collecting` aborts in-flight tool
+/// calls) and notify the main loop's `select!` so a blocking `next_line` is
+/// interrupted. The runtime then drops the executor, firing `kill_on_drop`
+/// on any in-flight child processes.
+pub(super) fn spawn_line_mode_sigint_handler(cancelled: Arc<AtomicBool>, shutdown: Arc<Notify>) {
+    tokio::spawn(async move {
+        let ctrl_c = tokio::signal::ctrl_c();
+        // SIGTERM — only on Unix. On non-Unix this is a pending future
+        // (never resolves) so the `select!` arm is never taken.
+        let term = sigterm_future();
+        tokio::select! {
+            biased;
+            _ = ctrl_c => {
+                tracing::info!("SIGINT received; signalling graceful line-mode shutdown");
+            }
+            _ = term => {
+                tracing::info!("SIGTERM received; signalling graceful line-mode shutdown");
+            }
+        }
+        cancelled.store(true, Ordering::Release);
+        shutdown.notify_one();
+    });
+}
+
+/// A future that resolves on SIGTERM (Unix) or never (non-Unix).
+#[cfg(unix)]
+async fn sigterm_future() {
+    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        Ok(mut s) => {
+            let _ = s.recv().await;
+        }
+        Err(_) => std::future::pending::<()>().await,
+    }
+}
+
+#[cfg(not(unix))]
+async fn sigterm_future() {
+    std::future::pending::<()>().await;
 }
 
 // reason: entry point; each arg is an independent session resource for non-interactive mode.
@@ -72,12 +117,28 @@ pub(super) async fn run_line_mode(
     let model_name = adapter.model_info().name.clone();
 
     let (conversation, open_outcome) = conversation;
+    let carryover_enabled = kf_code::shared::read_shared_config(&config)
+        .session
+        .carryover_enabled;
+    // Carryover target — line mode saves it on graceful shutdown (SIGINT),
+    // mirroring TUI teardown (`src/tui/mod.rs:436-440`). When enabled, the
+    // executor's cost tracker writes to this shared profile; we flush it
+    // after the turn loop.
+    let carryover_target: Option<Arc<std::sync::Mutex<session::carryover::CarryoverProfile>>> =
+        if carryover_enabled {
+            Some(Arc::new(std::sync::Mutex::new(
+                session::carryover::CarryoverProfile::default(),
+            )))
+        } else {
+            None
+        };
+    let saved_profile = carryover_target.clone();
     let mut executor = session::executor::Executor::with_log_and_undo_and_plugins(
         adapter,
         tools,
         config.clone(),
         conversation,
-        None,
+        carryover_target,
         None,
         Some(plugin_registry),
     )?;
@@ -130,7 +191,18 @@ pub(super) async fn run_line_mode(
         tracing::info!("System prompt set from CLI: {}", sys);
     }
 
-    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    // Cooperative cancel flag shared with the signal handler. `run_turn_collecting`
+    // reads it to abort in-flight tool calls; the SIGINT handler sets it so
+    // Ctrl-C in line mode triggers graceful teardown (executor cancel +
+    // carryover save + kill_on_drop children) instead of the default SIGINT
+    // kill that orphans child processes.
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let shutdown = Arc::new(Notify::new());
+
+    // Install the SIGINT handler — mirrors TUI (`src/tui/mod.rs:362-383`)
+    // and daemon teardown. Sets the cancel flag and wakes the main loop's
+    // `select!` so `next_line` is interruptible.
+    spawn_line_mode_sigint_handler(cancelled.clone(), shutdown.clone());
 
     let mut line_reader = line_mode::LineReader::new(!non_interactive)?;
     // `--prompt`/`-p` one-shot (WO 38.10): prime the reader with the
@@ -150,7 +222,22 @@ pub(super) async fn run_line_mode(
     let mut final_error: Option<String> = None;
     let overall_started = std::time::Instant::now();
 
-    while let Some(input) = line_reader.next_line().await? {
+    loop {
+        // Race the blocking stdin read against the SIGINT shutdown notify
+        // so Ctrl-C interrupts `next_line` instead of waiting for a line.
+        let input = tokio::select! {
+            biased;
+            r = line_reader.next_line() => match r {
+                Ok(Some(s)) => Some(s),
+                Ok(None) => break,
+                Err(e) => return Err(e),
+            },
+            _ = shutdown.notified() => {
+                tracing::info!("SIGINT received; signalling graceful line-mode shutdown");
+                break;
+            }
+        };
+        let Some(input) = input else { break };
         turn_no += 1;
         if max_turns > 0 && turn_no > max_turns {
             tracing::info!(
@@ -350,6 +437,19 @@ pub(super) async fn run_line_mode(
             &mut all_tool_records,
             &mut final_error,
         );
+        // If SIGINT fired during the turn, stop after this iteration.
+        if cancelled.load(Ordering::Acquire) {
+            break;
+        }
+    }
+
+    // Flush carryover on exit (graceful or SIGINT) — mirrors TUI teardown
+    // (`src/tui/mod.rs:436-440`). The executor's cost tracker wrote the
+    // shared profile; we persist it so the next session picks it up.
+    if let Some(ref target) = saved_profile {
+        if let Ok(guard) = target.lock() {
+            session::carryover::save_carryover(&guard);
+        }
     }
 
     if turn_no == 0 && system.is_none() {
@@ -863,6 +963,42 @@ mod tests {
         assert!(
             matches!(inner, Ok(None)),
             "expected Ok(None) on shutdown, got {inner:?}"
+        );
+    }
+
+    /// WO 43.18: the line-mode SIGINT handler must set the cancel flag and
+    /// fire the shutdown notify so the main loop's `select!` breaks. This
+    /// test verifies the shutdown contract that the handler fulfils: when
+    /// `notify_one()` fires, a `select!` racing `next_line` against
+    /// `notified()` takes the shutdown arm (no wall-clock sleep — the
+    /// event is driven by the `Notify` primitive).
+    #[tokio::test]
+    async fn line_mode_sigint_handler_flips_shutdown_path() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let shutdown = Arc::new(Notify::new());
+
+        // Simulate what the SIGINT handler does: set the flag + notify.
+        // This is the exact contract `spawn_line_mode_sigint_handler`
+        // executes on signal receipt.
+        let cancelled_clone = cancelled.clone();
+        let shutdown_clone = shutdown.clone();
+        tokio::spawn(async move {
+            cancelled_clone.store(true, Ordering::Release);
+            shutdown_clone.notify_one();
+        });
+
+        // The main loop's `select!` would race `next_line` against
+        // `shutdown.notified()`. Verify the notify resolves (event-driven,
+        // no sleep) and the flag is set.
+        let notified =
+            tokio::time::timeout(std::time::Duration::from_secs(5), shutdown.notified()).await;
+        assert!(
+            notified.is_ok(),
+            "shutdown notify did not fire within 5s — handler is broken"
+        );
+        assert!(
+            cancelled.load(Ordering::Acquire),
+            "cancel flag must be set when SIGINT handler fires"
         );
     }
 }

@@ -872,7 +872,7 @@ tree, ~11 stale claims corrected in-line. See
 | 43.15 | [Machine-greppable ADR predicate blocks](43.15-machine-greppable-adrs.md) | Done |
 | 43.16 | [No-throw dispatch hub (Result-typed)](43.16-no-throw-dispatch.md) | Planned |
 | 43.17 | [Content-hash consent binding for plugin trust](43.17-content-hash-consent.md) | Done |
-| 43.18 | [Abrupt-exit safety: line-mode SIGINT, audit flush, grep blocking](43.18-concurrency-shutdown-safety.md) | Planned |
+| 43.18 | [Abrupt-exit safety: line-mode SIGINT, audit flush, grep blocking](43.18-concurrency-shutdown-safety.md) | Done |
 | 43.19 | [TUI unicode-cursor fix + render-path test coverage](43.19-tui-panic-hardening.md) | Planned |
 | 43.20 | [Dependency and binary-size audit](43.20-dep-size-audit.md) | Planned |
 | 43.21 | [Persistence crash-robustness: audit flush policy, torn-tail tolerance, atomic cache writes](43.21-persistence-crash-robustness.md) | Planned |

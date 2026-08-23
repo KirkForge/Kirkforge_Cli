@@ -204,6 +204,13 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
                                     }
                                 }
                                 _ => {
+                                    // Intentional silent drop (WO 43.22
+                                    // disclosure): unknown event types —
+                                    // ping, content_block variants we
+                                    // don't decode, future server
+                                    // additions — carry no executor-
+                                    // relevant payload. Logged at debug
+                                    // only; nothing is escalated.
                                     tracing::debug!(event_type, "unknown SSE event type");
                                 }
                             }

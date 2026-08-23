@@ -1029,14 +1029,21 @@ pub use crate::cli::OutputFormat;
 
 /// Compute the backoff for retry `attempt` (1-indexed).
 ///
-/// Uses exponential backoff starting at 1 s with a small deterministic
-/// jitter (up to 250 ms per attempt, capped at 1 s). The jitter is
-/// computed from the attempt number rather than a random source so tests
-/// are stable and no new dependency is required.
+/// Exponential backoff starting at 1 s with a small capped jitter. The
+/// jitter is derived from wall-clock nanos (WO 43.22) so parallel
+/// subagents hitting a shared gateway don't retry in synchronized waves;
+/// the cap (250 ms per attempt, 1 s overall) keeps every attempt within
+/// [base, base + cap] and the doubling base keeps the ladder monotonic.
+/// No new dependency — `SystemTime` nanos stand in for an RNG.
 pub fn retry_backoff(attempt: u32) -> std::time::Duration {
     let shift = (attempt - 1).min(63);
     let base_s = 1u64 << shift;
-    let jitter_ms = (attempt as u64).saturating_mul(250).min(1000);
+    let cap_ms = (attempt as u64).saturating_mul(250).min(1000);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    let jitter_ms = nanos % cap_ms;
     std::time::Duration::from_millis(base_s.saturating_mul(1000).saturating_add(jitter_ms))
 }
 
@@ -1095,5 +1102,21 @@ mod backoff_tests {
         assert!(b3 <= std::time::Duration::from_millis(5000));
 
         assert!(b3 > b2 && b2 > b1);
+    }
+
+    /// WO 43.22: jitter must vary across calls (and therefore across
+    /// processes/seeds) so parallel subagents don't retry in lockstep.
+    /// Repeated calls within the same nanos residue are possible on a
+    /// coarse clock, so sample enough calls to cross a clock tick.
+    #[test]
+    fn backoff_jitter_varies_across_calls() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            seen.insert(retry_backoff(1).as_millis());
+        }
+        assert!(
+            seen.len() > 1,
+            "jitter must vary across calls, got a single value {seen:?}"
+        );
     }
 }

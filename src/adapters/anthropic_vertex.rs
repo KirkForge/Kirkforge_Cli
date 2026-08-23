@@ -33,6 +33,11 @@ pub struct AnthropicVertexAdapter {
     extended_thinking: bool,
     budget_tokens: usize,
     stream_idle_timeout: std::time::Duration,
+    /// Cached OAuth token (WO 43.22): fetched once and reused across
+    /// stream() calls until near expiry, instead of one roundtrip per
+    /// turn. Mutex (not RwLock) so a stampede of concurrent streams
+    /// coalesces into a single fetch.
+    token_cache: tokio::sync::Mutex<Option<yup_oauth2::AccessToken>>,
 }
 
 impl AnthropicVertexAdapter {
@@ -56,6 +61,7 @@ impl AnthropicVertexAdapter {
             extended_thinking: true,
             budget_tokens: 10_000,
             stream_idle_timeout: super::STREAM_IDLE_TIMEOUT,
+            token_cache: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -66,13 +72,31 @@ impl AnthropicVertexAdapter {
         )
     }
 
-    /// Obtain a short-lived access token for the configured service account.
-    async fn access_token(&self) -> anyhow::Result<String> {
-        super::vertex_auth::service_account_token(
+    /// Obtain a short-lived access token for the configured service
+    /// account, cached until near expiry (WO 43.22).
+    /// `AccessToken::is_expired` already applies a 1-minute safety
+    /// margin. ceiling: a token whose server sent no expiry is cached
+    /// for the adapter's lifetime — GCP always sends expires_in.
+    async fn cached_access_token(&self) -> anyhow::Result<String> {
+        let mut cache = self.token_cache.lock().await;
+        if let Some(t) = cache.as_ref() {
+            if !t.is_expired() {
+                if let Some(s) = t.token() {
+                    return Ok(s.to_string());
+                }
+            }
+        }
+        let token = super::vertex_auth::service_account_token(
             self.service_account_path.as_deref(),
             &["https://www.googleapis.com/auth/cloud-platform"],
         )
-        .await
+        .await?;
+        let s = token
+            .token()
+            .ok_or_else(|| anyhow::anyhow!("service account token endpoint returned None"))?
+            .to_string();
+        *cache = Some(token);
+        Ok(s)
     }
 }
 
@@ -124,7 +148,7 @@ impl ModelAdapter for AnthropicVertexAdapter {
             None,
         );
         let url = self.endpoint();
-        let token = self.access_token().await?;
+        let token = self.cached_access_token().await?;
 
         let response = super::send_with_retry(|| async {
             self.client

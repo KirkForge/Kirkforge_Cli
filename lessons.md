@@ -143,3 +143,22 @@
   test: skips Drop without aborting the process, so assertions can run
   after. The test verifies the per-entry flush landed on disk without
   relying on the Drop-based flush.
+
+## WO 43.22 (adapter transport robustness)
+
+- Two `build_reqwest_client` fns exist: `src/adapters/mod.rs:67` (model
+  adapters — the one WO 43.22 scopes) and `src/shared/mod.rs:14` (MCP
+  etc., takes Option<Duration>). Don't conflate them.
+- `retry_backoff` jitter is now wall-clock seeded — any test comparing
+  two samples for equality will flake. Compare bounds (shipped that bug
+  in b7ca2da2, fixed in caed29b5).
+- yup-oauth2 12.x `AccessToken` exposes `is_expired()` with a built-in
+  1-minute margin — enough for a token cache without parsing expiry.
+- ci-fast (30s terminate-after=1) + box load ~21/8 cores = timing
+  flakes in `tools::edit_file` roundtrips (27-31s each in isolation)
+  and `attached_cancel_token_kills_inflight_bash_promptly` (12s iso).
+  Both pass in isolation; wait for load < ~13 before judging a red run.
+- detect_changes works from the MCP server's main checkout with the
+  `worktree` param + `scope: compare, base_ref: <merge-base>`.
+- worktree prompt overrides repo AGENTS cadence where they conflict
+  (CHANGELOG/state.md/README forbidden; coordinator owns them).

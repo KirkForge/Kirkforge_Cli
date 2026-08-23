@@ -190,6 +190,15 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                                 continue;
                             }
 
+                            // Frames with no `choices` AND no `usage`
+                            // (keep-alives, the role-only first delta
+                            // some servers emit, unknown future fields)
+                            // are intentionally dropped here: there is
+                            // no text, tool, or accounting payload to
+                            // extract (WO 43.22 disclosure). Frames that
+                            // DO carry usage but empty choices fall
+                            // through to the usage merge below — that is
+                            // the include_usage frame, not a drop.
                             let choice = json
                                 .get("choices")
                                 .and_then(|c| c.as_array())

@@ -23,7 +23,8 @@ extern "C" {
 const SIGKILL: i32 = 9;
 
 /// Put the child into a new process group so a later signal can reach all
-/// descendants.
+/// descendants. On Linux the child also requests `PR_SET_PDEATHSIG`, so it
+/// dies with the parent even when the parent aborts or is SIGKILLed.
 ///
 /// On non-Unix targets this is a no-op: there is no process group concept
 /// available through `std::process`, so callers fall back to killing the
@@ -37,6 +38,14 @@ pub fn setup_process_group(cmd: &mut Command) {
             #[allow(unused_must_use)]
             {
                 setpgid(0, 0);
+                // WO 43.23: `panic = "abort"` and SIGKILL run no Drop, so
+                // PDEATHSIG is the only mechanism that kills children when
+                // the parent dies; every subsystem spawning through this
+                // helper inherits the coverage.
+                #[cfg(target_os = "linux")]
+                {
+                    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                }
             }
             Ok(())
         });
@@ -155,5 +164,79 @@ mod tests {
         let mut cmd = tokio::process::Command::new("cmd");
         setup_process_group(&mut cmd);
         // No-op; should not panic.
+    }
+
+    // ── WO 43.23: PR_SET_PDEATHSIG ──
+    //
+    // The "parent" is a re-exec of this test binary running only the
+    // ignored helper test below; it spawns a sleep through
+    // setup_process_group, publishes the child pid, then aborts — the
+    // no-Drop death path PDEATHSIG must cover. Polls kill(pid, 0) until
+    // ESRCH: event-driven, no fixed sleeps.
+    #[cfg(all(unix, target_os = "linux"))]
+    #[test]
+    fn child_dies_when_parent_aborts() {
+        let pidfile = std::env::temp_dir().join(format!(
+            "kf-pdeathsig-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let exe = std::env::current_exe().expect("current exe");
+        let out = std::process::Command::new(exe)
+            .arg("--ignored")
+            // Substring filter, not --exact: module_path!() carries the
+            // crate prefix, which libtest's exact matcher rejects.
+            .arg("pdeathsig_helper")
+            .env("KF_PDEATHSIG_PIDFILE", &pidfile)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("helper should run");
+        assert!(
+            matches!(out.status.code(), None | Some(134)),
+            "helper should have aborted (SIGABRT), got {:?}; stdout: {} stderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let pid: i32 = std::fs::read_to_string(&pidfile)
+            .expect("helper should have written the pidfile")
+            .trim()
+            .parse()
+            .expect("pidfile should contain a pid");
+        std::fs::remove_file(&pidfile).ok();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let rc = unsafe { libc::kill(pid, 0) };
+            let gone = rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(3); // ESRCH
+            if gone {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child {pid} survived parent abort (PDEATHSIG not applied?)"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
+    // Helper half of child_dies_when_parent_aborts. Ignored in normal
+    // runs (ci-fast skips #[ignore]); driven with --exact --ignored by
+    // the test above.
+    #[cfg(all(unix, target_os = "linux"))]
+    #[tokio::test]
+    #[ignore = "driven by child_dies_when_parent_aborts"]
+    async fn pdeathsig_helper() {
+        let pidfile = std::env::var("KF_PDEATHSIG_PIDFILE").expect("pidfile env");
+        let mut cmd = tokio::process::Command::new("sleep");
+        cmd.arg("30");
+        setup_process_group(&mut cmd);
+        let child = cmd.spawn().expect("spawn sleep");
+        let pid = child.id().expect("child pid");
+        std::fs::write(&pidfile, pid.to_string()).expect("write pidfile");
+        std::process::abort();
     }
 }

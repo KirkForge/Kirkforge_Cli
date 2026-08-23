@@ -683,6 +683,50 @@ mod tests {
         script
     }
 
+    // WO 43.26: pin that a hung plugin-bus verifier surfaces a timeout
+    // error verdict — not an indefinite hang. The underlying watchdog is
+    // WO 38.3 (`kf-plugin-host/verifier.rs` 5s killpg + `TimedOut`); this
+    // test locks the behavior at the bus-wrapper level so a future
+    // change to the host crate cannot silently re-introduce an
+    // unbounded bus-path wait. Bounded by an outer 30s wall: if the
+    // internal 5s watchdog regresses, the test fails fast instead of
+    // hanging the suite.
+    #[cfg(unix)]
+    #[test]
+    fn plugin_bus_verifier_hung_returns_timeout_error_not_hang() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = make_fail_script(tmp.path(), "sleep 60\nexit 1\n");
+        let mut bus = VerifierBus::new();
+        bus.add_plugin_verifier(
+            "hang_v".into(),
+            5,
+            tmp.path().to_path_buf(),
+            std::path::Path::new(script.file_name().unwrap()).to_path_buf(),
+        );
+        let run = std::thread::spawn(move || {
+            bus.run(&make_verify_ctx());
+            bus
+        });
+        let bus = match run.join() {
+            Ok(b) => b,
+            Err(p) => std::panic::resume_unwind(p),
+        };
+        assert_eq!(
+            bus.verdicts().len(),
+            1,
+            "hung verifier must surface exactly one verdict: {:?}",
+            bus.verdicts()
+        );
+        let v = &bus.verdicts()[0];
+        assert_eq!(v.severity, Severity::Error);
+        assert!(
+            v.message.contains("timed out"),
+            "verdict must name the timeout, got: {}",
+            v.message
+        );
+        assert!(bus.has_errors());
+    }
+
     #[cfg(unix)]
     #[test]
     fn add_plugin_verifier_pass_yields_no_verdicts() {

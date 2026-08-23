@@ -870,15 +870,22 @@ impl AppState {
     /// handler (WO 32.12). `line` and `col` are logical (not visual/wrapped)
     /// char indices into the input string.
     pub fn set_cursor_line_col(&mut self, line: usize, col: usize) {
+        // `cursor_position` is a CHAR index everywhere (cursor_byte:808,
+        // keys:1299, apply_paste:839). The previous impl used
+        // `char_indices()` which yields BYTE offsets, so a multibyte char
+        // on an earlier line made `char_idx` exceed the char index and
+        // the cursor landed wrong (clamped to end). Count chars, not
+        // bytes (WO 43.19).
         let input = &self.conversation.input;
         let mut current_line = 0usize;
-        for (char_idx, c) in input.char_indices() {
+        for (char_offset, c) in input.chars().enumerate() {
             if current_line == line {
-                let line_rest: String = input[char_idx..]
+                let line_chars = input
                     .chars()
+                    .skip(char_offset)
                     .take_while(|c2| *c2 != '\n')
-                    .collect();
-                self.conversation.cursor_position = char_idx + col.min(line_rest.chars().count());
+                    .count();
+                self.conversation.cursor_position = char_offset + col.min(line_chars);
                 return;
             }
             if c == '\n' {

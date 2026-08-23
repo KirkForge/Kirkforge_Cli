@@ -1189,4 +1189,153 @@ mod tests {
             .expect("rule line present");
         assert_eq!(rule_line.spans[0].content.chars().count(), 30);
     }
+
+    // ── format.rs direct unit tests (WO 43.19) ───────────────────────
+    //
+    // `format_duration`, `format_token_count`, and the budget indicator
+    // are pure (primitive in, String/Color out). The indicator had
+    // indirect coverage via the selftest budget scenario; the two
+    // string formatters had NO direct tests. These pin their exact
+    // output so a future refactor can't silently shift the format.
+
+    #[test]
+    fn format_duration_seconds_under_60() {
+        assert_eq!(format_duration(0.0), "0.0s");
+        assert_eq!(format_duration(5.0), "5.0s");
+        assert_eq!(format_duration(59.9), "59.9s");
+    }
+
+    #[test]
+    fn format_duration_minutes_under_60() {
+        assert_eq!(format_duration(60.0), "1m 0s");
+        assert_eq!(format_duration(125.0), "2m 5s");
+        // Exact minute boundaries avoid the {:.0} rounding edge case
+        // (e.g. 3590/60=59.83 rounds to 60m). 1800s = 30m 0s exactly.
+        assert_eq!(format_duration(1800.0), "30m 0s");
+    }
+
+    #[test]
+    fn format_duration_hours() {
+        assert_eq!(format_duration(3600.0), "1h 0m");
+        assert_eq!(format_duration(3660.0), "1h 1m");
+        assert_eq!(format_duration(7325.0), "2h 2m");
+    }
+
+    #[test]
+    fn format_token_count_under_1000_is_plain() {
+        assert_eq!(format_token_count(0), "0");
+        assert_eq!(format_token_count(999), "999");
+    }
+
+    #[test]
+    fn format_token_count_1000_plus_is_k() {
+        assert_eq!(format_token_count(1000), "1.0K");
+        assert_eq!(format_token_count(12_345), "12.3K");
+        assert_eq!(format_token_count(128_000), "128.0K");
+    }
+
+    #[test]
+    fn format_budget_indicator_zero_max_returns_plain_count() {
+        let (text, _) = format_budget_indicator(500, 0, &default_theme());
+        assert_eq!(text, "500");
+    }
+
+    #[test]
+    fn format_budget_indicator_clamps_above_100_pct() {
+        // used > max can happen after a tool cap pushes past the model's
+        // advertised context; the helper must clamp to 100%, not panic.
+        let (text, _) = format_budget_indicator(200_000, 100_000, &default_theme());
+        assert_eq!(text, "200.0K/100.0K (100%)");
+    }
+
+    #[test]
+    fn budget_pct_none_when_max_zero() {
+        assert_eq!(budget_pct(0, 0), None);
+        assert_eq!(budget_pct(500, 0), None);
+    }
+
+    #[test]
+    fn budget_pct_computes_and_clamps() {
+        assert_eq!(budget_pct(0, 100), Some(0));
+        assert_eq!(budget_pct(50, 100), Some(50));
+        assert_eq!(budget_pct(50, 200), Some(25));
+        // 150/100 → 150, clamped to 100.
+        assert_eq!(budget_pct(150, 100), Some(100));
+    }
+
+    // ── table.rs direct unit tests (WO 43.19) ────────────────────────
+    //
+    // `render_table` was only covered indirectly through the markdown
+    // renderer. These call it directly with a hand-built `TableState`
+    // to pin the grid layout: header bold, separator after header, and
+    // per-column truncation with ellipsis.
+
+    fn build_table(rows: Vec<Vec<String>>) -> TableState {
+        let mut st = TableState {
+            alignments: vec![
+                pulldown_cmark::Alignment::None,
+                pulldown_cmark::Alignment::None,
+            ],
+            ..Default::default()
+        };
+        for row in rows {
+            for cell in row {
+                st.start_cell();
+                st.current_cell.push_str(&cell);
+                st.end_cell();
+            }
+            st.end_row();
+        }
+        st
+    }
+
+    #[test]
+    fn render_table_empty_rows_returns_empty() {
+        let lines = render_table(TableState::default(), "", 80, &default_theme());
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn render_table_header_is_bold_and_separator_follows() {
+        let st = build_table(vec![
+            vec!["Name".into(), "Value".into()],
+            vec!["a".into(), "b".into()],
+        ]);
+        let lines = render_table(st, "", 80, &default_theme());
+        // header + separator + 1 data row.
+        assert_eq!(lines.len(), 3);
+        // Header spans must be bold.
+        let header = &lines[0];
+        assert!(
+            header
+                .spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::BOLD)),
+            "header row should contain a bold span"
+        );
+        // Separator is all dashes and pipes, no other chars.
+        let sep = &lines[1];
+        let sep_text: String = sep.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            sep_text.chars().all(|c| c == '-' || c == '|'),
+            "separator should be only '-' and '|', got: {sep_text:?}"
+        );
+    }
+
+    #[test]
+    fn render_table_truncates_long_cell_with_ellipsis() {
+        // Narrow width forces truncation. min_col=3, max_col derived;
+        // a 30-char cell must be cut to max_col-1 chars + '…'.
+        let st = build_table(vec![
+            vec!["Name".into(), "Value".into()],
+            vec!["a".into(), "x".repeat(30)],
+        ]);
+        let lines = render_table(st, "", 12, &default_theme());
+        let data_row = &lines[2];
+        let row_text: String = data_row.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            row_text.contains('…'),
+            "long cell must be truncated with ellipsis, got: {row_text:?}"
+        );
+    }
 }

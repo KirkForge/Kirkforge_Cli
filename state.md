@@ -4,6 +4,13 @@
 
 ## Shipped (closed this session)
 
+- **WO 43.12**: Done. Windows test parity finish — added `--doc` step to
+  ci-merge.yml windows job (mirror of Linux :186); audited 205 `cfg(unix)`
+  occurrences / 90 `#[cfg(unix)]`-gated test fns, ungated 8 platform-agnostic
+  tests (TUI path-completion, symlink_swap_denied non-symlink cases,
+  drain_capped Cursor tests). 82 stay Unix-only (Unix API, bash scripts,
+  setrlimit, process groups, UnixStream, module-gated, subprocess-dependent).
+  No PR-tier windows job (ADR-074 tier). Pushed to wo/wo43.12 (f7a0e035).
 - **WO 43.25-43.39**: ALL Done (15 workorders, round-4 full-coverage segment
   sweep). UTF-8 byte-slice panic hardening (43.25); unguarded subprocess
   spawns (43.26); atomic-write permissions + undo ordering (43.27);

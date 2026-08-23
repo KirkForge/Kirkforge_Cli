@@ -397,9 +397,9 @@ async fn verify_accepts_es256_token_local_jwks() {
 /// dependency (manual JWK→verifying-key + DER signature decode) or a fuller
 /// JOSE crate. Both inflate the release binary for an alg with zero
 /// production consumers, so the gap is deferred until an operator
-/// requests ES512. Tracked in WO 32.10 / state.md pending.
+/// requests ES512. Tracked in state.md pending (WO 32.10 is closed).
 #[tokio::test]
-#[ignore = "ES512 verifier not implemented — needs p521 non-dev dep; tracked in WO 32.10"]
+#[ignore = "ES512 verifier not implemented — needs p521 non-dev dep; tracked in state.md pending"]
 async fn es512_verifier_gap_is_documented() {
     clear_jwks_cache();
     let jwk = json!({

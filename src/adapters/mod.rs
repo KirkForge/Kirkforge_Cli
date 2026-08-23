@@ -1700,9 +1700,45 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_reqwest_client_returns_a_client() {
-        let _client = build_reqwest_client();
+    /// `reqwest::Client` exposes no getters for builder settings (timeouts,
+    /// tcp_nodelay), so the observable contract is behavioral: the built
+    /// client completes a request/response round trip over loopback HTTP.
+    /// ponytail: no config-accessor asserts exist upstream; upgrade path is
+    /// asserting connect_timeout once WO 43.22's builder change lands.
+    #[tokio::test]
+    async fn build_reqwest_client_returns_a_working_client() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().unwrap();
+
+        let serve = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.expect("accept");
+            let mut buf = [0u8; 1024];
+            let n = sock.read(&mut buf).await.expect("read request");
+            let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+            sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok")
+                .await
+                .expect("write response");
+            request
+        });
+
+        let client = build_reqwest_client();
+        let resp = client
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .expect("built client must complete a loopback request");
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.text().await.expect("body"), "ok");
+
+        let request = serve.await.expect("server task");
+        assert!(
+            request.starts_with("GET / HTTP/1.1"),
+            "unexpected request line: {request}"
+        );
     }
 
     #[test]

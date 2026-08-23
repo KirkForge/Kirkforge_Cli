@@ -1529,13 +1529,16 @@ mod tests {
             }
 
             // Totality on Unicode (multi-byte chars). The matcher must not
-            // panic or slice into the middle of a codepoint.
+            // panic, slice into the middle of a codepoint, or return
+            // nondeterministic verdicts.
             #[test]
             fn glob_match_total_unicode(
                 pattern in "[a-z\\u{1F300}-\\u{1F6FF}*?/]{0,32}",
                 value in "[a-z\\u{1F300}-\\u{1F6FF}/]{0,32}",
             ) {
-                let _ = glob_match(&pattern, &value);
+                let a = glob_match(&pattern, &value);
+                let b = glob_match(&pattern, &value);
+                prop_assert_eq!(a, b);
             }
 
             // `**` crosses `/`: glob_match("**", s) is true for EVERY value,

@@ -12,6 +12,7 @@
 // groups. It is now a thin router that re-exports `main` from
 // `cli_dispatch` and declares the feature-aligned sub-modules. Every
 // function moved verbatim — pure refactor, no behaviour change.
+#[cfg(feature = "computer_use")]
 mod chrome_launcher;
 mod cli_dispatch;
 mod error;
@@ -29,6 +30,11 @@ mod turn_events;
 // `crate::tools::computer_use` / `crate::shared::…` paths verbatim
 // (notably `chrome_launcher.rs`, which is unchanged by this split).
 // Referenced via `crate::tools` / `crate::shared` from those submodules.
-use kf_code::{shared, tools};
+// `shared` is only needed when `computer_use` is on (chrome_launcher uses
+// `crate::shared::ComputerUseConfig`); cfg-gate to avoid an unused-import
+// warning in default builds.
+#[cfg(feature = "computer_use")]
+use kf_code::shared;
+use kf_code::tools;
 
 pub use cli_dispatch::main;

@@ -950,6 +950,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires headless Chrome"]
+    #[cfg(feature = "computer_use")]
     async fn browser_session_open_and_screenshot_with_chrome() {
         use headless_chrome::browser::tab::point::Point;
         use headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption;
@@ -1085,6 +1086,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires headless Chrome"]
+    #[cfg(feature = "computer_use")]
     async fn browser_session_close_cleans_up() {
         use headless_chrome::browser::tab::point::Point;
         use headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption;

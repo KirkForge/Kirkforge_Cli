@@ -143,11 +143,13 @@ async-trait.workspace = true
 toml.workspace = true
 directories.workspace = true
 
-# System prompt templating
-handlebars = "6"
+# System prompt templating — mini-renderer in src/session/prompt/mod.rs
+# ({{var}}, {{#if}}, {{#each}} only). Replaces handlebars (pest stack,
+# ~300-500 KB) for a single template with 3 construct types.
 
-# Line-mode history and editing
-rustyline = "14"
+# Line-mode history and editing. 16 dedupes unicode-width (0.1 → 0.2)
+# with the rest of the workspace.
+rustyline = "16"
 
 # Diff display
 similar = "2"
@@ -189,14 +191,17 @@ textwrap = "0.16"
 # Markdown rendering for assistant messages
 pulldown-cmark = "0.13"
 
-# Base64 for image-attach (read_image tool / multimodal messages)
-base64 = "0.22"
+# Base64 for image-attach (read_image tool / multimodal messages).
+# 0.23 unifies with tiktoken's base64 — single copy in the graph.
+base64 = "0.23"
 
 # Constant-time comparison for daemon auth token checks.
 subtle = "2"
 
-# Clipboard for Ctrl+Shift+C copy
-arboard = "3"
+# Clipboard for Ctrl+Shift+C copy. Default features off drops the
+# image-data path (image → png → flate2) — the only call site is
+# `set_text` (src/tui/clipboard.rs), which needs text-only.
+arboard = { version = "3", default-features = false }
 
 # Rust-native plugin SDK (vendored workspace members)
 kf-plugin-sdk = { workspace = true }
@@ -211,10 +216,18 @@ kf-context-index = { workspace = true }
 kf-bench = { workspace = true }
 # Stratum context compression (optional; default on).
 kf-compress-core = { workspace = true, optional = true }
-# Headless Chrome CDP driver for the computer_use tool.
-headless_chrome = { version = "1", default-features = false }
-# SigV4 signing for Anthropic-on-Bedrock requests.
-aws-sigv4 = { version = "1", default-features = false, features = ["sign-http"] }
+# Headless Chrome CDP driver for the computer_use tool. Optional — the
+# `computer_use` feature enables it. Default builds exclude it (~1-2 MB
+# saved). PlaceholderTab (pure Rust) keeps the tool compiling without it.
+headless_chrome = { version = "1", default-features = false, optional = true }
+# SigV4 signing for Anthropic-on-Bedrock requests. 1.3+ modernizes the
+# smithy stack (aws-smithy-http 0.63 / runtime-api 1.11). NOTE: `sign-http`
+# (the `http_request` module our Bedrock signing uses) still requires http 0.2
+# for its canonical-request internals, and aws-smithy-http's default features
+# keep http-body 0.4 alive via aws-smithy-types — the http 0.2/http-body 0.4
+# dedup hoped for in WO 43.20 is NOT achievable while using `http_request`;
+# `http1` is enabled so the module's http 1.x types resolve.
+aws-sigv4 = { version = "1.3", default-features = false, features = ["sign-http", "http1"] }
 aws-credential-types = { version = "1.2", default-features = false }
 aws-smithy-runtime-api = { version = "1.7.3", default-features = false }
 futures-util = "0.3"
@@ -287,10 +300,13 @@ e2e-tests = []
   pty = ["portable-pty"]
 # computer_use: Anthropic hosted computer_use beta (coordinate-vision model).
 # Adapter wire format only (`computer` tool type + `anthropic-beta` header +
-# `computer_tool_result` stream parsing). The vision execution loop (R4) is
-# deferred — see WO 28.16. Default OFF: opt in via --features computer_use.
-# ponytail: meaningful capability + cost surface; users opt in explicitly.
-computer_use = []
+# `computer_tool_result` stream parsing). Enables the `headless_chrome` dep
+# so local Chrome execution is compiled in. Default OFF: opt in via
+# --features computer_use. The vision execution loop (R4) is deferred — see
+# WO 28.16.
+# ponytail: meaningful capability + cost + binary-size surface; users opt in
+# explicitly. Default builds use PlaceholderTab (no Chrome).
+computer_use = ["dep:headless_chrome"]
 # seccomp: Linux seccomp-bpf syscall filter for bash subprocesses (WO 30.4).
 # Applied in the pre_exec hook alongside landlock + rlimits. Confines the
 # syscall surface to an allowlist (everything else -> EPERM, graceful). Default

@@ -385,14 +385,27 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // fall back to a placeholder tab that fails gracefully at runtime. This
     // keeps the toolset construction cheap and avoids hard-failing startup
     // when Chrome is not installed.
+    //
+    // When the `computer_use` Cargo feature is off, chrome_launcher is not
+    // compiled in — PlaceholderTab is used regardless of config. This is the
+    // binary-size win: default builds don't link headless_chrome.
     let chrome_tab: std::sync::Arc<dyn crate::tools::computer_use::ChromeTab> =
         if computer_use_enabled {
-            match super::chrome_launcher::launch_chrome_tab(&config.security.computer_use).await {
-                Ok(tab) => tab,
-                Err(e) => {
-                    tracing::warn!(error = %e, "computer_use enabled but Chrome launch failed; tool will fail gracefully");
-                    std::sync::Arc::new(crate::tools::computer_use::PlaceholderTab)
+            #[cfg(feature = "computer_use")]
+            {
+                match super::chrome_launcher::launch_chrome_tab(&config.security.computer_use).await
+                {
+                    Ok(tab) => tab,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "computer_use enabled but Chrome launch failed; tool will fail gracefully");
+                        std::sync::Arc::new(crate::tools::computer_use::PlaceholderTab)
+                    }
                 }
+            }
+            #[cfg(not(feature = "computer_use"))]
+            {
+                tracing::warn!("computer_use enabled in config but the `computer_use` Cargo feature is off — using placeholder tab");
+                std::sync::Arc::new(crate::tools::computer_use::PlaceholderTab)
             }
         } else {
             std::sync::Arc::new(crate::tools::computer_use::PlaceholderTab)
@@ -403,13 +416,21 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // stays alive until `close` drops it.
     let session_launcher: Option<crate::tools::computer_use::SessionLauncher> =
         if computer_use_enabled {
-            let cfg = config.security.computer_use.clone();
-            Some(std::sync::Arc::new(move || {
-                let cfg = cfg.clone();
-                Box::pin(async move { super::chrome_launcher::open_browser_session(&cfg).await })
-                    as crate::tools::computer_use::SessionFuture
-            })
-                as crate::tools::computer_use::SessionLauncher)
+            #[cfg(feature = "computer_use")]
+            {
+                let cfg = config.security.computer_use.clone();
+                Some(std::sync::Arc::new(move || {
+                    let cfg = cfg.clone();
+                    Box::pin(
+                        async move { super::chrome_launcher::open_browser_session(&cfg).await },
+                    ) as crate::tools::computer_use::SessionFuture
+                })
+                    as crate::tools::computer_use::SessionLauncher)
+            }
+            #[cfg(not(feature = "computer_use"))]
+            {
+                None
+            }
         } else {
             None
         };

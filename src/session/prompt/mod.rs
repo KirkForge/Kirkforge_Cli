@@ -50,6 +50,137 @@ pub(crate) fn estimate_message_tokens(m: &Message) -> usize {
 /// the immediate thread.
 const DEFAULT_MICROCOMPACT_KEEP_TAIL: usize = 5;
 
+// ── Mini template renderer ──────────────────────────────────────────────
+// Replaces handlebars (pest stack, ~300-500 KB) for the system prompt. The
+// template uses exactly three constructs: {{var}}, {{#if X}}…{{/if}},
+// {{#each ARR}}…{{/each}} with {{this.field}} inside. No helpers, no
+// partials, no {{else}}. If the template grows beyond this subset, the
+// construct-freeze test (test_template_construct_freeze) will fail and
+// flag the need for a richer renderer.
+// ponytail: ceiling — supports {{var}}, {{#if}}, {{#each}}, {{this.x}} only.
+// Upgrade path: re-add handlebars if the template needs {{else}}, helpers,
+// or partials.
+
+/// Render a template against a JSON data object. Supports:
+/// - `{{var}}` — string substitution of a top-level key
+/// - `{{#if X}}…{{/if}}` — conditional block (truthy check)
+/// - `{{#each ARR}}…{{/each}}` — array iteration; inside, `{{this.field}}`
+///   accesses object fields of each element
+fn render_template(template: &str, data: &serde_json::Value) -> String {
+    render_block(template, data, data)
+}
+
+/// Render a template segment. `root` is the top-level data (for `{{var}}`),
+/// `scope` is the current iteration context (for `{{this.field}}`).
+fn render_block(template: &str, root: &serde_json::Value, scope: &serde_json::Value) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut pos = 0;
+    let bytes = template.as_bytes();
+
+    while pos < bytes.len() {
+        // Find the next `{{`
+        if let Some(open) = template[pos..].find("{{") {
+            let abs_open = pos + open;
+            // Copy literal text before the tag
+            out.push_str(&template[pos..abs_open]);
+            // Find the closing `}}`
+            let tag_start = abs_open + 2;
+            if let Some(close) = template[tag_start..].find("}}") {
+                let tag = template[tag_start..tag_start + close].trim();
+                let after = tag_start + close + 2;
+                match tag {
+                    t if t.starts_with("!--") => {
+                        // {{!-- ... --}} — comment that may contain }} inside.
+                        // Find the closing `--}}`
+                        if let Some(end) = template[tag_start..].find("--}}") {
+                            pos = tag_start + end + 4;
+                        } else {
+                            pos = after;
+                        }
+                    }
+                    t if t.starts_with('!') => {
+                        // {{! comment }} — emit nothing
+                        pos = after;
+                    }
+                    t if t.starts_with("#if ") => {
+                        let cond_key = t[4..].trim();
+                        let (body, body_end) = split_block(&template[after..], "if");
+                        let cond_val = root.get(cond_key).map(is_truthy).unwrap_or(false);
+                        if cond_val {
+                            out.push_str(&render_block(body, root, scope));
+                        }
+                        pos = after + body_end;
+                    }
+                    t if t.starts_with("#each ") => {
+                        let arr_key = t[6..].trim();
+                        let (body, body_end) = split_block(&template[after..], "each");
+                        if let Some(arr) = root.get(arr_key).and_then(|v| v.as_array()) {
+                            for item in arr {
+                                out.push_str(&render_block(body, root, item));
+                            }
+                        }
+                        pos = after + body_end;
+                    }
+                    t if t.starts_with("this.") => {
+                        let field = &t[5..];
+                        if let Some(val) = scope.get(field) {
+                            if let Some(s) = val.as_str() {
+                                out.push_str(s);
+                            } else {
+                                out.push_str(&val.to_string());
+                            }
+                        }
+                        pos = after;
+                    }
+                    _ => {
+                        // {{var}} — top-level key lookup
+                        if let Some(val) = root.get(tag) {
+                            if let Some(s) = val.as_str() {
+                                out.push_str(s);
+                            } else {
+                                out.push_str(&val.to_string());
+                            }
+                        }
+                        pos = after;
+                    }
+                }
+            } else {
+                // No closing `}}` — emit the `{{` literally
+                out.push_str("{{");
+                pos = abs_open + 2;
+            }
+        } else {
+            // No more tags — copy the rest
+            out.push_str(&template[pos..]);
+            break;
+        }
+    }
+    out
+}
+
+/// Split a block: find the matching `{{/<name>}}` and return (body_str,
+/// byte_offset_after_close_tag). If no close tag, returns the whole rest.
+fn split_block<'a>(rest: &'a str, name: &str) -> (&'a str, usize) {
+    let close = format!("{{{{/{name}}}}}");
+    if let Some(pos) = rest.find(&close) {
+        (&rest[..pos], pos + close.len())
+    } else {
+        (rest, rest.len())
+    }
+}
+
+/// Check if a JSON value is truthy (for {{#if}}).
+fn is_truthy(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Bool(b) => *b,
+        serde_json::Value::Null => false,
+        serde_json::Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
+        serde_json::Value::String(s) => !s.is_empty(),
+        serde_json::Value::Array(a) => !a.is_empty(),
+        serde_json::Value::Object(o) => !o.is_empty(),
+    }
+}
+
 pub struct PromptBuilder {
     template: String,
     /// When `Some`, replaces the base template entirely. Set from the
@@ -213,8 +344,6 @@ impl PromptBuilder {
         let mut content = if let Some(ref ovr) = self.system_override {
             ovr.clone()
         } else {
-            let reg = handlebars::Handlebars::new();
-
             let mut data = serde_json::json!({
                 "model_name": model_name,
                 "tools": tool_names.iter().map(|n| serde_json::json!({"name": n})).collect::<Vec<_>>(),
@@ -224,8 +353,7 @@ impl PromptBuilder {
                 data["thinking_available"] = serde_json::Value::Bool(true);
             }
 
-            reg.render_template(&self.template, &data)
-                .unwrap_or_else(|_| "You are a coding agent.".to_string())
+            render_template(&self.template, &data)
         };
 
         // The `remember` tool instruction is stable — it depends only on
@@ -383,7 +511,6 @@ impl PromptBuilder {
     }
 
     pub fn build_stem(&self, model_name: &str, model_supports_thinking: bool) -> String {
-        let reg = handlebars::Handlebars::new();
         let mut data = serde_json::json!({
             "model_name": model_name,
             "tools": Vec::<serde_json::Value>::new(), // empty — tools go in suffix
@@ -393,8 +520,7 @@ impl PromptBuilder {
             data["thinking_available"] = serde_json::Value::Bool(true);
         }
 
-        reg.render_template(&self.template, &data)
-            .unwrap_or_else(|_| "You are a coding agent.".to_string())
+        render_template(&self.template, &data)
     }
 
     pub fn cache_hit_probability(&self, model_name: &str, model_supports_thinking: bool) -> f64 {
@@ -2156,5 +2282,83 @@ mod tests {
         }];
         PromptBuilder::truncate_tool_results(&mut msgs);
         assert_eq!(msgs[0].token_count, None, "truncation must clear cache");
+    }
+
+    // Construct-freeze test: the system prompt template must only use
+    // constructs the mini-renderer supports ({{var}}, {{#if}}, {{#each}},
+    // {{this.field}}). If someone adds {{else}}, {{#unless}}, helpers, or
+    // partials, this test fails and flags the need for a richer renderer.
+    #[test]
+    fn test_template_construct_freeze() {
+        let template = include_str!("../../../prompts/system.hbs");
+        // Scan for unsupported constructs. The mini-renderer handles:
+        // {{var}}, {{#if X}}…{{/if}}, {{#each X}}…{{/each}}, {{this.field}}.
+        // Unsupported: {{else}}, {{#unless}}, {{#with}}, {{> partial}},
+        // {{helper args}}, {{{unescaped}}}.
+        let unsupported = [
+            "{{else}}",
+            "{{else ",
+            "{{#unless",
+            "{{#with",
+            "{{>",
+            "{{{",
+            "{{lookup",
+            "{{log ",
+        ];
+        for needle in &unsupported {
+            assert!(
+                !template.contains(needle),
+                "system.hbs uses unsupported construct '{needle}' — mini-renderer \
+                 does not handle it. Re-add handlebars or simplify the template."
+            );
+        }
+        // Verify the supported constructs are present and parse correctly.
+        let data = serde_json::json!({
+            "model_name": "test-model",
+            "tools": [{"name": "bash"}, {"name": "read_file"}],
+            "thinking_available": true,
+        });
+        let rendered = render_template(template, &data);
+        assert!(
+            !rendered.contains("{{#"),
+            "unrendered block tags remain: {rendered}"
+        );
+        assert!(
+            !rendered.contains("{{this"),
+            "unrendered this tags remain: {rendered}"
+        );
+        assert!(
+            rendered.contains("- **bash**"),
+            "each loop should render tool names"
+        );
+        assert!(
+            rendered.contains("- **read_file**"),
+            "each loop should render tool names"
+        );
+        assert!(
+            rendered.contains("collapsible panel"),
+            "if block should render when true"
+        );
+    }
+
+    #[test]
+    fn test_render_template_if_false_skips_block() {
+        let template = "before{{#if flag}}INSIDE{{/if}}after";
+        let data = serde_json::json!({"flag": false});
+        assert_eq!(render_template(template, &data), "beforeafter");
+    }
+
+    #[test]
+    fn test_render_template_each_empty_skips_block() {
+        let template = "before{{#each items}}- {{this.name}}{{/each}}after";
+        let data = serde_json::json!({"items": []});
+        assert_eq!(render_template(template, &data), "beforeafter");
+    }
+
+    #[test]
+    fn test_render_template_var_substitution() {
+        let template = "Hello {{name}}!";
+        let data = serde_json::json!({"name": "world"});
+        assert_eq!(render_template(template, &data), "Hello world!");
     }
 }

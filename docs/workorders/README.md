@@ -962,4 +962,5 @@ session/mcp/prompt/verifier, TUI, sandbox/security, daemon/jobs/cli, and
 | 43.37 | [Verifier corrections dead-queue + MCP pending-map leak](43.37-verifier-corrections-queue-mcp-leak.md) | Planned |
 | 43.38 | [Async blocking (glob, computer_use) + glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Done |
 | 43.39 | [kf-bench markdown-delta rate contradiction](43.39-bench-delta-rate.md) | Planned |
+| 43.39 | [kf-bench markdown-delta baseline rate](43.39-bench-delta-rate.md) | Done |
 

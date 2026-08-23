@@ -935,3 +935,14 @@ tree, ~11 stale claims corrected in-line. See
 | 43.33 | [jobd stop auth timeout](43.33-jobd-stop-auth-timeout.md) | Planned |
 | 43.34 | [Context-index retrieval smear (unresolved edges)](43.34-context-index-retrieve-smear.md) | Done |
 
+### Series 43.25-43.39 — Round-4 full-coverage segment sweep
+
+15 workorders from 7 read-only analysis agents covering executor/turn, tools,
+session/mcp/prompt/verifier, TUI, sandbox/security, daemon/jobs/cli, and
+`crates/*`. 24 NEW verified findings. See
+[WO 43.0](43.0-wo43-overview.md) for the overview.
+
+| WO | Title | Status |
+|----|-------|--------|
+| 43.35 | [Memory store stale-lock latch after crash](43.35-memory-store-stale-lock.md) | Done |
+

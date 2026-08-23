@@ -64,6 +64,7 @@ why, and the gate evidence.
 - WO 42.1: delete dead testdoctor test referencing deleted ci.yml — [42.1](docs/workorders/42.1-dead-testdoctor.md)
 - WO 42.2: audit chain resumes on restart + `FileAuditSink::verify_chain` — [42.2](docs/workorders/42.2-audit-chain-verify.md)
 - WO 43.29: guard OOB write in `minify_old_messages` on over-budget path — index-out-of-bounds panic when microcompaction collapsed the middle and the compacted form still exceeded budget — [43.29](docs/workorders/43.29-prompt-compaction-oob-panic.md)
+- WO 43.35: memory store stale-lock recovery via PID-liveness check — crashed process's `.lock` file is reclaimed (dead PID removal + age fallback) instead of permanently latching the store — [43.35](docs/workorders/43.35-memory-store-stale-lock.md)
 
 
 ### Added
@@ -117,6 +118,7 @@ Release prep — version bump only. WO 33-34 series highlights:
 ### Added
 - GitHub Discussions enabled.
 - WO 32.16-32.20: Windows stub tests, computer_use beta, security emitter, multi-language verifiers, parallel orchestration, self-update.
+
 
 
 

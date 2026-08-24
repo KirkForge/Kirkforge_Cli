@@ -438,6 +438,35 @@ impl Executor {
                 continue;
             };
 
+            // WO 38.1 / 44.28: re-verify no component of the resolved path became
+            // a symlink after Phase-1 canonicalization. A same-batch bash call can
+            // swap a dir or file for a symlink in the check-to-open window. The
+            // walk runs unconditionally for every deferred file call (read_file,
+            // read_image, write_file, edit_file) so it covers the read-before-edit
+            // gate's Allowed arm too — pre-44.28 it only ran inside the Denied
+            // arm, so the attack's exact precondition (file pre-read, gate allows)
+            // bypassed it.
+            // ponytail: the stat-walk is not atomic with the body's open — a
+            // swap inside that micro-window still slips through. The upgrade
+            // path is openat2(RESOLVE_NO_SYMLINKS) (or per-component openat
+            // with O_NOFOLLOW) at the tool-body open site.
+            if let Some(msg) = symlink_swap_denied(&path) {
+                let denied = format!("🔒 Access denied: {msg}");
+                let invocation = prep.invocation.clone();
+                results.insert(
+                    idx,
+                    (
+                        invocation,
+                        ToolOutcome::Failure(crate::shared::ToolError::AccessDenied {
+                            message: denied,
+                        }),
+                        Some(path.clone()),
+                        0,
+                    ),
+                );
+                continue;
+            }
+
             let path_arg = prep
                 .invocation
                 .arguments
@@ -451,32 +480,6 @@ impl Executor {
                     .check_edit(std::path::Path::new(path_arg), &path)
                 {
                     let denied = format!("🔒 Access denied: {msg}");
-                    // WO 38.1: re-verify no component of the resolved path became a
-                    // symlink after Phase-1 canonicalization — a same-batch bash call
-                    // can swap a dir or file for a symlink in the check-to-open
-                    // window. Walking the components right before the body closes
-                    // the final-component and parent-swap cases for reads and writes.
-                    // ponytail: the stat-walk is not atomic with the body's open — a
-                    // swap inside that micro-window still slips through. The upgrade
-                    // path is openat2(RESOLVE_NO_SYMLINKS) (or per-component openat
-                    // with O_NOFOLLOW) at the tool-body open site.
-                    if let Some(msg) = symlink_swap_denied(&path) {
-                        let denied = format!("🔒 Access denied: {msg}");
-                        let invocation = prep.invocation.clone();
-                        results.insert(
-                            idx,
-                            (
-                                invocation,
-                                ToolOutcome::Failure(crate::shared::ToolError::AccessDenied {
-                                    message: denied,
-                                }),
-                                Some(path.clone()),
-                                0,
-                            ),
-                        );
-                        continue;
-                    }
-
                     let invocation = prep.invocation.clone();
                     results.insert(
                         idx,

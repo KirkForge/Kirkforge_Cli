@@ -36,6 +36,13 @@
 //! not `src/lib/utils.rs`. Prefer explicit `**` when writing cross-slash
 //! path rules.
 //!
+//! **Command rules match case-insensitively (WO 44.21):** `bash`
+//! `command` rule values are normalized (whitespace collapsed, quotes
+//! stripped, lowercased) before matching, so `RM -RF /`, `rm  -rf  /`,
+//! and `rm "-rf" /` all match a deny rule `rm -rf /`. Glob *patterns*
+//! stay case-sensitive as written — write patterns in lowercase to
+//! match the lowercased values.
+//!
 //! Rules are evaluated in declaration order — first match wins. The
 //! **default action** is `Ask` (forces approval prompt) unless the
 //! global `auto_approve: true` is set, in which case the default is
@@ -46,7 +53,7 @@
 //! global flag. The rule persists in `~/.local/share/kf-code/config.toml`
 //! and survives across sessions.
 
-use crate::shared::bash_safety::split_compound_clauses;
+use crate::shared::bash_safety::{normalize_for_safety, split_compound_clauses};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -247,16 +254,39 @@ fn tool_matches(pattern: &str, tool: &str) -> bool {
 /// WO 38.1: the match runs per compound clause (`;`/`&&`/`||`/`|`/newline)
 /// and trips if ANY clause matches — a deny pattern must still fire when
 /// the payload hides in the second clause of a chained command.
+///
+/// WO 44.21: each clause is run through `normalize_for_safety` first
+/// (collapse whitespace, strip quotes, lowercase) so trivial quoting /
+/// spacing / casing evasions (`rm  -rf  /`, `rm "-rf" /`, `RM -RF /`)
+/// no longer bypass user-written deny rules. The deny prefix comparison
+/// lowercases the pattern to match the lowercased clause; glob patterns
+/// stay case-sensitive (patterns are config-authored, values are now
+/// lowercased — command rules match case-insensitively). Fail-closed:
+/// normalization makes MORE commands match, closing the bypasses.
 fn deny_command_matches(pattern: &str, command: &str) -> bool {
     let normalized = normalize_command_pattern(pattern);
+    let pattern_lower = normalized.to_ascii_lowercase();
+    // ponytail: normalize_for_safety is a dangerous-command preprocessor
+    // (strips quotes, collapses whitespace, lowercases), NOT a shell lexer.
+    // Sound for deny/allow VALUE matching because the command verb stays the
+    // first token — `echo "git status"` normalizes to `echo git status` which
+    // does NOT match a deny `git status` (prefix mismatch on the `echo` verb).
+    // ceiling: a bypass that survives quote-aware normalization (e.g. argv
+    // reconstruction via `$@`/variable indirection) is not caught here; the
+    // landlock sandbox + `--no-network` remain the real boundary.
+    // upgrade path: argv-tokenization (shell lexer -> structured argv ->
+    // permission matcher compares argv, not raw text); defer until a bypass
+    // survives quote-aware normalization.
     let matches_clause = |c: &str| -> bool {
-        if glob_match(&normalized, c) {
+        let n = normalize_for_safety(c);
+        if glob_match(&normalized, &n) {
             return true;
         }
         // Prefix deny: a pattern ending with a path or word boundary denies
-        // any clause that starts with it.
+        // any clause that starts with it. Compare lowercased (the clause is
+        // already lowercased by normalize_for_safety).
         (normalized.ends_with('/') || normalized.ends_with(' ') || normalized.ends_with('\t'))
-            && c.starts_with(&normalized)
+            && n.starts_with(&pattern_lower)
     };
     split_compound_clauses(command)
         .iter()
@@ -272,12 +302,20 @@ fn deny_command_matches(pattern: &str, command: &str) -> bool {
 /// every compound clause must match the pattern or the rule does not
 /// apply — the call falls through to later rules / the default. This is
 /// deliberately fail-closed for permissive rules.
+///
+/// WO 44.21: each clause is run through `normalize_for_safety` first so
+/// `git  status` and `git "status"` match an allow rule `git status`
+/// (matches user intent). The glob pattern stays case-sensitive; values
+/// are lowercased by normalization — command rules match case-insensitively
+/// for the literal bytes, but glob metachar semantics are unchanged.
 fn allow_command_matches(pattern: &str, command: &str) -> bool {
     let clauses = split_compound_clauses(command);
     if clauses.is_empty() {
         return glob_match(pattern, command);
     }
-    clauses.iter().all(|c| glob_match(pattern, c))
+    clauses
+        .iter()
+        .all(|c| glob_match(pattern, &normalize_for_safety(c)))
 }
 
 /// Normalize a bare `*` to `**` for bash `command` patterns.

@@ -11,6 +11,13 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 44.31 — budget guard: `check_and_slice` now compares the result's
+  token cost (via `count_tokens`, same estimator as `record_tool_usage`)
+  against `budget.remaining()` (tokens), not `result.len()` (bytes) against
+  `remaining()` (tokens). The byte-based `HeadTailSlicer` is fed byte
+  budgets derived from `remaining() * 4`. Pre-fix the guard sliced English
+  tool output ~4× too early (the model lost the middle of outputs far
+  sooner than the configured ceiling required). [44.31](docs/workorders/44.31-budget-slice-byte-token-unit-mismatch.md)
 - WO 43.20 — deps/binary-size: handlebars → in-tree stand-alone-tag-faithful
   renderer (fixes latent `{{!` comment leak in every system prompt), arboard
   slimmed, aws-sigv4 1.3.8, rustyline 16, `computer_use` feature gates

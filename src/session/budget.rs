@@ -19,6 +19,15 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub type SharedBudget = Arc<Mutex<TokenBudget>>;
 pub type SharedStore = Arc<dyn OffloadStore>;
 
+/// Approximate bytes per token for English/ASCII source (cl100k_base ≈ 4).
+/// Used to convert the token-denominated `remaining()` into byte budgets
+/// for the byte-based `HeadTailSlicer`. CJK is ~2-3 bytes/token, so this
+/// slices slightly conservatively (the safe direction). WO 44.31.
+// ponytail: ceiling — a per-model tokenizer would give exact byte/token
+// ratios; this is the English approximation. The slicer stays byte-based;
+// only the budget→slicer boundary converts units.
+const BYTES_PER_TOKEN: usize = 4;
+
 /// Per-session budget constructor (WO 22.6-R2).
 pub fn new_session_budget(cfg: &crate::shared::Config) -> SharedBudget {
     Arc::new(Mutex::new(TokenBudget {
@@ -172,6 +181,11 @@ pub enum BudgetAction {
 ///
 /// When the budget is `Under`, or the result already fits in the
 /// remaining space, the result is returned verbatim as `Keep`.
+///
+/// Units: `budget.remaining()` and the result's token cost are both
+/// token counts (the same `count_tokens` estimator `record_tool_usage`
+/// uses). The byte-based `HeadTailSlicer` is fed byte budgets derived
+/// from `remaining() * BYTES_PER_TOKEN`. WO 44.31.
 #[must_use]
 pub fn check_and_slice(
     result: &str,
@@ -183,15 +197,21 @@ pub fn check_and_slice(
         return BudgetAction::Keep(result.to_string());
     }
     let remaining = budget.remaining();
-    if result.len() <= remaining {
+    // Compare token cost (not byte length) against the token-denominated
+    // remaining headroom. Pre-44.31 this compared `result.len()` (bytes)
+    // against `remaining` (tokens), slicing ~4× too early for English.
+    let result_tokens = crate::session::prompt::count_tokens(result);
+    if result_tokens <= remaining {
         return BudgetAction::Keep(result.to_string());
     }
     // Split the remaining headroom into head + tail so the model
     // keeps the beginning and end of the output (which usually carry
     // the most signal: headers, summaries, error tails). The middle
     // is offloaded to the store and retrieved via `store_get`.
-    let head = remaining / 2;
-    let tail = remaining.saturating_sub(head);
+    // `remaining` is in tokens; the slicer takes bytes — convert.
+    let bytes_budget = remaining.saturating_mul(BYTES_PER_TOKEN);
+    let head = bytes_budget / 2;
+    let tail = bytes_budget.saturating_sub(head);
     let slicer = HeadTailSlicer {
         head_bytes: head,
         tail_bytes: tail,
@@ -986,6 +1006,85 @@ mod tests {
                 );
             }
             other => panic!("oversized result over budget must be sliced, got {other:?}"),
+        }
+    }
+
+    // WO 44.31: the guard compares token cost (not bytes) against the
+    // token-denominated remaining headroom. A result of R tokens but 4R
+    // bytes (English ≈ 4 bytes/token) must fit and be kept — pre-44.31
+    // it sliced because `result.len()` (4R) was compared against
+    // `remaining` (R).
+    #[test]
+    fn test_check_and_slice_token_fits_but_bytes_exceed_keeps() {
+        // remaining = 100 tokens. Build a result whose token count ≤ 100
+        // but whose byte length > 100 (≈4× the token count).
+        let budget = budget_with(900, 1000);
+        assert_eq!(budget.state(), BudgetState::Approaching);
+        assert_eq!(budget.remaining(), 100);
+        let store = InMemoryOffloadStore::new();
+        // ~45 bytes/sentence, ~10 tokens/sentence → 8 reps = 360 bytes,
+        // ~80 tokens. 80 ≤ 100 remaining → must Keep; pre-fix 360 > 100
+        // → Sliced. Varied content (not "a a a…") so cl100k_base doesn't
+        // collapse the repetition into a handful of tokens.
+        let sentence = "The quick brown fox jumps over the lazy dog. ";
+        let result = sentence.repeat(8);
+        let result_tokens = crate::session::prompt::count_tokens(&result);
+        assert!(
+            result_tokens <= 100,
+            "fixture must fit in remaining tokens: got {result_tokens} for {result:?}"
+        );
+        assert!(
+            result.len() > 100,
+            "fixture must exceed remaining in bytes: got {}",
+            result.len()
+        );
+        match check_and_slice(&result, &budget, &store) {
+            BudgetAction::Keep(kept) => assert_eq!(kept, result),
+            other => panic!("R-token/4R-byte result must Keep, got {other:?}"),
+        }
+        assert_eq!(store.len(), 0, "kept result must not touch the store");
+    }
+
+    // WO 44.31: a result of 2R tokens must slice, and the head+tail byte
+    // budgets must be derived from `remaining() * BYTES_PER_TOKEN` (not
+    // from `remaining()` bare). Pre-fix the slicer was fed token counts as
+    // byte budgets, so head+tail summed to `remaining` bytes ≈ R/4 tokens;
+    // post-fix they sum to `remaining * BYTES_PER_TOKEN` bytes ≈ R tokens.
+    #[test]
+    fn test_check_and_slice_double_remaining_tokens_slices_with_byte_budget() {
+        // remaining = 100 tokens → byte budget = 400 bytes → head=tail=200.
+        let budget = budget_with(900, 1000);
+        assert_eq!(budget.remaining(), 100);
+        let store = InMemoryOffloadStore::new();
+        // ~4 bytes/token ASCII → 200 tokens needs ~800 bytes of words.
+        // 200 > 100 remaining → must slice.
+        let word = "word "; // ~2 tokens, 5 bytes
+        let result = word.repeat(160); // ~320 tokens, 800 bytes
+        let result_tokens = crate::session::prompt::count_tokens(&result);
+        assert!(
+            result_tokens > 100,
+            "fixture must exceed remaining tokens: got {result_tokens}"
+        );
+        match check_and_slice(&result, &budget, &store) {
+            BudgetAction::Sliced { display, key } => {
+                assert!(
+                    display.len() < result.len(),
+                    "sliced display must be shorter: display={} result={}",
+                    display.len(),
+                    result.len()
+                );
+                // head + tail byte budget = 400; the display is head + marker
+                // + tail, so it must be ≤ 400 + marker length, well under 800.
+                assert!(
+                    display.len() <= 400 + 128,
+                    "head+tail must be bounded by bytes_budget (400) + marker; got {}",
+                    display.len()
+                );
+                assert_eq!(key.len(), 24, "key must be the 24-hex content key");
+                let stored = store.get(&key).expect("middle retrievable");
+                assert!(!stored.is_empty(), "middle must be offloaded");
+            }
+            other => panic!("2R-token result must slice, got {other:?}"),
         }
     }
 

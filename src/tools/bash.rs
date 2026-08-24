@@ -421,8 +421,12 @@ impl Tool for Bash {
                             }
                             #[cfg(not(unix))]
                             {
-                                let _ = code;
-                                std::process::ExitStatus::default()
+                                // Windows ExitStatus is a raw u32 wrapper:
+                                // success() == (code == 0), code() round-trips.
+                                // Using default() here would report failing
+                                // containerized commands as Success (WO 44.48).
+                                use std::os::windows::process::ExitStatusExt;
+                                std::process::ExitStatus::from_raw(code as u32)
                             }
                         };
                         Ok(ShellOutput {

@@ -103,7 +103,7 @@ pub(super) fn word_boundary_match(cmd: &str, pattern: &str) -> bool {
 /// whitespace, lowercases alphabetic characters, and strips simple backslash
 /// escapes. Backticks are intentionally left intact because they denote
 /// command substitution, which the safety layer treats literally.
-fn normalize_for_safety(cmd: &str) -> String {
+pub(crate) fn normalize_for_safety(cmd: &str) -> String {
     let mut out = String::with_capacity(cmd.len());
     let mut chars = cmd.chars().peekable();
     let mut in_single = false;

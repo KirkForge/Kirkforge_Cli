@@ -36,6 +36,13 @@
 //! not `src/lib/utils.rs`. Prefer explicit `**` when writing cross-slash
 //! path rules.
 //!
+//! **Command rules match case-insensitively (WO 44.21):** `bash`
+//! `command` rule values are normalized (whitespace collapsed, quotes
+//! stripped, lowercased) before matching, so `RM -RF /`, `rm  -rf  /`,
+//! and `rm "-rf" /` all match a deny rule `rm -rf /`. Glob *patterns*
+//! stay case-sensitive as written — write patterns in lowercase to
+//! match the lowercased values.
+//!
 //! Rules are evaluated in declaration order — first match wins. The
 //! **default action** is `Ask` (forces approval prompt) unless the
 //! global `auto_approve: true` is set, in which case the default is
@@ -46,7 +53,7 @@
 //! global flag. The rule persists in `~/.local/share/kf-code/config.toml`
 //! and survives across sessions.
 
-use crate::shared::bash_safety::split_compound_clauses;
+use crate::shared::bash_safety::{normalize_for_safety, split_compound_clauses};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -247,16 +254,39 @@ fn tool_matches(pattern: &str, tool: &str) -> bool {
 /// WO 38.1: the match runs per compound clause (`;`/`&&`/`||`/`|`/newline)
 /// and trips if ANY clause matches — a deny pattern must still fire when
 /// the payload hides in the second clause of a chained command.
+///
+/// WO 44.21: each clause is run through `normalize_for_safety` first
+/// (collapse whitespace, strip quotes, lowercase) so trivial quoting /
+/// spacing / casing evasions (`rm  -rf  /`, `rm "-rf" /`, `RM -RF /`)
+/// no longer bypass user-written deny rules. The deny prefix comparison
+/// lowercases the pattern to match the lowercased clause; glob patterns
+/// stay case-sensitive (patterns are config-authored, values are now
+/// lowercased — command rules match case-insensitively). Fail-closed:
+/// normalization makes MORE commands match, closing the bypasses.
 fn deny_command_matches(pattern: &str, command: &str) -> bool {
     let normalized = normalize_command_pattern(pattern);
+    let pattern_lower = normalized.to_ascii_lowercase();
+    // ponytail: normalize_for_safety is a dangerous-command preprocessor
+    // (strips quotes, collapses whitespace, lowercases), NOT a shell lexer.
+    // Sound for deny/allow VALUE matching because the command verb stays the
+    // first token — `echo "git status"` normalizes to `echo git status` which
+    // does NOT match a deny `git status` (prefix mismatch on the `echo` verb).
+    // ceiling: a bypass that survives quote-aware normalization (e.g. argv
+    // reconstruction via `$@`/variable indirection) is not caught here; the
+    // landlock sandbox + `--no-network` remain the real boundary.
+    // upgrade path: argv-tokenization (shell lexer -> structured argv ->
+    // permission matcher compares argv, not raw text); defer until a bypass
+    // survives quote-aware normalization.
     let matches_clause = |c: &str| -> bool {
-        if glob_match(&normalized, c) {
+        let n = normalize_for_safety(c);
+        if glob_match(&normalized, &n) {
             return true;
         }
         // Prefix deny: a pattern ending with a path or word boundary denies
-        // any clause that starts with it.
+        // any clause that starts with it. Compare lowercased (the clause is
+        // already lowercased by normalize_for_safety).
         (normalized.ends_with('/') || normalized.ends_with(' ') || normalized.ends_with('\t'))
-            && c.starts_with(&normalized)
+            && n.starts_with(&pattern_lower)
     };
     split_compound_clauses(command)
         .iter()
@@ -272,12 +302,20 @@ fn deny_command_matches(pattern: &str, command: &str) -> bool {
 /// every compound clause must match the pattern or the rule does not
 /// apply — the call falls through to later rules / the default. This is
 /// deliberately fail-closed for permissive rules.
+///
+/// WO 44.21: each clause is run through `normalize_for_safety` first so
+/// `git  status` and `git "status"` match an allow rule `git status`
+/// (matches user intent). The glob pattern stays case-sensitive; values
+/// are lowercased by normalization — command rules match case-insensitively
+/// for the literal bytes, but glob metachar semantics are unchanged.
 fn allow_command_matches(pattern: &str, command: &str) -> bool {
     let clauses = split_compound_clauses(command);
     if clauses.is_empty() {
         return glob_match(pattern, command);
     }
-    clauses.iter().all(|c| glob_match(pattern, c))
+    clauses
+        .iter()
+        .all(|c| glob_match(pattern, &normalize_for_safety(c)))
 }
 
 /// Normalize a bare `*` to `**` for bash `command` patterns.
@@ -844,6 +882,88 @@ mod tests {
         );
     }
 
+    /// WO 44.21: trivial quoting / spacing / casing evasions of a deny rule
+    /// `rm -rf /` are now blocked because each clause is normalized
+    /// (whitespace collapsed, quotes stripped, lowercased) before matching.
+    #[test]
+    fn test_evaluate_deny_command_normalizes_clause_evasions() {
+        let rules = vec![rule("bash", "command", "rm -rf /", PermissionAction::Deny)];
+        // Double spaces between every token.
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "rm  -rf  /home/user"}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Deny,
+            "double-spaced rm -rf / must be denied"
+        );
+        // Quoted flag.
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "rm \"-rf\" /home/user"}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Deny,
+            "quoted-flag rm -rf / must be denied"
+        );
+        // Upper case.
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "RM -RF /home/user"}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Deny,
+            "upper-case rm -rf / must be denied"
+        );
+        // Tab-separated variant (normalize_for_safety collapses all whitespace).
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "rm\t-rf\t/home/user"}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Deny,
+            "tab-separated rm -rf / must be denied"
+        );
+    }
+
+    /// WO 44.21 ceiling guard: `echo "git status"` normalizes to
+    /// `echo git status`, which does NOT match a deny `git status` — the
+    /// command verb (`echo`) stays the first token, so the prefix compare
+    /// fails. This is the soundness property that makes quote-stripping
+    /// safe for deny VALUE matching; a real shell lexer is the upgrade path.
+    #[test]
+    fn test_evaluate_deny_command_normalize_ceiling_verb_stays_first() {
+        let rules = vec![rule(
+            "bash",
+            "command",
+            "git status",
+            PermissionAction::Deny,
+        )];
+        assert_ne!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "echo \"git status\""}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Deny,
+            "echo \"git status\" must not be denied by a git status rule"
+        );
+    }
+
     /// Allow/Ask bash rules keep the stricter anchored semantics: a literal
     /// `git status` rule does not permit a chained destructive command.
     #[test]
@@ -874,6 +994,52 @@ mod tests {
             .0,
             PermissionAction::Ask,
             "anchored allow rule must not match chained command"
+        );
+    }
+
+    /// WO 44.21: `git  status` (double space) and `git "status"` (quoted
+    /// arg) now match an allow rule `git status` after normalization —
+    /// previously they silently fell through to Ask. Matches user intent.
+    #[test]
+    fn test_evaluate_allow_command_normalizes_clause() {
+        let rules = vec![rule(
+            "bash",
+            "command",
+            "git status",
+            PermissionAction::Allow,
+        )];
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "git  status"}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Allow,
+            "double-spaced git status must match allow git status"
+        );
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "git \"status\""}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Allow,
+            "quoted-arg git status must match allow git status"
+        );
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "GIT STATUS"}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Allow,
+            "upper-case git status must match allow git status"
         );
     }
 

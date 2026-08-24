@@ -904,12 +904,12 @@ tree, ~11 stale claims corrected in-line. See
 | 44.24 | [Audit scrubber misses github_pat_/glpat-/AIza/ya29 token literals](44.24-audit-token-literal-gaps.md) | Done |
 | 44.28 | [Phase 2.5 symlink-swap re-verification is unreachable on the allowed path](44.28-symlink-swap-check-dead-on-allowed-path.md) | Done |
 | 44.29 | [`/plugins` reload silently drops the Node/Go/Generic verifiers](44.29-plugin-reload-drops-node-go-verifiers.md) | Done |
-| 44.30 | [`max_tool_result_chars` never applies to file tools (read_file can flood the context)](44.30-file-tool-result-truncation-bypass.md) | Planned |
+| 44.30 | [`max_tool_result_chars` never applies to file tools (read_file can flood the context)](44.30-file-tool-result-truncation-bypass.md) | Done |
 | 44.31 | [Budget guard compares result bytes against the token budget (unit mismatch)](44.31-budget-slice-byte-token-unit-mismatch.md) | Done |
 | 44.36 | [Surface executor-task death: event loop busy-spins on closed channel and drops all user input silently](44.36-executor-death-spin.md) | Done |
-| 44.37 | [Scheduled-job completion poll does blocking disk I/O (chmod + full dir walk) on every event-loop iteration](44.37-job-poll-disk-throttle.md) | Planned |
+| 44.37 | [Scheduled-job completion poll does blocking disk I/O (chmod + full dir walk) on every event-loop iteration](44.37-job-poll-disk-throttle.md) | Done |
 | 44.38 | [PTY streaming appends to the wrong chat entry (ToolStart is emitted at record time, not run time)](44.38-pty-stream-wrong-entry.md) | Done |
-| 44.39 | [Terminal left in raw mode when TUI setup fails between enable_raw_mode and the TerminalGuard](44.39-raw-mode-restore-window.md) | Planned |
+| 44.39 | [Terminal left in raw mode when TUI setup fails between enable_raw_mode and the TerminalGuard](44.39-raw-mode-restore-window.md) | Done |
 | 44.44 | [Workflow/jobd bash spawns skip env scrub, PATH pin, output cap, process-group kill](44.44-workflow-bash-spawn-hygiene.md) | Planned |
 | 44.45 | [Workflow engine error/budget semantics: unguarded eval_condition, dead on_exceeded route, batch-error mislabels siblings](44.45-workflow-engine-error-budget-semantics.md) | Done |
 | 44.46 | [Stratum mode config is dead wiring: config/env/stratum_mode tool never set the session mode](44.46-stratum-mode-dead-wiring.md) | Done |

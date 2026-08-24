@@ -1825,14 +1825,16 @@ mod tests {
             }
 
             // A deny pattern that does NOT match any clause must return false.
+            // "9zz**" uses a digit prefix that can never appear in the
+            // [a-z]{1,8} clause generators (WO 44.21 normalization lowercases
+            // both sides — "zzz**" would match "zzz" since ** = *).
             #[test]
             fn deny_no_match_returns_false(
                 sep in separator_strategy(),
                 clause_a in "[a-z]{1,8}",
                 clause_b in "[a-z]{1,8}",
             ) {
-                // Pattern that neither clause matches.
-                let pattern = "zzz**";
+                let pattern = "9zz**";
                 let cmd = format!("{clause_a}{sep}{clause_b}");
                 prop_assert!(
                     !deny_command_matches(pattern, &cmd),

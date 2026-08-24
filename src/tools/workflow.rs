@@ -207,6 +207,7 @@ pub fn summary_to_json(summary: &kf_workflow::WorkflowSummary) -> String {
         .collect();
     serde_json::json!({
         "workflow": summary.workflow_name,
+        "budget_exceeded": summary.budget_exceeded,
         "steps": steps.iter().map(|s| serde_json::json!({
             "name": s.name,
             "kind": format!("{:?}", s.kind).to_lowercase(),
@@ -771,6 +772,7 @@ mod tests {
         let mut summary = kf_workflow::WorkflowSummary {
             workflow_name: "wf".into(),
             outputs: std::collections::HashMap::new(),
+            ..Default::default()
         };
         summary.outputs.insert(
             "zebra".into(),
@@ -806,6 +808,7 @@ mod tests {
         let mut summary = kf_workflow::WorkflowSummary {
             workflow_name: "wf".into(),
             outputs: std::collections::HashMap::new(),
+            ..Default::default()
         };
         summary.outputs.insert(
             "s".into(),
@@ -828,6 +831,7 @@ mod tests {
         let mut summary = kf_workflow::WorkflowSummary {
             workflow_name: "wf".into(),
             outputs: std::collections::HashMap::new(),
+            ..Default::default()
         };
         summary.outputs.insert(
             "s".into(),
@@ -850,6 +854,7 @@ mod tests {
         let summary = kf_workflow::WorkflowSummary {
             workflow_name: "wf".into(),
             outputs: std::collections::HashMap::new(),
+            ..Default::default()
         };
         let json = summary_to_json(&summary);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();

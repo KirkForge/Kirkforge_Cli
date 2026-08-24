@@ -584,9 +584,37 @@ impl WorkflowExecutor {
         Self { workflow }
     }
 
-    /// Check budget limits (max_iterations, max_seconds). Returns `Ok(())`
-    /// if within budget, or `Err` with a budget-exceeded message.
-    /// Inserts an `on_exceeded` step output if one is configured.
+    /// Insert the synthetic `on_exceeded` step output (if configured and not
+    /// already present) so the handler's output reaches the model. Deduped
+    /// across the max_iterations / max_seconds branches.
+    fn insert_on_exceeded(
+        on_exceeded: &str,
+        reason: String,
+        completed: &mut HashSet<String>,
+        skipped: &HashSet<String>,
+        outputs: &mut HashMap<String, StepOutput>,
+    ) {
+        if !completed.contains(on_exceeded) && !skipped.contains(on_exceeded) {
+            completed.insert(on_exceeded.to_string());
+            outputs.insert(
+                on_exceeded.to_string(),
+                StepOutput {
+                    name: on_exceeded.to_string(),
+                    kind: StepKind::Agent,
+                    persona: String::new(),
+                    summary: reason,
+                    critique: None,
+                    structured_output: None,
+                },
+            );
+        }
+    }
+
+    /// Check budget limits (max_iterations, max_seconds). Returns `true` if a
+    /// budget is exceeded (and inserts the `on_exceeded` step output if one is
+    /// configured), `false` if within budget. Does NOT bail — the caller
+    /// returns `Ok(WorkflowSummary { budget_exceeded: true, .. })` so the
+    /// configured handler output reaches the model instead of being dropped.
     fn check_budget(
         budget: &Budget,
         iterations: u64,
@@ -594,50 +622,36 @@ impl WorkflowExecutor {
         completed: &mut HashSet<String>,
         skipped: &HashSet<String>,
         outputs: &mut HashMap<String, StepOutput>,
-    ) -> Result<()> {
+    ) -> bool {
         if let Some(max_iter) = budget.max_iterations {
             if iterations >= max_iter {
                 if let Some(ref on_exceeded) = budget.on_exceeded {
-                    if !completed.contains(on_exceeded) && !skipped.contains(on_exceeded) {
-                        completed.insert(on_exceeded.clone());
-                        outputs.insert(
-                            on_exceeded.clone(),
-                            StepOutput {
-                                name: on_exceeded.clone(),
-                                kind: StepKind::Agent,
-                                persona: String::new(),
-                                summary: format!("budget exceeded: max_iterations ({max_iter})"),
-                                critique: None,
-                                structured_output: None,
-                            },
-                        );
-                    }
+                    Self::insert_on_exceeded(
+                        on_exceeded,
+                        format!("budget exceeded: max_iterations ({max_iter})"),
+                        completed,
+                        skipped,
+                        outputs,
+                    );
                 }
-                bail!("workflow budget exceeded: max_iterations ({max_iter})");
+                return true;
             }
         }
         if let Some(max_secs) = budget.max_seconds {
             if start.elapsed().as_secs() >= max_secs {
                 if let Some(ref on_exceeded) = budget.on_exceeded {
-                    if !completed.contains(on_exceeded) && !skipped.contains(on_exceeded) {
-                        completed.insert(on_exceeded.clone());
-                        outputs.insert(
-                            on_exceeded.clone(),
-                            StepOutput {
-                                name: on_exceeded.clone(),
-                                kind: StepKind::Agent,
-                                persona: String::new(),
-                                summary: format!("budget exceeded: max_seconds ({max_secs})"),
-                                critique: None,
-                                structured_output: None,
-                            },
-                        );
-                    }
+                    Self::insert_on_exceeded(
+                        on_exceeded,
+                        format!("budget exceeded: max_seconds ({max_secs})"),
+                        completed,
+                        skipped,
+                        outputs,
+                    );
                 }
-                bail!("workflow budget exceeded: max_seconds ({max_secs})");
+                return true;
             }
         }
-        Ok(())
+        false
     }
 
     /// Build the prompt for an Agent step by prepending fork_from context
@@ -917,16 +931,24 @@ impl WorkflowExecutor {
                 }
             }
 
-            // Budget checks.
+            // Budget checks. On exceed, return Ok with budget_exceeded=true
+            // so the on_exceeded handler output (if any) reaches the model —
+            // bailing would drop WorkflowSummary, the only carrier of outputs.
             if let Some(ref budget) = self.workflow.budget {
-                Self::check_budget(
+                if Self::check_budget(
                     budget,
                     iterations,
                     start,
                     &mut completed,
                     &skipped,
                     &mut outputs,
-                )?;
+                ) {
+                    return Ok(WorkflowSummary {
+                        workflow_name: self.workflow.name.clone(),
+                        outputs,
+                        budget_exceeded: true,
+                    });
+                }
             }
 
             // Also consider skipped steps as "done" for dependency resolution.
@@ -1105,6 +1127,7 @@ impl WorkflowExecutor {
         Ok(WorkflowSummary {
             workflow_name: self.workflow.name.clone(),
             outputs,
+            budget_exceeded: false,
         })
     }
 }
@@ -1114,6 +1137,11 @@ impl WorkflowExecutor {
 pub struct WorkflowSummary {
     pub workflow_name: String,
     pub outputs: HashMap<String, StepOutput>,
+    /// `true` if a budget limit (max_iterations / max_seconds) was hit. When
+    /// `budget.on_exceeded` is configured, the handler step's output is in
+    /// `outputs` and the workflow returns `Ok` with this flag set instead of
+    /// bailing — so the configured handler output reaches the model.
+    pub budget_exceeded: bool,
 }
 
 impl WorkflowSummary {
@@ -2195,5 +2223,140 @@ mod tests {
     #[tokio::test]
     async fn eval_condition_bounded_failing_condition_is_false() {
         assert!(!eval_condition_bounded("false").await);
+    }
+
+    // WO 44.45 defect 2: a budget.on_exceeded handler must surface in the
+    // summary, not be dropped by a bail. Previously check_budget inserted the
+    // synthetic on_exceeded StepOutput then bailed, so WorkflowSummary (the
+    // only carrier of outputs) was dropped and the caller saw only
+    // "workflow budget exceeded". Now run() returns Ok with budget_exceeded
+    // =true and the handler output in `outputs`.
+    //
+    // `handler` depends on `work` so it is NOT ready in batch 1 — the budget
+    // hits on the batch-2 check (iterations=1 >= max_iterations=1) before
+    // handler runs, and check_budget inserts the synthetic handler output.
+    #[tokio::test]
+    async fn budget_on_exceeded_surfaces_handler_output() {
+        let wf = Workflow {
+            name: "budget".into(),
+            steps: vec![
+                Step {
+                    name: "work".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("do work".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "handler".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("handle budget exceed".into()),
+                    persona: Some("plan".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec!["work".into()],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+            ],
+            budget: Some(Budget {
+                max_tokens: None,
+                max_seconds: None,
+                max_iterations: Some(1),
+                on_exceeded: Some("handler".into()),
+            }),
+        };
+        let (runner, _log) = make_runner();
+        let exe = WorkflowExecutor::new(wf);
+        // Must be Ok, not Err — the handler output must reach the model.
+        let summary = exe.run(Arc::new(runner), None).await.unwrap();
+        assert!(
+            summary.budget_exceeded,
+            "budget_exceeded must be true when max_iterations is hit"
+        );
+        // The on_exceeded handler's synthetic output must be present.
+        let handler = summary
+            .step("handler")
+            .expect("on_exceeded handler output must be in summary");
+        assert!(
+            handler.summary.contains("budget exceeded: max_iterations"),
+            "handler summary must name the budget reason, got: {}",
+            handler.summary
+        );
+        // The first step's output is still present — budget exceed does not
+        // erase already-completed work.
+        assert!(summary.step("work").is_some());
+    }
+
+    // WO 44.45 defect 2: a budget with NO on_exceeded still returns Ok with
+    // budget_exceeded=true (the workflow just stops, no handler output).
+    // Two chained steps so the workflow has remaining work when budget hits.
+    #[tokio::test]
+    async fn budget_exceeded_without_handler_returns_ok_flag_set() {
+        let wf = Workflow {
+            name: "budget_no_handler".into(),
+            steps: vec![
+                Step {
+                    name: "a".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("do a".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "b".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("do b".into()),
+                    persona: Some("plan".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec!["a".into()],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+            ],
+            budget: Some(Budget {
+                max_tokens: None,
+                max_seconds: None,
+                max_iterations: Some(1),
+                on_exceeded: None,
+            }),
+        };
+        let (runner, _log) = make_runner();
+        let exe = WorkflowExecutor::new(wf);
+        let summary = exe.run(Arc::new(runner), None).await.unwrap();
+        assert!(summary.budget_exceeded);
     }
 }

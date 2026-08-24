@@ -100,6 +100,7 @@ impl AdapterSwap {
                     Some(config.model.gcp_region.as_str())
                 },
                 config.model.gcp_service_account_path.clone(),
+                &config.model.anthropic_api_base,
             ),
         );
 
@@ -156,6 +157,7 @@ impl AdapterSwap {
                     Some(config.model.gcp_region.as_str())
                 },
                 config.model.gcp_service_account_path.clone(),
+                &config.model.anthropic_api_base,
             ),
         );
         let _old = std::mem::replace(adapter, new_adapter);

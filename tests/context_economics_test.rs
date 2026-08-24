@@ -46,6 +46,7 @@ fn ollama_adapter(mock_uri: &str) -> Box<dyn kf_code::adapters::ModelAdapter> {
         None,
         None,
         None,
+        "https://api.anthropic.com",
     )
 }
 

@@ -42,7 +42,8 @@ use serde::{Deserialize, Serialize};
 // WO 39.2: bumped 103 → 104 → 105 (added ToolConfig.load_project_mcp_json).
 // WO 41.1: bumped 105 → 106 (added SessionConfig.auto_apply_patch).
 // WO 43.17: bumped 106 → 107 (added ToolConfig.plugin_consent_ledger).
-pub const CONFIG_FIELD_COUNT: usize = 107;
+// WO 44.22: bumped 107 → 108 (added ModelConfig.anthropic_api_base).
+pub const CONFIG_FIELD_COUNT: usize = 108;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

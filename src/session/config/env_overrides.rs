@@ -459,6 +459,11 @@ pub(super) fn apply_env_overrides(cfg: &mut Config) {
             cfg.model.anthropic_provider = val;
         }
     }
+    if let Ok(val) = std::env::var("KF_CODE_ANTHROPIC_API_BASE") {
+        if !val.is_empty() {
+            cfg.model.anthropic_api_base = val;
+        }
+    }
 
     // Per-provider API keys (env layer — these supplement the config
     // fields and are resolved by `adapters::auth::resolve_api_key`).

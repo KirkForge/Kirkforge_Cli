@@ -299,6 +299,7 @@ impl InProcessTaskSpawner {
                     Some(cfg.model.gcp_region.as_str())
                 },
                 cfg.model.gcp_service_account_path.clone(),
+                &cfg.model.anthropic_api_base,
             ),
             &cfg,
         );

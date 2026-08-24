@@ -16,6 +16,10 @@
 
 # URL of the Ollama or OpenAI-compatible gateway. This is where requests are
 # routed; it can be a local Ollama install or a cloud provider endpoint.
+# For the OpenAI-compatible /v1/chat/completions adapter, both forms work:
+#   ollama_host = "http://localhost:11434"
+#   ollama_host = "http://localhost:11434/v1"
+# The trailing /v1 is de-duplicated so neither produces /v1/v1/chat/completions.
 # Default: "" (empty).
 # ollama_host = ""
 
@@ -103,6 +107,12 @@
 # sends `x-api-key` with every request. Falls back to the
 # `ANTHROPIC_API_KEY` environment variable when omitted from config.
 # anthropic_api_key = ""
+
+# Base URL for the first-party Anthropic Messages API (/v1/messages is
+# appended). Defaults to the real Anthropic endpoint so the x-api-key
+# header reaches Anthropic, not the shared ollama_host. Set this only if
+# you route Anthropic traffic through a proxy or gateway.
+# anthropic_api_base = "https://api.anthropic.com"
 
 # Per-provider API keys for other adapters. Each falls back to the
 # corresponding `*_API_KEY` environment variable when omitted.

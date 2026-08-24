@@ -8,6 +8,10 @@ fn default_anthropic_provider() -> String {
     "anthropic".to_string()
 }
 
+fn default_anthropic_api_base() -> String {
+    "https://api.anthropic.com".to_string()
+}
+
 fn default_aws_region() -> String {
     "us-east-1".to_string()
 }
@@ -94,6 +98,12 @@ pub struct ModelConfig {
     pub routing_model_map: HashMap<String, String>,
     #[serde(default = "default_anthropic_provider")]
     pub anthropic_provider: String,
+    /// Base URL for the first-party Anthropic Messages API
+    /// (`/v1/messages` is appended). Defaults to the real Anthropic
+    /// endpoint so the `x-api-key` header reaches Anthropic, not the
+    /// shared `ollama_host` (WO 44.22).
+    #[serde(default = "default_anthropic_api_base")]
+    pub anthropic_api_base: String,
     #[serde(default = "default_aws_region")]
     pub aws_region: String,
     #[serde(default)]
@@ -183,6 +193,7 @@ impl Default for ModelConfig {
             router_model: String::new(),
             routing_model_map: HashMap::new(),
             anthropic_provider: default_anthropic_provider(),
+            anthropic_api_base: default_anthropic_api_base(),
             aws_region: default_aws_region(),
             gcp_service_account_path: None,
             gcp_project_id: String::new(),

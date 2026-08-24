@@ -515,6 +515,12 @@ impl PostHook for StratumSessionStartHook {
 
     fn handle(&self, _ctx: &HookContext) -> Result<(), String> {
         let mode = active_mode(Some(&self.config));
+        // WO 44.46: propagate the config/env-resolved mode into SESSION_MODE
+        // so the budget-slice compression listener (which reads
+        // current_session_mode) honors `tools.stratum_mode` / `STRATUM_MODE`
+        // instead of always defaulting to Full. The budget's Lite→Full
+        // auto-escalation still mutates this global after we write it.
+        set_session_mode(mode);
         let rules = format!(
             "mode={}\nruns_transforms={}\noffloads_bloat={}\noffload_threshold={}",
             mode.as_str(),

@@ -11,6 +11,14 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 44.30 — `max_tool_result_chars` now applies to file tools.
+  `truncate_tool_output` only handled `ToolOutcome::Success` and was only
+  called on the non-file branch of `record_tool_result`, so
+  `read_file(limit=500000)` injected megabytes into context regardless of
+  the configured cap. Extended `truncate_tool_output` to handle
+  `FileContent` (truncate content, force `truncated: true`) and
+  `GrepMatches` (render + truncate), and wired it into the file-tool
+  branch before the budget slice. [44.30](docs/workorders/44.30-file-tool-result-truncation-bypass.md)
 - WO 44.29 — `/plugins` reload no longer silently drops the Node/Go/generic
   built-in verifiers. `BUILTIN_VERIFIERS` (the retain allowlist in
   `rebuild_plugin_verifiers`) was missing the 5 WO 32.20 names

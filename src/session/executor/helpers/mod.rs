@@ -231,6 +231,59 @@ pub(crate) fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> To
                 ToolOutcome::Success { content }
             }
         }
+        ToolOutcome::FileContent {
+            path,
+            content,
+            truncated,
+        } => {
+            if content.len() > max_chars {
+                let mut boundary = max_chars;
+                while !content.is_char_boundary(boundary) {
+                    boundary -= 1;
+                }
+                let cut = format!(
+                    "{}...\n[output truncated to {} chars]",
+                    &content[..boundary],
+                    max_chars
+                );
+                ToolOutcome::FileContent {
+                    path,
+                    content: cut,
+                    truncated: true,
+                }
+            } else {
+                ToolOutcome::FileContent {
+                    path,
+                    content,
+                    truncated,
+                }
+            }
+        }
+        ToolOutcome::GrepMatches {
+            path,
+            matches,
+            total,
+        } => {
+            let rendered = outcome::format_grep_output(&path, &matches);
+            if rendered.len() > max_chars {
+                let mut boundary = max_chars;
+                while !rendered.is_char_boundary(boundary) {
+                    boundary -= 1;
+                }
+                let truncated = format!(
+                    "{}...\n[output truncated to {} chars]",
+                    &rendered[..boundary],
+                    max_chars
+                );
+                ToolOutcome::Success { content: truncated }
+            } else {
+                ToolOutcome::GrepMatches {
+                    path,
+                    matches,
+                    total,
+                }
+            }
+        }
         ToolOutcome::Error { message } => ToolOutcome::Error { message },
         ToolOutcome::Failure(err) => ToolOutcome::Failure(err.clone()),
         other => other,
@@ -941,6 +994,115 @@ mod tests {
         match truncate_tool_output(fail, 2) {
             ToolOutcome::Failure(crate::shared::ToolError::Cancelled) => {}
             other => panic!("expected Failure preserved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_tool_output_truncates_file_content_over_cap() {
+        let outcome = ToolOutcome::FileContent {
+            path: std::path::PathBuf::from("/tmp/huge.log"),
+            content: "abcdefghij".into(),
+            truncated: false,
+        };
+        let out = truncate_tool_output(outcome, 5);
+        match out {
+            ToolOutcome::FileContent {
+                content, truncated, ..
+            } => {
+                assert!(content.contains("abcde"), "{content}");
+                assert!(content.contains("truncated"), "{content}");
+                assert!(truncated, "truncated flag must be forced true when cut");
+            }
+            other => panic!("expected truncated FileContent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_tool_output_preserves_short_file_content() {
+        let outcome = ToolOutcome::FileContent {
+            path: std::path::PathBuf::from("/tmp/small.txt"),
+            content: "abc".into(),
+            truncated: false,
+        };
+        let out = truncate_tool_output(outcome, 10);
+        match out {
+            ToolOutcome::FileContent {
+                content, truncated, ..
+            } => {
+                assert_eq!(content, "abc");
+                assert!(!truncated, "short content should not be marked truncated");
+            }
+            other => panic!("expected unmodified FileContent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_tool_output_preserves_file_content_truncated_flag_from_tool() {
+        // When read_file already set truncated=true (line-limit cut), and the
+        // content is under max_tool_result_chars, the original flag is kept.
+        let outcome = ToolOutcome::FileContent {
+            path: std::path::PathBuf::from("/tmp/partial.log"),
+            content: "abc".into(),
+            truncated: true,
+        };
+        let out = truncate_tool_output(outcome, 10);
+        match out {
+            ToolOutcome::FileContent { truncated, .. } => {
+                assert!(
+                    truncated,
+                    "original truncated flag from read_file must be preserved"
+                );
+            }
+            other => panic!("expected FileContent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_tool_output_truncates_grep_matches_over_cap() {
+        let matches = vec![crate::shared::Match {
+            line_number: 1,
+            line: "a".into(),
+            context_before: vec![],
+            context_after: vec![],
+        }];
+        let outcome = ToolOutcome::GrepMatches {
+            path: std::path::PathBuf::from("/tmp/x"),
+            matches,
+            total: 1,
+        };
+        // The rendered output is "Matches in /tmp/x:\n>1: a\n\n" (22 chars).
+        let out = truncate_tool_output(outcome, 10);
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(content.contains("truncated"), "{content}");
+                assert!(
+                    content.len() < 50,
+                    "should be well under original: {content}"
+                );
+            }
+            other => panic!("expected truncated Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_tool_output_preserves_short_grep_matches() {
+        let matches = vec![crate::shared::Match {
+            line_number: 1,
+            line: "a".into(),
+            context_before: vec![],
+            context_after: vec![],
+        }];
+        let outcome = ToolOutcome::GrepMatches {
+            path: std::path::PathBuf::from("/tmp/x"),
+            matches,
+            total: 1,
+        };
+        let out = truncate_tool_output(outcome, 1000);
+        match out {
+            ToolOutcome::GrepMatches { total, .. } => {
+                assert_eq!(total, 1, "short grep should stay as GrepMatches");
+            }
+            other => panic!("expected unmodified GrepMatches, got {other:?}"),
         }
     }
 

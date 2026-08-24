@@ -784,6 +784,7 @@ impl Executor {
             }
 
             // ponytail: outcome already computed in Phase 2 (where timeout ran); no second timeout here.
+            let outcome = truncate_tool_output(outcome, max_tool_result_chars);
             #[cfg(feature = "budget")]
             let outcome = {
                 if let (Some(ref budget), Some(ref store)) = (&self.budget, &self.budget_store) {

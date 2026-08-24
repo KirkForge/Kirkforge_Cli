@@ -250,7 +250,10 @@ pub(crate) async fn handle_tool_outcome(
     Ok(None)
 }
 
-fn format_grep_output(path: &std::path::Path, matches: &[crate::shared::Match]) -> String {
+pub(crate) fn format_grep_output(
+    path: &std::path::Path,
+    matches: &[crate::shared::Match],
+) -> String {
     let mut out = format!("Matches in {}:\n", path.display());
     for m in matches {
         for ctx in &m.context_before {

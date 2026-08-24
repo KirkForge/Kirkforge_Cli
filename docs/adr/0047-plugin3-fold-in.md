@@ -1,5 +1,12 @@
 # ADR-047: Fold Plugin3 into Core
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-budget-core]
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-24
 

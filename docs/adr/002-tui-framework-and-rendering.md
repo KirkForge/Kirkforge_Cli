@@ -1,5 +1,12 @@
 # ADR 002: TUI Framework and Rendering
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

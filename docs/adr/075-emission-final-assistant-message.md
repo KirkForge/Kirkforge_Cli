@@ -1,5 +1,12 @@
 # ADR-075: Emission flattening for the executor-backed ModelClient
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-08-19
 - **Related:** [ADR-073](./073-tools-session-layering-ports.md) (tools↔session

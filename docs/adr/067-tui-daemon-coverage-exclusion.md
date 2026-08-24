@@ -1,5 +1,12 @@
 # ADR-067: TUI and daemon coverage exclusion rationale
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-08-06
 

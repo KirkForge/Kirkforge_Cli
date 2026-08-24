@@ -1,5 +1,12 @@
 # ADR-077: Bench spec task triage — implement / defer / drop
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-08-23
 - **Related:** [ADR-0066](./066-kirk-bench-spec.md) (the KIRK-BENCH spec + the

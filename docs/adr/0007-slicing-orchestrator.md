@@ -1,5 +1,12 @@
 # ADR-0007: Parallel slicing orchestrator
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-budget-core]
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-06-24
 

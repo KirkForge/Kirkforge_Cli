@@ -1,5 +1,12 @@
 # ADR-076: Reducer contract — fold verification state into `DelegationResult.packet`
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-08-20
 - **Related:** [ADR-075](./075-emission-final-assistant-message.md) (the

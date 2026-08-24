@@ -1,5 +1,12 @@
 # ADR 018: LSP integration — kf-lsp crate + lsp_query tool
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-lsp]
+-->
+
 ## Status
 
 Accepted (2026-07-19)

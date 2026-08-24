@@ -1,5 +1,12 @@
 # ADR-045: Continuous Evaluation Pipeline
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-bench]
+-->
+
 ## Status
 
 Accepted

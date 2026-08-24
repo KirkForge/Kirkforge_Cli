@@ -1,5 +1,12 @@
 # ADR-0004: OffloadStore reuse from Stratum
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-budget-core]
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-06-24
 

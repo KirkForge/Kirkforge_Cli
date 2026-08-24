@@ -1,5 +1,12 @@
 # ADR 015: Per-Session Undo Stack for File Edits
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

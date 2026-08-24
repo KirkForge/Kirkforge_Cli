@@ -1,5 +1,12 @@
 # ADR-023: Programmable JSON Workflow Engine
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-workflow]
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-19
 

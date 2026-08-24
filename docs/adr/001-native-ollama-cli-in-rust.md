@@ -1,5 +1,12 @@
 # ADR 001: Native Ollama CLI in Rust
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

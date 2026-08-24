@@ -1,5 +1,12 @@
 # ADR 013: Rust-Native Plugin System
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-budget-core, kf-plugin-sdk, kf-plugin-host]
+-->
+
 ## Status
 
 Accepted

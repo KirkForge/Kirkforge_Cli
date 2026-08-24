@@ -1,5 +1,12 @@
 # ADR-0009: Hook surface — PostToolUse, UserPromptSubmit, PreCompact
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-budget-core]
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-06-24
 

@@ -1,5 +1,12 @@
 # ADR-0066: KIRK-BENCH spec + signature Token Budget Challenge
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-30
 

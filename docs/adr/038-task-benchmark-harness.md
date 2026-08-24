@@ -1,5 +1,12 @@
 # ADR-038: Task-benchmark harness
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-bench]
+-->
+
 ## Status
 
 Accepted

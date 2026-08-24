@@ -1,5 +1,12 @@
 # ADR-039: Execution replay + time-travel
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

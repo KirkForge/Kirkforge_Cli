@@ -1,5 +1,12 @@
 # ADR 014: Background Bash Jobs
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

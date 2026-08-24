@@ -1,5 +1,12 @@
 # ADR-063: Plugin init scaffolding command
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-27
 

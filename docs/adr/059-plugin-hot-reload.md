@@ -1,5 +1,12 @@
 # ADR-059: Plugin hot-reload via file watcher
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-27
 

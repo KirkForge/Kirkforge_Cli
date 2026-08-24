@@ -1,5 +1,12 @@
 # ADR 003: Model Abstraction — Single Stream, Per-Model Adapters
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

@@ -1,5 +1,12 @@
 # ADR-041: Subagent model selection
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

@@ -1,5 +1,12 @@
 # ADR-0032: PlanReason trace events
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-20
 

@@ -1,5 +1,12 @@
 # ADR-070: Adapter-Gap Decisions and Deferrals
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-08-08
 

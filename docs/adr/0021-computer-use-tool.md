@@ -1,5 +1,12 @@
 # ADR 0021: `computer_use` tool via headless Chrome CDP
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-19
 

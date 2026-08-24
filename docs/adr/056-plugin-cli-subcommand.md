@@ -1,5 +1,12 @@
 # ADR-056: Shared plugin-ops layer and `kirkforge plugin` CLI subcommand
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-27
 

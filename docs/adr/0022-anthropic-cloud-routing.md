@@ -1,5 +1,12 @@
 # ADR 0022: Anthropic cloud routing — Bedrock and Vertex
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-19
 

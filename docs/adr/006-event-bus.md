@@ -1,5 +1,12 @@
 # ADR 006: Event Bus — Pub/Sub Dispatcher for Tool Execution Events
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

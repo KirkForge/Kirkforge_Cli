@@ -1,5 +1,12 @@
 # ADR-061: Plugin hook fail-open audit log
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-plugin-host]
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-27
 

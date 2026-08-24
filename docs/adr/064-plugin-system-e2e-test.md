@@ -1,5 +1,12 @@
 # ADR-064: Plugin system end-to-end integration test suite
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-27
 

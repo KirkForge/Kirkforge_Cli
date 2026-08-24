@@ -281,3 +281,32 @@
 - nextest per-test budgets + libtest "running for over 60 seconds" lines
   distinguish a hung future from a slow one — grep the full log for
   TERMINATING, not just FAIL.
+
+## WO 44.38 (PTY streaming event ordering)
+
+- `ToolStart` was emitted at record time (inside `record_tool_result`,
+  after the tool body ran), so PTY chunks flowing during the body had no
+  streaming card. Moving it to `spawn_batch` at dispatch time fixed the
+  root cause. The two record-time emissions were redundant.
+- The TUI `ToolStart` placeholder was NOT marked `streaming = true` —
+  it defaulted to `false`. The old `BashPartialOutput` arm only checked
+  `last.role == "tool"` (not `last.streaming`), so it appended anyway.
+  When I hardened the arm to check `last.streaming`, the placeholder
+  failed the check and a duplicate card was pushed. Fix: mark the
+  `ToolStart` placeholder `streaming = true` (semantically correct —
+  the tool IS in-flight).
+- `cargo check --lib` on this cold worktree took 5+ minutes; `cargo
+  check --workspace --all-targets` took 7+ minutes. The `cargo test`
+  build for the test target was even slower. Budget 15+ minutes for a
+  full gate cycle on a cold worktree. Running a single test by name
+  still requires compiling the test harness (~3 min after the lib is
+  built). The bash tool's 120s/300s timeouts were too short for cold
+  builds — use 900s.
+- `nohup cargo test > log 2>&1 &` loses the test result output (the
+  process finishes but the log only captures the Compiling line —
+  output buffering issue). Run `cargo test` directly in the foreground
+  with a long timeout instead.
+- Pre-existing flakes in `tui::commands::{jobs,tasks}` tests (date-based
+  job files, filesystem-dependent task dirs) — unrelated to my changes.
+  `same_ms_double_spawn_gets_distinct_temp_dirs` is a known concurrency
+  flake that passes in isolation.

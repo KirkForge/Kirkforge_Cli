@@ -184,10 +184,13 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
         TurnEvent::ToolStart { name, args: _ } => {
             state.generation.is_generating = false; // turn ended (tool call)
             state.generation.turn_tool_calls += 1;
-            state
-                .conversation
-                .messages
-                .push_back(ConversationEntry::new("tool", format!("🔧 {name} ...")));
+            // The placeholder is a streaming card: the tool is in-flight
+            // and PTY chunks may append to it before ToolResult finalizes
+            // (WO 44.38). Marking it streaming lets BashPartialOutput's
+            // "append to last streaming tool card" path find it.
+            let mut entry = ConversationEntry::new("tool", format!("🔧 {name} ..."));
+            entry.streaming = true;
+            state.conversation.messages.push_back(entry);
         }
         TurnEvent::ToolResult { name, output, .. } => {
             // Tool outputs are stored FULL in a sidecar and shown
@@ -452,41 +455,50 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             state.mark_dirty();
         }
         TurnEvent::BashPartialOutput(chunk) => {
-            // Stream PTY output into the running tool card. The last
-            // message is the "🔧 name ..." placeholder pushed by
-            // `ToolStart`; append the chunk and mark it streaming so the
-            // card renders a spinner + incremental text.
+            // Stream PTY output into a streaming tool card. With WO 44.38
+            // ToolStart fires at dispatch time, so a streaming card should
+            // already exist. But defense in depth: if the last tool entry
+            // is NOT streaming (completed card, or no tool entry yet),
+            // push a fresh streaming card so chunks always land somewhere
+            // sane instead of corrupting a completed card or being dropped.
+            let needs_fresh = match state.conversation.messages.back() {
+                Some(last) => last.role != "tool" || !last.streaming,
+                None => true,
+            };
+            if needs_fresh {
+                state
+                    .conversation
+                    .messages
+                    .push_back(ConversationEntry::new("tool", "🔧 bash …"));
+            }
             if let Some(last) = state.conversation.messages.back_mut() {
-                if last.role == "tool" {
-                    last.streaming = true;
-                    // Bound the streaming card: a `watch`/`top`/long
-                    // ping balloons `content` and the render path
-                    // re-wraps the whole string every frame. Keep the
-                    // tail under 64 KiB and surface a byte-count
-                    // marker so the user sees `… [N bytes total,
-                    // showing last 64K]` instead of silent loss. The
-                    // full output still lands in `tool_output` when
-                    // `ToolResult` finalizes the entry (WO 38.11).
-                    const PTY_TAIL_BYTES: usize = 64 * 1024;
-                    last.content.push_str(&chunk);
-                    if last.content.len() > PTY_TAIL_BYTES {
-                        let total = last.content.len();
-                        let mut start = total - PTY_TAIL_BYTES;
-                        // Walk back to a char boundary BEFORE slicing so a
-                        // multibyte char straddling the offset doesn't
-                        // panic (WO 43.25). The prior char_indices fixup
-                        // here was dead code — the slice panicked first.
-                        while !last.content.is_char_boundary(start) {
-                            start -= 1;
-                        }
-                        let tail = last.content[start..].to_string();
-                        last.content = format!(
-                            "… [{total} bytes total, showing last {PTY_TAIL_BYTES}]\n{tail}"
-                        );
+                last.streaming = true;
+                // Bound the streaming card: a `watch`/`top`/long
+                // ping balloons `content` and the render path
+                // re-wraps the whole string every frame. Keep the
+                // tail under 64 KiB and surface a byte-count
+                // marker so the user sees `… [N bytes total,
+                // showing last 64K]` instead of silent loss. The
+                // full output still lands in `tool_output` when
+                // `ToolResult` finalizes the entry (WO 38.11).
+                const PTY_TAIL_BYTES: usize = 64 * 1024;
+                last.content.push_str(&chunk);
+                if last.content.len() > PTY_TAIL_BYTES {
+                    let total = last.content.len();
+                    let mut start = total - PTY_TAIL_BYTES;
+                    // Walk back to a char boundary BEFORE slicing so a
+                    // multibyte char straddling the offset doesn't
+                    // panic (WO 43.25). The prior char_indices fixup
+                    // here was dead code — the slice panicked first.
+                    while !last.content.is_char_boundary(start) {
+                        start -= 1;
                     }
-                    last.bump_version();
-                    state.mark_dirty();
+                    let tail = last.content[start..].to_string();
+                    last.content =
+                        format!("… [{total} bytes total, showing last {PTY_TAIL_BYTES}]\n{tail}");
                 }
+                last.bump_version();
+                state.mark_dirty();
             }
         }
         TurnEvent::MemoryExtracted { count, turn } => {
@@ -507,7 +519,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             state.generation.turn_tool_calls = 0;
             state.generation.continuation = None;
             for msg in &mut state.conversation.messages {
-                if msg.role == "assistant" {
+                if msg.role == "assistant" || msg.role == "tool" {
                     msg.streaming = false;
                     msg.bump_version();
                 }
@@ -904,8 +916,14 @@ mod tests {
     /// `BashPartialOutput` streams PTY output into the running tool card:
     /// it marks the last tool entry as streaming and appends the chunk.
     /// The entry stays streaming until `ToolResult` finalizes it.
+    ///
+    /// WO 44.38: with ToolStart now emitted at dispatch time, this is the
+    /// real event order (start → chunks → result). The test also covers
+    /// the defense-in-depth path: chunks arriving with no streaming card
+    /// get a fresh one instead of being dropped.
     #[test]
     fn bash_partial_output_streams_into_running_tool_card() {
+        // ── Order 1: ToolStart first (the real order post-44.38) ──
         let mut s = app_state();
         dispatch_turn_event(
             &mut s,
@@ -940,6 +958,62 @@ mod tests {
             s.conversation.messages[0].tool_output.as_deref(),
             Some("final")
         );
+
+        // ── Order 2: chunks before ToolStart (defense in depth) ──
+        // If chunks arrive with no streaming tool card (e.g. a race or
+        // pre-44.38 executor), the TUI must push a fresh streaming card
+        // instead of dropping the chunks.
+        let mut s2 = app_state();
+        dispatch_turn_event(&mut s2, TurnEvent::BashPartialOutput("early chunk".into()));
+        assert_eq!(s2.conversation.messages.len(), 1);
+        assert_eq!(s2.conversation.messages[0].role, "tool");
+        assert!(s2.conversation.messages[0].streaming);
+        assert!(s2.conversation.messages[0].content.contains("early chunk"));
+    }
+
+    /// WO 44.38 regression: chunks arriving after a completed tool card
+    /// must NOT corrupt it. The completed card's content and streaming
+    /// flag must be untouched; a fresh streaming card is pushed instead.
+    #[test]
+    fn bash_partial_output_after_completed_card_does_not_corrupt_it() {
+        let mut s = app_state();
+        // First tool: start → result (completed card).
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolStart {
+                name: "grep".into(),
+                args: serde_json::json!({"pattern": "foo"}),
+            },
+        );
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "grep".into(),
+                output: "1 hit".into(),
+                success: true,
+            },
+        );
+        assert_eq!(s.conversation.messages.len(), 1);
+        assert!(!s.conversation.messages[0].streaming);
+        let completed_content = s.conversation.messages[0].content.clone();
+
+        // Second tool's PTY chunks arrive (before its ToolStart, or after
+        // a completed card from a prior batch). Must not touch the grep card.
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput("chunk for bash".into()),
+        );
+
+        // The completed card is untouched.
+        assert_eq!(s.conversation.messages[0].content, completed_content);
+        assert!(!s.conversation.messages[0].streaming);
+        // A fresh streaming card was pushed for the chunks.
+        assert_eq!(s.conversation.messages.len(), 2);
+        assert_eq!(s.conversation.messages[1].role, "tool");
+        assert!(s.conversation.messages[1].streaming);
+        assert!(s.conversation.messages[1]
+            .content
+            .contains("chunk for bash"));
     }
 
     /// `ToolResult` is the v1.1 contract: full output goes into

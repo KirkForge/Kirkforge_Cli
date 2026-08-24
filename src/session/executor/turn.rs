@@ -769,15 +769,7 @@ impl Executor {
                 return Ok(());
             }
 
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::ToolStart {
-                        name: tc.name.clone(),
-                        args: run_args.clone(),
-                    })
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
-            );
+            // ToolStart was emitted at dispatch time in spawn_batch (WO 44.38).
 
             if matches!(tc.name.as_str(), "read_file" | "read_image") {
                 self.sandbox.mark_read(&resolved);
@@ -860,15 +852,7 @@ impl Executor {
 
         // Non-file tools already passed their pre-gate hooks and checks; the
         // body ran in Phase 2. Just record its outcome here.
-        crate::send_or_warn!(
-            event_tx
-                .send(TurnEvent::ToolStart {
-                    name: tc.name.clone(),
-                    args: tc.arguments.clone(),
-                })
-                .await,
-            "TurnEvent receiver dropped; discarding event"
-        );
+        // ToolStart was emitted at dispatch time in spawn_batch (WO 44.38).
 
         let args_json = serde_json::to_string(&tc.arguments).unwrap_or_default();
 

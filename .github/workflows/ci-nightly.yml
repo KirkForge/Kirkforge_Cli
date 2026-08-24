@@ -110,9 +110,14 @@ jobs:
           fi
 
       - name: Run integration tests against Ollama (nightly profile, include ignored)
-        # nightly profile: 600s slow-timeout, --run-ignored all so
-        # #[ignore] tests run. -p kf-code scopes to the integration tests.
-        run: cargo nextest run --profile nightly --run-ignored all --no-fail-fast --locked -p kf-code
+        # nightly profile: 600s slow-timeout, --run-ignored all so the 7
+        # #[ignore]d Ollama tests in tests/integration_test.rs run. --test
+        # integration_test scopes to that target only; -p kf-code alone
+        # selects the whole package (bin unit tests + every tests/*.rs), and
+        # --run-ignored all would sweep in src/tui/clipboard.rs (panics
+        # headless) and every slow real-subprocess unit ignore. The
+        # real-network JWKS smoke lives in kf-rbac, not kf-code (WO 44.53).
+        run: cargo nextest run --profile nightly --run-ignored all --no-fail-fast --locked -p kf-code --test integration_test
 
       - name: Run smoke tests (nightly profile)
         run: cargo nextest run --profile nightly --no-fail-fast --locked -p kf-code --test smoke_test

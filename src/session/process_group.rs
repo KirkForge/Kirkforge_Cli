@@ -96,6 +96,124 @@ pub fn kill_process_group_by_pid(pid: u32) {
 #[cfg(not(unix))]
 pub fn kill_process_group_by_pid(_pid: u32) {}
 
+// ── Windows Job Object tree-kill (WO 44.44 item 4) ──
+//
+// On Windows there is no `killpg`. `tokio::process` + `kill_on_drop` kills
+// only the direct `sh` child; `sh -c "a; b"` grandchildren survive and keep
+// the stdout/stderr pipes open, deadlocking the caller's drain tasks past
+// their own timeout (the WO 43.26 regression). A Job Object with
+// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` kills the entire process tree when
+// the job handle is closed, so dropping the `JobGuard` reaps the tree.
+#[cfg(windows)]
+mod job_object {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    };
+
+    /// RAII guard: dropping it closes the job handle, which kills every
+    /// process assigned to the job (the `KILL_ON_JOB_CLOSE` flag). Holds
+    /// the only ref to the job so the kill fires exactly once.
+    pub struct JobGuard {
+        handle: HANDLE,
+    }
+
+    // SAFETY: JobGuard owns its HANDLE exclusively (created by
+    // CreateJobObjectW, never shared/aliased). The handle is a kernel
+    // object reference, not a pointer into another thread's data — moving
+    // it across threads is safe. This unlocks `Send` for futures holding
+    // a JobGuard across `.await` (tokio::spawn requires `Send`).
+    unsafe impl Send for JobGuard {}
+
+    impl JobGuard {
+        /// Create a job object that kills its process tree when closed.
+        pub fn new() -> std::io::Result<Self> {
+            // SAFETY: CreateJobObjectW with null args creates an unnamed
+            // job with default security. Runs in the parent (no async-
+            // signal-safety constraint).
+            let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: zeroed produces a valid all-zero POD struct; the
+            // fields we need (BasicLimitInformation.LimitFlags) are set
+            // immediately after.
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            // SAFETY: handle is a valid job object; info is a POD struct.
+            let ok = unsafe {
+                SetInformationJobObject(
+                    handle,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as _,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            };
+            if ok == 0 {
+                unsafe { CloseHandle(handle) };
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(Self { handle })
+        }
+
+        /// Assign a child process (by pid) to the job. Must be called right
+        /// after spawn — Windows applies the job atomically, so any
+        /// descendant the child later spawns inherits the job.
+        pub fn assign(&self, pid: u32) -> std::io::Result<()> {
+            // SAFETY: OpenProcess with PROCESS_SET_QUOTA | PROCESS_TERMINATE
+            // is the documented access for AssignProcessToJobObject; the
+            // handle is closed here.
+            let access = PROCESS_SET_QUOTA | PROCESS_TERMINATE;
+            let proc = unsafe { OpenProcess(access, 0, pid) };
+            if proc.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let ok = unsafe { AssignProcessToJobObject(self.handle, proc) };
+            unsafe { CloseHandle(proc) };
+            if ok == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for JobGuard {
+        fn drop(&mut self) {
+            // SAFETY: we hold the only ref; closing the handle fires the
+            // KILL_ON_JOB_CLOSE limit and reaps the tree.
+            unsafe { CloseHandle(self.handle) };
+        }
+    }
+}
+
+/// On Windows, create a Job Object guard and assign the child to it so a
+/// later drop kills the whole process tree. On non-Windows this is a no-op
+/// (Unix uses process groups via `setup_process_group`/`kill_process_group`).
+/// Returns `None` if the job could not be created (best-effort: the caller
+/// falls back to `kill_on_drop` on the immediate child).
+#[cfg(windows)]
+pub fn assign_child_to_job(child: &tokio::process::Child) -> Option<job_object::JobGuard> {
+    let pid = child.id()?;
+    match job_object::JobGuard::new() {
+        Ok(g) => match g.assign(pid) {
+            Ok(()) => Some(g),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to assign child to job object");
+                None
+            }
+        },
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to create job object");
+            None
+        }
+    }
+}
+
 /// Wait for a child to exit, bounded by a timeout.
 ///
 /// This is best-effort reaping: if the child does not exit in time it

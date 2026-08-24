@@ -919,5 +919,5 @@ tree, ~11 stale claims corrected in-line. See
 | 44.53 | [Nightly ollama job runs every kf-code #[ignore] test and is red-by-construction](44.53-nightly-ollama-runs-all-ignored-unit-tests.md) | Planned |
 | 44.54 | [Nightly mutants job overwrites its baseline; only the last module survives](44.54-mutants-baseline-overwritten-per-module.md) | Planned |
 | 44.55 | [e2e test target is invisible to the PR gate and locally downgraded to a warning](44.55-e2e-compile-gate-invisible-on-pr.md) | Planned |
-| 44.56 | [impact-fallback.sh runs uncapped workspace tests; documented OOM hazard](44.56-impact-fallback-uncapped-test-threads-oom.md) | Planned |
+| 44.56 | [impact-fallback.sh runs uncapped workspace tests; documented OOM hazard](44.56-impact-fallback-uncapped-test-threads-oom.md) | Done |
 

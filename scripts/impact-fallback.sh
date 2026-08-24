@@ -58,7 +58,22 @@ run_step() {
 }
 
 run_step "Cargo check" cargo check --all-targets --locked
-run_step "Unit tests" cargo test --locked --workspace
+
+# Cap test threads: the workspace fans out ~38 integration test binaries and
+# each spawns a tokio runtime; uncapped `cargo test --workspace` OOMs the host
+# (killed a prior session — see test-full.sh / lessons.md). Mirror test-full.sh:
+# nextest ci-full when available, else cargo test with --test-threads capped at
+# min(KF_TEST_THREADS, 8).
+export PATH="$HOME/.cargo/bin:$PATH"
+if command -v cargo-nextest >/dev/null 2>&1; then
+    TEST_CMD=(cargo nextest run --profile ci-full --workspace --no-fail-fast --locked)
+else
+    THREADS="${KF_TEST_THREADS:-$(nproc)}"
+    if [ "$THREADS" -gt 8 ]; then THREADS=8; fi
+    TEST_CMD=(cargo test --locked --workspace --no-fail-fast -- --test-threads="$THREADS")
+fi
+run_step "Unit tests" "${TEST_CMD[@]}"
+
 run_step "Clippy" cargo clippy --all-targets -- -D warnings
 
 echo

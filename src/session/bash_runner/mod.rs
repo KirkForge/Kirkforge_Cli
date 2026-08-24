@@ -458,7 +458,7 @@ pub(crate) fn sanitized_path(original: &str) -> String {
 /// This is the entry point used by the model's bash tool; tests should call
 /// `sanitized_path` directly with a constructed string to avoid mutating
 /// global environment state.
-fn model_command_path() -> String {
+pub(crate) fn model_command_path() -> String {
     let original = std::env::var("PATH").unwrap_or_default();
     sanitized_path(&original)
 }

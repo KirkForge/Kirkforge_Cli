@@ -13,6 +13,13 @@
 //! (e.g. inside a sandboxed bench run that does not wire up a spawner),
 //! the tool returns `ToolOutcome::Error` rather than silently no-op'ing.
 
+use crate::session::bash_runner::{
+    cap_to_string, drain_capped, model_command_path, scrub_secrets_from_child_env, shell_program,
+    MAX_BASH_OUTPUT_BYTES,
+};
+#[cfg(windows)]
+use crate::session::process_group::assign_child_to_job;
+use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use crate::shared::access::{DenyList, PathGuard};
 use crate::shared::bash_safety::check_bash_command_str;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
@@ -22,7 +29,9 @@ use crate::tools::{Tool, ToolContext};
 use anyhow::{bail, Context, Result};
 use kf_workflow::{StepOutput, StepRequest, StepRunner, Workflow, WorkflowExecutor};
 use std::collections::HashMap;
+use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 /// `workflow_run` tool. Stateless: every invocation resolves a template
@@ -232,51 +241,106 @@ const WORKFLOW_BASH_TIMEOUT_SECS: u64 = 30;
 /// cancellation from a normal exit so the caller can produce a
 /// step-specific error message.
 enum BashOutcome {
-    Output(std::process::Output),
+    Output {
+        stdout: String,
+        stderr: String,
+        status: std::process::ExitStatus,
+    },
     SpawnError(std::io::Error),
     Timeout,
     Cancelled,
 }
 
 /// Spawn `sh -c <command>` with `kill_on_drop`, bounded by both a wall
-/// timeout and the workflow cancel token. On timeout or cancel the
-/// `Child` is dropped, and `kill_on_drop` reaps the process group.
+/// timeout and the workflow cancel token. On timeout or cancel the child
+/// process tree is killed (Unix process group / Windows Job Object) and
+/// the `Child` is dropped, and `kill_on_drop` reaps the direct child.
 ///
-/// Mirrors the foreground `run_shell_with_token` pattern (`bash_runner`
-/// /mod.rs:629) but in the simpler `output()` form, since workflow
-/// steps don't need the capped-stream drain machinery.
+/// WO 44.44: this path now inherits the same hardening as the foreground
+/// `run_shell_with_token` (`bash_runner/mod.rs`): secret env scrub, PATH
+/// pin, capped output drain (`MAX_BASH_OUTPUT_BYTES`), and process-tree
+/// kill (Unix `killpg` / Windows Job Object). Previously it buffered the
+/// whole stream via `wait_with_output()` with no cap and no env scrub.
 async fn run_bounded_bash(command: &str, cancel_token: &CancellationToken) -> BashOutcome {
-    let mut cmd = tokio::process::Command::new("sh");
+    let mut cmd = tokio::process::Command::new(shell_program());
     cmd.arg("-c")
         .arg(command)
         .kill_on_drop(true)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let child = match cmd.spawn() {
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("PATH", model_command_path());
+    scrub_secrets_from_child_env(&mut cmd);
+    setup_process_group(&mut cmd);
+
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return BashOutcome::SpawnError(e),
     };
-    let out_fut = child.wait_with_output();
-    let timeout_fut =
-        tokio::time::sleep(std::time::Duration::from_secs(WORKFLOW_BASH_TIMEOUT_SECS));
-    tokio::pin!(out_fut);
-    tokio::pin!(timeout_fut);
-    let cancel_fut = cancel_token.cancelled();
-    tokio::pin!(cancel_fut);
-    tokio::select! {
-        biased;
-        result = &mut out_fut => match result {
-            Ok(o) => BashOutcome::Output(o),
-            Err(e) => BashOutcome::SpawnError(e),
-        },
-        _ = &mut timeout_fut => BashOutcome::Timeout,
-        _ = &mut cancel_fut => BashOutcome::Cancelled,
+    // Windows: wrap the child in a Job Object so a later drop kills the
+    // whole process tree (no process-group kill on Windows). Unix uses
+    // killpg via kill_process_group below.
+    #[cfg(windows)]
+    let _job = assign_child_to_job(&child);
+
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let drain_stdout = tokio::spawn(drain_capped(stdout, MAX_BASH_OUTPUT_BYTES));
+    let drain_stderr = tokio::spawn(drain_capped(stderr, MAX_BASH_OUTPUT_BYTES));
+
+    let timeout_at = tokio::time::Instant::now() + Duration::from_secs(WORKFLOW_BASH_TIMEOUT_SECS);
+    // Internal discriminant for the select's Err arm only (not the public
+    // BashOutcome): distinguishes timeout from cancel without reusing the
+    // public enum, which also carries Output/SpawnError that can't be errors.
+    enum KillReason {
+        Timeout,
+        Cancelled,
     }
-    // On timeout/cancel the `child` (still owned here) is dropped, and
-    // `kill_on_drop` issues the kill. `out_fut` held a `&mut` borrow on
-    // `child`, so the borrow must end before drop — `tokio::pin!` keeps
-    // the future alive but the borrow is released when the select
-    // returns and `out_fut` goes out of scope at the function's tail.
+    let status_result = tokio::select! {
+        biased;
+        result = child.wait() => Ok(result),
+        _ = tokio::time::sleep_until(timeout_at) => Err(KillReason::Timeout),
+        _ = cancel_token.cancelled() => Err(KillReason::Cancelled),
+    };
+
+    match status_result {
+        Ok(Ok(status)) => {
+            let (raw_out, dropped_out) = join_drain(drain_stdout).await;
+            let (raw_err, dropped_err) = join_drain(drain_stderr).await;
+            BashOutcome::Output {
+                stdout: cap_to_string(raw_out, dropped_out),
+                stderr: cap_to_string(raw_err, dropped_err),
+                status,
+            }
+        }
+        Ok(Err(e)) => BashOutcome::SpawnError(e),
+        Err(KillReason::Timeout) => {
+            // Kill the process tree so the drain tasks see EOF and the
+            // pipes close. Unix: killpg the whole group. Windows: drop the
+            // JobGuard (KILL_ON_JOB_CLOSE) — it goes out of scope here.
+            kill_process_group(&mut child);
+            reap_child(&mut child, Duration::from_secs(2)).await;
+            BashOutcome::Timeout
+        }
+        Err(KillReason::Cancelled) => {
+            kill_process_group(&mut child);
+            reap_child(&mut child, Duration::from_secs(2)).await;
+            BashOutcome::Cancelled
+        }
+    }
+}
+
+/// Join a drain task with a bounded timeout. Returns the bytes + dropped
+/// count, or empty buffers if the join failed (the kill already ran, so
+/// partial output is best-effort). Mirrors `bash_runner::join_drain` but
+/// inline because workflow bash doesn't surface a `ShellError::Drain` —
+/// a stuck drainer is folded into the (possibly empty) output.
+async fn join_drain(
+    handle: tokio::task::JoinHandle<std::io::Result<(Vec<u8>, u64)>>,
+) -> (Vec<u8>, u64) {
+    match tokio::time::timeout(Duration::from_secs(5), handle).await {
+        Ok(Ok(Ok(pair))) => pair,
+        _ => (Vec::new(), 0),
+    }
 }
 
 /// Adapter that presents a `TaskSpawner` as a `StepRunner`. Each agent step
@@ -325,14 +389,15 @@ impl StepRunner for TaskSpawnerStepRunner {
         }
         let output = run_bounded_bash(command, &self.cancel_token).await;
         match output {
-            BashOutcome::Output(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if !output.status.success() {
+            BashOutcome::Output {
+                stdout,
+                stderr,
+                status,
+            } => {
+                if !status.success() {
                     bail!(
                         "step '{name}': bash exited {} — stderr: {}",
-                        output
-                            .status
+                        status
                             .code()
                             .map(|c| c.to_string())
                             .unwrap_or_else(|| "signal".into()),
@@ -454,15 +519,16 @@ impl StepRunner for TaskSpawnerStepRunner {
                             bail!("step '{}': bash command denied: {denied}", req.name);
                         }
                         match run_bounded_bash(&req.command, &cancel_token).await {
-                            BashOutcome::Output(output) => {
-                                let stdout = String::from_utf8_lossy(&output.stdout);
-                                let stderr = String::from_utf8_lossy(&output.stderr);
-                                if !output.status.success() {
+                            BashOutcome::Output {
+                                stdout,
+                                stderr,
+                                status,
+                            } => {
+                                if !status.success() {
                                     bail!(
                                         "step '{}': bash exited {} — stderr: {}",
                                         req.name,
-                                        output
-                                            .status
+                                        status
                                             .code()
                                             .map(|c| c.to_string())
                                             .unwrap_or_else(|| "signal".into()),
@@ -963,17 +1029,14 @@ mod tests {
         );
     }
 
-    // WO 43.26: a stuck workflow bash step must hit the step timeout,
-    // not hang until the executor's outer tool timeout. Bounded by an
-    // outer 45s wall (timeout is 30s): if the timeout path regresses,
-    // the test fails instead of hanging indefinitely.
-    // DEFERRED (unix-only): on Windows the whole test future hangs past
-    // its own inner 45s tokio timeout (tokio::process + kill_on_drop of
-    // an msys `sh` tree — the grandchild holds the pipes; no process-group
-    // kill on Windows). Same subsystem as WO 44.44 (workflow bash spawn
-    // hygiene); the Windows timeout/kill semantics are tracked there.
-    // Remove this cfg when 44.44 lands a Windows-safe kill strategy.
-    #[cfg(unix)]
+    // WO 43.26 / WO 44.44: a stuck workflow bash step must hit the step
+    // timeout, not hang until the executor's outer tool timeout. Bounded by
+    // an outer 45s wall (timeout is 30s): if the timeout path regresses, the
+    // test fails instead of hanging indefinitely. WO 44.44 item 4 un-gated
+    // this test: the Windows Job Object wrap kills the whole `sh` tree on
+    // timeout (KILL_ON_JOB_CLOSE), so the drain tasks see EOF and the
+    // future resolves instead of deadlocking on the pipe held by an
+    // orphaned grandchild.
     #[tokio::test]
     async fn run_bash_stuck_step_times_out() {
         let spawner: Arc<dyn TaskSpawner> = Arc::new(EchoSpawner {

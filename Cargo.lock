@@ -2099,6 +2099,7 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-typescript",
  "url",
+ "windows-sys 0.61.2",
  "wiremock",
  "yup-oauth2",
 ]

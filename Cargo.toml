@@ -362,3 +362,9 @@ panic = "abort"
 [profile.dev]
 opt-level = 0
 debug = true
+
+# WO 44.44: Windows Job Objects for process-tree kill on timeout. Already in
+# the lock graph via kf-memory-store's Windows PID probe; target-gated so
+# Linux/macOS builds pay zero size cost.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading"] }

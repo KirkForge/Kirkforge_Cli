@@ -11,6 +11,11 @@ if ! command -v cargo-mutants >/dev/null 2>&1; then
     exit 1
 fi
 # Default: run all four target modules. Pass file paths as args to override.
+# Each run writes to its own -o dir so runs don't overwrite each other
+# (WO 44.54). cargo-mutants creates `<dir>/mutants.out/` with outcomes.json
+# inside; the slug is derived from the file basename.
+OUT_BASE="${OUT_BASE:-mutants-out}"
+mkdir -p "$OUT_BASE"
 if [ "$#" -gt 0 ]; then
     TARGETS=("$@")
 else
@@ -22,6 +27,8 @@ else
     )
 fi
 for f in "${TARGETS[@]}"; do
-    echo "=== mutants: $f ==="
-    cargo mutants --file "$f" -j 2
+    slug=$(basename "${f%.rs}")
+    slug=${slug#mod}
+    echo "=== mutants: $f -> $OUT_BASE/$slug ==="
+    cargo mutants --file "$f" -j 2 -o "$OUT_BASE/$slug"
 done

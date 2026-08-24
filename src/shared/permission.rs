@@ -945,7 +945,12 @@ mod tests {
     /// safe for deny VALUE matching; a real shell lexer is the upgrade path.
     #[test]
     fn test_evaluate_deny_command_normalize_ceiling_verb_stays_first() {
-        let rules = vec![rule("bash", "command", "git status", PermissionAction::Deny)];
+        let rules = vec![rule(
+            "bash",
+            "command",
+            "git status",
+            PermissionAction::Deny,
+        )];
         assert_ne!(
             evaluate(
                 &rules,

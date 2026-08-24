@@ -349,13 +349,22 @@ impl Tool for StratumMode {
         let json_out = json_get_bool(&args, "json");
         let value = json_get_string(&args, "value");
 
+        // WO 44.46: actually set the session mode when `value` parses, and
+        // report the live session mode (current_session_mode) when `value`
+        // is absent — previously this echoed a hardcoded Mode::Full and never
+        // mutated SESSION_MODE, so the tool's "set it for this invocation"
+        // contract was unfulfilled and the show path couldn't reflect the
+        // budget's auto-escalation state.
         let mode = if let Some(ref v) = value {
             match v.parse::<Mode>() {
-                Ok(m) => m,
+                Ok(m) => {
+                    set_session_mode(m);
+                    m
+                }
                 Err(e) => return error_json(format!("stratum_mode: {e}")),
             }
         } else {
-            Mode::Full
+            current_session_mode()
         };
 
         if json_out {
@@ -515,6 +524,12 @@ impl PostHook for StratumSessionStartHook {
 
     fn handle(&self, _ctx: &HookContext) -> Result<(), String> {
         let mode = active_mode(Some(&self.config));
+        // WO 44.46: propagate the config/env-resolved mode into SESSION_MODE
+        // so the budget-slice compression listener (which reads
+        // current_session_mode) honors `tools.stratum_mode` / `STRATUM_MODE`
+        // instead of always defaulting to Full. The budget's Lite→Full
+        // auto-escalation still mutates this global after we write it.
+        set_session_mode(mode);
         let rules = format!(
             "mode={}\nruns_transforms={}\noffloads_bloat={}\noffload_threshold={}",
             mode.as_str(),
@@ -708,7 +723,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_session_start_hook_returns_ok() {
+        let _guard = SessionModeGuard::new();
         let config: crate::shared::SharedConfig =
             Arc::new(std::sync::RwLock::new(crate::shared::Config::default()));
         let hook = StratumSessionStartHook { config };
@@ -717,6 +734,120 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(hook.handle(&ctx), Ok(()));
+        // Default config resolves Mode::Full; the hook must propagate it.
+        assert_eq!(
+            current_session_mode(),
+            Mode::Full,
+            "session-start hook must set SESSION_MODE from resolved mode"
+        );
+    }
+
+    // ── WO 44.46 wiring tests ─────────────────────────────────────────
+
+    /// Config `stratum_mode = "off"` → the hook writes Mode::Off into
+    /// SESSION_MODE, so the budget-slice listener honors pass-through.
+    #[test]
+    #[serial]
+    fn session_start_hook_propagates_config_off_to_session_mode() {
+        let _guard = SessionModeGuard::new();
+        let mut cfg = crate::shared::Config::default();
+        cfg.tools.stratum_mode = Some("off".into());
+        let config: crate::shared::SharedConfig = Arc::new(std::sync::RwLock::new(cfg));
+        let hook = StratumSessionStartHook { config };
+        let ctx = HookContext {
+            event: "session-start".into(),
+            ..Default::default()
+        };
+        assert_eq!(hook.handle(&ctx), Ok(()));
+        assert_eq!(
+            current_session_mode(),
+            Mode::Off,
+            "config stratum_mode=off must reach SESSION_MODE at session start"
+        );
+    }
+
+    /// Config `stratum_mode = "lite"` → SESSION_MODE is Lite at session
+    /// start (the budget's Lite→Full escalation can still flip it later).
+    #[test]
+    #[serial]
+    fn session_start_hook_propagates_config_lite_to_session_mode() {
+        let _guard = SessionModeGuard::new();
+        let mut cfg = crate::shared::Config::default();
+        cfg.tools.stratum_mode = Some("lite".into());
+        let config: crate::shared::SharedConfig = Arc::new(std::sync::RwLock::new(cfg));
+        let hook = StratumSessionStartHook { config };
+        let ctx = HookContext {
+            event: "session-start".into(),
+            ..Default::default()
+        };
+        assert_eq!(hook.handle(&ctx), Ok(()));
+        assert_eq!(current_session_mode(), Mode::Lite);
+    }
+
+    /// `stratum_mode` tool with `value=ultra` sets SESSION_MODE; a
+    /// follow-up call with no value reads back the live mode (ultra),
+    /// not a hardcoded Full.
+    #[tokio::test]
+    #[serial]
+    async fn stratum_mode_tool_sets_and_reports_live_session_mode() {
+        let _guard = SessionModeGuard::new();
+        let tool = StratumMode;
+        let ctx = ToolContext::new();
+
+        // Set to ultra.
+        set_session_mode(Mode::Full);
+        let out = tool.run(&ctx, serde_json::json!({"value": "ultra"})).await;
+        match out {
+            ToolOutcome::Success { content } => assert_eq!(content, "ultra"),
+            other => panic!("set path must return Success, got {other:?}"),
+        }
+        assert_eq!(
+            current_session_mode(),
+            Mode::Ultra,
+            "stratum_mode value=ultra must set SESSION_MODE"
+        );
+
+        // Show path with no value reports the live mode (ultra), not Full.
+        let out = tool.run(&ctx, serde_json::json!({})).await;
+        match out {
+            ToolOutcome::Success { content } => assert_eq!(
+                content, "ultra",
+                "show path must report current_session_mode, not hardcoded Full"
+            ),
+            other => panic!("show path must return Success, got {other:?}"),
+        }
+    }
+
+    /// `stratum_mode` tool with `value=off` sets SESSION_MODE=Off, so the
+    /// budget-slice listener returns input unchanged (WO 43.36 gate).
+    #[tokio::test]
+    #[serial]
+    async fn stratum_mode_tool_sets_off_disables_compression() {
+        let _guard = SessionModeGuard::new();
+        let tool = StratumMode;
+        let ctx = ToolContext::new();
+        set_session_mode(Mode::Full);
+        let _ = tool.run(&ctx, serde_json::json!({"value": "off"})).await;
+        assert_eq!(current_session_mode(), Mode::Off);
+
+        // The default budget-sliced listener reads current_session_mode,
+        // so with Mode::Off the pipeline returns input unchanged.
+        let store = Arc::new(InMemoryOffloadStore::new());
+        let listener = default_budget_sliced_listener(store);
+        let input = "head\n<<kf-budget:slice:abc123>>\ntail";
+        let event = BudgetSlicedEvent {
+            original_size: 10_000,
+            sliced_size: 200,
+            key: "abc123".into(),
+            sliced_display: input.to_string(),
+        };
+        let replacement = listener(event);
+        assert!(replacement.is_some(), "listener must return Some");
+        assert_eq!(
+            replacement.as_ref().unwrap(),
+            input,
+            "Mode::Off must pass through sliced display unchanged"
+        );
     }
 
     #[test]

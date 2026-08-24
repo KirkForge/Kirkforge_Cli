@@ -169,11 +169,15 @@ pub(super) async fn parse_bedrock_event_stream<B, E>(
             Ok(chunk) => {
                 envelope_buffer.extend_from_slice(chunk.as_ref());
                 if envelope_buffer.len() > MAX_ENVELOPE_BUFFER_BYTES {
-                    let _ = inner_tx
-                        .send(Ok(format!(
-                            "data: {{\"type\":\"error\",\"error\":{{\"message\":\"Bedrock envelope buffer exceeded {} MiB limit; aborting stream\"}}}}\n\n",
+                    let payload = serde_json::json!({
+                        "type": "error",
+                        "error": {"message": format!(
+                            "Bedrock envelope buffer exceeded {} MiB limit; aborting stream",
                             MAX_ENVELOPE_BUFFER_BYTES / (1024 * 1024)
-                        ).into_bytes()))
+                        )}
+                    });
+                    let _ = inner_tx
+                        .send(Ok(format!("data: {payload}\n\n").into_bytes()))
                         .await;
                     envelope_buffer.clear();
                     continue;
@@ -198,9 +202,16 @@ pub(super) async fn parse_bedrock_event_stream<B, E>(
                 }
             }
             Err(e) => {
-                let payload =
-                    format!("data: {{\"type\":\"error\",\"error\":{{\"message\":\"{e}\"}}}}\n\n");
-                let _ = inner_tx.send(Ok(payload.into_bytes())).await;
+                // serde_json escapes the message string (quotes, backslashes,
+                // newlines) so the transport error text can't break the JSON
+                // frame or smuggle extra `data:` lines through the parser.
+                let payload = serde_json::json!({
+                    "type": "error",
+                    "error": {"message": e.to_string()}
+                });
+                let _ = inner_tx
+                    .send(Ok(format!("data: {payload}\n\n").into_bytes()))
+                    .await;
             }
         }
     }
@@ -619,5 +630,48 @@ mod tests {
             saw_error,
             "expected an envelope-buffer-overflow error event"
         );
+    }
+
+    // WO 44.23: a transport error whose Display contains quotes and newlines
+    // must surface verbatim as exactly one StreamEvent::Error. The old
+    // `format!`-built error frame interpolated the raw Display into a JSON
+    // string unescaped → invalid JSON → parser emitted "JSON parse:" instead
+    // of the real cause, and a multi-line "data: ...\n\n" payload could
+    // smuggle extra frames through the parser.
+    #[tokio::test]
+    async fn parse_bedrock_event_stream_escapes_transport_error_text() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
+        let stream = tokio_stream::iter(vec![Err::<Vec<u8>, String>(
+            "conn \"reset\"\nby peer".to_string(),
+        )]);
+
+        parse_bedrock_event_stream(tx, stream, super::super::STREAM_IDLE_TIMEOUT).await;
+
+        let mut errors: Vec<String> = Vec::new();
+        let mut other: usize = 0;
+        while let Ok(Some(ev)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await
+        {
+            match ev {
+                StreamEvent::Error(msg) => errors.push(msg),
+                StreamEvent::Done { .. } => {}
+                _ => other += 1,
+            }
+        }
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected exactly one Error event, got {errors:?}"
+        );
+        let msg = &errors[0];
+        assert!(
+            msg.contains(r#"conn "reset""#) && msg.contains('\n') && msg.contains("by peer"),
+            "error text must be preserved verbatim, got: {msg:?}"
+        );
+        assert!(
+            !msg.contains("JSON parse"),
+            "must not surface a JSON parse error instead of the transport cause: {msg:?}"
+        );
+        assert_eq!(other, 0, "no extra non-Error events expected, got {other}");
     }
 }

@@ -310,3 +310,30 @@
   job files, filesystem-dependent task dirs) — unrelated to my changes.
   `same_ms_double_spawn_gets_distinct_temp_dirs` is a known concurrency
   flake that passes in isolation.
+
+## WO 44.53 (nightly ollama CI scope)
+
+- `cargo nextest` `-p <pkg>` is **package** selection, not test-target
+  selection. For a bin-only crate (no `[lib]`), `-p <pkg>` selects every
+  test target (bin unit tests + every `tests/*.rs`). To scope to one
+  integration target, use `-p <pkg> --test <target>`. The nightly profile
+  has no `default-filter` so `all()` applies — `--run-ignored all` then
+  sweeps in every `#[ignore]`d unit test in `src/**`, including ones that
+  panic headless (`src/tui/clipboard.rs:48`). The fix pattern mirrors
+  `scripts/run-integration-tests.sh:30` (`cargo test --test
+  integration_test -- --include-ignored`).
+- The `nightly` nextest profile (`.config/nextest.toml:55-60`) is the only
+  profile without a `default-filter`. All others (`ci-fast`, `ci-full`,
+  `integration`, `e2e`) set `default-filter`. That's why `--run-ignored
+  all` only goes wide on the nightly job — the other profiles would skip
+  `#[ignore]` even if the workflow passed the flag.
+- Timing-sensitive real-subprocess tests (`edit_file` proptests,
+  `attached_cancel_token_kills_inflight_bash_promptly`) flake when the
+  machine is at 2-3x CPU oversubscription from parallel sibling-worktree
+  builds. Both pass in isolation / under `--no-fail-fast`. This is the
+  documented Known flakes pattern, not a regression — a YAML-only change
+  cannot affect Rust test logic.
+- When the machine is saturated (load >2x cores), `cargo check
+  --workspace --all-targets` (12-13 min) + `--no-fail-fast` full suite is
+  a more honest gate than a single fail-fast run that aborts on the first
+  CPU-starved timing test.

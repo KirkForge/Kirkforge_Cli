@@ -113,7 +113,11 @@ jobs:
         # fall back to origin/dev for push-triggered runs.
         run: |
           base="origin/${{ github.base_ref || 'dev' }}"
-          pkgs="$(bash scripts/changed-packages.sh "$base" 2>/dev/null || true)"
+          # Do NOT swallow the classifier exit code: a non-zero exit (base ref
+          # unresolvable, e.g. fork PRs where origin/${base_ref} doesn't
+          # exist) must fail this job so the PR check suite goes red, not
+          # silently green with zero Rust checks run (WO 44.52).
+          pkgs="$(bash scripts/changed-packages.sh "$base")"
           echo "packages=$pkgs" >> "$GITHUB_OUTPUT"
           if [ "$pkgs" = "__NO_RUST_CHANGES__" ] || [ -z "$pkgs" ]; then
             echo "No Rust packages affected; clippy + fast-tests will skip."

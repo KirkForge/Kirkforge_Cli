@@ -112,19 +112,29 @@ if [ "$MODE" = "full" ]; then
     # The e2e integration suite is feature-gated behind `e2e-tests`
     # (WO 28.10); only `full` mode pulls it in for local reproduction.
     # Uses the e2e nextest profile (300s slow-timeout) when available.
+    # The e2e test binary MUST compile — a build break is a real failure,
+    # not environment noise (WO 44.55). Probe with --no-run first; on
+    # failure re-run with visible output and record the failure. The
+    # re-run uses `|| true` so set -e doesn't exit before failures+=
+    # records the step — the gate decision was already made by the probe;
+    # the script still exits non-zero via the failures array at the end.
     if [ "$NEXTEST_AVAILABLE" = "1" ]; then
         if cargo test --test e2e --features e2e-tests --no-run --locked >/dev/null 2>&1; then
             run_step "e2e suite" cargo nextest run --profile e2e --features e2e-tests --no-fail-fast --locked
         else
             echo
-            echo -e "${YELLOW}WARNING${NC}: e2e crate did not build locally; skipping e2e suite."
+            echo -e "${RED}FAILED${NC}: e2e crate did not build locally (re-running with output):"
+            cargo test --test e2e --features e2e-tests --no-run --locked || true
+            failures+=("e2e suite (build)")
         fi
     else
         if cargo test --test e2e --features e2e-tests --no-run --locked >/dev/null 2>&1; then
             run_step "e2e suite" cargo test --test e2e --features e2e-tests --locked -- --test-threads="$TEST_THREADS"
         else
             echo
-            echo -e "${YELLOW}WARNING${NC}: e2e crate did not build locally; skipping e2e suite."
+            echo -e "${RED}FAILED${NC}: e2e crate did not build locally (re-running with output):"
+            cargo test --test e2e --features e2e-tests --no-run --locked || true
+            failures+=("e2e suite (build)")
         fi
     fi
 

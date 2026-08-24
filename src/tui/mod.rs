@@ -49,8 +49,8 @@ use crate::session::prompt::CompactRequest;
 use crate::shared::{Config, Message, Role};
 use app::{AppState, ConnectionState, ConversationEntry};
 use commands::{
-    messages_to_entries, notify_completed_jobs, notify_completed_scheduled_jobs, PersonaKind,
-    PersonaResult,
+    messages_to_entries, notify_completed_jobs, notify_completed_scheduled_jobs, should_poll,
+    PersonaKind, PersonaResult,
 };
 use components::approval::render_approval_dialog;
 use connection::{connection_probe_task, probe_ollama_connection};
@@ -883,6 +883,17 @@ async fn run_event_loop(
         bg_tx,
     };
 
+    // WO 44.37: throttle the scheduled-job completion poll. Without this
+    // `notify_completed_scheduled_jobs` did a synchronous read_dir +
+    // per-job JSON parse on every event-loop iteration (8×/s idle). The
+    // daemon push path (`NotifyJobsChanged` → `jobs_dirty`) is the primary
+    // driver; this poll is a fallback, so 1 Hz is plenty. `None` means
+    // "never polled" → the first iteration always runs (covers jobs that
+    // finished before the TUI started).
+    // ponytail: ceiling — if job counts grow large, move the poll to
+    // spawn_blocking instead of widening the interval.
+    let mut last_scheduled_poll: Option<Instant> = None;
+
     loop {
         // Check for exit signal
         if state.session.should_exit {
@@ -1040,8 +1051,14 @@ async fn run_event_loop(
         if notify_completed_jobs(state).await {
             state.mark_dirty();
         }
-        if notify_completed_scheduled_jobs(state).await {
-            state.mark_dirty();
+        // WO 44.37: throttle the scheduled-job poll to 1 Hz (see
+        // `last_scheduled_poll` above). The in-memory bash-job poll just
+        // above is cheap and stays unthrottled.
+        if should_poll(last_scheduled_poll, Instant::now()) {
+            if notify_completed_scheduled_jobs(state).await {
+                state.mark_dirty();
+            }
+            last_scheduled_poll = Some(Instant::now());
         }
 
         dispatch_kb_events(state, &key_ctx, kb_event, kb_rx).await?;

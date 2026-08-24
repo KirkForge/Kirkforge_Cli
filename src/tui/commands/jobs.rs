@@ -691,6 +691,25 @@ pub async fn notify_completed_jobs(state: &mut AppState) -> bool {
     any
 }
 
+/// Decide whether the scheduled-job completion poll should run this
+/// iteration. The poll does a synchronous `read_dir` + per-job JSON parse
+/// on the tokio worker; without a throttle it ran at event-loop rate
+/// (8×/s idle, more under load). The daemon push path
+/// (`NotifyJobsChanged` → `jobs_dirty`) is the primary driver; this poll
+/// is a fallback for missed pushes, so 1 Hz is plenty.
+///
+/// `last == None` means "never polled" → always run (first iteration).
+/// Otherwise run when `now - last >= SCHEDULED_POLL_INTERVAL`.
+pub fn should_poll(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    match last {
+        None => true,
+        Some(prev) => now.duration_since(prev) >= SCHEDULED_POLL_INTERVAL,
+    }
+}
+
+/// Minimum spacing between scheduled-job completion polls.
+pub const SCHEDULED_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Poll the persistent scheduled-job store and push a one-time chat
 /// notification for every run that has finished since the last poll.
 ///
@@ -791,6 +810,29 @@ mod tests {
         tokio::sync::mpsc::UnboundedReceiver<crate::tui::commands::BgCmdDone>,
     ) {
         tokio::sync::mpsc::unbounded_channel()
+    }
+
+    #[test]
+    fn should_poll_first_run_always_polls() {
+        // last == None → first iteration, must poll so the UI shows
+        // already-finished jobs on startup.
+        assert!(should_poll(None, std::time::Instant::now()));
+    }
+
+    #[test]
+    fn should_poll_under_interval_skips() {
+        let now = std::time::Instant::now();
+        let last = now; // 0 s ago — well under the 1 s interval.
+        assert!(!should_poll(Some(last), now));
+    }
+
+    #[test]
+    fn should_poll_at_or_over_interval_polls() {
+        let now = std::time::Instant::now();
+        let last = now
+            .checked_sub(std::time::Duration::from_secs(1))
+            .expect("Instant can go back 1 s");
+        assert!(should_poll(Some(last), now));
     }
 
     #[tokio::test]

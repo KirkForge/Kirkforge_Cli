@@ -207,11 +207,14 @@ fn run_session_picker_sync(
 
     install_panic_hook();
     enable_raw_mode()?;
+    // Guard must exist before any fallible terminal setup so its drop
+    // restores raw mode even when EnterAlternateScreen/Terminal::new
+    // fails (EPIPE, pty teardown race). Drop is idempotent (mod.rs:86).
+    let _guard = TerminalGuard;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let _guard = TerminalGuard;
 
     let mut picker = SessionPicker::new(sessions);
     loop {
@@ -553,6 +556,12 @@ pub async fn run_tui(
 
     install_panic_hook();
     enable_raw_mode()?;
+    // Guard must exist before any fallible terminal setup so its drop
+    // restores raw mode even when EnterAlternateScreen/mouse/paste/
+    // Terminal::new fails (EPIPE, pty teardown race). Drop is
+    // idempotent and writes disable/reset sequences unconditionally
+    // (mod.rs:86-150), so creating it before those modes are enabled is safe.
+    let _guard = TerminalGuard;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     if mouse_enabled {
@@ -563,7 +572,6 @@ pub async fn run_tui(
     execute!(stdout, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let _guard = TerminalGuard;
 
     let mut state = init_app_state(
         &shared_config,

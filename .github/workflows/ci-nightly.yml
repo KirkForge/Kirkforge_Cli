@@ -202,30 +202,33 @@ jobs:
       # to the named source file. -j 2 keeps CI runners responsive. Each run
       # is informational (continue-on-error) — we record the survival score,
       # not a pass/fail. Ratchet to blocking per-module after a baseline.
+      #
+      # WO 44.54: each run writes to its own -o dir so runs don't overwrite
+      # each other. cargo-mutants creates `<dir>/mutants.out/` (containing
+      # outcomes.json, missed.txt, etc.) — the prior workflow referenced
+      # flat mutants.out.json/.txt files that cargo-mutants never emits.
       - name: Mutants — path_safety (kf-routing)
         continue-on-error: true
-        run: cargo mutants --file crates/kf-routing/src/path_safety.rs -j 2
+        run: cargo mutants --file crates/kf-routing/src/path_safety.rs -j 2 -o mutants-out/path_safety
 
       - name: Mutants — secret scrubbing (bash_runner)
         continue-on-error: true
-        run: cargo mutants --file src/session/bash_runner/mod.rs -j 2
+        run: cargo mutants --file src/session/bash_runner/mod.rs -j 2 -o mutants-out/bash_runner
 
       - name: Mutants — audit chain (shared/audit)
         continue-on-error: true
-        run: cargo mutants --file src/shared/audit.rs -j 2
+        run: cargo mutants --file src/shared/audit.rs -j 2 -o mutants-out/audit
 
       - name: Mutants — sandbox (executor/sandbox)
         continue-on-error: true
-        run: cargo mutants --file src/session/executor/sandbox.rs -j 2
+        run: cargo mutants --file src/session/executor/sandbox.rs -j 2 -o mutants-out/sandbox
 
       - name: Upload mutants artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mutants-report
-          path: |
-            mutants.out.json
-            mutants.out.txt
+          path: mutants-out/
 
       - name: Record baseline survival score
         if: always()
@@ -236,13 +239,19 @@ jobs:
             echo
             echo "Per-module survival score (informational; ratchet to blocking after baseline):"
             echo
-            if [ -f mutants.out.json ]; then
-              echo '```json'
-              cat mutants.out.json
-              echo '```'
-            else
-              echo "_mutants.out.json not produced — see job logs_"
-            fi
+            for module in path_safety bash_runner audit sandbox; do
+              outcomes="mutants-out/$module/mutants.out/outcomes.json"
+              echo "### $module"
+              echo
+              if [ -f "$outcomes" ]; then
+                echo '```json'
+                cat "$outcomes"
+                echo '```'
+              else
+                echo "_$outcomes not produced — see job logs_"
+              fi
+              echo
+            done
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Release compile validation on linux + windows. The tag-triggered

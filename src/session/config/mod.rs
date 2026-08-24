@@ -663,6 +663,9 @@ fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::String(v)) = table.get("anthropic_provider") {
         cfg.model.anthropic_provider = v.clone();
     }
+    if let Some(Value::String(v)) = table.get("anthropic_api_base") {
+        cfg.model.anthropic_api_base = v.clone();
+    }
     if let Some(Value::String(v)) = table.get("aws_region") {
         cfg.model.aws_region = v.clone();
     }
@@ -1804,6 +1807,7 @@ mod tests {
         let mut cfg = Config::default();
         let table: toml::Table = r#"
             anthropic_provider = "bedrock"
+            anthropic_api_base = "https://my-anthropic-proxy.example.com"
             aws_region = "us-west-2"
             gcp_project_id = "my-project"
             gcp_region = "us-east4"
@@ -1822,6 +1826,10 @@ mod tests {
         merge_toml_into_config(&mut cfg, table);
 
         assert_eq!(cfg.model.anthropic_provider, "bedrock");
+        assert_eq!(
+            cfg.model.anthropic_api_base,
+            "https://my-anthropic-proxy.example.com"
+        );
         assert_eq!(cfg.model.aws_region, "us-west-2");
         assert_eq!(cfg.model.gcp_project_id, "my-project");
         assert_eq!(cfg.model.gcp_region, "us-east4");
@@ -1856,10 +1864,12 @@ mod tests {
         let _e8 = set_env("KF_CODE_COMPUTER_USE_HEIGHT", Some("768"));
         let _e9 = set_env("KF_CODE_COMPUTER_USE_STARTUP_TIMEOUT", Some("60"));
         let _e10 = set_env("KF_CODE_COMPUTER_USE_WAIT_TIMEOUT", Some("20"));
+        let _e11 = set_env("KF_CODE_ANTHROPIC_API_BASE", Some("https://proxy.example.com"));
 
         apply_env_overrides(&mut cfg);
 
         assert_eq!(cfg.model.anthropic_provider, "vertex");
+        assert_eq!(cfg.model.anthropic_api_base, "https://proxy.example.com");
         assert_eq!(cfg.model.aws_region, "eu-west-1");
         assert_eq!(cfg.model.gcp_project_id, "p2");
         assert_eq!(cfg.model.gcp_region, "europe-west1");
@@ -2440,11 +2450,11 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=33 (32 direct + subagent_provider sub-struct handle),
+        // ModelConfig=34 (33 direct + subagent_provider sub-struct handle),
         // SecurityConfig=22, ToolConfig=35, SessionConfig=9,
-        // DisplayConfig=7 → 107 total pub fields.
+        // DisplayConfig=7 → 108 total pub fields.
         assert_eq!(
-            CONFIG_FIELD_COUNT, 107,
+            CONFIG_FIELD_COUNT, 108,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -2517,6 +2527,7 @@ mod tests {
             mouse_enabled = true
             checkpoint_interval_messages = 999
             anthropic_provider = "x"
+            anthropic_api_base = "x"
             aws_region = "x"
             gcp_project_id = "x"
             gcp_region = "x"
@@ -2571,7 +2582,8 @@ mod tests {
         // tables + 8 computer_use sub-keys + 7 subagent_provider sub-keys = 97
         // WO 39.2: +1 (load_project_mcp_json) = 98
         // WO 43.17: +1 (plugin_consent_ledger) = 99
-        const MERGE_TOML_EXPECTED: usize = 99;
+        // WO 44.22: +1 (anthropic_api_base) = 100
+        const MERGE_TOML_EXPECTED: usize = 100;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -2594,7 +2606,8 @@ mod tests {
         // + 5 API-key literals = 93
         // WO 39.2: +1 (KF_CODE_LOAD_PROJECT_MCP_JSON) = 94
         // WO 43.17: +1 (KF_CODE_PLUGIN_CONSENT_LEDGER) = 95
-        const ENV_OVERRIDE_EXPECTED: usize = 95;
+        // WO 44.22: +1 (KF_CODE_ANTHROPIC_API_BASE) = 96
+        const ENV_OVERRIDE_EXPECTED: usize = 96;
         assert_eq!(
             env_var_count, ENV_OVERRIDE_EXPECTED,
             "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"

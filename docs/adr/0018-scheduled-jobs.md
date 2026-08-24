@@ -1,5 +1,12 @@
 # ADR-0018: Cron / scheduled jobs
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-16
 

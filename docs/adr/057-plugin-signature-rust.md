@@ -1,5 +1,12 @@
 # ADR-057: In-process plugin signature verification (no minisign shell-out)
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-plugin-host]
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-27
 

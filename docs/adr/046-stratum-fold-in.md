@@ -1,5 +1,12 @@
 # ADR-046: Fold Stratum into Core
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

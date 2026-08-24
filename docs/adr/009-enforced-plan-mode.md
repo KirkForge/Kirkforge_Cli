@@ -1,5 +1,12 @@
 # ADR 009: Enforced Plan Mode — Read-Only Discovery Before Implementation
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

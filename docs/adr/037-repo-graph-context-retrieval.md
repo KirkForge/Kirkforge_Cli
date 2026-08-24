@@ -1,5 +1,12 @@
 # ADR-037: Repo-Graph Context Retrieval
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-context-index]
+-->
+
 **Status:** Accepted (2026-07-21)
 
 ## Context

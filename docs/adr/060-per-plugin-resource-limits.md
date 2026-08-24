@@ -1,5 +1,12 @@
 # ADR-060: Per-plugin resource limits (extend SandboxConfig to plugin tools)
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-plugin-host]
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-27
 

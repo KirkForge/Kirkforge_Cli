@@ -1,5 +1,12 @@
 # ADR-0010: Cost reporting — usage.jsonl + report subcommand
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-budget-core]
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-06-24
 

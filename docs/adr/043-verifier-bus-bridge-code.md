@@ -1,5 +1,12 @@
 # ADR-043: Verifier-bus bridge code
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

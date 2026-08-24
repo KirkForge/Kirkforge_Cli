@@ -1,5 +1,12 @@
 # ADR 010: Built-In Subagent Personas — Fork-Isolated `/explore`, `/plan`, `/coder`
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

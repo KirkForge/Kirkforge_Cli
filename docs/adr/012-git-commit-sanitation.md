@@ -1,5 +1,12 @@
 # ADR 012: Safe Git Commit Helper — `/commit` with Pre-Commit Sanitation
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

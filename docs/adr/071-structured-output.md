@@ -1,5 +1,12 @@
 # ADR-071: JSON-Schema Structured Output
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 **Status:** Accepted
 **Date:** 2026-08-08
 **Replaces:** WO 22.9-R2 (deferred), WO 20.0.8-G4 (structured output half)

@@ -1,5 +1,12 @@
 # ADR-024: Release cadence and semantic versioning
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-19
 

@@ -1,5 +1,12 @@
 # ADR-030: `--seed` deterministic mode
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 **Status:** Accepted (2026-07-21)
 
 ## Context

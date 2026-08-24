@@ -1,5 +1,12 @@
 # ADR-0027: Context management depth — cache-stem reuse, microcompaction, and tool-result truncation
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-20
 

@@ -1,5 +1,12 @@
 # ADR 017: Plugin API version contract
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

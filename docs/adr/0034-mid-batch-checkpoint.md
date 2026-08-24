@@ -1,5 +1,12 @@
 # ADR-034: Mid-batch tool-result checkpointing
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-20
 

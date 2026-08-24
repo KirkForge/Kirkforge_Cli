@@ -1,5 +1,12 @@
 # ADR-068: Remove Standalone Subsystem CLIs
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-08-07
 

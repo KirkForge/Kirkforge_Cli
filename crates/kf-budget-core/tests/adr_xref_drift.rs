@@ -388,10 +388,12 @@ fn implemented_from_header(header: &str) -> &'static str {
 
 #[test]
 fn adr_predicate_blocks_cross_check_header_crates_and_supersedes() {
-    // WO 43.15: when an ADR carries an `<!-- adr-predicates … -->` block,
-    // (a) its `status` keyword must agree with the file's Status header,
-    // (b) every `affects-crates` entry must be a dir under `crates/`, and
-    // (c) every `supersedes` ADR number must resolve to an existing ADR file.
+    // WO 43.15 + WO 44.2: every ADR file must carry an
+    // `<!-- adr-predicates … -->` block, and (a) its `status` keyword
+    // must agree with the file's Status header, (b) every `affects-crates`
+    // entry must be a dir under `crates/`, and (c) every `supersedes` ADR
+    // number must resolve to an existing ADR file. README.md (the index)
+    // is the only deliberately blockless file and is skipped above.
     let dir = adr_dir();
     let crates_dir = repo_root().join("crates");
     let entries = std::fs::read_dir(&dir).expect("docs/adr/ readable");
@@ -430,7 +432,14 @@ fn adr_predicate_blocks_cross_check_header_crates_and_supersedes() {
         }
         let body =
             std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("ADR {file} readable: {e}"));
+        // WO 44.2: every ADR file must carry a predicate block. README.md
+        // (the index) is the only deliberately blockless file and is
+        // skipped above. A backfilled ADR that loses its block is a
+        // regression — silently re-enabling the old skip would hide it.
         let Some(block) = parse_predicate_block(&body) else {
+            failures.push(format!(
+                "{file}: no `<!-- adr-predicates … -->` block — WO 44.2 requires one on every ADR"
+            ));
             continue;
         };
         any_block_seen = true;

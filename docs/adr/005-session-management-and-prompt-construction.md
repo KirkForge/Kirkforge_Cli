@@ -1,5 +1,12 @@
 # ADR 005: Session Management and Prompt Construction
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

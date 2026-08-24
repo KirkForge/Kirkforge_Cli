@@ -1,5 +1,12 @@
 # ADR 019: VS Code extension — Option A PTY wrapper MVP
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted (2026-07-19)

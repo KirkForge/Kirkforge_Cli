@@ -1,5 +1,12 @@
 # ADR-074: CI architecture reset — PR / merge / nightly tiers
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-08-15
 - **Related:** [ADR-0029](./0029-test-partitioning.md) (test partitioning),

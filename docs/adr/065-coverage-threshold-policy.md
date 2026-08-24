@@ -1,5 +1,12 @@
 # ADR-065: Coverage-gate threshold policy (75% target, headroom, --skip workaround)
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-30
 

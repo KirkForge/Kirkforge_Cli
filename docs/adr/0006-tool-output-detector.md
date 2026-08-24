@@ -1,5 +1,12 @@
 # ADR-0006: Tool output detection
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: [kf-budget-core]
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-06-24
 

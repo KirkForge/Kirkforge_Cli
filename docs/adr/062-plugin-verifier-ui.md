@@ -1,5 +1,12 @@
 # ADR-062: Plugin verifier results in `/verify` panel + cost report
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-27
 

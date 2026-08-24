@@ -1,5 +1,12 @@
 # ADR-072: MCP Sampling Trust Model and Approval Flow
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 **Status:** Accepted
 **Date:** 2026-08-10
 **Replaces:** none (new decision)

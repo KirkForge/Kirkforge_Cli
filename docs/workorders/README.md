@@ -896,7 +896,7 @@ tree, ~11 stale claims corrected in-line. See
 | 43.39 | [kf-bench markdown-delta baseline computation contradicts the regression signal](43.39-bench-delta-rate.md) | Done |
 | 44.0 | [Series 44 overview: regression audit + five-area fresh sweep](44.0-wo44-overview.md) | Done |
 | 44.1 | [Line-mode Ctrl-C does not cancel the in-flight turn](44.1-line-mode-ctrl-c-turn-cancel.md) | Done |
-| 44.2 | [Finish the ADR predicate-block backfill (43.15 step 4)](44.2-adr-predicate-backfill.md) | Planned |
+| 44.2 | [Finish the ADR predicate-block backfill (43.15 step 4)](44.2-adr-predicate-backfill.md) | Done |
 | 44.20 | [Split compound clauses on background `&` (allow-rule/allowlist bypass)](44.20-bash-background-separator-bypass.md) | Done |
 | 44.21 | [Permission bash rules match raw text: whitespace/quote evasion of deny rules](44.21-permission-bash-rule-normalization.md) | Done |
 | 44.22 | [First-party Anthropic sends `x-api-key` to the Ollama default host](44.22-anthropic-base-url-key-destination.md) | Done |

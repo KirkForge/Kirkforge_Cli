@@ -1,5 +1,12 @@
 # ADR-051: Stratum and Budget Guard Coordination
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-25
 

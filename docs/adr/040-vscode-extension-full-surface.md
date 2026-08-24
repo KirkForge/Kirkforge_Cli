@@ -1,5 +1,12 @@
 # ADR-040: VS Code extension full surface
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

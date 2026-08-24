@@ -1,5 +1,12 @@
 # ADR-035: Git Worktree Per Session
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 **Status:** Accepted (2026-07-21)
 
 ## Context

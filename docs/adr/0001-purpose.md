@@ -1,5 +1,12 @@
 # ADR-0001: Purpose — output-side sibling of Stratum
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-06-24
 

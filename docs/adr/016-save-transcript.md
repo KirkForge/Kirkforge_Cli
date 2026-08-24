@@ -1,5 +1,12 @@
 # ADR 016: `/save` Conversation Transcript
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

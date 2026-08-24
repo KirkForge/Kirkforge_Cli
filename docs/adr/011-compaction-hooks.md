@@ -1,5 +1,12 @@
 # ADR 011: Tail-Preserving Compaction with pre-compact / post-compact Hooks
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

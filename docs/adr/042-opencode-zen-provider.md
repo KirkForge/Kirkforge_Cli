@@ -1,5 +1,12 @@
 # ADR-042: OpenCode Zen provider
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

@@ -1,5 +1,12 @@
 # ADR-058: Plugin manifest `depends_on` (dependency graph)
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-07-27
 

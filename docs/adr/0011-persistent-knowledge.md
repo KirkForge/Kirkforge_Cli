@@ -1,5 +1,12 @@
 # ADR-0011: Persistent knowledge — saved findings (REJECTED)
 
+<!-- adr-predicates
+status: rejected
+implemented: false
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Rejected (2026-07-17)
 - **Date:** 2026-06-24
 

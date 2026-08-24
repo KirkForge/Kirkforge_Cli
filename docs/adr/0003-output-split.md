@@ -1,5 +1,12 @@
 # ADR-0003: SlicingTransform + LocalSummaryCompactor
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 - **Status:** Accepted
 - **Date:** 2026-06-24
 

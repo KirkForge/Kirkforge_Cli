@@ -1,5 +1,12 @@
 # ADR 008: Session Daemon — Metadata-Only Background Process for Fast Resume
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

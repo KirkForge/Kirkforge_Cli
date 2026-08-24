@@ -1,5 +1,12 @@
 # ADR 007: Verifier Slots and Correction Loop
 
+<!-- adr-predicates
+status: accepted
+implemented: true
+supersedes: []
+affects-crates: []
+-->
+
 ## Status
 
 Accepted

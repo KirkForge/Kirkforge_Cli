@@ -980,7 +980,8 @@ fn truncate_string(s: &str, max: usize) -> String {
 // redaction (bash command, plugin args_summary, hook reason). Two patterns:
 //   1. `NAME=value` where NAME matches the credential shapes shared with
 //      `bash_runner::is_secret_env_name` (single source of truth).
-//   2. Common token literals: `Bearer ...`, `sk-...`, `ghp_...`, `AKIA...`,
+//   2. Common token literals: `Bearer ...`, `sk-...`, `ghp_...`,
+//      `github_pat_...`, `glpat-...`, `AIza...`, `ya29....`, `AKIA...`,
 //      `xox[bp]-...` (Slack).
 static SCRUB_RE: OnceLock<Regex> = OnceLock::new();
 
@@ -1005,10 +1006,13 @@ fn scrubber() -> &'static Regex {
         // so we can include `"` and `\S` without escaping.
         let name_value = format!(r#"(?i)\b({name_pat})=("[^"]*"|'[^']*'|\S+)"#);
         // Token literals (case-sensitive where the prefix is fixed-case):
-        //   Bearer <token>   sk-<token>   ghp_<token>   AKIA<token>
+        //   Bearer <token>   sk-<token>   ghp_<token>   github_pat_<token>
+        //   glpat-<token>    AIza<token>   ya29.<token>  AKIA<token>
         //   xoxb-<token>  xoxp-<token>  (Slack bot/user tokens)
+        // WO 44.24: added github_pat_/glpat-/AIza/ya29. (the existing ya29
+        // test only passed behind a Bearer prefix; bare ya29. leaked).
         // Group 3 = the whole literal.
-        let literals = r#"(?s)(Bearer\s+[A-Za-z0-9_\-\.=]+|sk-[A-Za-z0-9_\-]+|ghp_[A-Za-z0-9]+|AKIA[0-9A-Z]+|xox[bp]-[A-Za-z0-9\-]+)"#;
+        let literals = r#"(?s)(Bearer\s+[A-Za-z0-9_\-\.=]+|sk-[A-Za-z0-9_\-]+|ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|glpat-[A-Za-z0-9\-_]{20,}|AIza[0-9A-Za-z_\-]{35}|ya29\.[A-Za-z0-9_\-]+|AKIA[0-9A-Z]+|xox[bp]-[A-Za-z0-9\-]+)"#;
         Regex::new(&format!("{name_value}|{literals}")).expect("scrub_free_text regex compiles")
     })
 }
@@ -1018,7 +1022,8 @@ fn scrubber() -> &'static Regex {
 /// Replaces `NAME=value` tokens (where NAME matches the credential shapes
 /// from [`is_secret_env_name`](crate::session::bash_runner) — shared via
 /// `SECRET_ENV_SUFFIXES` / `SECRET_ENV_EXACT`) with `NAME=[REDACTED]`, and
-/// common token literals (`Bearer ...`, `sk-...`, `ghp_...`, `AKIA...`,
+/// common token literals (`Bearer ...`, `sk-...`, `ghp_...`,
+/// `github_pat_...`, `glpat-...`, `AIza...`, `ya29....`, `AKIA...`,
 /// `xox[bp]-...`) with `[REDACTED]`. Non-credential `NAME=value` pairs (e.g.
 /// `PATH=/usr/bin`) are left intact.
 pub fn scrub_free_text(s: &str) -> String {
@@ -1302,6 +1307,59 @@ mod tests {
                 "token {must_vanish} must be scrubbed from {input}, got: {scrubbed}"
             );
         }
+    }
+
+    /// WO 44.24: the four provider shapes added to the literals alternation
+    /// must vanish BARE (no `Bearer` prefix, no `NAME=`). The `AIza` length
+    /// quantifier (35 chars) must NOT redact a short `AIzaphenia`-style word.
+    #[test]
+    fn scrub_free_text_redacts_bare_provider_tokens() {
+        // github_pat_: fine-grained PAT, 22 chars after the prefix.
+        let gpat = "curl https://api.github.com -H github_pat_AAAAAAAAAAAAAAAAAAAAAAAA_xyz";
+        let scrubbed = scrub_free_text(gpat);
+        assert!(
+            !scrubbed.contains("github_pat_AAAAAAAAAAAAAAAAAAAAAAAA_xyz"),
+            "bare github_pat_ token must be scrubbed, got: {scrubbed}"
+        );
+        assert!(scrubbed.contains("[REDACTED]"));
+
+        // glpat-: GitLab PAT, 20+ chars.
+        let glpat = "git clone https://gitlab.com -H glpat-01234567890123456789";
+        let scrubbed = scrub_free_text(glpat);
+        assert!(
+            !scrubbed.contains("glpat-01234567890123456789"),
+            "bare glpat- token must be scrubbed, got: {scrubbed}"
+        );
+        assert!(scrubbed.contains("[REDACTED]"));
+
+        // AIza: Google API key, exactly 35 chars after the prefix.
+        let aiza = "key=AIzaSyA1234567890abcdefghijklmnopqrstuv";
+        let scrubbed = scrub_free_text(aiza);
+        assert!(
+            !scrubbed.contains("AIzaSyA1234567890abcdefghijklmnopqrstuv"),
+            "bare AIza key must be scrubbed, got: {scrubbed}"
+        );
+        // NAME=value path keeps the name; only the value is redacted.
+        assert!(scrubbed.contains("key=[REDACTED]"));
+
+        // ya29.: Google OAuth access token, bare (no Bearer prefix).
+        let ya29 = "token ya29.AABBCCDDeeff-0123456789-xyz_TOKEN";
+        let scrubbed = scrub_free_text(ya29);
+        assert!(
+            !scrubbed.contains("ya29.AABBCCDDeeff-0123456789-xyz_TOKEN"),
+            "bare ya29. token must be scrubbed, got: {scrubbed}"
+        );
+        assert!(scrubbed.contains("[REDACTED]"));
+
+        // False-positive guard: `AIza` + a short suffix must NOT be redacted
+        // (the 35-char quantifier is what distinguishes a real key from a
+        // word like `AIzaphenia`). The whole token survives verbatim.
+        let benign = "the word AIzaphenia is not a key";
+        let scrubbed = scrub_free_text(benign);
+        assert_eq!(
+            scrubbed, benign,
+            "AIza + short suffix must NOT be redacted (length guard), got: {scrubbed}"
+        );
     }
 
     #[test]

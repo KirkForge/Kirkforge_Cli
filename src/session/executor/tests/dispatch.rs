@@ -930,10 +930,7 @@ async fn symlink_swap_blocks_edit_file_when_read_gate_allows() {
     use crate::tools::edit_file::EditFile;
 
     let tmp = std::env::temp_dir();
-    let dir = tmp.join(format!(
-        "kf_code_symlink_swap_edit_{}",
-        std::process::id()
-    ));
+    let dir = tmp.join(format!("kf_code_symlink_swap_edit_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let target = dir.join("victim.txt");
@@ -986,12 +983,8 @@ async fn symlink_swap_blocks_edit_file_when_read_gate_allows() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(
-        Box::new(adapter),
-        vec![bash, edit_tool],
-        make_config(true),
-    )
-    .unwrap();
+    let mut exe =
+        make_executor(Box::new(adapter), vec![bash, edit_tool], make_config(true)).unwrap();
     // Pre-mark read so the read-before-edit gate ALLOWS — this is the
     // attack precondition. The symlink walk must still deny.
     exe.sandbox.mark_read(&target.canonicalize().unwrap());
@@ -1034,10 +1027,7 @@ async fn symlink_swap_blocks_read_file_on_swapped_final_component() {
     use crate::tools::read_file::ReadFile;
 
     let tmp = std::env::temp_dir();
-    let dir = tmp.join(format!(
-        "kf_code_symlink_swap_read_{}",
-        std::process::id()
-    ));
+    let dir = tmp.join(format!("kf_code_symlink_swap_read_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let target = dir.join("victim.txt");
@@ -1085,12 +1075,8 @@ async fn symlink_swap_blocks_read_file_on_swapped_final_component() {
     );
 
     let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
-    let mut exe = make_executor(
-        Box::new(adapter),
-        vec![bash, read_tool],
-        make_config(true),
-    )
-    .unwrap();
+    let mut exe =
+        make_executor(Box::new(adapter), vec![bash, read_tool], make_config(true)).unwrap();
 
     let events = exe
         .run_turn_collecting("swap then read", &approval_tx, never_cancelled())

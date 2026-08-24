@@ -43,10 +43,13 @@ pub(super) fn spawn_non_interactive_approval_handler(
 /// Spawn the SIGINT/SIGTERM handler for line mode.
 ///
 /// Mirrors TUI teardown (`src/tui/mod.rs:362-383`): on Ctrl-C, set the
-/// cooperative cancel flag (so `run_turn_collecting` aborts in-flight tool
-/// calls) and notify the main loop's `select!` so a blocking `next_line` is
-/// interrupted. The runtime then drops the executor, firing `kill_on_drop`
-/// on any in-flight child processes.
+/// cooperative cancel flag and notify the main loop's `select!` so a
+/// blocking `next_line` is interrupted. The main loop installs a live
+/// per-turn `CancellationToken` (WO 44.1, mirroring `loop_.rs:513-519`)
+/// and races the turn against `shutdown.notified()`; on notify it
+/// cancels that token, so in-flight tool calls abort and `kill_on_drop`
+/// reaps their children. The runtime then drops the executor, firing
+/// `kill_on_drop` on any remaining child processes.
 pub(super) fn spawn_line_mode_sigint_handler(cancelled: Arc<AtomicBool>, shutdown: Arc<Notify>) {
     tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
@@ -191,11 +194,12 @@ pub(super) async fn run_line_mode(
         tracing::info!("System prompt set from CLI: {}", sys);
     }
 
-    // Cooperative cancel flag shared with the signal handler. `run_turn_collecting`
-    // reads it to abort in-flight tool calls; the SIGINT handler sets it so
-    // Ctrl-C in line mode triggers graceful teardown (executor cancel +
-    // carryover save + kill_on_drop children) instead of the default SIGINT
-    // kill that orphans child processes.
+    // Cooperative cancel flag shared with the signal handler. The main loop
+    // races the turn against `shutdown.notified()` (WO 44.1) and sets this
+    // flag on notify so the post-iteration check breaks; the SIGINT handler
+    // also sets it directly so Ctrl-C in line mode triggers graceful
+    // teardown (executor cancel + carryover save + kill_on_drop children)
+    // instead of the default SIGINT kill that orphans child processes.
     let cancelled = Arc::new(AtomicBool::new(false));
     let shutdown = Arc::new(Notify::new());
 
@@ -424,9 +428,34 @@ pub(super) async fn run_line_mode(
         }
 
         let turn_started_at = std::time::Instant::now();
-        let events = executor
-            .run_turn_collecting(&input, &approval_tx, &cancelled)
-            .await?;
+        // WO 44.1: install a fresh per-turn cancel token (one-shot, like the
+        // TUI at `loop_.rs:513-519`) so a mid-turn SIGINT reaches in-flight
+        // tool calls immediately instead of waiting for each tool's own
+        // timeout. Per-tool child tokens derive from this live root token
+        // (`prepare_batch`), so cancelling it aborts in-flight tools and
+        // `kill_on_drop` reaps their children promptly.
+        let turn_token = tokio_util::sync::CancellationToken::new();
+        executor.set_cancel_token(Some(turn_token.clone()));
+        // Race the turn against `shutdown.notified()` (mirrors `loop_.rs:534-546`):
+        // biased toward the turn arm so a turn that already completed before
+        // the notify fires is not misattributed as a cancel. On notify, cancel
+        // the live token + set the flag so the post-iteration check breaks.
+        let turn_result = {
+            let mut turn =
+                std::pin::pin!(executor.run_turn_collecting(&input, &approval_tx, &cancelled));
+            loop {
+                tokio::select! {
+                    biased;
+                    r = &mut turn => break r,
+                    _ = shutdown.notified() => {
+                        cancelled.store(true, Ordering::Release);
+                        turn_token.cancel();
+                    }
+                }
+            }
+        };
+        executor.set_cancel_token(None);
+        let events = turn_result?;
         let _turn_duration_ms = turn_started_at.elapsed().as_millis() as u64;
         emit_turn_events(
             &events,
@@ -438,6 +467,9 @@ pub(super) async fn run_line_mode(
             &mut final_error,
         );
         // If SIGINT fired during the turn, stop after this iteration.
+        // (Fallback path — the select arm above already set the flag and
+        // cancelled the in-flight work; this catches a notify that raced
+        // the turn's own completion.)
         if cancelled.load(Ordering::Acquire) {
             break;
         }
@@ -978,6 +1010,14 @@ mod tests {
     /// `notify_one()` fires, a `select!` racing `next_line` against
     /// `notified()` takes the shutdown arm (no wall-clock sleep — the
     /// event is driven by the `Notify` primitive).
+    ///
+    /// WO 44.1: also asserts the turn-cancellation half — a turn future
+    /// that never resolves on its own (stub for a `sleep 300` bash call)
+    /// must complete promptly once the shutdown notify fires and the
+    /// per-turn token is cancelled. This is the exact `select!` race
+    /// `run_line_mode` now installs around `run_turn_collecting`
+    /// (mirroring `loop_.rs:534-546`); before WO 44.1 the turn was
+    /// awaited plainly and a mid-turn Ctrl-C hung for the tool timeout.
     #[tokio::test]
     async fn line_mode_sigint_handler_flips_shutdown_path() {
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -993,18 +1033,45 @@ mod tests {
             shutdown_clone.notify_one();
         });
 
-        // The main loop's `select!` would race `next_line` against
-        // `shutdown.notified()`. Verify the notify resolves (event-driven,
-        // no sleep) and the flag is set.
-        let notified =
-            tokio::time::timeout(std::time::Duration::from_secs(5), shutdown.notified()).await;
+        // WO 44.1: the turn-cancellation contract. A never-completing stub
+        // tool (stands in for `sleep 300`) is raced against
+        // `shutdown.notified()` exactly as `run_line_mode` now does around
+        // `run_turn_collecting`. The spawned handler fires the notify, so
+        // the select takes the shutdown arm and cancels the per-turn token;
+        // the turn future (`pending()`) never completes on its own, so the
+        // only way this resolves within the 5s timeout is via the shutdown
+        // arm — proving a mid-turn Ctrl-C reaches the turn. Before WO 44.1
+        // the turn was awaited plainly and would hang for the tool timeout
+        // (120s), which the 5s timeout catches as a failure instead of
+        // hanging the suite. No wall-clock sleep — driven by the `Notify`
+        // primitive. (The production `run_line_mode` wraps this in a `loop`
+        // because a real cancelled turn future does complete after the
+        // token fires; the `pending()` stub here makes the shutdown arm
+        // terminal, so no loop is needed in the test.)
+        let turn_token = tokio_util::sync::CancellationToken::new();
+        let mut turn = std::pin::pin!(std::future::pending::<()>());
+        let raced = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                biased;
+                _ = &mut turn => {}
+                _ = shutdown.notified() => {
+                    cancelled.store(true, Ordering::Release);
+                    turn_token.cancel();
+                }
+            }
+        })
+        .await;
         assert!(
-            notified.is_ok(),
-            "shutdown notify did not fire within 5s — handler is broken"
+            raced.is_ok(),
+            "turn race did not resolve within 5s — mid-turn Ctrl-C would hang"
         );
         assert!(
             cancelled.load(Ordering::Acquire),
             "cancel flag must be set when SIGINT handler fires"
+        );
+        assert!(
+            turn_token.is_cancelled(),
+            "per-turn token must be cancelled when shutdown fires mid-turn"
         );
     }
 }

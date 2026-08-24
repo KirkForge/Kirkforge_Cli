@@ -882,6 +882,83 @@ mod tests {
         );
     }
 
+    /// WO 44.21: trivial quoting / spacing / casing evasions of a deny rule
+    /// `rm -rf /` are now blocked because each clause is normalized
+    /// (whitespace collapsed, quotes stripped, lowercased) before matching.
+    #[test]
+    fn test_evaluate_deny_command_normalizes_clause_evasions() {
+        let rules = vec![rule("bash", "command", "rm -rf /", PermissionAction::Deny)];
+        // Double spaces between every token.
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "rm  -rf  /home/user"}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Deny,
+            "double-spaced rm -rf / must be denied"
+        );
+        // Quoted flag.
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "rm \"-rf\" /home/user"}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Deny,
+            "quoted-flag rm -rf / must be denied"
+        );
+        // Upper case.
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "RM -RF /home/user"}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Deny,
+            "upper-case rm -rf / must be denied"
+        );
+        // Tab-separated variant (normalize_for_safety collapses all whitespace).
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "rm\t-rf\t/home/user"}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Deny,
+            "tab-separated rm -rf / must be denied"
+        );
+    }
+
+    /// WO 44.21 ceiling guard: `echo "git status"` normalizes to
+    /// `echo git status`, which does NOT match a deny `git status` — the
+    /// command verb (`echo`) stays the first token, so the prefix compare
+    /// fails. This is the soundness property that makes quote-stripping
+    /// safe for deny VALUE matching; a real shell lexer is the upgrade path.
+    #[test]
+    fn test_evaluate_deny_command_normalize_ceiling_verb_stays_first() {
+        let rules = vec![rule("bash", "command", "git status", PermissionAction::Deny)];
+        assert_ne!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "echo \"git status\""}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Deny,
+            "echo \"git status\" must not be denied by a git status rule"
+        );
+    }
+
     /// Allow/Ask bash rules keep the stricter anchored semantics: a literal
     /// `git status` rule does not permit a chained destructive command.
     #[test]
@@ -912,6 +989,52 @@ mod tests {
             .0,
             PermissionAction::Ask,
             "anchored allow rule must not match chained command"
+        );
+    }
+
+    /// WO 44.21: `git  status` (double space) and `git "status"` (quoted
+    /// arg) now match an allow rule `git status` after normalization —
+    /// previously they silently fell through to Ask. Matches user intent.
+    #[test]
+    fn test_evaluate_allow_command_normalizes_clause() {
+        let rules = vec![rule(
+            "bash",
+            "command",
+            "git status",
+            PermissionAction::Allow,
+        )];
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "git  status"}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Allow,
+            "double-spaced git status must match allow git status"
+        );
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "git \"status\""}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Allow,
+            "quoted-arg git status must match allow git status"
+        );
+        assert_eq!(
+            evaluate(
+                &rules,
+                "bash",
+                &json!({"command": "GIT STATUS"}),
+                PermissionAction::Ask
+            )
+            .0,
+            PermissionAction::Allow,
+            "upper-case git status must match allow git status"
         );
     }
 

@@ -1368,7 +1368,10 @@ mod tests {
         );
         let info = adapter.model_info();
         assert_eq!(info.name, "claude-sonnet-4");
-        assert_eq!(info.tool_call_format, crate::shared::ToolCallStyle::Anthropic);
+        assert_eq!(
+            info.tool_call_format,
+            crate::shared::ToolCallStyle::Anthropic
+        );
     }
 
     // WO 44.22: AdapterSwap stores the Anthropic base URL and passes it

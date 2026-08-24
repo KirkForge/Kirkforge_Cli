@@ -1864,7 +1864,10 @@ mod tests {
         let _e8 = set_env("KF_CODE_COMPUTER_USE_HEIGHT", Some("768"));
         let _e9 = set_env("KF_CODE_COMPUTER_USE_STARTUP_TIMEOUT", Some("60"));
         let _e10 = set_env("KF_CODE_COMPUTER_USE_WAIT_TIMEOUT", Some("20"));
-        let _e11 = set_env("KF_CODE_ANTHROPIC_API_BASE", Some("https://proxy.example.com"));
+        let _e11 = set_env(
+            "KF_CODE_ANTHROPIC_API_BASE",
+            Some("https://proxy.example.com"),
+        );
 
         apply_env_overrides(&mut cfg);
 

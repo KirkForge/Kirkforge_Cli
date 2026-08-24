@@ -899,7 +899,7 @@ tree, ~11 stale claims corrected in-line. See
 | 44.2 | [Finish the ADR predicate-block backfill (43.15 step 4)](44.2-adr-predicate-backfill.md) | Planned |
 | 44.20 | [Split compound clauses on background `&` (allow-rule/allowlist bypass)](44.20-bash-background-separator-bypass.md) | Planned |
 | 44.21 | [Permission bash rules match raw text: whitespace/quote evasion of deny rules](44.21-permission-bash-rule-normalization.md) | Planned |
-| 44.22 | [First-party Anthropic sends `x-api-key` to the Ollama default host](44.22-anthropic-base-url-key-destination.md) | Planned |
+| 44.22 | [First-party Anthropic sends `x-api-key` to the Ollama default host](44.22-anthropic-base-url-key-destination.md) | Done |
 | 44.23 | [Bedrock error frames interpolate transport errors into JSON unescaped](44.23-bedrock-error-frame-json-escaping.md) | Planned |
 | 44.24 | [Audit scrubber misses github_pat_/glpat-/AIza/ya29 token literals](44.24-audit-token-literal-gaps.md) | Planned |
 | 44.28 | [Phase 2.5 symlink-swap re-verification is unreachable on the allowed path](44.28-symlink-swap-check-dead-on-allowed-path.md) | Planned |

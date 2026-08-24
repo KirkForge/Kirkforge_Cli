@@ -256,3 +256,28 @@
 - Same load-flake hit 3 of 4 worktrees (attached_cancel_token... at
   load>10). With ≥3 concurrent full-suite gates on 8 cores, budget for one
   re-run or serialize the final gate runs.
+
+# Round 2 — dev-first flow enforcement (user directive)
+
+- THE FLOW IS: push to dev → CI green → fast-forward main. Never land on
+  main first. The 41-commit pile sat on local main with zero CI signal
+  because two sessions skipped this.
+- test-fast.sh (lib/bins) is NOT a merge gate — integration tests
+  (readme_drift, context_economics, kf-memory-store, kf-routing) live
+  outside it. Run scripts/test-full.sh before any dev push. Two of five
+  CI failures tonight were invisible to test-fast.
+- "Windows test parity" claims from 43.12/43.35 were never verified:
+  pid_is_alive was hardcoded true on Windows, deny_paths compared
+  '/'-only, ':'-splitting broke drive letters twice (lookup AND splice
+  — extract the shared helper the first time). The windows CI job died
+  on runner infra twice, which masked all of it.
+- GitHub windows runners flake: install-action "bash startup failure"
+  (partner-runner-images#169) — rerun the failed job, don't debug ghosts.
+  But rerun ONCE; a second identical failure is real (run_bash_stuck
+  deadlocked twice → real).
+- git merge-base --is-ancestor misses rebase-merged branches; `git cherry
+  <upstream> <branch>` (patch-id) found 11 "unmerged" worktrees that were
+  content-identical. Use both before pruning.
+- nextest per-test budgets + libtest "running for over 60 seconds" lines
+  distinguish a hung future from a slow one — grep the full log for
+  TERMINATING, not just FAIL.

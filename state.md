@@ -167,14 +167,24 @@
 
 ## CI / branch state
 
-- **CI: GREEN** (post-merge full local gate, head `65e726db`):
-  `scripts/test-fast.sh` → 4659 passed, 0 failed, 15 skipped.
-  `cargo clippy --all-targets -- -D warnings` clean.
-  `cargo clippy --target x86_64-pc-windows-gnu --workspace --all-targets -- -D warnings`
-  clean (fixed two pre-existing/un-gated breakages: 43.6 unix-only kf_rbac
-  imports, 43.23 libc::kill test probe). `cargo fmt --check` clean.
-  `cargo check --workspace --all-targets --locked` clean.
-  `adr_xref_drift` 6/6 passed. detect_changes vs `e1e5e6b2`: every changed
-  file maps to an intended WO scope (43.20/22/23/24).
-- **main** at `65e726db` (5 commits ahead of `e1e5e6b2` base). Not pushed —
-  user did not request push.
+- **CI: GREEN on origin/dev** — GitHub run `32675304923`, all five jobs
+  (static, clippy, windows, e2e, full-tests). First fully green dev run
+  since `32571059308` (2026-08-22); the 41-commit pile in between never
+  had a valid green signal.
+- **main == dev == origin/main == origin/dev** at `138adff8`. Flow from
+  now on (user directive): push to dev → CI green → fast-forward main.
+- **Windows CI debt cleared** (all inherited from the dead session, fixed
+  this session): kf-budget-core README test count 923; complete_path +
+  complete_mention drive-colon split (one shared `split_range_suffix`);
+  kf-memory-store real Windows PID probe (OpenProcess/GetExitCodeProcess,
+  windows-sys target-gated); kf-routing deny-path separator normalization;
+  set_times write-handle in the age-fallback test.
+- **DEFERRED to WO 44.44 item 4**: `run_bash_stuck_step_times_out` is
+  `#[cfg(unix)]` — on Windows the whole test future deadlocks past its own
+  inner timeout (msys sh + kill_on_drop orphan grandchildren; fix = Job
+  Objects). Un-gate the test when 44.44 lands.
+- **Cleanup**: 60 worktrees → 3 (main, dev-integration, user's external);
+  all merged local + remote wo/* branches deleted (49 remote + 6 stale
+  wo30* + locals); remote is just dev + main.
+- Last full local gate on `138adff8`: test-full 4905 passed / clippy
+  (unix + windows cross) / fmt / check --locked all clean.

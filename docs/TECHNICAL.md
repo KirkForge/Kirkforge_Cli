@@ -193,6 +193,17 @@ prefix heuristics (`claude-*` → Anthropic, `glm*`/`deepseek*`/`gemini*`/`kimi*
 → Ollama-kind, `opencode/` → OpenCode-Zen, else → OpenAI-compat). The `provider`
 field selects the Anthropic cloud backend (direct, Bedrock, or Vertex).
 
+**Per-provider base URLs** (WO 44.22): the first-party Anthropic adapter uses
+`[model].anthropic_api_base` (default `https://api.anthropic.com`) — not the
+shared `ollama_host`. This prevents the `x-api-key` header from being
+transmitted to whatever owns port 11434 when `ollama_host` defaults to
+`http://localhost:11434`. The OpenAI-compat adapter trims a trailing `/v1`
+from the base URL after stripping slashes, so both `http://host:11434` and
+`http://host:11434/v1` (Ollama's documented compat base) produce
+`/v1/chat/completions` rather than `/v1/v1/chat/completions`. The long-term
+shape is per-provider bases for every adapter kind; this WO adds the first
+(`anthropic_api_base`), the openai_compat de-dup is a localized fix.
+
 **Per-provider API key resolution** (`adapters/auth.rs`): each adapter resolves
 its API key via `resolve_api_key(provider, config_key)`, which returns the first
 non-empty value from: (1) the config field (`[model].anthropic_api_key`, etc.),

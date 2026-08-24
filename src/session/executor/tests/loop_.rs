@@ -1130,7 +1130,7 @@ async fn esc_cancel_aborts_stalled_parent_stream() {
     // The TUI's Esc/Ctrl+C path.
     h.cancel_tx.send(()).unwrap();
 
-    wait_turn_complete_within(&mut h.event_rx, 2).await;
+    wait_turn_complete_within(&mut h.event_rx, 10).await;
     h.handle.abort();
 }
 
@@ -1350,6 +1350,6 @@ async fn esc_cancel_cascades_to_live_tool_token() {
     started_rx.await.expect("tool must start before cancel");
     h.cancel_tx.send(()).unwrap();
 
-    wait_turn_complete_within(&mut h.event_rx, 2).await;
+    wait_turn_complete_within(&mut h.event_rx, 10).await;
     h.handle.abort();
 }

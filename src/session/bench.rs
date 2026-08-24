@@ -9,17 +9,90 @@ use kf_bench::{BenchReport, BenchSummary, BenchTask, TaskResult};
 use std::path::Path;
 use std::time::Instant;
 
+/// Wall-clock budget for a single verify command. Generous vs the nextest
+/// `ci-full` 60s per-test budget — a verify that takes longer than this is
+/// stuck, not slow. See WO 44.47.
+const VERIFY_TIMEOUT_SECS: u64 = 120;
+
+/// Run the task's verify command bounded by a wall-clock timeout. On
+/// timeout the child is killed (`kill_on_drop`) and the function returns
+/// `false` — a stuck verify is a verify failure with a clear diagnostic,
+/// not a hung bench loop. `FileContains` has no subprocess so it bypasses
+/// the bound (a filesystem read, not an unbounded spawn). See WO 44.47
+/// (same class as WO 43.26 workflow bash — `tokio::process` + `kill_on_drop`
+/// rather than `spawn_blocking`, because `spawn_blocking` cannot kill the
+/// blocked thread on timeout and would leak a stuck `sh -c` past the
+/// runtime shutdown).
+async fn verify_task_bounded(
+    task: &BenchTask,
+    sandbox_path: &Path,
+    timeout: std::time::Duration,
+) -> bool {
+    use kf_bench::VerifySpec;
+    let curated = task.budget_env();
+    let command = match &task.verify {
+        VerifySpec::TestPasses { command } | VerifySpec::CommandExitsZero { command } => command,
+        // FileContains is a filesystem read, not a subprocess — no
+        // timeout needed, delegate to the sync helper.
+        VerifySpec::FileContains { .. } => {
+            return kf_bench::verify_task(task, sandbox_path).unwrap_or(false);
+        }
+    };
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg(command)
+        .current_dir(sandbox_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    if matches!(task.verify, VerifySpec::TestPasses { .. }) {
+        cmd.env("CARGO_TERM_COLOR", "never");
+    }
+    if let Some((k, v)) = curated {
+        cmd.env(k, v.to_string());
+    }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "verify_task spawn failed");
+            return false;
+        }
+    };
+    match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(status)) => status.success(),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "verify_task wait failed");
+            false
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_secs = timeout.as_secs(),
+                command = ?task.verify,
+                "verify_task timed out, treating as failure"
+            );
+            // `child` dropped here → kill_on_drop reaps the process.
+            false
+        }
+    }
+}
+
 /// Collect metrics from a completed turn's events and produce a TaskResult.
 ///
 /// This is the pure, testable portion of `run_task` — no adapter, no async,
 /// no timeout. It aggregates token counts, tool call counts, and cost from
 /// the `TurnEvent` stream, then runs verification.
+///
+/// `precomputed_verify` lets an async caller (`run_task`) run the verify
+/// command bounded by a timeout before calling this pure helper, and pass
+/// the result through. `None` falls back to the inline sync `verify_task`
+/// (used by tests; the async path always passes `Some`). See WO 44.47.
 pub fn collect_turn_metrics(
     events: &[super::executor::TurnEvent],
     duration_secs: f64,
     task: &BenchTask,
     sandbox_path: &std::path::Path,
     run_error: Option<String>,
+    precomputed_verify: Option<bool>,
 ) -> TaskResult {
     let mut tokens_in: u64 = 0;
     let mut tokens_out: u64 = 0;
@@ -50,7 +123,8 @@ pub fn collect_turn_metrics(
     }
 
     let success = if run_error.is_none() {
-        kf_bench::verify_task(task, sandbox_path).unwrap_or(false)
+        precomputed_verify
+            .unwrap_or_else(|| kf_bench::verify_task(task, sandbox_path).unwrap_or(false))
     } else {
         false
     };
@@ -258,12 +332,31 @@ pub async fn run_task(
         Err(_) => (vec![], Some(format!("timeout after {timeout_secs}s"))),
     };
 
+    // WO 44.47: bound the verify command. The agent run above is already
+    // bounded by `tokio::time::timeout`; the verify half was not, so a
+    // stuck `sh -c` (e.g. a wedged test binary) hung the bench loop and
+    // blocked the tokio worker. Run verify on a blocking thread with a
+    // wall-clock cap; pass the result through to the pure metrics helper.
+    let precomputed_verify = if run_error.is_none() {
+        Some(
+            verify_task_bounded(
+                task,
+                &sandbox_path,
+                std::time::Duration::from_secs(VERIFY_TIMEOUT_SECS),
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+
     Ok(collect_turn_metrics(
         &events,
         duration,
         task,
         &sandbox_path,
         run_error,
+        precomputed_verify,
     ))
 }
 
@@ -417,7 +510,7 @@ mod tests {
                 command: "true".to_string(),
             },
         );
-        let result = collect_turn_metrics(&[], 1.5, &task, dir.path(), None);
+        let result = collect_turn_metrics(&[], 1.5, &task, dir.path(), None, None);
         assert!(result.success);
         assert_eq!(result.tokens_in, 0);
         assert_eq!(result.tokens_out, 0);
@@ -457,7 +550,7 @@ mod tests {
                 args: serde_json::json!({}),
             },
         ];
-        let result = collect_turn_metrics(&events, 3.2, &task, dir.path(), None);
+        let result = collect_turn_metrics(&events, 3.2, &task, dir.path(), None, None);
         assert!(result.success);
         assert_eq!(result.tokens_in, 300);
         assert_eq!(result.tokens_out, 130);
@@ -474,8 +567,14 @@ mod tests {
                 command: "true".to_string(),
             },
         );
-        let result =
-            collect_turn_metrics(&[], 5.0, &task, dir.path(), Some("model error".to_string()));
+        let result = collect_turn_metrics(
+            &[],
+            5.0,
+            &task,
+            dir.path(),
+            Some("model error".to_string()),
+            None,
+        );
         assert!(!result.success);
         assert_eq!(result.error.as_deref(), Some("model error"));
     }
@@ -495,6 +594,7 @@ mod tests {
             &task,
             dir.path(),
             Some("timeout after 300s".to_string()),
+            None,
         );
         assert!(!result.success);
         assert!(result.error.as_ref().unwrap().contains("timeout"));
@@ -509,7 +609,7 @@ mod tests {
                 command: "false".to_string(),
             },
         );
-        let result = collect_turn_metrics(&[], 2.0, &task, dir.path(), None);
+        let result = collect_turn_metrics(&[], 2.0, &task, dir.path(), None, None);
         assert!(!result.success);
     }
 
@@ -531,7 +631,7 @@ mod tests {
             budget_ceiling: None,
             kf_only: false,
         };
-        let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
+        let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None, None);
         assert!(result.success);
     }
 
@@ -551,7 +651,7 @@ mod tests {
             budget_ceiling: None,
             kf_only: false,
         };
-        let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
+        let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None, None);
         assert!(!result.success);
     }
 
@@ -605,7 +705,7 @@ mod tests {
             super::super::executor::TurnEvent::Thinking("thought".into()),
             super::super::executor::TurnEvent::Error("err".into()),
         ];
-        let result = collect_turn_metrics(&events, 1.0, &task, dir.path(), None);
+        let result = collect_turn_metrics(&events, 1.0, &task, dir.path(), None, None);
         assert!(result.success);
         assert_eq!(result.tokens_in, 0);
         assert_eq!(result.tokens_out, 0);
@@ -636,7 +736,7 @@ mod tests {
                 args: serde_json::json!({}),
             },
         ];
-        let result = collect_turn_metrics(&events, 2.5, &task, dir.path(), None);
+        let result = collect_turn_metrics(&events, 2.5, &task, dir.path(), None, None);
         assert_eq!(result.tool_calls, 3);
     }
 
@@ -663,7 +763,7 @@ mod tests {
                 cumulative_cost: 0.003,
             },
         ];
-        let result = collect_turn_metrics(&events, 1.0, &task, dir.path(), None);
+        let result = collect_turn_metrics(&events, 1.0, &task, dir.path(), None, None);
         assert_eq!(result.tokens_in, 30);
         assert_eq!(result.tokens_out, 15);
         assert!((result.cost_usd - 0.003).abs() < 0.0001);
@@ -684,7 +784,7 @@ mod tests {
             budget_ceiling: None,
             kf_only: false,
         };
-        let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None);
+        let result = collect_turn_metrics(&[], 1.0, &task, dir.path(), None, None);
         assert_eq!(result.task_name, "named-task");
         assert_eq!(result.difficulty, Difficulty::Hard);
     }
@@ -698,8 +798,14 @@ mod tests {
                 command: "true".to_string(),
             },
         );
-        let result =
-            collect_turn_metrics(&[], 1.0, &task, dir.path(), Some("adapter crashed".into()));
+        let result = collect_turn_metrics(
+            &[],
+            1.0,
+            &task,
+            dir.path(),
+            Some("adapter crashed".into()),
+            None,
+        );
         assert!(!result.success);
         assert_eq!(result.error.as_deref(), Some("adapter crashed"));
     }
@@ -713,7 +819,7 @@ mod tests {
                 command: "true".to_string(),
             },
         );
-        let result = collect_turn_metrics(&[], 0.0, &task, dir.path(), None);
+        let result = collect_turn_metrics(&[], 0.0, &task, dir.path(), None, None);
         assert_eq!(result.duration_secs, 0.0);
     }
 
@@ -867,7 +973,45 @@ mod tests {
                 tokens_after: 200,
             },
         ];
-        let result = collect_turn_metrics(&events, 2.0, &task, dir.path(), None);
+        let result = collect_turn_metrics(&events, 2.0, &task, dir.path(), None, None);
         assert_eq!(result.compression_passes, 2);
+    }
+
+    // WO 44.47: a stuck verify command (sleep 300) must resolve within the
+    // bound, not hang the bench loop. The bounded wrapper treats timeout as
+    // a verify failure (returns false). Uses a 2s test timeout so the test
+    // runs fast; the production bound is 120s (VERIFY_TIMEOUT_SECS).
+    #[tokio::test]
+    async fn verify_task_bounded_treats_stuck_command_as_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "stuck-verify",
+            VerifySpec::CommandExitsZero {
+                command: "sleep 300".to_string(),
+            },
+        );
+        let start = std::time::Instant::now();
+        let result =
+            verify_task_bounded(&task, dir.path(), std::time::Duration::from_secs(2)).await;
+        let elapsed = start.elapsed();
+        assert!(!result, "a timed-out verify must score false");
+        assert!(
+            elapsed.as_secs() < 30,
+            "must resolve within seconds, not minutes; got {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_task_bounded_passes_through_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = sample_task(
+            "ok-verify",
+            VerifySpec::CommandExitsZero {
+                command: "true".to_string(),
+            },
+        );
+        let result =
+            verify_task_bounded(&task, dir.path(), std::time::Duration::from_secs(10)).await;
+        assert!(result, "true command must verify successfully");
     }
 }

@@ -313,6 +313,20 @@ impl Executor {
                 continue;
             }
             let idx = prep.idx;
+            // Emit ToolStart at dispatch time so the TUI has a streaming
+            // card to append PTY chunks to before the body finishes. The
+            // record-time emissions in `record_tool_result` were removed
+            // (WO 44.38) — they fired after the body ran, so PTY chunks
+            // flowing during the body had no card to land in.
+            crate::send_or_warn!(
+                event_tx
+                    .send(TurnEvent::ToolStart {
+                        name: prep.invocation.name.clone(),
+                        args: prep.invocation.arguments.clone(),
+                    })
+                    .await,
+                "TurnEvent receiver dropped; discarding event"
+            );
             if deterministic {
                 // Run sequentially — no tokio::spawn, no concurrency.
                 let outcome = run_prepared_call(prep).await;
@@ -497,6 +511,19 @@ impl Executor {
             }
 
             let invocation = prep.invocation.clone();
+            // Emit ToolStart at dispatch time (WO 44.38) — same rationale
+            // as the non-file arm above. File tools don't stream PTY chunks
+            // but the TUI still shows a streaming card until ToolResult
+            // finalizes it, and `run_turn_collecting` pairs the event.
+            crate::send_or_warn!(
+                event_tx
+                    .send(TurnEvent::ToolStart {
+                        name: name.clone(),
+                        args: prep.invocation.arguments.clone(),
+                    })
+                    .await,
+                "TurnEvent receiver dropped; discarding event"
+            );
             let outcome = run_prepared_call(prep).await.map(|(_, o, ms)| (o, ms));
             if let Some((ref o, ms)) = outcome {
                 // Mark reads immediately so later writes in the same batch

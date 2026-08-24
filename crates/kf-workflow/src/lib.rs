@@ -380,6 +380,15 @@ pub trait StepRunner: Send + Sync {
         bail!("tool steps not supported by this runner (step '{name}')")
     }
 
+    /// Evaluate a step's `condition` shell string. Returns `true` if the
+    /// condition is absent or exits 0, `false` otherwise (including timeout
+    /// and spawn failure — a hung condition skips the step, not the workflow).
+    /// Override to route the condition through the same deny gate the runner
+    /// applies to bash steps. The default is `eval_condition_bounded`.
+    async fn eval_condition(&self, condition: &str) -> bool {
+        eval_condition_bounded(condition).await
+    }
+
     /// Run a batch of independent steps and return their summaries in input order.
     ///
     /// The default implementation runs sequentially, dispatching by step kind.
@@ -512,6 +521,55 @@ fn extract_field(val: &serde_json::Value, path: &str) -> String {
     }
 }
 
+/// Wall-clock bound for condition evaluation. Mirrors the workflow bash
+/// step timeout (`WORKFLOW_BASH_TIMEOUT_SECS` in `src/tools/workflow.rs`):
+/// a condition should be a quick test/grep, not a long-running command.
+/// `ceiling:` a template that needs a longer condition should surface a
+/// per-step timeout knob; upgrade path is a `step.timeout_secs` field.
+#[cfg(not(test))]
+const CONDITION_TIMEOUT_SECS: u64 = 30;
+/// Under cfg(test) the bound is 2s so the `sleep infinity` pinning test
+/// resolves fast instead of hanging the suite for 30s.
+#[cfg(test)]
+const CONDITION_TIMEOUT_SECS: u64 = 2;
+
+/// Evaluate a shell condition string with a wall-clock bound and
+/// `kill_on_drop`. Returns `true` if the condition exits 0, `false`
+/// otherwise — including timeout and spawn failure, so a hung condition
+/// skips the step instead of wedging the workflow.
+/// ponytail: sh -c eval — upgrade to expression parser if needed.
+pub async fn eval_condition_bounded(condition: &str) -> bool {
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg(condition)
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let status_fut = cmd.status();
+    let timeout_fut = tokio::time::sleep(std::time::Duration::from_secs(CONDITION_TIMEOUT_SECS));
+    tokio::pin!(status_fut);
+    tokio::pin!(timeout_fut);
+    tokio::select! {
+        biased;
+        result = &mut status_fut => match result {
+            Ok(status) => status.success(),
+            Err(e) => {
+                tracing::warn!("condition eval failed for '{condition}': {e}");
+                false
+            }
+        },
+        _ = &mut timeout_fut => {
+            tracing::warn!(
+                "condition '{condition}' timed out after {CONDITION_TIMEOUT_SECS}s — skipping step"
+            );
+            false
+        }
+    }
+    // On timeout the `cmd` future (still owned here) is dropped; `kill_on_drop`
+    // reaps the spawned `sh` process so a `sleep infinity` condition cannot
+    // outlive the bound.
+}
+
 /// Executes a workflow in dependency order.
 ///
 /// The executor runs all ready steps together. If the host does not yet
@@ -524,21 +582,6 @@ pub struct WorkflowExecutor {
 impl WorkflowExecutor {
     pub fn new(workflow: Workflow) -> Self {
         Self { workflow }
-    }
-
-    /// Evaluate a shell condition string. Returns `true` if the condition is
-    /// absent or evaluates to exit code 0, `false` otherwise.
-    /// ponytail: sh -c eval — upgrade to expression parser if needed.
-    async fn eval_condition(condition: &str) -> Result<bool> {
-        tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(condition)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await
-            .map(|status| status.success())
-            .map_err(|e| anyhow::anyhow!("condition eval failed for '{condition}': {e}"))
     }
 
     /// Check budget limits (max_iterations, max_seconds). Returns `Ok(())`
@@ -905,7 +948,7 @@ impl WorkflowExecutor {
                     .find(|s| &s.name == name)
                     .ok_or_else(|| anyhow!("missing step {name}"))?;
                 if let Some(ref cond) = step.condition {
-                    if !Self::eval_condition(cond).await? {
+                    if !runner.eval_condition(cond).await {
                         skipped.insert(name.clone());
                         continue;
                     }
@@ -2120,5 +2163,37 @@ mod tests {
         );
         let result = resolve_step_refs("$(step1.a.b.c)", &outputs);
         assert_eq!(result, "deep");
+    }
+
+    // WO 44.45 defect 1: a hung condition (sleep infinity) must resolve to
+    // `false` within the bound (2s under cfg(test)), not wedge the workflow.
+    // Bounded by an outer 5s wall: if the timeout path regresses, the test
+    // fails instead of hanging indefinitely. unix-only mirrors the bash
+    // step timeout test (same kill_on_drop + sh tree concern on Windows).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn eval_condition_bounded_hung_condition_resolves_false() {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            eval_condition_bounded("sleep infinity"),
+        )
+        .await;
+        match result {
+            Ok(false) => {}
+            Ok(true) => panic!("hung condition must evaluate false, not true"),
+            Err(_) => panic!("eval_condition_bounded hung past 5s — bound not honoured"),
+        }
+    }
+
+    // WO 44.45 defect 1: a passing condition exits 0 and returns true.
+    #[tokio::test]
+    async fn eval_condition_bounded_passing_condition_is_true() {
+        assert!(eval_condition_bounded("true").await);
+    }
+
+    // WO 44.45 defect 1: a failing condition (exit non-zero) returns false.
+    #[tokio::test]
+    async fn eval_condition_bounded_failing_condition_is_false() {
+        assert!(!eval_condition_bounded("false").await);
     }
 }

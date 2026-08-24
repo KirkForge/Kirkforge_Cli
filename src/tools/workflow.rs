@@ -383,6 +383,26 @@ impl StepRunner for TaskSpawnerStepRunner {
         }
     }
 
+    // Route the condition string through the same deny gate the runner
+    // applies to bash steps — conditions are the only other `sh -c` spawn
+    // site in the workflow path, so they must not bypass the gate. A denied
+    // condition is treated as `false` (skip) + warn, matching timeout/ spawn-
+    // failure semantics: a skipped step is recoverable, a wedged workflow is
+    // not.
+    async fn eval_condition(&self, condition: &str) -> bool {
+        if let Some(denied) = check_bash_command_str(
+            condition,
+            None,
+            &self.deny_list,
+            &self.path_guard,
+            self.bash_sandbox_workdir,
+        ) {
+            tracing::warn!("condition denied: {denied} — skipping step");
+            return false;
+        }
+        kf_workflow::eval_condition_bounded(condition).await
+    }
+
     async fn run_batch(&self, steps: Vec<StepRequest>) -> Result<Vec<(String, String)>> {
         // Fan out independent steps in parallel. Each step is dispatched to
         // its own tokio task so they run concurrently.

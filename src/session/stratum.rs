@@ -349,13 +349,22 @@ impl Tool for StratumMode {
         let json_out = json_get_bool(&args, "json");
         let value = json_get_string(&args, "value");
 
+        // WO 44.46: actually set the session mode when `value` parses, and
+        // report the live session mode (current_session_mode) when `value`
+        // is absent — previously this echoed a hardcoded Mode::Full and never
+        // mutated SESSION_MODE, so the tool's "set it for this invocation"
+        // contract was unfulfilled and the show path couldn't reflect the
+        // budget's auto-escalation state.
         let mode = if let Some(ref v) = value {
             match v.parse::<Mode>() {
-                Ok(m) => m,
+                Ok(m) => {
+                    set_session_mode(m);
+                    m
+                }
                 Err(e) => return error_json(format!("stratum_mode: {e}")),
             }
         } else {
-            Mode::Full
+            current_session_mode()
         };
 
         if json_out {

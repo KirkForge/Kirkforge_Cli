@@ -43,6 +43,7 @@ fn real_adapter(mock_uri: &str) -> Box<dyn ModelAdapter> {
         None,
         None,
         None,
+        "https://api.anthropic.com",
     )
 }
 

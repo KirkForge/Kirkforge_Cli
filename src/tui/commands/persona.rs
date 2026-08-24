@@ -249,6 +249,7 @@ async fn run_persona_task(
                 Some(config.model.gcp_region.as_str())
             },
             config.model.gcp_service_account_path.clone(),
+            &config.model.anthropic_api_base,
         ),
         &config,
     );

@@ -166,6 +166,10 @@ pub async fn run_task(
         .model
         .anthropic_provider
         .clone();
+    let anthropic_api_base = crate::shared::read_shared_config(&shared_config)
+        .model
+        .anthropic_api_base
+        .clone();
     let request_timeout = crate::shared::read_shared_config(&shared_config)
         .model
         .request_timeout_secs;
@@ -193,6 +197,7 @@ pub async fn run_task(
         None,
         None,
         None,
+        &anthropic_api_base,
     );
 
     // Open conversation log in sandbox.

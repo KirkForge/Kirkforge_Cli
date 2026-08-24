@@ -452,41 +452,51 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             state.mark_dirty();
         }
         TurnEvent::BashPartialOutput(chunk) => {
-            // Stream PTY output into the running tool card. The last
-            // message is the "🔧 name ..." placeholder pushed by
-            // `ToolStart`; append the chunk and mark it streaming so the
-            // card renders a spinner + incremental text.
+            // Stream PTY output into a streaming tool card. With WO 44.38
+            // ToolStart fires at dispatch time, so a streaming card should
+            // already exist. But defense in depth: if the last tool entry
+            // is NOT streaming (completed card, or no tool entry yet),
+            // push a fresh streaming card so chunks always land somewhere
+            // sane instead of corrupting a completed card or being dropped.
+            let needs_fresh = match state.conversation.messages.back() {
+                Some(last) => last.role != "tool" || !last.streaming,
+                None => true,
+            };
+            if needs_fresh {
+                state.conversation.messages.push_back(ConversationEntry::new(
+                    "tool",
+                    "🔧 bash …",
+                ));
+            }
             if let Some(last) = state.conversation.messages.back_mut() {
-                if last.role == "tool" {
-                    last.streaming = true;
-                    // Bound the streaming card: a `watch`/`top`/long
-                    // ping balloons `content` and the render path
-                    // re-wraps the whole string every frame. Keep the
-                    // tail under 64 KiB and surface a byte-count
-                    // marker so the user sees `… [N bytes total,
-                    // showing last 64K]` instead of silent loss. The
-                    // full output still lands in `tool_output` when
-                    // `ToolResult` finalizes the entry (WO 38.11).
-                    const PTY_TAIL_BYTES: usize = 64 * 1024;
-                    last.content.push_str(&chunk);
-                    if last.content.len() > PTY_TAIL_BYTES {
-                        let total = last.content.len();
-                        let mut start = total - PTY_TAIL_BYTES;
-                        // Walk back to a char boundary BEFORE slicing so a
-                        // multibyte char straddling the offset doesn't
-                        // panic (WO 43.25). The prior char_indices fixup
-                        // here was dead code — the slice panicked first.
-                        while !last.content.is_char_boundary(start) {
-                            start -= 1;
-                        }
-                        let tail = last.content[start..].to_string();
-                        last.content = format!(
-                            "… [{total} bytes total, showing last {PTY_TAIL_BYTES}]\n{tail}"
-                        );
+                last.streaming = true;
+                // Bound the streaming card: a `watch`/`top`/long
+                // ping balloons `content` and the render path
+                // re-wraps the whole string every frame. Keep the
+                // tail under 64 KiB and surface a byte-count
+                // marker so the user sees `… [N bytes total,
+                // showing last 64K]` instead of silent loss. The
+                // full output still lands in `tool_output` when
+                // `ToolResult` finalizes the entry (WO 38.11).
+                const PTY_TAIL_BYTES: usize = 64 * 1024;
+                last.content.push_str(&chunk);
+                if last.content.len() > PTY_TAIL_BYTES {
+                    let total = last.content.len();
+                    let mut start = total - PTY_TAIL_BYTES;
+                    // Walk back to a char boundary BEFORE slicing so a
+                    // multibyte char straddling the offset doesn't
+                    // panic (WO 43.25). The prior char_indices fixup
+                    // here was dead code — the slice panicked first.
+                    while !last.content.is_char_boundary(start) {
+                        start -= 1;
                     }
-                    last.bump_version();
-                    state.mark_dirty();
+                    let tail = last.content[start..].to_string();
+                    last.content = format!(
+                        "… [{total} bytes total, showing last {PTY_TAIL_BYTES}]\n{tail}"
+                    );
                 }
+                last.bump_version();
+                state.mark_dirty();
             }
         }
         TurnEvent::MemoryExtracted { count, turn } => {
@@ -507,7 +517,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             state.generation.turn_tool_calls = 0;
             state.generation.continuation = None;
             for msg in &mut state.conversation.messages {
-                if msg.role == "assistant" {
+                if msg.role == "assistant" || msg.role == "tool" {
                     msg.streaming = false;
                     msg.bump_version();
                 }

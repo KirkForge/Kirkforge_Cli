@@ -116,8 +116,7 @@ async fn rebuild_plugin_verifiers_keeps_every_built_in() {
         }],
         make_info(),
     ));
-    let mut executor =
-        make_executor(adapter, vec![], make_config(false)).expect("build executor");
+    let mut executor = make_executor(adapter, vec![], make_config(false)).expect("build executor");
 
     // init_default_verifiers ran in the constructor; collect the names it
     // registered so the assertion below tracks the real registration set,

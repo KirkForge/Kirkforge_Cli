@@ -895,15 +895,15 @@ tree, ~11 stale claims corrected in-line. See
 | 43.38 | [Async blocking in tools (glob walk, computer_use sleep) + shell-glob redirection bypass](43.38-async-blocking-glob-sleep-redirection.md) | Done |
 | 43.39 | [kf-bench markdown-delta baseline computation contradicts the regression signal](43.39-bench-delta-rate.md) | Done |
 | 44.0 | [Series 44 overview: regression audit + five-area fresh sweep](44.0-wo44-overview.md) | Done |
-| 44.1 | [Line-mode Ctrl-C does not cancel the in-flight turn](44.1-line-mode-ctrl-c-turn-cancel.md) | Planned |
+| 44.1 | [Line-mode Ctrl-C does not cancel the in-flight turn](44.1-line-mode-ctrl-c-turn-cancel.md) | Done |
 | 44.2 | [Finish the ADR predicate-block backfill (43.15 step 4)](44.2-adr-predicate-backfill.md) | Planned |
-| 44.20 | [Split compound clauses on background `&` (allow-rule/allowlist bypass)](44.20-bash-background-separator-bypass.md) | Planned |
+| 44.20 | [Split compound clauses on background `&` (allow-rule/allowlist bypass)](44.20-bash-background-separator-bypass.md) | Done |
 | 44.21 | [Permission bash rules match raw text: whitespace/quote evasion of deny rules](44.21-permission-bash-rule-normalization.md) | Done |
 | 44.22 | [First-party Anthropic sends `x-api-key` to the Ollama default host](44.22-anthropic-base-url-key-destination.md) | Done |
-| 44.23 | [Bedrock error frames interpolate transport errors into JSON unescaped](44.23-bedrock-error-frame-json-escaping.md) | Planned |
-| 44.24 | [Audit scrubber misses github_pat_/glpat-/AIza/ya29 token literals](44.24-audit-token-literal-gaps.md) | Planned |
+| 44.23 | [Bedrock error frames interpolate transport errors into JSON unescaped](44.23-bedrock-error-frame-json-escaping.md) | Done |
+| 44.24 | [Audit scrubber misses github_pat_/glpat-/AIza/ya29 token literals](44.24-audit-token-literal-gaps.md) | Done |
 | 44.28 | [Phase 2.5 symlink-swap re-verification is unreachable on the allowed path](44.28-symlink-swap-check-dead-on-allowed-path.md) | Done |
-| 44.29 | [`/plugins` reload silently drops the Node/Go/Generic verifiers](44.29-plugin-reload-drops-node-go-verifiers.md) | Planned |
+| 44.29 | [`/plugins` reload silently drops the Node/Go/Generic verifiers](44.29-plugin-reload-drops-node-go-verifiers.md) | Done |
 | 44.30 | [`max_tool_result_chars` never applies to file tools (read_file can flood the context)](44.30-file-tool-result-truncation-bypass.md) | Planned |
 | 44.31 | [Budget guard compares result bytes against the token budget (unit mismatch)](44.31-budget-slice-byte-token-unit-mismatch.md) | Done |
 | 44.36 | [Surface executor-task death: event loop busy-spins on closed channel and drops all user input silently](44.36-executor-death-spin.md) | Done |

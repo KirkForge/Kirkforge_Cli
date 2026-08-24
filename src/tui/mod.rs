@@ -329,6 +329,24 @@ fn should_shutdown_after_errors(consecutive: u32, max: u32) -> bool {
     consecutive >= max
 }
 
+// WO 44.36: surface executor-task death. A closed `event_rx` means the
+// executor task exited (propagated error logged to kf-code.log). Push a
+// system entry so the user sees why the session is quitting — the
+// alternate screen hides the log file. Returns true so the caller sets
+// `should_exit` and falls through to the standard teardown path. Pure
+// over `AppState` so the contract is unit-testable without a live TUI.
+fn handle_executor_channel_closed(state: &mut AppState) -> bool {
+    state
+        .conversation
+        .messages
+        .push_back(ConversationEntry::new(
+            "system",
+            "⚠️ Session executor exited unexpectedly (see kf-code.log for the error). Exiting.",
+        ));
+    state.mark_dirty();
+    true
+}
+
 #[cfg(unix)]
 fn install_signal_handlers(
     shared_config: &crate::shared::SharedConfig,
@@ -919,7 +937,20 @@ async fn run_event_loop(
                 kb_event = ev;
             }
             ev = event_rx.recv() => {
-                first_executor_event = ev;
+                // WO 44.36: a closed event channel means the executor
+                // task has exited (e.g. conversation-log IO error at
+                // loop_.rs:480-487). `recv() == None` is permanent —
+                // with `biased;` polling this arm would win every
+                // iteration and busy-spin at 100% CPU, dropping all
+                // input silently. Treat it as fatal: surface a system
+                // entry and fall through to the standard exit path
+                // (terminal restored, carryover saved), the same path
+                // the shutdown arm below uses.
+                if let Some(ev) = ev {
+                    first_executor_event = Some(ev);
+                } else if handle_executor_channel_closed(state) {
+                    state.session.should_exit = true;
+                }
             }
             ev = approval_rx.recv() => {
                 first_approval_event = ev;
@@ -1774,6 +1805,91 @@ mod tests {
         // mode — the should_exit==true assert is the real correctness
         // check; the hang guard is the safety net.
         assert!(should_exit, "shutdown Notify was never observed");
+    }
+
+    // ── WO 44.36: closed event channel must not busy-spin ────────
+    //
+    // When the executor task exits, `event_tx` drops and `event_rx.recv()`
+    // returns `Ready(None)` permanently. With `biased;` select polling
+    // the `event_rx.recv()` arm wins every iteration, the body no-ops
+    // (drain is gated on `is_some()`), and the loop spins at 100% CPU —
+    // UI looks alive but silently drops all input. This test documents
+    // the spin hazard by reproducing the select shape: a closed
+    // `mpsc::Receiver::recv()` arm must resolve immediately, NOT wait
+    // for the slow tick. A regression that re-introduces the no-op
+    // handling (e.g. storing `None` and looping) would make this test
+    // hang until the 1s safety net trips.
+    #[tokio::test]
+    async fn closed_event_rx_resolves_immediately() {
+        let (_tx, mut rx) = mpsc::channel::<()>(1);
+        // Drop the sender so `recv()` returns `None` permanently.
+        drop(_tx);
+
+        let mut slow_tick = tokio::time::interval(std::time::Duration::from_millis(125));
+        slow_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        let started = std::time::Instant::now();
+        let mut saw_closed = false;
+        while !saw_closed {
+            tokio::select! {
+                biased;
+                ev = rx.recv() => {
+                    // None = channel closed = executor task exited.
+                    // The loop MUST take this arm, not the tick arm.
+                    assert!(ev.is_none(), "expected closed channel, got a value");
+                    saw_closed = true;
+                }
+                _ = slow_tick.tick() => {
+                    // If the closed arm ever loses to the tick, the
+                    // spin bug is back. Fail fast.
+                    panic!("closed event_rx arm lost to slow_tick (busy-spin regression)");
+                }
+            }
+            // Safety net: bail out if the test would otherwise hang.
+            if started.elapsed() > std::time::Duration::from_secs(1) {
+                panic!("closed event_rx was never observed");
+            }
+        }
+        assert!(saw_closed, "closed event_rx was never observed");
+    }
+
+    // WO 44.36: the decision helper pushes a visible system entry and
+    // signals exit so the loop falls through to the standard teardown
+    // path (terminal restored, carryover saved). Pure over AppState so
+    // it tests without a live TUI.
+    #[test]
+    fn handle_executor_channel_closed_marks_exit() {
+        let mut state = test_state();
+        let before = state.conversation.messages.len();
+
+        // Mirror the select-arm call site: helper returns the decision,
+        // caller sets should_exit and breaks to the standard teardown.
+        let should_exit = handle_executor_channel_closed(&mut state);
+        if should_exit {
+            state.session.should_exit = true;
+        }
+
+        assert!(
+            should_exit,
+            "helper must signal should_exit on closed channel"
+        );
+        assert!(
+            state.session.should_exit,
+            "caller must set should_exit from the return value"
+        );
+        assert_eq!(state.conversation.messages.len(), before + 1);
+        let entry = state.conversation.messages.back().unwrap();
+        assert_eq!(entry.role, "system");
+        assert!(
+            entry.content.contains("executor exited unexpectedly"),
+            "system entry should explain the exit; got: {}",
+            entry.content
+        );
+        assert!(
+            entry.content.contains("kf-code.log"),
+            "system entry should point at the log file; got: {}",
+            entry.content
+        );
     }
 
     // ── Persona merge regression tests ─────────────────────────

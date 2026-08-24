@@ -11,6 +11,13 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 44.45 — workflow engine error/budget semantics hardened: `eval_condition`
+  is now bounded (kill_on_drop + 30s wall, 2s under test) and routed through
+  the bash deny gate (no more `sleep infinity` wedge); `budget.on_exceeded`
+  handler output reaches the model (returns `Ok` with `budget_exceeded` flag
+  instead of bailing and dropping `WorkflowSummary`); `run_batch` joins ALL
+  handles and preserves successful siblings on error (`BatchErrors` carries
+  ok/err partitions) instead of early-returning and mislabeling every task.
 - WO 44.29 — `/plugins` reload no longer silently drops the Node/Go/generic
   built-in verifiers. `BUILTIN_VERIFIERS` (the retain allowlist in
   `rebuild_plugin_verifiers`) was missing the 5 WO 32.20 names

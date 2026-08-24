@@ -380,6 +380,15 @@ pub trait StepRunner: Send + Sync {
         bail!("tool steps not supported by this runner (step '{name}')")
     }
 
+    /// Evaluate a step's `condition` shell string. Returns `true` if the
+    /// condition is absent or exits 0, `false` otherwise (including timeout
+    /// and spawn failure — a hung condition skips the step, not the workflow).
+    /// Override to route the condition through the same deny gate the runner
+    /// applies to bash steps. The default is `eval_condition_bounded`.
+    async fn eval_condition(&self, condition: &str) -> bool {
+        eval_condition_bounded(condition).await
+    }
+
     /// Run a batch of independent steps and return their summaries in input order.
     ///
     /// The default implementation runs sequentially, dispatching by step kind.
@@ -417,6 +426,40 @@ pub struct StepRequest {
     pub tool_name: String,
     pub tool_arguments: serde_json::Value,
     pub with_critique: bool,
+}
+
+/// Outcome of a `run_batch` that joined ALL handles (never early-returned on
+/// the first error). Carries both the succeeded steps' `(name, summary)`
+/// pairs and the failed steps' `(name, error)` pairs so the executor can
+/// preserve sibling results instead of dropping them. A runner that cannot
+/// partition (e.g. the sequential default) returns a plain `anyhow::Error`
+/// and the executor falls back to the all-failed path.
+#[derive(Debug)]
+pub struct BatchErrors {
+    /// `(step_name, summary)` for steps that succeeded.
+    pub successes: Vec<(String, String)>,
+    /// `(step_name, error)` for steps that failed.
+    pub failures: Vec<(String, anyhow::Error)>,
+}
+
+impl std::fmt::Display for BatchErrors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "batch failed: {}/{} steps errored",
+            self.failures.len(),
+            self.successes.len() + self.failures.len()
+        )
+    }
+}
+
+impl std::error::Error for BatchErrors {}
+
+impl BatchErrors {
+    /// True if at least one step failed.
+    pub fn has_failures(&self) -> bool {
+        !self.failures.is_empty()
+    }
 }
 
 /// Resolve `$(step_name)` and `$(step_name.field.path)` references in a string
@@ -512,6 +555,55 @@ fn extract_field(val: &serde_json::Value, path: &str) -> String {
     }
 }
 
+/// Wall-clock bound for condition evaluation. Mirrors the workflow bash
+/// step timeout (`WORKFLOW_BASH_TIMEOUT_SECS` in `src/tools/workflow.rs`):
+/// a condition should be a quick test/grep, not a long-running command.
+/// `ceiling:` a template that needs a longer condition should surface a
+/// per-step timeout knob; upgrade path is a `step.timeout_secs` field.
+#[cfg(not(test))]
+const CONDITION_TIMEOUT_SECS: u64 = 30;
+/// Under cfg(test) the bound is 2s so the `sleep infinity` pinning test
+/// resolves fast instead of hanging the suite for 30s.
+#[cfg(test)]
+const CONDITION_TIMEOUT_SECS: u64 = 2;
+
+/// Evaluate a shell condition string with a wall-clock bound and
+/// `kill_on_drop`. Returns `true` if the condition exits 0, `false`
+/// otherwise — including timeout and spawn failure, so a hung condition
+/// skips the step instead of wedging the workflow.
+/// ponytail: sh -c eval — upgrade to expression parser if needed.
+pub async fn eval_condition_bounded(condition: &str) -> bool {
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg(condition)
+        .kill_on_drop(true)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let status_fut = cmd.status();
+    let timeout_fut = tokio::time::sleep(std::time::Duration::from_secs(CONDITION_TIMEOUT_SECS));
+    tokio::pin!(status_fut);
+    tokio::pin!(timeout_fut);
+    tokio::select! {
+        biased;
+        result = &mut status_fut => match result {
+            Ok(status) => status.success(),
+            Err(e) => {
+                tracing::warn!("condition eval failed for '{condition}': {e}");
+                false
+            }
+        },
+        _ = &mut timeout_fut => {
+            tracing::warn!(
+                "condition '{condition}' timed out after {CONDITION_TIMEOUT_SECS}s — skipping step"
+            );
+            false
+        }
+    }
+    // On timeout the `cmd` future (still owned here) is dropped; `kill_on_drop`
+    // reaps the spawned `sh` process so a `sleep infinity` condition cannot
+    // outlive the bound.
+}
+
 /// Executes a workflow in dependency order.
 ///
 /// The executor runs all ready steps together. If the host does not yet
@@ -526,24 +618,37 @@ impl WorkflowExecutor {
         Self { workflow }
     }
 
-    /// Evaluate a shell condition string. Returns `true` if the condition is
-    /// absent or evaluates to exit code 0, `false` otherwise.
-    /// ponytail: sh -c eval — upgrade to expression parser if needed.
-    async fn eval_condition(condition: &str) -> Result<bool> {
-        tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(condition)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await
-            .map(|status| status.success())
-            .map_err(|e| anyhow::anyhow!("condition eval failed for '{condition}': {e}"))
+    /// Insert the synthetic `on_exceeded` step output (if configured and not
+    /// already present) so the handler's output reaches the model. Deduped
+    /// across the max_iterations / max_seconds branches.
+    fn insert_on_exceeded(
+        on_exceeded: &str,
+        reason: String,
+        completed: &mut HashSet<String>,
+        skipped: &HashSet<String>,
+        outputs: &mut HashMap<String, StepOutput>,
+    ) {
+        if !completed.contains(on_exceeded) && !skipped.contains(on_exceeded) {
+            completed.insert(on_exceeded.to_string());
+            outputs.insert(
+                on_exceeded.to_string(),
+                StepOutput {
+                    name: on_exceeded.to_string(),
+                    kind: StepKind::Agent,
+                    persona: String::new(),
+                    summary: reason,
+                    critique: None,
+                    structured_output: None,
+                },
+            );
+        }
     }
 
-    /// Check budget limits (max_iterations, max_seconds). Returns `Ok(())`
-    /// if within budget, or `Err` with a budget-exceeded message.
-    /// Inserts an `on_exceeded` step output if one is configured.
+    /// Check budget limits (max_iterations, max_seconds). Returns `true` if a
+    /// budget is exceeded (and inserts the `on_exceeded` step output if one is
+    /// configured), `false` if within budget. Does NOT bail — the caller
+    /// returns `Ok(WorkflowSummary { budget_exceeded: true, .. })` so the
+    /// configured handler output reaches the model instead of being dropped.
     fn check_budget(
         budget: &Budget,
         iterations: u64,
@@ -551,50 +656,36 @@ impl WorkflowExecutor {
         completed: &mut HashSet<String>,
         skipped: &HashSet<String>,
         outputs: &mut HashMap<String, StepOutput>,
-    ) -> Result<()> {
+    ) -> bool {
         if let Some(max_iter) = budget.max_iterations {
             if iterations >= max_iter {
                 if let Some(ref on_exceeded) = budget.on_exceeded {
-                    if !completed.contains(on_exceeded) && !skipped.contains(on_exceeded) {
-                        completed.insert(on_exceeded.clone());
-                        outputs.insert(
-                            on_exceeded.clone(),
-                            StepOutput {
-                                name: on_exceeded.clone(),
-                                kind: StepKind::Agent,
-                                persona: String::new(),
-                                summary: format!("budget exceeded: max_iterations ({max_iter})"),
-                                critique: None,
-                                structured_output: None,
-                            },
-                        );
-                    }
+                    Self::insert_on_exceeded(
+                        on_exceeded,
+                        format!("budget exceeded: max_iterations ({max_iter})"),
+                        completed,
+                        skipped,
+                        outputs,
+                    );
                 }
-                bail!("workflow budget exceeded: max_iterations ({max_iter})");
+                return true;
             }
         }
         if let Some(max_secs) = budget.max_seconds {
             if start.elapsed().as_secs() >= max_secs {
                 if let Some(ref on_exceeded) = budget.on_exceeded {
-                    if !completed.contains(on_exceeded) && !skipped.contains(on_exceeded) {
-                        completed.insert(on_exceeded.clone());
-                        outputs.insert(
-                            on_exceeded.clone(),
-                            StepOutput {
-                                name: on_exceeded.clone(),
-                                kind: StepKind::Agent,
-                                persona: String::new(),
-                                summary: format!("budget exceeded: max_seconds ({max_secs})"),
-                                critique: None,
-                                structured_output: None,
-                            },
-                        );
-                    }
+                    Self::insert_on_exceeded(
+                        on_exceeded,
+                        format!("budget exceeded: max_seconds ({max_secs})"),
+                        completed,
+                        skipped,
+                        outputs,
+                    );
                 }
-                bail!("workflow budget exceeded: max_seconds ({max_secs})");
+                return true;
             }
         }
-        Ok(())
+        false
     }
 
     /// Build the prompt for an Agent step by prepending fork_from context
@@ -779,8 +870,14 @@ impl WorkflowExecutor {
         }
     }
 
-    /// Handle a batch-level error: check for on_error routes, mark failed
-    /// steps, and return Ok(()) to continue or Err(e) to abort.
+    /// Handle a batch-level error. When the error is a `BatchErrors` (the
+    /// parallel runner joined all handles and partitioned ok/err), preserve
+    /// the succeeded siblings' real outputs and mark only the actually-failed
+    /// steps — instead of the old behavior of marking every task in the
+    /// batch failed (including successful ones). For a plain `anyhow::Error`
+    /// (sequential default runner, or a panic that lost per-step info), fall
+    /// back to the old all-failed path. Returns `Ok(())` to continue (when an
+    /// `on_error` route exists) or `Err(e)` to abort.
     fn handle_batch_error(
         tasks: &[StepRequest],
         workflow: &Workflow,
@@ -788,6 +885,14 @@ impl WorkflowExecutor {
         completed: &mut HashSet<String>,
         outputs: &mut HashMap<String, StepOutput>,
     ) -> Result<()> {
+        // If the runner partitioned ok/err, preserve sibling successes.
+        if let Some(batch) = error.downcast_ref::<BatchErrors>() {
+            return Self::handle_partitioned_batch_error(workflow, batch, completed, outputs);
+        }
+
+        // Fallback: plain error (sequential default runner, or a panic that
+        // lost per-step info). Old all-failed behavior — every task marked
+        // failed with the batch error.
         let has_error_route = tasks.iter().any(|t| {
             workflow
                 .steps
@@ -848,6 +953,97 @@ impl WorkflowExecutor {
         Ok(())
     }
 
+    /// Handle a `BatchErrors` (partitioned ok/err) batch result: insert the
+    /// succeeded siblings' real outputs (with persona + structured_output)
+    /// and mark only the actually-failed steps. Route to the first failed
+    /// step's `on_error` if any; otherwise propagate the error.
+    fn handle_partitioned_batch_error(
+        workflow: &Workflow,
+        batch: &BatchErrors,
+        completed: &mut HashSet<String>,
+        outputs: &mut HashMap<String, StepOutput>,
+    ) -> Result<()> {
+        // Insert succeeded siblings as real outputs (not the canned
+        // "step failed" the old path applied to every task).
+        for (name, summary) in &batch.successes {
+            let step = workflow
+                .steps
+                .iter()
+                .find(|s| s.name == *name)
+                .ok_or_else(|| anyhow::anyhow!("batch step '{name}' not found in workflow"))?;
+            let persona = step
+                .persona
+                .clone()
+                .unwrap_or_else(|| format!("{:?}", step.kind).to_lowercase());
+            let structured_output: Option<serde_json::Value> = serde_json::from_str(summary).ok();
+            outputs.insert(
+                name.clone(),
+                StepOutput {
+                    name: name.clone(),
+                    kind: step.kind.clone(),
+                    persona,
+                    summary: summary.clone(),
+                    critique: None,
+                    structured_output,
+                },
+            );
+            completed.insert(name.clone());
+        }
+
+        // Mark only the actually-failed steps.
+        let mut first_error_msg: Option<String> = None;
+        let mut on_error_route: Option<String> = None;
+        for (name, err) in &batch.failures {
+            if first_error_msg.is_none() {
+                first_error_msg = Some(err.to_string());
+            }
+            let step = workflow
+                .steps
+                .iter()
+                .find(|s| s.name == *name)
+                .ok_or_else(|| anyhow::anyhow!("batch step '{name}' not found in workflow"))?;
+            if on_error_route.is_none() {
+                on_error_route = step.on_error.clone();
+            }
+            outputs.insert(
+                name.clone(),
+                StepOutput {
+                    name: name.clone(),
+                    kind: step.kind.clone(),
+                    persona: step.persona.clone().unwrap_or_default(),
+                    summary: format!("step failed: {err}"),
+                    critique: None,
+                    structured_output: None,
+                },
+            );
+            completed.insert(name.clone());
+        }
+
+        // Route to the first failed step's on_error if configured.
+        if let Some(on_error) = on_error_route {
+            let trigger = first_error_msg.unwrap_or_else(|| "batch failure".to_string());
+            completed.insert(on_error.clone());
+            outputs.insert(
+                on_error.clone(),
+                StepOutput {
+                    name: on_error.clone(),
+                    kind: StepKind::Agent,
+                    persona: String::new(),
+                    summary: format!("error handler triggered by: {trigger}"),
+                    critique: None,
+                    structured_output: None,
+                },
+            );
+            return Ok(());
+        }
+
+        // No on_error route — propagate the first failure.
+        Err(anyhow!(
+            "{}",
+            first_error_msg.unwrap_or_else(|| "batch failed with no error detail".to_string())
+        ))
+    }
+
     /// Run the workflow to completion, invoking `runner` for each step.
     ///
     /// The runner receives the step prompt concatenated with the human-readable
@@ -874,16 +1070,24 @@ impl WorkflowExecutor {
                 }
             }
 
-            // Budget checks.
+            // Budget checks. On exceed, return Ok with budget_exceeded=true
+            // so the on_exceeded handler output (if any) reaches the model —
+            // bailing would drop WorkflowSummary, the only carrier of outputs.
             if let Some(ref budget) = self.workflow.budget {
-                Self::check_budget(
+                if Self::check_budget(
                     budget,
                     iterations,
                     start,
                     &mut completed,
                     &skipped,
                     &mut outputs,
-                )?;
+                ) {
+                    return Ok(WorkflowSummary {
+                        workflow_name: self.workflow.name.clone(),
+                        outputs,
+                        budget_exceeded: true,
+                    });
+                }
             }
 
             // Also consider skipped steps as "done" for dependency resolution.
@@ -905,7 +1109,7 @@ impl WorkflowExecutor {
                     .find(|s| &s.name == name)
                     .ok_or_else(|| anyhow!("missing step {name}"))?;
                 if let Some(ref cond) = step.condition {
-                    if !Self::eval_condition(cond).await? {
+                    if !runner.eval_condition(cond).await {
                         skipped.insert(name.clone());
                         continue;
                     }
@@ -1062,6 +1266,7 @@ impl WorkflowExecutor {
         Ok(WorkflowSummary {
             workflow_name: self.workflow.name.clone(),
             outputs,
+            budget_exceeded: false,
         })
     }
 }
@@ -1071,6 +1276,11 @@ impl WorkflowExecutor {
 pub struct WorkflowSummary {
     pub workflow_name: String,
     pub outputs: HashMap<String, StepOutput>,
+    /// `true` if a budget limit (max_iterations / max_seconds) was hit. When
+    /// `budget.on_exceeded` is configured, the handler step's output is in
+    /// `outputs` and the workflow returns `Ok` with this flag set instead of
+    /// bailing — so the configured handler output reaches the model.
+    pub budget_exceeded: bool,
 }
 
 impl WorkflowSummary {
@@ -2120,5 +2330,378 @@ mod tests {
         );
         let result = resolve_step_refs("$(step1.a.b.c)", &outputs);
         assert_eq!(result, "deep");
+    }
+
+    // WO 44.45 defect 1: a hung condition (sleep infinity) must resolve to
+    // `false` within the bound (2s under cfg(test)), not wedge the workflow.
+    // Bounded by an outer 5s wall: if the timeout path regresses, the test
+    // fails instead of hanging indefinitely. unix-only mirrors the bash
+    // step timeout test (same kill_on_drop + sh tree concern on Windows).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn eval_condition_bounded_hung_condition_resolves_false() {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            eval_condition_bounded("sleep infinity"),
+        )
+        .await;
+        match result {
+            Ok(false) => {}
+            Ok(true) => panic!("hung condition must evaluate false, not true"),
+            Err(_) => panic!("eval_condition_bounded hung past 5s — bound not honoured"),
+        }
+    }
+
+    // WO 44.45 defect 1: a passing condition exits 0 and returns true.
+    #[tokio::test]
+    async fn eval_condition_bounded_passing_condition_is_true() {
+        assert!(eval_condition_bounded("true").await);
+    }
+
+    // WO 44.45 defect 1: a failing condition (exit non-zero) returns false.
+    #[tokio::test]
+    async fn eval_condition_bounded_failing_condition_is_false() {
+        assert!(!eval_condition_bounded("false").await);
+    }
+
+    // WO 44.45 defect 2: a budget.on_exceeded handler must surface in the
+    // summary, not be dropped by a bail. Previously check_budget inserted the
+    // synthetic on_exceeded StepOutput then bailed, so WorkflowSummary (the
+    // only carrier of outputs) was dropped and the caller saw only
+    // "workflow budget exceeded". Now run() returns Ok with budget_exceeded
+    // =true and the handler output in `outputs`.
+    //
+    // `handler` depends on `work` so it is NOT ready in batch 1 — the budget
+    // hits on the batch-2 check (iterations=1 >= max_iterations=1) before
+    // handler runs, and check_budget inserts the synthetic handler output.
+    #[tokio::test]
+    async fn budget_on_exceeded_surfaces_handler_output() {
+        let wf = Workflow {
+            name: "budget".into(),
+            steps: vec![
+                Step {
+                    name: "work".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("do work".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "handler".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("handle budget exceed".into()),
+                    persona: Some("plan".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec!["work".into()],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+            ],
+            budget: Some(Budget {
+                max_tokens: None,
+                max_seconds: None,
+                max_iterations: Some(1),
+                on_exceeded: Some("handler".into()),
+            }),
+        };
+        let (runner, _log) = make_runner();
+        let exe = WorkflowExecutor::new(wf);
+        // Must be Ok, not Err — the handler output must reach the model.
+        let summary = exe.run(Arc::new(runner), None).await.unwrap();
+        assert!(
+            summary.budget_exceeded,
+            "budget_exceeded must be true when max_iterations is hit"
+        );
+        // The on_exceeded handler's synthetic output must be present.
+        let handler = summary
+            .step("handler")
+            .expect("on_exceeded handler output must be in summary");
+        assert!(
+            handler.summary.contains("budget exceeded: max_iterations"),
+            "handler summary must name the budget reason, got: {}",
+            handler.summary
+        );
+        // The first step's output is still present — budget exceed does not
+        // erase already-completed work.
+        assert!(summary.step("work").is_some());
+    }
+
+    // WO 44.45 defect 2: a budget with NO on_exceeded still returns Ok with
+    // budget_exceeded=true (the workflow just stops, no handler output).
+    // Two chained steps so the workflow has remaining work when budget hits.
+    #[tokio::test]
+    async fn budget_exceeded_without_handler_returns_ok_flag_set() {
+        let wf = Workflow {
+            name: "budget_no_handler".into(),
+            steps: vec![
+                Step {
+                    name: "a".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("do a".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "b".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("do b".into()),
+                    persona: Some("plan".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec!["a".into()],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+            ],
+            budget: Some(Budget {
+                max_tokens: None,
+                max_seconds: None,
+                max_iterations: Some(1),
+                on_exceeded: None,
+            }),
+        };
+        let (runner, _log) = make_runner();
+        let exe = WorkflowExecutor::new(wf);
+        let summary = exe.run(Arc::new(runner), None).await.unwrap();
+        assert!(summary.budget_exceeded);
+    }
+
+    // WO 44.45 defect 3: a batch of [ok, fail, ok] must preserve BOTH ok
+    // siblings' real outputs and mark only the failed step — not mark every
+    // task in the batch failed (the old handle_batch_error behavior) or drop
+    // the siblings' JoinHandles (the old run_batch early-return). Uses a
+    // runner that returns Err(BatchErrors{successes, failures}) so the
+    // executor's handle_partitioned_batch_error path is exercised.
+    #[tokio::test]
+    async fn batch_error_preserves_successful_siblings() {
+        // Runner: run_step always succeeds (for the on_error handler step);
+        // run_batch returns BatchErrors with [ok, fail, ok].
+        struct BatchErrorsRunner;
+        #[async_trait::async_trait]
+        impl StepRunner for BatchErrorsRunner {
+            async fn run_step(&self, name: &str, _prompt: &str, persona: &str) -> Result<String> {
+                Ok(format!("{persona}:{name}:done"))
+            }
+
+            async fn run_batch(&self, steps: Vec<StepRequest>) -> Result<Vec<(String, String)>> {
+                let mut successes = Vec::new();
+                let mut failures: Vec<(String, anyhow::Error)> = Vec::new();
+                for req in steps {
+                    if req.name == "fail" {
+                        failures.push((req.name, anyhow::anyhow!("boom")));
+                    } else {
+                        successes.push((req.name.clone(), format!("{}:done", req.name)));
+                    }
+                }
+                Err(anyhow::Error::from(BatchErrors {
+                    successes,
+                    failures,
+                }))
+            }
+        }
+
+        let wf = Workflow {
+            name: "batch_siblings".into(),
+            steps: vec![
+                Step {
+                    name: "ok1".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("ok1".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "fail".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("fail".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: Some("handler".into()),
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "ok2".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("ok2".into()),
+                    persona: Some("coder".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "handler".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("handle".into()),
+                    persona: Some("plan".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+            ],
+            budget: None,
+        };
+        let exe = WorkflowExecutor::new(wf);
+        let summary = exe.run(Arc::new(BatchErrorsRunner), None).await.unwrap();
+        // Both ok siblings' real outputs must be preserved (not "step failed").
+        let ok1 = summary.step("ok1").expect("ok1 output must be preserved");
+        assert_eq!(ok1.summary, "ok1:done");
+        assert_eq!(ok1.persona, "explore");
+        let ok2 = summary.step("ok2").expect("ok2 output must be preserved");
+        assert_eq!(ok2.summary, "ok2:done");
+        assert_eq!(ok2.persona, "coder");
+        // Only the failed step is marked failed.
+        let fail = summary.step("fail").expect("fail output present");
+        assert!(
+            fail.summary.contains("step failed: boom"),
+            "fail summary must name the error, got: {}",
+            fail.summary
+        );
+        // The on_error handler was routed to.
+        let handler = summary
+            .step("handler")
+            .expect("on_error handler output present");
+        assert!(
+            handler.summary.contains("error handler triggered by:"),
+            "handler summary must name the trigger, got: {}",
+            handler.summary
+        );
+    }
+
+    // WO 44.45 defect 3: a BatchErrors with NO on_error route propagates the
+    // first failure (does not silently swallow it).
+    #[tokio::test]
+    async fn batch_error_without_on_error_propagates() {
+        struct FailNoRouteRunner;
+        #[async_trait::async_trait]
+        impl StepRunner for FailNoRouteRunner {
+            async fn run_step(&self, _name: &str, _prompt: &str, persona: &str) -> Result<String> {
+                Ok(format!("{persona}:done"))
+            }
+
+            async fn run_batch(&self, _steps: Vec<StepRequest>) -> Result<Vec<(String, String)>> {
+                Err(anyhow::Error::from(BatchErrors {
+                    successes: vec![("ok".into(), "ok:done".into())],
+                    failures: vec![("fail".into(), anyhow::anyhow!("unrecoverable"))],
+                }))
+            }
+        }
+
+        let wf = Workflow {
+            name: "batch_no_route".into(),
+            steps: vec![
+                Step {
+                    name: "ok".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("ok".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "fail".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("fail".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+            ],
+            budget: None,
+        };
+        let exe = WorkflowExecutor::new(wf);
+        let err = exe
+            .run(Arc::new(FailNoRouteRunner), None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("unrecoverable"),
+            "propagated error must name the failure, got: {err}"
+        );
     }
 }

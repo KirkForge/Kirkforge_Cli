@@ -15,8 +15,10 @@
 #   set touches no Rust-relevant paths at all, so callers can distinguish
 #   "docs-only" from "nothing changed".
 #
-# Exit codes: 0 always (the "no changes" case is a normal result, not an
-#   error). Non-zero only on git/usage failure.
+# Exit codes: 0 on success (the "no changes" case is a normal result, not an
+#   error). Non-zero on git/usage failure — the caller must propagate this
+#   (WO 44.52): swallowing it turns a classifier crash into a silently
+#   untested PR.
 #
 # ponytail: the reverse-dep table is hardcoded. The workspace is small and
 #   stable (13 crates, 4 inter-crate edges); a `cargo metadata` subprocess
@@ -55,13 +57,15 @@ reverse_deps_of() {
 }
 
 # ── Gather changed files ────────────────────────────────────────────────
-# git diff may fail if the base ref is not present locally; fall back to an
-# empty change set (caller skips tests) rather than crashing the CI step.
-if ! CHANGED=$(git diff --name-only --diff-filter=ACMR "$BASE_REF..HEAD" 2>/dev/null); then
-    echo "" >&2
-    echo "changed-packages: base ref '$BASE_REF' not resolvable; empty result." >&2
-    echo ""
-    exit 0
+# If git diff fails (base ref not resolvable — e.g. fork PRs where
+# origin/${base_ref} doesn't exist), fail loudly. A silent empty result would
+# be indistinguishable from "no Rust changes" and make the PR check suite
+# green with zero Rust checks run (WO 44.52). The caller (ci-pr.yml) no longer
+# swallows this exit code.
+if ! CHANGED=$(git diff --name-only --diff-filter=ACMR "$BASE_REF..HEAD"); then
+    echo "changed-packages: FAILED to resolve base ref '$BASE_REF' — see git error above." >&2
+    echo "changed-packages: this is a classification error, not a clean tree (WO 44.52)." >&2
+    exit 1
 fi
 
 if [ -z "$CHANGED" ]; then

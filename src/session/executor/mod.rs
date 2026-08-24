@@ -955,6 +955,13 @@ impl Executor {
             "python_test",
             "python_lint",
             "python_typecheck",
+            // WO 32.20 Node/Go/generic built-ins. Must stay in sync with
+            // init_default_verifiers or reload drops them silently (WO 44.29).
+            "node_test",
+            "node_lint",
+            "go_test",
+            "go_vet",
+            "generic_test",
         ];
 
         let Some(ref correction_loop) = self.correction_loop else {

@@ -11,6 +11,14 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 44.29 — `/plugins` reload no longer silently drops the Node/Go/generic
+  built-in verifiers. `BUILTIN_VERIFIERS` (the retain allowlist in
+  `rebuild_plugin_verifiers`) was missing the 5 WO 32.20 names
+  (node_test, node_lint, go_test, go_vet, generic_test), so the first live
+  plugin reload permanently removed them from the correction loop for the rest
+  of the session. Added the names + a guard test that fails the next time the
+  list drifts from `init_default_verifiers`.
+  [44.29](docs/workorders/44.29-plugin-reload-drops-node-go-verifiers.md)
 - WO 44.31 — budget guard: `check_and_slice` now compares the result's
   token cost (via `count_tokens`, same estimator as `record_tool_usage`)
   against `budget.remaining()` (tokens), not `result.len()` (bytes) against

@@ -430,7 +430,14 @@ pub struct OpenAiCompatAdapter {
 
 impl OpenAiCompatAdapter {
     pub fn new(ollama_host: &str, model: &str, timeout_secs: u64) -> Self {
-        let api_base = ollama_host.trim_end_matches('/').to_string();
+        // Trim trailing slashes, then strip one trailing `/v1` so both
+        // `http://host:11434` and `http://host:11434/v1` bases produce
+        // `/v1/chat/completions` instead of `/v1/v1/chat/completions`
+        // (WO 44.22 — Ollama's own docs use the `/v1` base form).
+        let api_base = ollama_host
+            .trim_end_matches('/')
+            .trim_end_matches("/v1")
+            .to_string();
         Self {
             model: model.to_string(),
             api_base,
@@ -1460,6 +1467,28 @@ mod tests {
     fn openai_compat_new_strips_trailing_slash() {
         let a = OpenAiCompatAdapter::new("http://host/", "model", 30);
         assert_eq!(a.api_base, "http://host");
+    }
+
+    // WO 44.22: a base like `http://host:11434/v1` (the canonical
+    // OpenAI-compat base in Ollama's docs) must not produce
+    // `/v1/v1/chat/completions`. The trailing `/v1` is stripped after
+    // the slash trim so both suffix forms work.
+    #[test]
+    fn openai_compat_new_strips_trailing_v1_suffix() {
+        let a = OpenAiCompatAdapter::new("http://host:11434/v1", "model", 30);
+        assert_eq!(a.api_base, "http://host:11434");
+    }
+
+    #[test]
+    fn openai_compat_new_strips_trailing_v1_and_slash() {
+        let a = OpenAiCompatAdapter::new("http://host:11434/v1/", "model", 30);
+        assert_eq!(a.api_base, "http://host:11434");
+    }
+
+    #[test]
+    fn openai_compat_new_preserves_non_v1_path() {
+        let a = OpenAiCompatAdapter::new("http://host:11434/api", "model", 30);
+        assert_eq!(a.api_base, "http://host:11434/api");
     }
 
     #[test]

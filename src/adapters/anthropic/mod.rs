@@ -826,6 +826,15 @@ mod tests {
         assert_eq!(a.api_base, "https://api.anthropic.com");
     }
 
+    // WO 44.22: the default Anthropic base URL produces the correct
+    // endpoint path {api_base}/v1/messages = https://api.anthropic.com/v1/messages.
+    #[test]
+    fn default_api_base_produces_correct_messages_endpoint() {
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-sonnet-4", 30, None);
+        let endpoint = format!("{}/v1/messages", a.api_base);
+        assert_eq!(endpoint, "https://api.anthropic.com/v1/messages");
+    }
+
     #[test]
     fn set_json_mode_toggles_flag() {
         let mut a = AnthropicAdapter::new("https://api.anthropic.com", "claude-4", 30, None);

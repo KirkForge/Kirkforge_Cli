@@ -428,6 +428,40 @@ pub struct StepRequest {
     pub with_critique: bool,
 }
 
+/// Outcome of a `run_batch` that joined ALL handles (never early-returned on
+/// the first error). Carries both the succeeded steps' `(name, summary)`
+/// pairs and the failed steps' `(name, error)` pairs so the executor can
+/// preserve sibling results instead of dropping them. A runner that cannot
+/// partition (e.g. the sequential default) returns a plain `anyhow::Error`
+/// and the executor falls back to the all-failed path.
+#[derive(Debug)]
+pub struct BatchErrors {
+    /// `(step_name, summary)` for steps that succeeded.
+    pub successes: Vec<(String, String)>,
+    /// `(step_name, error)` for steps that failed.
+    pub failures: Vec<(String, anyhow::Error)>,
+}
+
+impl std::fmt::Display for BatchErrors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "batch failed: {}/{} steps errored",
+            self.failures.len(),
+            self.successes.len() + self.failures.len()
+        )
+    }
+}
+
+impl std::error::Error for BatchErrors {}
+
+impl BatchErrors {
+    /// True if at least one step failed.
+    pub fn has_failures(&self) -> bool {
+        !self.failures.is_empty()
+    }
+}
+
 /// Resolve `$(step_name)` and `$(step_name.field.path)` references in a string
 /// using completed step outputs. `$(step_name)` is replaced with the step's
 /// summary. `$(step_name.field)` extracts `field` (and nested paths via `.`)
@@ -836,8 +870,14 @@ impl WorkflowExecutor {
         }
     }
 
-    /// Handle a batch-level error: check for on_error routes, mark failed
-    /// steps, and return Ok(()) to continue or Err(e) to abort.
+    /// Handle a batch-level error. When the error is a `BatchErrors` (the
+    /// parallel runner joined all handles and partitioned ok/err), preserve
+    /// the succeeded siblings' real outputs and mark only the actually-failed
+    /// steps — instead of the old behavior of marking every task in the
+    /// batch failed (including successful ones). For a plain `anyhow::Error`
+    /// (sequential default runner, or a panic that lost per-step info), fall
+    /// back to the old all-failed path. Returns `Ok(())` to continue (when an
+    /// `on_error` route exists) or `Err(e)` to abort.
     fn handle_batch_error(
         tasks: &[StepRequest],
         workflow: &Workflow,
@@ -845,6 +885,14 @@ impl WorkflowExecutor {
         completed: &mut HashSet<String>,
         outputs: &mut HashMap<String, StepOutput>,
     ) -> Result<()> {
+        // If the runner partitioned ok/err, preserve sibling successes.
+        if let Some(batch) = error.downcast_ref::<BatchErrors>() {
+            return Self::handle_partitioned_batch_error(workflow, batch, completed, outputs);
+        }
+
+        // Fallback: plain error (sequential default runner, or a panic that
+        // lost per-step info). Old all-failed behavior — every task marked
+        // failed with the batch error.
         let has_error_route = tasks.iter().any(|t| {
             workflow
                 .steps
@@ -903,6 +951,97 @@ impl WorkflowExecutor {
             );
         }
         Ok(())
+    }
+
+    /// Handle a `BatchErrors` (partitioned ok/err) batch result: insert the
+    /// succeeded siblings' real outputs (with persona + structured_output)
+    /// and mark only the actually-failed steps. Route to the first failed
+    /// step's `on_error` if any; otherwise propagate the error.
+    fn handle_partitioned_batch_error(
+        workflow: &Workflow,
+        batch: &BatchErrors,
+        completed: &mut HashSet<String>,
+        outputs: &mut HashMap<String, StepOutput>,
+    ) -> Result<()> {
+        // Insert succeeded siblings as real outputs (not the canned
+        // "step failed" the old path applied to every task).
+        for (name, summary) in &batch.successes {
+            let step = workflow
+                .steps
+                .iter()
+                .find(|s| s.name == *name)
+                .ok_or_else(|| anyhow::anyhow!("batch step '{name}' not found in workflow"))?;
+            let persona = step
+                .persona
+                .clone()
+                .unwrap_or_else(|| format!("{:?}", step.kind).to_lowercase());
+            let structured_output: Option<serde_json::Value> = serde_json::from_str(summary).ok();
+            outputs.insert(
+                name.clone(),
+                StepOutput {
+                    name: name.clone(),
+                    kind: step.kind.clone(),
+                    persona,
+                    summary: summary.clone(),
+                    critique: None,
+                    structured_output,
+                },
+            );
+            completed.insert(name.clone());
+        }
+
+        // Mark only the actually-failed steps.
+        let mut first_error_msg: Option<String> = None;
+        let mut on_error_route: Option<String> = None;
+        for (name, err) in &batch.failures {
+            if first_error_msg.is_none() {
+                first_error_msg = Some(err.to_string());
+            }
+            let step = workflow
+                .steps
+                .iter()
+                .find(|s| s.name == *name)
+                .ok_or_else(|| anyhow::anyhow!("batch step '{name}' not found in workflow"))?;
+            if on_error_route.is_none() {
+                on_error_route = step.on_error.clone();
+            }
+            outputs.insert(
+                name.clone(),
+                StepOutput {
+                    name: name.clone(),
+                    kind: step.kind.clone(),
+                    persona: step.persona.clone().unwrap_or_default(),
+                    summary: format!("step failed: {err}"),
+                    critique: None,
+                    structured_output: None,
+                },
+            );
+            completed.insert(name.clone());
+        }
+
+        // Route to the first failed step's on_error if configured.
+        if let Some(on_error) = on_error_route {
+            let trigger = first_error_msg.unwrap_or_else(|| "batch failure".to_string());
+            completed.insert(on_error.clone());
+            outputs.insert(
+                on_error.clone(),
+                StepOutput {
+                    name: on_error.clone(),
+                    kind: StepKind::Agent,
+                    persona: String::new(),
+                    summary: format!("error handler triggered by: {trigger}"),
+                    critique: None,
+                    structured_output: None,
+                },
+            );
+            return Ok(());
+        }
+
+        // No on_error route — propagate the first failure.
+        Err(anyhow!(
+            "{}",
+            first_error_msg.unwrap_or_else(|| "batch failed with no error detail".to_string())
+        ))
     }
 
     /// Run the workflow to completion, invoking `runner` for each step.
@@ -2358,5 +2497,211 @@ mod tests {
         let exe = WorkflowExecutor::new(wf);
         let summary = exe.run(Arc::new(runner), None).await.unwrap();
         assert!(summary.budget_exceeded);
+    }
+
+    // WO 44.45 defect 3: a batch of [ok, fail, ok] must preserve BOTH ok
+    // siblings' real outputs and mark only the failed step — not mark every
+    // task in the batch failed (the old handle_batch_error behavior) or drop
+    // the siblings' JoinHandles (the old run_batch early-return). Uses a
+    // runner that returns Err(BatchErrors{successes, failures}) so the
+    // executor's handle_partitioned_batch_error path is exercised.
+    #[tokio::test]
+    async fn batch_error_preserves_successful_siblings() {
+        // Runner: run_step always succeeds (for the on_error handler step);
+        // run_batch returns BatchErrors with [ok, fail, ok].
+        struct BatchErrorsRunner;
+        #[async_trait::async_trait]
+        impl StepRunner for BatchErrorsRunner {
+            async fn run_step(&self, name: &str, _prompt: &str, persona: &str) -> Result<String> {
+                Ok(format!("{persona}:{name}:done"))
+            }
+
+            async fn run_batch(&self, steps: Vec<StepRequest>) -> Result<Vec<(String, String)>> {
+                let mut successes = Vec::new();
+                let mut failures: Vec<(String, anyhow::Error)> = Vec::new();
+                for req in steps {
+                    if req.name == "fail" {
+                        failures.push((req.name, anyhow::anyhow!("boom")));
+                    } else {
+                        successes.push((req.name.clone(), format!("{}:done", req.name)));
+                    }
+                }
+                Err(anyhow::Error::from(BatchErrors {
+                    successes,
+                    failures,
+                }))
+            }
+        }
+
+        let wf = Workflow {
+            name: "batch_siblings".into(),
+            steps: vec![
+                Step {
+                    name: "ok1".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("ok1".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "fail".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("fail".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: Some("handler".into()),
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "ok2".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("ok2".into()),
+                    persona: Some("coder".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "handler".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("handle".into()),
+                    persona: Some("plan".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+            ],
+            budget: None,
+        };
+        let exe = WorkflowExecutor::new(wf);
+        let summary = exe.run(Arc::new(BatchErrorsRunner), None).await.unwrap();
+        // Both ok siblings' real outputs must be preserved (not "step failed").
+        let ok1 = summary.step("ok1").expect("ok1 output must be preserved");
+        assert_eq!(ok1.summary, "ok1:done");
+        assert_eq!(ok1.persona, "explore");
+        let ok2 = summary.step("ok2").expect("ok2 output must be preserved");
+        assert_eq!(ok2.summary, "ok2:done");
+        assert_eq!(ok2.persona, "coder");
+        // Only the failed step is marked failed.
+        let fail = summary.step("fail").expect("fail output present");
+        assert!(
+            fail.summary.contains("step failed: boom"),
+            "fail summary must name the error, got: {}",
+            fail.summary
+        );
+        // The on_error handler was routed to.
+        let handler = summary
+            .step("handler")
+            .expect("on_error handler output present");
+        assert!(
+            handler.summary.contains("error handler triggered by:"),
+            "handler summary must name the trigger, got: {}",
+            handler.summary
+        );
+    }
+
+    // WO 44.45 defect 3: a BatchErrors with NO on_error route propagates the
+    // first failure (does not silently swallow it).
+    #[tokio::test]
+    async fn batch_error_without_on_error_propagates() {
+        struct FailNoRouteRunner;
+        #[async_trait::async_trait]
+        impl StepRunner for FailNoRouteRunner {
+            async fn run_step(&self, _name: &str, _prompt: &str, persona: &str) -> Result<String> {
+                Ok(format!("{persona}:done"))
+            }
+
+            async fn run_batch(&self, _steps: Vec<StepRequest>) -> Result<Vec<(String, String)>> {
+                Err(anyhow::Error::from(BatchErrors {
+                    successes: vec![("ok".into(), "ok:done".into())],
+                    failures: vec![("fail".into(), anyhow::anyhow!("unrecoverable"))],
+                }))
+            }
+        }
+
+        let wf = Workflow {
+            name: "batch_no_route".into(),
+            steps: vec![
+                Step {
+                    name: "ok".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("ok".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "fail".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("fail".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+            ],
+            budget: None,
+        };
+        let exe = WorkflowExecutor::new(wf);
+        let err = exe
+            .run(Arc::new(FailNoRouteRunner), None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("unrecoverable"),
+            "propagated error must name the failure, got: {err}"
+        );
     }
 }

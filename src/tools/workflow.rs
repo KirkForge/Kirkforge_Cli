@@ -406,8 +406,15 @@ impl StepRunner for TaskSpawnerStepRunner {
 
     async fn run_batch(&self, steps: Vec<StepRequest>) -> Result<Vec<(String, String)>> {
         // Fan out independent steps in parallel. Each step is dispatched to
-        // its own tokio task so they run concurrently.
-        let mut handles = Vec::with_capacity(steps.len());
+        // its own tokio task so they run concurrently. We join ALL handles
+        // before returning (never early-return on the first error) so a
+        // failed step does not drop its siblings' JoinHandles — detached
+        // subagent tasks would keep running (LLM turns, token spend) with
+        // results discarded. On any failure we return `BatchErrors` carrying
+        // both successes and failures so the executor can preserve the
+        // succeeded siblings' outputs.
+        let mut handles: Vec<(String, tokio::task::JoinHandle<Result<(String, String)>>)> =
+            Vec::with_capacity(steps.len());
         for req in steps {
             let spawner = self.spawner.clone();
             let toolset = self.toolset.clone();
@@ -416,6 +423,7 @@ impl StepRunner for TaskSpawnerStepRunner {
             let deny_list = self.deny_list.clone();
             let path_guard = self.path_guard.clone();
             let bash_sandbox_workdir = self.bash_sandbox_workdir;
+            let name = req.name.clone();
             let handle = tokio::spawn(async move {
                 match req.kind {
                     kf_workflow::StepKind::Agent => {
@@ -532,17 +540,29 @@ impl StepRunner for TaskSpawnerStepRunner {
                     }
                 }
             });
-            handles.push(handle);
+            handles.push((name, handle));
         }
 
-        let mut out = Vec::with_capacity(handles.len());
-        for h in handles {
-            out.push(
-                h.await
-                    .map_err(|e| anyhow::anyhow!("batch task panicked: {e}"))??,
-            );
+        // Join ALL handles — never early-return on the first error, so a
+        // failed step does not drop its siblings' JoinHandles (detached
+        // subagent tasks would keep running with results discarded).
+        let mut successes = Vec::with_capacity(handles.len());
+        let mut failures: Vec<(String, anyhow::Error)> = Vec::new();
+        for (name, h) in handles {
+            match h.await {
+                Ok(Ok(pair)) => successes.push(pair),
+                Ok(Err(e)) => failures.push((name, e)),
+                Err(e) => failures.push((name, anyhow::anyhow!("batch task panicked: {e}"))),
+            }
         }
-        Ok(out)
+        if failures.is_empty() {
+            Ok(successes)
+        } else {
+            Err(anyhow::Error::from(kf_workflow::BatchErrors {
+                successes,
+                failures,
+            }))
+        }
     }
 }
 

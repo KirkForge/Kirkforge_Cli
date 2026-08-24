@@ -96,3 +96,86 @@ async fn write_file_event_is_non_conflicting_across_both_verifier_paths() {
     // Both paths agree the benign write is clean: the event path returns
     // `Verdict::Clean` and the bus path returns zero error verdicts.
 }
+
+// WO 44.29: `rebuild_plugin_verifiers` retains built-ins via a hand-maintained
+// allowlist (`BUILTIN_VERIFIERS`). WO 32.20 added 5 verifier registrations to
+// `init_default_verifiers` but never extended the list, so the first `/plugins`
+// reload silently dropped node_test/node_lint/go_test/go_vet/generic_test.
+// This test registers the full default set on a fresh executor, runs a reload
+// with an empty plugin registry, and asserts every built-in survived — so the
+// next added verifier fails here instead of silently regressing.
+#[tokio::test]
+async fn rebuild_plugin_verifiers_keeps_every_built_in() {
+    use super::common::{make_config, make_executor, make_info, MockAdapter};
+    use crate::shared::{FinishReason, StreamEvent};
+
+    let adapter = Box::new(MockAdapter::new(
+        vec![StreamEvent::Done {
+            finish_reason: FinishReason::Stop,
+            usage: None,
+        }],
+        make_info(),
+    ));
+    let mut executor =
+        make_executor(adapter, vec![], make_config(false)).expect("build executor");
+
+    // init_default_verifiers ran in the constructor; collect the names it
+    // registered so the assertion below tracks the real registration set,
+    // not a second hand-maintained list (which would drift the same way).
+    let before = executor
+        .correction_loop
+        .as_ref()
+        .expect("correction_loop set by init_default_verifiers")
+        .verifier_handler()
+        .slots()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .names();
+
+    // Reload with an empty registry: no plugin verifiers, but every built-in
+    // must survive the retain.
+    let empty_registry = kf_plugin_host::PluginRegistry::new();
+    let plugin_added = executor.rebuild_plugin_verifiers(&empty_registry);
+    assert_eq!(plugin_added, 0, "empty registry adds no plugin verifiers");
+
+    let after = executor
+        .correction_loop
+        .as_ref()
+        .expect("correction_loop still present")
+        .verifier_handler()
+        .slots()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .names();
+
+    assert_eq!(
+        after, before,
+        "rebuild_plugin_verifiers dropped a built-in: before={before:?} after={after:?}.\n\
+         BUILTIN_VERIFIERS is out of sync with init_default_verifiers — add the missing name."
+    );
+
+    // Explicit belt-and-braces: the WO 32.20 five must be present. If this
+    // fires, the fix regressed; if `before` lacks them, init_default_verifiers
+    // itself dropped a registration.
+    for required in [
+        "security",
+        "lint",
+        "build",
+        "git",
+        "rustfmt",
+        "test",
+        "python_test",
+        "python_lint",
+        "python_typecheck",
+        "node_test",
+        "node_lint",
+        "go_test",
+        "go_vet",
+        "generic_test",
+    ] {
+        assert!(
+            after.iter().any(|n| n == required),
+            "built-in `{required}` missing after rebuild_plugin_verifiers; after={after:?}"
+        );
+    }
+}

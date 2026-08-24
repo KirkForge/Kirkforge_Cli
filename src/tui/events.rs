@@ -466,10 +466,10 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 None => true,
             };
             if needs_fresh {
-                state.conversation.messages.push_back(ConversationEntry::new(
-                    "tool",
-                    "🔧 bash …",
-                ));
+                state
+                    .conversation
+                    .messages
+                    .push_back(ConversationEntry::new("tool", "🔧 bash …"));
             }
             if let Some(last) = state.conversation.messages.back_mut() {
                 last.streaming = true;
@@ -494,9 +494,8 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                         start -= 1;
                     }
                     let tail = last.content[start..].to_string();
-                    last.content = format!(
-                        "… [{total} bytes total, showing last {PTY_TAIL_BYTES}]\n{tail}"
-                    );
+                    last.content =
+                        format!("… [{total} bytes total, showing last {PTY_TAIL_BYTES}]\n{tail}");
                 }
                 last.bump_version();
                 state.mark_dirty();
@@ -1000,7 +999,10 @@ mod tests {
 
         // Second tool's PTY chunks arrive (before its ToolStart, or after
         // a completed card from a prior batch). Must not touch the grep card.
-        dispatch_turn_event(&mut s, TurnEvent::BashPartialOutput("chunk for bash".into()));
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput("chunk for bash".into()),
+        );
 
         // The completed card is untouched.
         assert_eq!(s.conversation.messages[0].content, completed_content);
@@ -1009,7 +1011,9 @@ mod tests {
         assert_eq!(s.conversation.messages.len(), 2);
         assert_eq!(s.conversation.messages[1].role, "tool");
         assert!(s.conversation.messages[1].streaming);
-        assert!(s.conversation.messages[1].content.contains("chunk for bash"));
+        assert!(s.conversation.messages[1]
+            .content
+            .contains("chunk for bash"));
     }
 
     /// `ToolResult` is the v1.1 contract: full output goes into

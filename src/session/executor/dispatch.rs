@@ -743,10 +743,20 @@ fn symlink_swap_denied(resolved: &std::path::Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::symlink_swap_denied;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    // WO 43.12: ungated — pure std::fs, no Unix-only API.
+    // WO 43.12: ungated — pure std::fs, no Unix-only API. WO 44.28: per-call
+    // unique dir — the shared name raced under parallel test runners (one
+    // test's `remove_dir_all` wiped another's `victim.txt` mid-canonicalize).
+    static TEMP_ROOT_SEQ: AtomicUsize = AtomicUsize::new(0);
+
     fn temp_root() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("kf_wo38_symlink_walk_{}", std::process::id()));
+        let n = TEMP_ROOT_SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "kf_wo38_symlink_walk_{}_{}",
+            std::process::id(),
+            n
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

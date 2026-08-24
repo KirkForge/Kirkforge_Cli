@@ -917,6 +917,212 @@ async fn test_pre_tool_hook_deny_blocks_edit_file_before_mutation() {
     );
 }
 
+// WO 44.28 regression: a same-batch bash call swaps the edit target for a
+// symlink after Phase-1 canonicalization but before the Phase 2.5 body.
+// The file is pre-marked read so the read-before-edit gate ALLOWS — pre-fix
+// the symlink walk only ran inside the gate's Denied arm, so the body would
+// have opened the attacker-controlled symlink target. The hoisted walk must
+// deny before `run_prepared_call` and the symlink target must be untouched.
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_swap_blocks_edit_file_when_read_gate_allows() {
+    use crate::tools::bash::Bash;
+    use crate::tools::edit_file::EditFile;
+
+    let tmp = std::env::temp_dir();
+    let dir = tmp.join(format!(
+        "kf_code_symlink_swap_edit_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("victim.txt");
+    let secret = dir.join("secret.txt");
+    std::fs::write(&target, "original").unwrap();
+    std::fs::write(&secret, "EXFIL_SECRET").unwrap();
+
+    let bash = Arc::new(Bash::new(
+        crate::shared::access::DenyList::default(),
+        crate::shared::access::PathGuard::default(),
+        false,
+        None,
+        crate::shared::SandboxConfig::default(),
+    ));
+    let edit_tool: Arc<dyn Tool> = Arc::new(EditFile::new(
+        None,
+        crate::session::access::PathGuard::default(),
+        false,
+        false,
+    ));
+
+    let swap_cmd = format!(
+        "rm -f {tgt} && ln -s {sec} {tgt}",
+        tgt = target.to_string_lossy(),
+        sec = secret.to_string_lossy(),
+    );
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-bash-swap".into(),
+                name: "bash".into(),
+                arguments: serde_json::json!({ "command": swap_cmd }),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-edit".into(),
+                name: "edit_file".into(),
+                arguments: serde_json::json!({
+                    "path": target.to_string_lossy(),
+                    "old_string": "original",
+                    "new_string": "MUTATED",
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(
+        Box::new(adapter),
+        vec![bash, edit_tool],
+        make_config(true),
+    )
+    .unwrap();
+    // Pre-mark read so the read-before-edit gate ALLOWS — this is the
+    // attack precondition. The symlink walk must still deny.
+    exe.sandbox.mark_read(&target.canonicalize().unwrap());
+
+    let events = exe
+        .run_turn_collecting("swap then edit", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let denied = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, output, success: false }
+                if name == "edit_file" && output.contains("symlink")
+        )
+    });
+    assert!(
+        denied,
+        "edit_file after a same-batch symlink swap must be denied, got events: {events:?}"
+    );
+
+    // The symlink target must be untouched — the edit body never ran.
+    let on_disk = std::fs::read_to_string(&secret).unwrap();
+    assert_eq!(
+        on_disk, "EXFIL_SECRET",
+        "symlink target must be unchanged; edit body ran and wrote through the symlink"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// WO 44.28 regression (read side): a same-batch bash call swaps the read
+// target's final component for a symlink before the read_file body runs.
+// Pre-fix the symlink walk never ran for reads (needs_read_gate is false
+// for read_file), so the body would have followed the symlink and read the
+// attacker's secret. The hoisted walk must deny before `run_prepared_call`.
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_swap_blocks_read_file_on_swapped_final_component() {
+    use crate::tools::bash::Bash;
+    use crate::tools::read_file::ReadFile;
+
+    let tmp = std::env::temp_dir();
+    let dir = tmp.join(format!(
+        "kf_code_symlink_swap_read_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("victim.txt");
+    let secret = dir.join("secret.txt");
+    std::fs::write(&target, "harmless").unwrap();
+    std::fs::write(&secret, "EXFIL_SECRET").unwrap();
+
+    let bash = Arc::new(Bash::new(
+        crate::shared::access::DenyList::default(),
+        crate::shared::access::PathGuard::default(),
+        false,
+        None,
+        crate::shared::SandboxConfig::default(),
+    ));
+    let read_tool: Arc<dyn Tool> = Arc::new(ReadFile::new(
+        crate::session::access::PathGuard::default(),
+        false,
+        4096,
+    ));
+
+    let swap_cmd = format!(
+        "rm -f {tgt} && ln -s {sec} {tgt}",
+        tgt = target.to_string_lossy(),
+        sec = secret.to_string_lossy(),
+    );
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-bash-swap".into(),
+                name: "bash".into(),
+                arguments: serde_json::json!({ "command": swap_cmd }),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-read".into(),
+                name: "read_file".into(),
+                arguments: serde_json::json!({ "path": target.to_string_lossy() }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(
+        Box::new(adapter),
+        vec![bash, read_tool],
+        make_config(true),
+    )
+    .unwrap();
+
+    let events = exe
+        .run_turn_collecting("swap then read", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let denied = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, output, success: false }
+                if name == "read_file" && output.contains("symlink")
+        )
+    });
+    assert!(
+        denied,
+        "read_file after a same-batch symlink swap must be denied, got events: {events:?}"
+    );
+
+    // No read result should leak the secret content.
+    let leaked = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { output, .. } if output.contains("EXFIL_SECRET")
+        )
+    });
+    assert!(
+        !leaked,
+        "read_file must not return the symlink target's secret content, got events: {events:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // WO 35.3: an executor with an attached root cancel token must kill an
 // in-flight bash child when the token fires + the flag is set — the
 // subagent cancellation path. Without the live child token (pre-WO 35.3

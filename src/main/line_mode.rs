@@ -1037,31 +1037,26 @@ mod tests {
         // tool (stands in for `sleep 300`) is raced against
         // `shutdown.notified()` exactly as `run_line_mode` now does around
         // `run_turn_collecting`. The spawned handler fires the notify, so
-        // the select takes the shutdown arm, cancels the per-turn token,
-        // and loops; the turn future (`pending()`) never completes on its
-        // own, so the only way this resolves within the 5s timeout is via
-        // the shutdown arm — proving a mid-turn Ctrl-C reaches the turn.
-        // Before WO 44.1 the turn was awaited plainly and would hang for
-        // the tool timeout (120s), which the 5s timeout catches as a
-        // failure instead of hanging the suite. No wall-clock sleep —
-        // driven by the `Notify` primitive.
+        // the select takes the shutdown arm and cancels the per-turn token;
+        // the turn future (`pending()`) never completes on its own, so the
+        // only way this resolves within the 5s timeout is via the shutdown
+        // arm — proving a mid-turn Ctrl-C reaches the turn. Before WO 44.1
+        // the turn was awaited plainly and would hang for the tool timeout
+        // (120s), which the 5s timeout catches as a failure instead of
+        // hanging the suite. No wall-clock sleep — driven by the `Notify`
+        // primitive. (The production `run_line_mode` wraps this in a `loop`
+        // because a real cancelled turn future does complete after the
+        // token fires; the `pending()` stub here makes the shutdown arm
+        // terminal, so no loop is needed in the test.)
         let turn_token = tokio_util::sync::CancellationToken::new();
         let mut turn = std::pin::pin!(std::future::pending::<()>());
         let raced = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = &mut turn => return,
-                    _ = shutdown.notified() => {
-                        cancelled.store(true, Ordering::Release);
-                        turn_token.cancel();
-                        // The turn future is `pending()` and will never
-                        // complete on its own; break out so the timeout
-                        // observes resolution. In production the cancelled
-                        // token aborts in-flight tools and the turn
-                        // returns; here the stub stands in for that.
-                        return;
-                    }
+            tokio::select! {
+                biased;
+                _ = &mut turn => {}
+                _ = shutdown.notified() => {
+                    cancelled.store(true, Ordering::Release);
+                    turn_token.cancel();
                 }
             }
         })

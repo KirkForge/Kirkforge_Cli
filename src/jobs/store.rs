@@ -33,16 +33,21 @@ impl JobStore {
     }
 
     /// Ensure the jobs root exists and is private.
+    ///
+    /// The chmod runs only on creation — WO 44.37: the prior unconditional
+    /// `set_permissions` did a chmod(2) on every call, and `ensure_root` is
+    /// reached on every event-loop iteration via `job_store()` →
+    /// `notify_completed_scheduled_jobs`. Existing private roots stay private.
     pub fn ensure_root(&self) -> Result<()> {
         if !self.root.exists() {
             fs::create_dir_all(&self.root)
                 .with_context(|| format!("creating jobs directory {}", self.root.display()))?;
-        }
-        #[cfg(unix)]
-        {
-            let perms = fs::Permissions::from_mode(0o700);
-            fs::set_permissions(&self.root, perms)
-                .with_context(|| format!("setting permissions on {}", self.root.display()))?;
+            #[cfg(unix)]
+            {
+                let perms = fs::Permissions::from_mode(0o700);
+                fs::set_permissions(&self.root, perms)
+                    .with_context(|| format!("setting permissions on {}", self.root.display()))?;
+            }
         }
         Ok(())
     }

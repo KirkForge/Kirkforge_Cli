@@ -587,6 +587,21 @@ variants, any other TS-shape kind flows through `BusEventKind::Other`
 (WO 45.10 — closes the one untyped event surface; `as_str()` preserves
 the TS wire shape for the `artifact.*` bridge).
 
+**Config surface count (WO 45.41 audit):** the `Config` tree exposes
+**139 distinct config surfaces**, not the ~400 an external reviewer
+estimated — 107 struct fields across the 5 sub-structs
+(`CONFIG_FIELD_COUNT` at `src/shared/config/mod.rs:49`), 96 env-var
+overrides (91 `KF_CODE_*` + 5 provider API keys,
+`src/session/config/env_overrides.rs`), and 62 CLI flags across all
+subcommands (23 on `run`), with ~64 of the env vars shadowing a struct
+field (so they are one knob with two access paths, not two knobs). The
+count is enforced by `config_field_count_drift_guard`
+(`src/session/config/mod.rs:1222`), which asserts four invariants stay
+in sync: the `CONFIG_FIELD_COUNT` const, the serde-serialized field
+count, the `merge_toml_into_config` key count, and the
+`apply_env_overrides` env-var count. Adding a config field without
+updating all four sites fails the test.
+
 `ToolConfig.max_continuation_rounds` (default 5, clamped 0–50) caps how many
 times the turn loop will continue after `FinishReason::Length`. When the cap
 is hit, the turn ends with a clear error message. Set to 0 to disable

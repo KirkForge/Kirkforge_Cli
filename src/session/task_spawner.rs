@@ -1066,7 +1066,10 @@ mod tests {
     #[test]
     fn no_agent_model_falls_back_to_subagent_provider() {
         let m = resolve_effective_model(None, None, Some("subagent-model"), "parent-model");
-        assert_eq!(m, "subagent-model", "subagent_provider.model is the next fallback");
+        assert_eq!(
+            m, "subagent-model",
+            "subagent_provider.model is the next fallback"
+        );
     }
 
     #[test]
@@ -1080,6 +1083,9 @@ mod tests {
         // An empty string model field must not block the chain (it is
         // filtered out, falling through to the next level).
         let m = resolve_effective_model(None, Some(""), Some("subagent-model"), "parent-model");
-        assert_eq!(m, "subagent-model", "empty agent model is skipped, not used");
+        assert_eq!(
+            m, "subagent-model",
+            "empty agent model is skipped, not used"
+        );
     }
 }

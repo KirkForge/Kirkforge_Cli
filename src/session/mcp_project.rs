@@ -239,7 +239,10 @@ pub fn env_trust_override_matches(project_root: &Path) -> bool {
         return true;
     }
     // Canonicalize both for a real same-directory check.
-    match (std::fs::canonicalize(&env_path), std::fs::canonicalize(project_root)) {
+    match (
+        std::fs::canonicalize(&env_path),
+        std::fs::canonicalize(project_root),
+    ) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }

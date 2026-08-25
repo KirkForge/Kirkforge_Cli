@@ -930,7 +930,7 @@ tree, ~11 stale claims corrected in-line. See
 | 45.16 | [Split `src/session/config/mod.rs` (2952 lines / 120477 bytes)](45.16-split-session-config-mod.md) | Planned |
 | 45.17 | [Split `crates/kf-workflow/src/lib.rs` (2707 lines / 105477 bytes)](45.17-split-kf-workflow-lib.md) | Planned |
 | 45.18 | [Split `crates/kf-context-index/src/lib.rs` (2706 lines / 103356 bytes)](45.18-split-kf-context-index-lib.md) | Planned |
-| 45.19 | [Split `src/session/prompt/mod.rs` (2693 lines / 102144 bytes)](45.19-split-session-prompt-mod.md) | Planned |
+| 45.19 | [Split `src/session/prompt/mod.rs` (2693 lines / 102144 bytes)](45.19-split-session-prompt-mod.md) | Done |
 | 45.20 | [Split `src/tools/task.rs` (2639 lines / 99487 bytes)](45.20-split-tools-task.md) | Planned |
 | 45.21 | [detect_shadowed_rules misses bash-command deny semantics (*→** promotion + prefix match)](45.21-shadow-detection-misses-bash-command-deny-semantics.md) | Planned |
 | 45.31 | [Claude compat support gaps: documentation + .mcp.json modal + .claude/agents model field](45.31-claude-compat-support-gaps.md) | Planned |

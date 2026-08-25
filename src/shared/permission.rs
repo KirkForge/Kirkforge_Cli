@@ -437,6 +437,46 @@ fn rule_subsumes(earlier: &PermissionRule, later: &PermissionRule) -> bool {
     if earlier.key != later.key {
         return false;
     }
+    // Bash command deny rules get two runtime surfaces the generic glob
+    // check does NOT model (WO 45.21): (1) `*`→`**` promotion via
+    // `normalize_command_pattern`, (2) prefix match for patterns ending
+    // in `/`/` `/`\t`. Model them before the generic fallback so common
+    // shadowings (`rm -rf *` shadows `rm -rf /home`; `rm -rf /` shadows
+    // `rm -rf /home`) are reported. Soundness is preserved: both surfaces
+    // are sufficient conditions for "every value later matches, earlier
+    // also matches" — glob subsumption transitivity for promotion,
+    // literal-prefix containment for the prefix branch.
+    if earlier.tool == "bash"
+        && earlier.key == "command"
+        && matches!(earlier.action, PermissionAction::Deny)
+    {
+        let e_norm = normalize_command_pattern(earlier.pattern.as_str());
+        // Deny patterns are promoted at runtime; allow/ask are NOT, so
+        // compare against the raw later pattern for those.
+        let later_pat = if matches!(later.action, PermissionAction::Deny) {
+            normalize_command_pattern(later.pattern.as_str())
+        } else {
+            later.pattern.as_str().to_string()
+        };
+        // Promotion surface: the promoted earlier glob matches later's
+        // pattern string → earlier matches every value later matches.
+        if glob_match(e_norm.as_str(), later_pat.as_str()) {
+            return true;
+        }
+        // Prefix surface: a deny pattern ending in a path/word boundary
+        // matches any clause that starts with it (lowercased at runtime).
+        if e_norm.ends_with('/') || e_norm.ends_with(' ') || e_norm.ends_with('\t') {
+            let e_lower = e_norm.to_ascii_lowercase();
+            let later_lower = later_pat.to_ascii_lowercase();
+            if later_lower.starts_with(e_lower.as_str()) {
+                return true;
+            }
+        }
+        // Fall through to the generic check — it's strictly narrower than
+        // the promotion surface (raw `*` vs promoted `**`), so it can't
+        // add a false positive the promotion surface missed, but it keeps
+        // the existing behaviour for non-promoted patterns identical.
+    }
     // Pattern: earlier's glob must match later's pattern string. If M's
     // pattern matches the literal text of N's pattern, M matches every
     // value N matches. Equal patterns trivially satisfy this.
@@ -1655,6 +1695,84 @@ mod tests {
         assert!(
             shadows.is_empty(),
             "narrower pattern doesn't subsume broader"
+        );
+    }
+
+    // WO 45.21: bash command deny rules get `*`→`**` promotion + prefix
+    // matching at runtime. The subsumption check now models both surfaces
+    // so common shadowings (`rm -rf *` shadows `rm -rf /home`; `rm -rf /`
+    // shadows `rm -rf /home`) are reported.
+
+    #[test]
+    fn shadow_deny_star_promotion_shadows_allow() {
+        // Miss A: #0 bash:command=rm -rf * (Deny) promotes to `rm -rf **`
+        // at runtime, shadowing #1 bash:command=rm -rf /home (Allow).
+        // The raw glob `rm -rf *` does NOT cross `/`, so the generic check
+        // missed this; the promotion surface catches it.
+        let rules = vec![
+            rule("bash", "command", "rm -rf *", PermissionAction::Deny),
+            rule("bash", "command", "rm -rf /home", PermissionAction::Allow),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert_eq!(
+            shadows,
+            vec![(1, 0)],
+            "deny rm -rf * shadows allow rm -rf /home"
+        );
+    }
+
+    #[test]
+    fn shadow_deny_prefix_shadows_allow() {
+        // Miss B: #0 bash:command=rm -rf / (Deny) ends in `/`, so the
+        // runtime prefix branch matches `rm -rf /home` (and anything under
+        // it). The generic anchored glob missed this; the prefix surface
+        // catches it.
+        let rules = vec![
+            rule("bash", "command", "rm -rf /", PermissionAction::Deny),
+            rule("bash", "command", "rm -rf /home", PermissionAction::Allow),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert_eq!(
+            shadows,
+            vec![(1, 0)],
+            "deny rm -rf / shadows allow rm -rf /home"
+        );
+    }
+
+    #[test]
+    fn shadow_deny_double_star_shadows_star() {
+        // `rm -rf **` (deny) subsumes `rm -rf *` (deny) — the promoted
+        // earlier pattern `rm -rf **` matches the promoted later pattern
+        // `rm -rf **` (lone `*` promoted). Runtime would Deny both.
+        let rules = vec![
+            rule("bash", "command", "rm -rf **", PermissionAction::Deny),
+            rule("bash", "command", "rm -rf *", PermissionAction::Deny),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert_eq!(
+            shadows,
+            vec![(1, 0)],
+            "deny rm -rf ** shadows deny rm -rf *"
+        );
+    }
+
+    #[test]
+    fn shadow_allow_earlier_no_promotion_no_false_positive() {
+        // Soundness: allow rules are NOT promoted at runtime, so an
+        // earlier `rm -rf *` (Allow) must NOT be reported as shadowing a
+        // later `rm -rf /home` (Deny) — the allow's lone `*` doesn't cross
+        // `/`, so `rm -rf /home` does NOT match the allow rule at runtime.
+        // The promotion surface is gated on `earlier.action == Deny`, so
+        // this case correctly falls through to the generic glob, which
+        // also fails (lone `*` stops at `/`).
+        let rules = vec![
+            rule("bash", "command", "rm -rf *", PermissionAction::Allow),
+            rule("bash", "command", "rm -rf /home", PermissionAction::Deny),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert!(
+            shadows.is_empty(),
+            "allow rm -rf * must NOT shadow deny rm -rf /home (no promotion on allow)"
         );
     }
 

@@ -925,18 +925,18 @@ tree, ~11 stale claims corrected in-line. See
 
 | 45.1 | [# Workorder 45.1 — Cross-cutting AgentRun identity contract](45.1-agent-run-identity-contract.md) | Done |
 | 45.10 | [Event Type Audit (external reviewer claim)](45.10-event-type-audit.md) | Done |
-| 45.11 | [Sandbox Policy Unification (external reviewer claim)](45.11-sandbox-policy-unification-audit.md) | Planned |
-| 45.12 | [MCP tool calls bypass all local sandbox policy](45.12-mcp-tool-no-sandbox.md) | Planned |
+| 45.11 | [Sandbox Policy Unification (external reviewer claim)](45.11-sandbox-policy-unification-audit.md) | Done |
+| 45.12 | [MCP tool calls bypass all local sandbox policy](45.12-mcp-tool-no-sandbox.md) | Done |
 | 45.16 | [Split `src/session/config/mod.rs` (2952 lines / 120477 bytes)](45.16-split-session-config-mod.md) | Done |
 | 45.17 | [Split `crates/kf-workflow/src/lib.rs` (2707 lines / 105477 bytes)](45.17-split-kf-workflow-lib.md) | Done |
 | 45.18 | [Split `crates/kf-context-index/src/lib.rs` (2706 lines / 103356 bytes)](45.18-split-kf-context-index-lib.md) | Done |
 | 45.19 | [Split `src/session/prompt/mod.rs` (2693 lines / 102144 bytes)](45.19-split-session-prompt-mod.md) | Done |
 | 45.20 | [Split `src/tools/task.rs` (2639 lines / 99487 bytes)](45.20-split-tools-task.md) | Done |
-| 45.21 | [detect_shadowed_rules misses bash-command deny semantics (*→** promotion + prefix match)](45.21-shadow-detection-misses-bash-command-deny-semantics.md) | Planned |
-| 45.31 | [Claude compat support gaps: documentation + .mcp.json modal + .claude/agents model field](45.31-claude-compat-support-gaps.md) | Planned |
+| 45.21 | [detect_shadowed_rules misses bash-command deny semantics (*→** promotion + prefix match)](45.21-shadow-detection-misses-bash-command-deny-semantics.md) | Done |
+| 45.31 | [Claude compat support gaps: documentation + .mcp.json modal + .claude/agents model field](45.31-claude-compat-support-gaps.md) | Done |
 | 45.32 | [Declarative agent definition: TOML/YAML config layer for subagents](45.32-declarative-agent-definition-gap.md) | Planned |
-| 45.36 | [Verifier Architecture Audit (external reviewer CLAIM A)](45.36-verifier-architecture-audit.md) | Planned |
-| 45.37 | [Worktree Artifact Policy Audit (external reviewer CLAIM B)](45.37-worktree-artifact-policy-audit.md) | Planned |
+| 45.36 | [Verifier Architecture Audit (external reviewer CLAIM A)](45.36-verifier-architecture-audit.md) | Done |
+| 45.37 | [Worktree Artifact Policy Audit (external reviewer CLAIM B)](45.37-worktree-artifact-policy-audit.md) | Done |
 | 45.41 | [Config knob count audit (external reviewer "400 knobs" claim)](45.41-config-knob-count-audit.md) | Planned |
 | 45.42 | [Operational maturity audit (external reviewer 8/10 score)](45.42-operational-maturity-audit.md) | Planned |
 | 45.43 | [Architectural simplicity audit (external reviewer 7/10 score)](45.43-architectural-simplicity-audit.md) | Planned |

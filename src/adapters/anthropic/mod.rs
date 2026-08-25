@@ -225,8 +225,7 @@ pub(crate) fn build_anthropic_body(
     max_tokens: u32,
     tool_choice: Option<&crate::shared::ToolChoice>,
 ) -> serde_json::Value {
-    let lower = model.to_lowercase();
-    let supports_thinking = lower.contains("claude-3-7-sonnet") || lower.contains("claude-4");
+    let supports_thinking = super::anthropic_supports_thinking(model);
 
     let mut system_blocks: Vec<serde_json::Value> = Vec::new();
     let mut anthropic_messages: Vec<serde_json::Value> = Vec::new();
@@ -810,6 +809,26 @@ mod tests {
     #[test]
     fn model_info_no_thinking_for_claude_3_5() {
         let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-3-5-sonnet", 30, None);
+        assert!(!a.model_info().supports_thinking);
+    }
+
+    // WO 45.62: current-shipping model families (claude-sonnet-5,
+    // claude-opus-4-8) must be detected as thinking-capable; Haiku never is.
+    #[test]
+    fn model_info_reasoning_for_claude_sonnet_5() {
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-sonnet-5", 30, None);
+        assert!(a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_reasoning_for_claude_opus_4_8() {
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-opus-4-8", 30, None);
+        assert!(a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_no_thinking_for_claude_haiku_4_5() {
+        let a = AnthropicAdapter::new("https://api.anthropic.com", "claude-haiku-4-5", 30, None);
         assert!(!a.model_info().supports_thinking);
     }
 

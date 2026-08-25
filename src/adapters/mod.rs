@@ -37,16 +37,33 @@ pub(crate) const MAX_SSE_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 // from config.model.streaming_timeout_secs (WO 32.13).
 pub(crate) const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
+// Whether an Anthropic-family model id supports extended thinking.
+// All Claude models from 3.7 onward support thinking EXCEPT Haiku (which
+// never supports it) and the pre-3.7 Claude 3 family (3-opus, 3-sonnet,
+// 3-5, 3-haiku). Covers current names (claude-sonnet-5, claude-opus-4-8,
+// claude-haiku-4-5, ...) without per-release substring updates.
+// ponytail: substring heuristic, not a maintained model table — ceiling is
+// a future model that drops thinking or a new non-thinking family; upgrade
+// path: replace with an explicit capability table when the family count grows.
+pub(crate) fn anthropic_supports_thinking(model_id: &str) -> bool {
+    let lower = model_id.to_lowercase();
+    lower.contains("claude-")
+        && !lower.contains("haiku")
+        && !lower.contains("claude-3-5")
+        && !lower.contains("claude-3-opus")
+        && !lower.contains("claude-3-sonnet")
+        && !lower.contains("claude-3-haiku")
+}
+
 /// Build `ModelInfo` for any Anthropic-family model (first-party, Bedrock,
 /// or Vertex). `image_prefix` is the model-id prefix that signals vision
 /// support — `"claude-3"` for first-party/Vertex, `"anthropic.claude-3"` for
 /// Bedrock.
 pub(crate) fn anthropic_model_info(model_id: &str, image_prefix: &str) -> ModelInfo {
     let lower = model_id.to_lowercase();
-    let is_reasoning = lower.contains("claude-3-7-sonnet") || lower.contains("claude-4");
     ModelInfo {
         name: model_id.to_string(),
-        supports_thinking: is_reasoning,
+        supports_thinking: anthropic_supports_thinking(model_id),
         tool_call_format: ToolCallStyle::Anthropic,
         // ceiling: flat 200_000 for every claude model; model-specific
         // context sizing is deferred (WO 15.26 3.22 deferred).

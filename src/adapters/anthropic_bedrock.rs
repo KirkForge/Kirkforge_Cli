@@ -342,6 +342,25 @@ mod tests {
         assert!(!a.model_info().supports_thinking);
     }
 
+    // WO 45.62: current-shipping model families via Bedrock.
+    #[test]
+    fn model_info_reasoning_for_claude_sonnet_5() {
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-sonnet-5", "us-east-1", 30);
+        assert!(a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_reasoning_for_claude_opus_4_8() {
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-opus-4-8", "us-east-1", 30);
+        assert!(a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_no_thinking_for_claude_haiku_4_5() {
+        let a = AnthropicBedrockAdapter::new("anthropic.claude-haiku-4-5", "us-east-1", 30);
+        assert!(!a.model_info().supports_thinking);
+    }
+
     #[test]
     fn model_info_anthropic_tool_call_format() {
         let a = AnthropicBedrockAdapter::new("anthropic.claude-3-opus", "us-east-1", 30);

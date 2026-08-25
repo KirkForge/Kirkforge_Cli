@@ -1295,4 +1295,147 @@ mod tests {
             "survivor must still run after the crash is removed"
         );
     }
+
+    // ── WO 45.47: verifier-bus verdict-set determinism invariant ─────────
+    //
+    // Verifiers are documented as deterministic (`verifier/mod.rs:13`,
+    // `types.rs:405`), but no test pinned the cross-cutting invariant:
+    // the whole bus, run N times on the same `VerifyContext`, must produce
+    // the same multiset of verdicts. A future Vec→HashMap swap of
+    // `VerifierBus::verifiers`, a verifier that reads `SystemTime::now()`,
+    // or a racing spawn would silently break this — only these tests catch
+    // it at CI time (the `flaky` doctor is a manual dev tool, not a gate).
+
+    // Sort key for verdict multiset comparison. `VerdictEntry` has no `Ord`
+    // impl; derive a tuple from `Display` (source/severity both impl it) +
+    // message + file + line so `sort_by_key` yields a canonical order and
+    // `Vec` equality is multiset equality.
+    fn verdict_sort_key(v: &VerdictEntry) -> (String, String, String, String, u32) {
+        (
+            v.source.to_string(),
+            v.severity.to_string(),
+            v.message.clone(),
+            v.file
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            v.line.unwrap_or(0),
+        )
+    }
+
+    fn sorted_verdicts(bus: &VerifierBus) -> Vec<(String, String, String, String, u32)> {
+        let mut keys: Vec<_> = bus.verdicts().iter().map(verdict_sort_key).collect();
+        keys.sort();
+        keys
+    }
+
+    // Four stubs with distinct verdicts (distinct sources/severities/files
+    // so a multiset collision can't mask a dropped/added verdict).
+    fn four_distinct_stubs() -> [StubVerifier; 4] {
+        [
+            StubVerifier {
+                name: "alpha".into(),
+                entries: vec![VerdictEntry {
+                    source: VerifierSource::Build,
+                    severity: Severity::Info,
+                    message: "alpha-finding".into(),
+                    file: Some(PathBuf::from("src/a.rs")),
+                    line: Some(10),
+                }],
+            },
+            StubVerifier {
+                name: "beta".into(),
+                entries: vec![VerdictEntry {
+                    source: VerifierSource::Lint,
+                    severity: Severity::Warning,
+                    message: "beta-finding".into(),
+                    file: Some(PathBuf::from("src/b.rs")),
+                    line: None,
+                }],
+            },
+            StubVerifier {
+                name: "gamma".into(),
+                entries: vec![VerdictEntry {
+                    source: VerifierSource::Security,
+                    severity: Severity::Error,
+                    message: "gamma-finding".into(),
+                    file: None,
+                    line: Some(42),
+                }],
+            },
+            StubVerifier {
+                name: "delta".into(),
+                entries: vec![
+                    VerdictEntry {
+                        source: VerifierSource::Git,
+                        severity: Severity::Info,
+                        message: "delta-1".into(),
+                        file: None,
+                        line: None,
+                    },
+                    VerdictEntry {
+                        source: VerifierSource::Test,
+                        severity: Severity::Warning,
+                        message: "delta-2".into(),
+                        file: Some(PathBuf::from("tests/d.rs")),
+                        line: Some(7),
+                    },
+                ],
+            },
+        ]
+    }
+
+    #[test]
+    fn same_verify_ctx_produces_same_verdict_multiset_across_runs() {
+        let ctx = make_verify_ctx();
+        let mut bus = VerifierBus::new();
+        for stub in four_distinct_stubs() {
+            bus.register(Box::new(stub));
+        }
+        // Run 1 establishes the baseline; runs 2..=10 must match it exactly.
+        bus.run(&ctx);
+        let baseline = sorted_verdicts(&bus);
+        assert!(!baseline.is_empty(), "baseline should have verdicts");
+        for run_idx in 2..=10 {
+            bus.run(&ctx);
+            let got = sorted_verdicts(&bus);
+            assert_eq!(
+                baseline, got,
+                "verdict multiset differs on run {run_idx}: determinism invariant violated"
+            );
+        }
+    }
+
+    #[test]
+    fn verifier_insertion_order_does_not_change_verdict_set() {
+        let ctx = make_verify_ctx();
+        let stubs = four_distinct_stubs();
+
+        let mut bus_a = VerifierBus::new();
+        for s in [&stubs[0], &stubs[1], &stubs[2], &stubs[3]] {
+            // clone the stub by reconstructing from its entries
+            bus_a.register(Box::new(StubVerifier {
+                name: s.name.clone(),
+                entries: s.entries.clone(),
+            }));
+        }
+        bus_a.run(&ctx);
+        let set_a = sorted_verdicts(&bus_a);
+
+        let mut bus_b = VerifierBus::new();
+        // reversed order
+        for s in [&stubs[3], &stubs[2], &stubs[1], &stubs[0]] {
+            bus_b.register(Box::new(StubVerifier {
+                name: s.name.clone(),
+                entries: s.entries.clone(),
+            }));
+        }
+        bus_b.run(&ctx);
+        let set_b = sorted_verdicts(&bus_b);
+
+        assert_eq!(
+            set_a, set_b,
+            "verdict multiset must not depend on registration order"
+        );
+    }
 }

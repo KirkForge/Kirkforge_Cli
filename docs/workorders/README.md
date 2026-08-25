@@ -941,6 +941,6 @@ tree, ~11 stale claims corrected in-line. See
 | 45.42 | [Operational maturity audit (external reviewer 8/10 score)](45.42-operational-maturity-audit.md) | Planned |
 | 45.43 | [Architectural simplicity audit (external reviewer 7/10 score)](45.43-architectural-simplicity-audit.md) | Planned |
 | 45.46 | [# Workorder 46.0 — Event Bus No-Drop Under Load Invariant](45.46-event-bus-no-drop-invariant.md) | Planned |
-| 45.47 | [# Workorder 46.1 — Verifier Verdict-Set Determinism Invariant](45.47-verifier-verdict-set-determinism.md) | Planned |
+| 45.47 | [# Workorder 46.1 — Verifier Verdict-Set Determinism Invariant](45.47-verifier-verdict-set-determinism.md) | Done |
 | 45.51 | [state.md stale WO 44 status + HEAD SHA](45.51-state-md-stale-wo44-and-sha.md) | Done |
 | 45.52 | [workorders/README.md WO 34 prose contradicts its own table](45.52-workorders-readme-wo34-prose-contradicts-table.md) | Done |

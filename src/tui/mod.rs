@@ -413,10 +413,10 @@ fn spawn_ctrl_c_handler(shutdown: Arc<Notify>) {
     });
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn teardown(
-    shared_config: &crate::shared::SharedConfig,
-    saved_profile: &Option<Arc<Mutex<CarryoverProfile>>>,
+// Bundles the 9 mpsc sender ends dropped by `teardown`. Grouping them
+// keeps the `teardown` signature under clippy::too_many_arguments. The
+// senders are dropped in one `drop((...))` tuple; order does not matter.
+struct TeardownChannels {
     cancel_tx: mpsc::UnboundedSender<()>,
     input_tx: mpsc::UnboundedSender<String>,
     resume_tx: mpsc::UnboundedSender<ConversationLog>,
@@ -426,9 +426,26 @@ async fn teardown(
     plan_tx: mpsc::UnboundedSender<bool>,
     persona_tx: mpsc::UnboundedSender<PersonaResult>,
     plugin_reload_tx: mpsc::UnboundedSender<kf_plugin_host::PluginRegistry>,
+}
+
+async fn teardown(
+    shared_config: &crate::shared::SharedConfig,
+    saved_profile: &Option<Arc<Mutex<CarryoverProfile>>>,
+    channels: TeardownChannels,
     handle: &mut tokio::task::JoinHandle<()>,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) {
+    let TeardownChannels {
+        cancel_tx,
+        input_tx,
+        resume_tx,
+        compact_tx,
+        model_tx,
+        undo_tx,
+        plan_tx,
+        persona_tx,
+        plugin_reload_tx,
+    } = channels;
     crate::send_or_warn!(cancel_tx.send(()), "cancel channel receiver dropped");
     drop((
         input_tx,
@@ -658,32 +675,34 @@ pub async fn run_tui(
     )
     .then(|| state.session.log_path.clone());
     let event_tx_for_commands = event_tx.clone();
-    let mut handle = spawn_executor(
+    let mut handle = spawn_executor(ExecutorSpawnArgs {
         adapter,
         tools,
-        shared_config.clone(),
+        shared_config: shared_config.clone(),
         conversation_log,
         open_outcome,
         carryover_target,
         undo_stack,
         plugin_registry,
-        &state,
+        state: &state,
         system,
         context_index,
         trace_recorder,
         session_stores,
-        input_rx,
-        event_tx,
-        approval_tx,
-        cancel_rx,
-        resume_rx,
-        compact_rx,
-        model_rx,
-        undo_rx,
-        config_rx,
-        plan_rx,
-        plugin_reload_rx,
-    );
+        channels: ExecutorChannels {
+            input_rx,
+            event_tx,
+            approval_tx,
+            cancel_rx,
+            resume_rx,
+            compact_rx,
+            model_rx,
+            undo_rx,
+            config_rx,
+            plan_rx,
+            plugin_reload_rx,
+        },
+    });
 
     if let Some(path) = started_empty_banner {
         let display = path
@@ -745,15 +764,17 @@ pub async fn run_tui(
     teardown(
         &shared_config,
         &saved_profile,
-        cancel_tx,
-        input_tx,
-        resume_tx,
-        compact_tx,
-        model_tx,
-        undo_tx,
-        plan_tx,
-        persona_tx,
-        plugin_reload_tx,
+        TeardownChannels {
+            cancel_tx,
+            input_tx,
+            resume_tx,
+            compact_tx,
+            model_tx,
+            undo_tx,
+            plan_tx,
+            persona_tx,
+            plugin_reload_tx,
+        },
         &mut handle,
         &mut terminal,
     )
@@ -762,21 +783,12 @@ pub async fn run_tui(
     res
 }
 
-#[allow(clippy::too_many_arguments)]
-fn spawn_executor(
-    adapter: Box<dyn crate::adapters::ModelAdapter>,
-    tools: crate::session::toolset::CompositeToolset,
-    shared_config: crate::shared::SharedConfig,
-    conversation_log: ConversationLog,
-    open_outcome: crate::session::conversation::OpenOutcome,
-    carryover_target: Option<Arc<Mutex<CarryoverProfile>>>,
-    undo_stack: Option<crate::tools::UndoStackRef>,
-    plugin_registry: &kf_plugin_host::PluginRegistry,
-    state: &AppState,
-    system: Option<String>,
-    context_index: Option<kf_context_index::ContextIndex>,
-    trace_recorder: Option<crate::session::replay::TraceRecorder>,
-    session_stores: crate::session::SessionStores,
+// Bundles the 11 mpsc channel ends passed to `spawn_executor` so the
+// function signature stays under clippy::too_many_arguments. The ends
+// are wired one-to-one into `Executor::run` (which has its own REASONED
+// `#[allow]` — see loop_.rs); grouping them here is purely a call-site
+// ergonomics fix and does not change the channel wiring.
+struct ExecutorChannels {
     input_rx: mpsc::UnboundedReceiver<String>,
     event_tx: mpsc::Sender<executor::TurnEvent>,
     approval_tx: mpsc::UnboundedSender<ApprovalRequest>,
@@ -788,7 +800,57 @@ fn spawn_executor(
     config_rx: mpsc::UnboundedReceiver<Config>,
     plan_rx: mpsc::UnboundedReceiver<bool>,
     plugin_reload_rx: mpsc::UnboundedReceiver<kf_plugin_host::PluginRegistry>,
-) -> tokio::task::JoinHandle<()> {
+}
+
+// Bundles the session resources + channels passed to `spawn_executor`
+// (21 params → 1). Single caller: `run_tui`. No behavior change.
+struct ExecutorSpawnArgs<'a> {
+    adapter: Box<dyn crate::adapters::ModelAdapter>,
+    tools: crate::session::toolset::CompositeToolset,
+    shared_config: crate::shared::SharedConfig,
+    conversation_log: ConversationLog,
+    open_outcome: crate::session::conversation::OpenOutcome,
+    carryover_target: Option<Arc<Mutex<CarryoverProfile>>>,
+    undo_stack: Option<crate::tools::UndoStackRef>,
+    plugin_registry: &'a kf_plugin_host::PluginRegistry,
+    state: &'a AppState,
+    system: Option<String>,
+    context_index: Option<kf_context_index::ContextIndex>,
+    trace_recorder: Option<crate::session::replay::TraceRecorder>,
+    session_stores: crate::session::SessionStores,
+    channels: ExecutorChannels,
+}
+
+fn spawn_executor(args: ExecutorSpawnArgs) -> tokio::task::JoinHandle<()> {
+    let ExecutorSpawnArgs {
+        adapter,
+        tools,
+        shared_config,
+        conversation_log,
+        open_outcome,
+        carryover_target,
+        undo_stack,
+        plugin_registry,
+        state,
+        system,
+        context_index,
+        trace_recorder,
+        session_stores,
+        channels,
+    } = args;
+    let ExecutorChannels {
+        input_rx,
+        event_tx,
+        approval_tx,
+        cancel_rx,
+        resume_rx,
+        compact_rx,
+        model_rx,
+        undo_rx,
+        config_rx,
+        plan_rx,
+        plugin_reload_rx,
+    } = channels;
     let mut exe = executor::Executor::with_log_and_undo_and_plugins(
         adapter,
         tools,

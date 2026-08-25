@@ -1,6 +1,7 @@
 use super::handler::VerifierHandler;
 use super::types::BusEvent;
 use super::types::{FixSuggestion, Verdict};
+use crate::session::executor::types::VerificationOutcome;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -55,7 +56,7 @@ impl CorrectionLoop {
                 Verdict::Skipped(reason) => {
                     results.push(CorrectionResult {
                         verifier: decisive_name.clone(),
-                        success: true,
+                        outcome: VerificationOutcome::Skipped,
                         message: format!("verification skipped: {reason}"),
                         fix: None,
                         file: None,
@@ -124,9 +125,16 @@ impl CorrectionLoop {
 
                     let file = fix.file.clone();
                     let line = fix.line;
+                    let outcome = if is_suggestion {
+                        VerificationOutcome::Suggestion
+                    } else if applied {
+                        VerificationOutcome::Fixed
+                    } else {
+                        VerificationOutcome::Failed
+                    };
                     results.push(CorrectionResult {
                         verifier: decisive_name.clone(),
-                        success: applied,
+                        outcome,
                         message,
                         fix: Some(fix),
                         file: Some(file),
@@ -145,7 +153,7 @@ impl CorrectionLoop {
                 Verdict::Unfixable(err) => {
                     results.push(CorrectionResult {
                         verifier: decisive_name.clone(),
-                        success: false,
+                        outcome: VerificationOutcome::Failed,
                         message: format!(
                             "Verification failed: {} — {}",
                             err.description, err.details
@@ -168,10 +176,15 @@ impl CorrectionLoop {
 }
 
 /// Result of a correction attempt.
+///
+/// `outcome` carries the typed `Verdict` discriminant (WO 45.36) so a
+/// consumer can distinguish `Skipped` from `Clean`/`Fixed`/`Suggestion`/
+/// `Failed`. The prior `success: bool` flattened `Skipped` into `true`,
+/// indistinguishable from a clean verdict.
 #[derive(Debug, Clone)]
 pub struct CorrectionResult {
     pub verifier: String,
-    pub success: bool,
+    pub outcome: VerificationOutcome,
     pub message: String,
     pub fix: Option<FixSuggestion>,
     pub file: Option<std::path::PathBuf>,
@@ -663,14 +676,15 @@ mod tests {
         };
         let cr = CorrectionResult {
             verifier: "v".into(),
-            success: true,
+            outcome: VerificationOutcome::Fixed,
             message: "ok".into(),
             fix: Some(fix.clone()),
             file: Some(fix.file.clone()),
             line: None,
         };
         assert_eq!(cr.verifier, "v");
-        assert!(cr.success);
+        assert_eq!(cr.outcome, VerificationOutcome::Fixed);
+        assert!(cr.outcome.is_success());
         assert_eq!(cr.message, "ok");
         assert_eq!(cr.fix.as_ref().unwrap().file, fix.file);
     }
@@ -753,7 +767,12 @@ mod tests {
         let results = loop_.run(&event).await;
         assert_eq!(results.len(), 1, "Skipped verdict must produce one result");
         assert_eq!(results[0].verifier, "aggregate");
-        assert!(results[0].success, "Skipped is not a failure");
+        assert_eq!(
+            results[0].outcome,
+            VerificationOutcome::Skipped,
+            "Skipped is not a failure"
+        );
+        assert!(results[0].outcome.is_success());
         assert_eq!(
             results[0].message,
             "verification skipped: tool-error event: no verifiers act on ToolError"

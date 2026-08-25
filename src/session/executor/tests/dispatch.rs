@@ -737,10 +737,13 @@ command = "bin/check.sh"
         .await;
 
     // 4. Assert the plugin verifier's verdict surfaced as a
-    //    `CorrectionResult` sourced from `plugin:security`.
-    let plugin_correction = corrections
-        .iter()
-        .find(|c| c.verifier == "plugin:security" && !c.success && c.fix.is_none());
+    //    `CorrectionResult` sourced from `plugin:security` with a Failed
+    //    outcome (Severity::Error → Failed; WO 45.36).
+    let plugin_correction = corrections.iter().find(|c| {
+        c.verifier == "plugin:security"
+            && c.outcome == crate::session::executor::types::VerificationOutcome::Failed
+            && c.fix.is_none()
+    });
     assert!(
         plugin_correction.is_some(),
         "expected a CorrectionResult from plugin:security, got: {corrections:?}"

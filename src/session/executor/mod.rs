@@ -39,7 +39,7 @@ pub use approval::{ApprovalRequest, ApprovalResponder, ApprovalResponse};
 pub use cost_tracking::{DoomLoopAction, DoomLoopOutcome};
 pub use loop_::{DoomHit, DoomLoopTracker};
 pub use scout::{ScoutSubagent, SCOUT_TOOLS};
-pub use types::{CompactHookStats, TurnEvent};
+pub use types::{CompactHookStats, TurnEvent, VerificationOutcome};
 
 pub struct Executor {
     adapter: Box<dyn ModelAdapter>,

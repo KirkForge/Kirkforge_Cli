@@ -279,7 +279,7 @@ pub(crate) async fn emit_correction_results(
             event_tx
                 .send(TurnEvent::Verification {
                     message: cr.message.clone(),
-                    success: cr.success,
+                    outcome: cr.outcome,
                     file: cr.file.clone(),
                     line: cr.line,
                 })

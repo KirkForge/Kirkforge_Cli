@@ -2,6 +2,47 @@
 
 use crate::shared::ToolInvocation;
 
+/// Typed outcome of a verifier pass, mirroring the relevant `Verdict`
+/// cases the correction loop surfaces. Carries the discriminant that
+/// `TurnEvent::Verification { success: bool }` previously flattened,
+/// so a consumer can tell "verifier confirmed clean" from "verifier was
+/// skipped (tool not available)" from "verifier auto-fixed a problem".
+/// WO 45.36.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerificationOutcome {
+    /// Verifier confirmed clean — no issues found.
+    Clean,
+    /// Verifier skipped (e.g. tool not available, no-op event).
+    Skipped,
+    /// Verifier found and auto-applied a fix (formatter or text replacement).
+    Fixed,
+    /// Verifier returned an informational suggestion — no fix applied.
+    Suggestion,
+    /// Verifier reported an issue it could not fix, or an auto-fix failed.
+    Failed,
+}
+
+impl VerificationOutcome {
+    /// True for outcomes a consumer should treat as "not a verifier
+    /// failure" — `Clean`, `Skipped`, `Fixed`, `Suggestion`. `Failed` is
+    /// the only failure outcome. Preserves the prior `success: bool`
+    /// partition exactly (Skipped was `success: true` before WO 45.36).
+    pub fn is_success(self) -> bool {
+        !matches!(self, VerificationOutcome::Failed)
+    }
+
+    /// Stable lowercase wire label (used in the StreamJson line).
+    pub fn label(self) -> &'static str {
+        match self {
+            VerificationOutcome::Clean => "clean",
+            VerificationOutcome::Skipped => "skipped",
+            VerificationOutcome::Fixed => "fixed",
+            VerificationOutcome::Suggestion => "suggestion",
+            VerificationOutcome::Failed => "failed",
+        }
+    }
+}
+
 pub(crate) enum IterationOutcome {
     ToolCalls(Vec<ToolInvocation>),
 
@@ -48,7 +89,7 @@ pub enum TurnEvent {
     Error(String),
     Verification {
         message: String,
-        success: bool,
+        outcome: VerificationOutcome,
         file: Option<std::path::PathBuf>,
         line: Option<u32>,
     },

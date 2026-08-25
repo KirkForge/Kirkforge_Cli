@@ -190,9 +190,19 @@ impl Executor {
                     for entry in bus.verdicts() {
                         let is_error =
                             entry.severity == crate::session::verifier::bus::Severity::Error;
+                        // WO 45.36: prior `success: !is_error` mapped Error
+                        // → failure (false) and Info/Warning → success (true).
+                        // Preserve that partition exactly with the typed
+                        // outcome: Error → Failed; Info/Warning → Clean (the
+                        // advisory findings were not verifier failures).
+                        let outcome = if is_error {
+                            crate::session::executor::types::VerificationOutcome::Failed
+                        } else {
+                            crate::session::executor::types::VerificationOutcome::Clean
+                        };
                         corrections.push(CorrectionResult {
                             verifier: format!("{}", entry.source),
-                            success: !is_error,
+                            outcome,
                             message: format!(
                                 "[{}] {}:{} {}",
                                 entry.severity,

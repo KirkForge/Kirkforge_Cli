@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::executor::types::VerificationOutcome;
 use crate::session::verifier::types::{EditEvent, ToolErrorEvent};
 use crate::shared::test_util::remove_test_file;
 use std::path::PathBuf;
@@ -199,9 +200,10 @@ async fn test_correction_loop_returns_suggestion_when_no_fix_available() {
     let event = make_edit_event();
     let results = loop_.run(&event).await;
     assert_eq!(results.len(), 1);
-    assert!(
-        results[0].success,
-        "suggestion should be reported as success"
+    assert_eq!(
+        results[0].outcome,
+        VerificationOutcome::Suggestion,
+        "suggestion should be reported as Suggestion"
     );
     assert!(results[0].message.contains("Verifier suggestion"));
     assert!(results[0].message.contains("ambiguous issue"));
@@ -263,7 +265,11 @@ async fn test_correction_loop_runs_command_fix() {
     });
     let results = loop_.run(&event).await;
     assert_eq!(results.len(), 1);
-    assert!(results[0].success);
+    assert_eq!(
+        results[0].outcome,
+        VerificationOutcome::Fixed,
+        "command fix should report Fixed"
+    );
     assert!(results[0].message.contains("Auto-formatted"));
 
     remove_test_file(&path);
@@ -329,9 +335,10 @@ async fn test_correction_loop_stops_at_max_iterations() {
         results.len()
     );
     for (i, r) in results.iter().enumerate() {
-        assert!(
-            r.success,
-            "iteration {i}: command fix should report success"
+        assert_eq!(
+            r.outcome,
+            VerificationOutcome::Fixed,
+            "iteration {i}: command fix should report Fixed"
         );
         assert!(
             r.message.contains("Auto-formatted"),
@@ -369,7 +376,11 @@ async fn test_correction_loop_unfixable_stops() {
     let event = make_edit_event();
     let results = loop_.run(&event).await;
     assert_eq!(results.len(), 1);
-    assert!(!results[0].success);
+    assert_eq!(
+        results[0].outcome,
+        VerificationOutcome::Failed,
+        "Unfixable should report Failed"
+    );
     assert!(results[0].message.contains("Verification failed"));
 }
 
@@ -476,7 +487,11 @@ async fn test_correction_loop_applies_and_returns() {
 
     let results = loop_.run(&event).await;
     assert_eq!(results.len(), 1);
-    assert!(results[0].success);
+    assert_eq!(
+        results[0].outcome,
+        VerificationOutcome::Fixed,
+        "applied text fix should report Fixed"
+    );
     assert!(results[0].message.contains("Auto-fixed"));
 
     // Verify file was actually fixed

@@ -491,6 +491,88 @@ fn store_write_run_and_emissions_transactional_on_sqlite() {
 }
 
 #[test]
+fn store_write_run_and_emissions_fallback_on_in_memory_no_deadlock() {
+    // Regression: write_run_and_emissions used to call the public
+    // write_emission_records / write_run_record, which re-acquire self.lock
+    // (std::sync::Mutex, non-reentrant) while the outer call already held it
+    // → self-deadlock on the InMemoryAdapter / FileAdapter fallback path
+    // (write_run_and_emissions_tx returns Ok(false)). If this test returns
+    // at all, the deadlock is gone.
+    let store = store_with(InMemoryAdapter::new());
+    let mut run = sample_run("R1", "T1");
+    let emissions = vec![kf_memory_store::EmittedFileRecord {
+        id: None,
+        path: "src/foo.rs".into(),
+        sha256: "abcdef0123456789".into(),
+        bytes: 42,
+        before_hash: None,
+        existed: false,
+        timestamp: None,
+    }];
+    store
+        .write_run_and_emissions(&mut run, &emissions, 1)
+        .unwrap();
+    // Both the run and the emission should be present as generic objects.
+    let runs = store
+        .adapter()
+        .query(&MemoryQuery {
+            kind: Some("run".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].id, "run-R1");
+    let emissions_out = store
+        .adapter()
+        .query(&MemoryQuery {
+            kind: Some("emission".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(emissions_out.len(), 1);
+    assert_eq!(run.emission_ids.len(), 1);
+    assert_eq!(run.files_emitted, 1);
+    assert_eq!(run.total_bytes_emitted, 42);
+}
+
+#[test]
+fn store_write_run_and_emissions_fallback_on_file_adapter_no_deadlock() {
+    // Same regression, on the FileAdapter fallback (the production fallback
+    // when SQLite fails to open — see MemoryStore::create).
+    let tmp = tempfile::tempdir().unwrap();
+    let store = store_with(FileAdapter::new(tmp.path().join("mem.json")));
+    let mut run = sample_run("R1", "T1");
+    let emissions = vec![kf_memory_store::EmittedFileRecord {
+        id: None,
+        path: "src/foo.rs".into(),
+        sha256: "abcdef0123456789".into(),
+        bytes: 42,
+        before_hash: None,
+        existed: false,
+        timestamp: None,
+    }];
+    store
+        .write_run_and_emissions(&mut run, &emissions, 1)
+        .unwrap();
+    let runs = store
+        .adapter()
+        .query(&MemoryQuery {
+            kind: Some("run".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(runs.len(), 1);
+    let emissions_out = store
+        .adapter()
+        .query(&MemoryQuery {
+            kind: Some("emission".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(emissions_out.len(), 1);
+}
+
+#[test]
 fn store_write_emission_records_sequential_on_in_memory() {
     let store = store_with(InMemoryAdapter::new());
     let emissions = vec![kf_memory_store::EmittedFileRecord {

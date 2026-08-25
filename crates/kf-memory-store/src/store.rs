@@ -287,6 +287,19 @@ impl MemoryStore {
         emissions: &[EmittedFileRecord],
     ) -> Result<Vec<String>> {
         let _g = self.lock.lock().expect("store lock poisoned");
+        self.write_emission_records_inner(run_id, task_id, turn, emissions)
+    }
+
+    // Lock-free body. Caller holds the store lock. Used by
+    // write_run_and_emissions to avoid re-acquiring self.lock (std::sync::Mutex
+    // is non-reentrant → would self-deadlock).
+    fn write_emission_records_inner(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        turn: i64,
+        emissions: &[EmittedFileRecord],
+    ) -> Result<Vec<String>> {
         let mut ids = Vec::with_capacity(emissions.len());
         let ts = iso_now();
         for (i, e) in emissions.iter().enumerate() {
@@ -343,6 +356,13 @@ impl MemoryStore {
 
     pub fn write_run_record(&self, run: &RunRecord) -> Result<()> {
         let _g = self.lock.lock().expect("store lock poisoned");
+        self.write_run_record_inner(run)
+    }
+
+    // Lock-free body. Caller holds the store lock. Used by
+    // write_run_and_emissions to avoid re-acquiring self.lock (std::sync::Mutex
+    // is non-reentrant → would self-deadlock).
+    fn write_run_record_inner(&self, run: &RunRecord) -> Result<()> {
         let emission_ids = run.emission_ids.clone();
 
         // Specialized run-row write (no-op if unsupported).
@@ -444,9 +464,11 @@ impl MemoryStore {
         {
             return Ok(());
         }
-        // Fallback: sequential writes.
-        let _ = self.write_emission_records(&run.run_id, &run.task_id, turn, emissions)?;
-        self.write_run_record(run)
+        // Fallback: sequential writes. Call the lock-free _inner helpers —
+        // we already hold self.lock above; re-acquiring it (via the public
+        // methods) would self-deadlock (std::sync::Mutex is non-reentrant).
+        let _ = self.write_emission_records_inner(&run.run_id, &run.task_id, turn, emissions)?;
+        self.write_run_record_inner(run)
     }
 
     pub fn query_runs(&self, limit: Option<usize>) -> Result<Vec<MemoryObject>> {

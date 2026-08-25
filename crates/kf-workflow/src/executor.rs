@@ -247,7 +247,7 @@ impl WorkflowExecutor {
             summary: combined_summary,
             critique: None,
             structured_output: Some(combined_structured),
-                    run_id: None,
+            run_id: None,
         }))
     }
 
@@ -275,7 +275,7 @@ impl WorkflowExecutor {
             },
             critique: None,
             structured_output: None,
-                    run_id: None,
+            run_id: None,
         }
     }
 
@@ -673,7 +673,7 @@ impl WorkflowExecutor {
                         summary: summary.to_string(),
                         critique,
                         structured_output,
-                    run_id: None,
+                        run_id: None,
                     },
                 );
             }

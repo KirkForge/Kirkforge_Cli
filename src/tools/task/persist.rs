@@ -180,6 +180,7 @@ mod tests {
                 duration_ms: Some(1_500),
                 token_estimate: None,
                 parent_task_id: Some("task-1".to_string()),
+                parent_run_id: None,
             },
             ..Default::default()
         }

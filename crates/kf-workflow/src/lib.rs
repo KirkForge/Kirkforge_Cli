@@ -474,7 +474,7 @@ impl BatchErrors {
 }
 
 /// Completed workflow summary.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowSummary {
     pub workflow_name: String,
     pub outputs: HashMap<String, StepOutput>,
@@ -1436,7 +1436,7 @@ mod tests {
                 summary: "found 3 items".into(),
                 critique: None,
                 structured_output: None,
-                    run_id: None,
+                run_id: None,
             },
         );
         let result = resolve_step_refs("Result: $(explore)", &outputs);
@@ -1455,6 +1455,7 @@ mod tests {
                 summary: r#"{"count": 5, "items": ["a","b"]}"#.into(),
                 critique: None,
                 structured_output: Some(serde_json::json!({"count": 5, "items": ["a", "b"]})),
+                run_id: None,
             },
         );
         let result = resolve_step_refs("Count: $(explore.count)", &outputs);
@@ -1476,7 +1477,7 @@ mod tests {
                 summary: "plain text summary".into(),
                 critique: None,
                 structured_output: None,
-                    run_id: None,
+                run_id: None,
             },
         );
         let result = resolve_step_refs("$(explore.count)", &outputs);
@@ -1505,6 +1506,7 @@ mod tests {
                 structured_output: Some(serde_json::json!({
                     "a": {"b": {"c": "deep"}}
                 })),
+                run_id: None,
             },
         );
         let result = resolve_step_refs("$(step1.a.b.c)", &outputs);

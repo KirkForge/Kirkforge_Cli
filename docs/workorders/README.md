@@ -923,15 +923,15 @@ tree, ~11 stale claims corrected in-line. See
 
 20 audit workorders from verifying ChatGPT's architecture review against the actual codebase.
 
-| 45.1 | [# Workorder 45.1 — Cross-cutting AgentRun identity contract](45.1-agent-run-identity-contract.md) | Planned |
+| 45.1 | [# Workorder 45.1 — Cross-cutting AgentRun identity contract](45.1-agent-run-identity-contract.md) | Done |
 | 45.10 | [Event Type Audit (external reviewer claim)](45.10-event-type-audit.md) | Planned |
 | 45.11 | [Sandbox Policy Unification (external reviewer claim)](45.11-sandbox-policy-unification-audit.md) | Planned |
 | 45.12 | [MCP tool calls bypass all local sandbox policy](45.12-mcp-tool-no-sandbox.md) | Planned |
-| 45.16 | [Split `src/session/config/mod.rs` (2952 lines / 120477 bytes)](45.16-split-session-config-mod.md) | Planned |
-| 45.17 | [Split `crates/kf-workflow/src/lib.rs` (2707 lines / 105477 bytes)](45.17-split-kf-workflow-lib.md) | Planned |
-| 45.18 | [Split `crates/kf-context-index/src/lib.rs` (2706 lines / 103356 bytes)](45.18-split-kf-context-index-lib.md) | Planned |
+| 45.16 | [Split `src/session/config/mod.rs` (2952 lines / 120477 bytes)](45.16-split-session-config-mod.md) | Done |
+| 45.17 | [Split `crates/kf-workflow/src/lib.rs` (2707 lines / 105477 bytes)](45.17-split-kf-workflow-lib.md) | Done |
+| 45.18 | [Split `crates/kf-context-index/src/lib.rs` (2706 lines / 103356 bytes)](45.18-split-kf-context-index-lib.md) | Done |
 | 45.19 | [Split `src/session/prompt/mod.rs` (2693 lines / 102144 bytes)](45.19-split-session-prompt-mod.md) | Done |
-| 45.20 | [Split `src/tools/task.rs` (2639 lines / 99487 bytes)](45.20-split-tools-task.md) | Planned |
+| 45.20 | [Split `src/tools/task.rs` (2639 lines / 99487 bytes)](45.20-split-tools-task.md) | Done |
 | 45.21 | [detect_shadowed_rules misses bash-command deny semantics (*→** promotion + prefix match)](45.21-shadow-detection-misses-bash-command-deny-semantics.md) | Planned |
 | 45.31 | [Claude compat support gaps: documentation + .mcp.json modal + .claude/agents model field](45.31-claude-compat-support-gaps.md) | Planned |
 | 45.32 | [Declarative agent definition: TOML/YAML config layer for subagents](45.32-declarative-agent-definition-gap.md) | Planned |
@@ -942,5 +942,5 @@ tree, ~11 stale claims corrected in-line. See
 | 45.43 | [Architectural simplicity audit (external reviewer 7/10 score)](45.43-architectural-simplicity-audit.md) | Planned |
 | 45.46 | [# Workorder 46.0 — Event Bus No-Drop Under Load Invariant](45.46-event-bus-no-drop-invariant.md) | Planned |
 | 45.47 | [# Workorder 46.1 — Verifier Verdict-Set Determinism Invariant](45.47-verifier-verdict-set-determinism.md) | Planned |
-| 45.51 | [state.md stale WO 44 status + HEAD SHA](45.51-state-md-stale-wo44-and-sha.md) | Planned |
-| 45.52 | [workorders/README.md WO 34 prose contradicts its own table](45.52-workorders-readme-wo34-prose-contradicts-table.md) | Planned |
+| 45.51 | [state.md stale WO 44 status + HEAD SHA](45.51-state-md-stale-wo44-and-sha.md) | Done |
+| 45.52 | [workorders/README.md WO 34 prose contradicts its own table](45.52-workorders-readme-wo34-prose-contradicts-table.md) | Done |

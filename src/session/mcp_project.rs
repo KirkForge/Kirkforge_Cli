@@ -212,6 +212,42 @@ pub fn is_approved(project_root: &Path) -> bool {
     }
 }
 
+/// Env override for non-interactive / scripted runs (WO 45.31). When
+/// `KF_MCP_AUTO_TRUST_PROJECT` is set to the absolute path of the project
+/// root, the project's `.mcp.json` is admitted without the interactive
+/// prompt AND its approval is persisted, so subsequent launches stay
+/// silent. This is a real trust decision (the operator names the exact
+/// project), not a blanket "trust everything": a mismatched path is
+/// ignored. Returns `true` when the override matches `project_root`.
+///
+/// The comparison is on canonicalized absolute paths so a relative CWD
+/// and an absolute env value still match when they refer to the same
+/// directory. A path that cannot be canonicalized falls back to the
+/// raw string comparison.
+pub fn env_trust_override_matches(project_root: &Path) -> bool {
+    let raw = match std::env::var("KF_MCP_AUTO_TRUST_PROJECT") {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return false;
+    }
+    let env_path = PathBuf::from(raw);
+    // Fast path: literal string equality (covers non-canonical inputs).
+    if env_path == project_root {
+        return true;
+    }
+    // Canonicalize both for a real same-directory check.
+    match (
+        std::fs::canonicalize(&env_path),
+        std::fs::canonicalize(project_root),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Decide whether to load `.mcp.json` servers for a project, given the
 /// config flag and the persisted approval state. Returns the effective
 /// server list (empty when blocked) and a `prompted` flag so the caller
@@ -238,6 +274,45 @@ pub fn resolve_project_mcp(
         return (Vec::new(), true);
     }
     (to_mcp_server_configs(doc), false)
+}
+
+/// What to do for an unapproved project's `.mcp.json` (WO 45.31). The
+/// caller arrives here when `resolve_project_mcp` returned `prompted =
+/// true`. This pure decision over `(non_interactive, env_override,
+/// user_approved)` tells the caller whether to load + persist, or drop —
+/// keeping the gate logic testable without a terminal or stdin.
+///
+/// - `LoadAndPersist`: admit the servers and call `record_approval` so
+///   the next launch is silent.
+/// - `Drop`: do not load; do not persist.
+///
+/// Precedence: env override > interactive prompt > non-interactive drop.
+/// The env override is a real trust decision (operator named the exact
+/// project), so it wins even in non-interactive mode — that's the CI
+/// escape hatch. Without it, non-interactive drops (never auto-approve
+/// spawned subprocesses from a script).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpApprovalOutcome {
+    LoadAndPersist,
+    Drop,
+}
+
+pub fn decide_unapproved_mcp(
+    non_interactive: bool,
+    env_override: bool,
+    user_approved: bool,
+) -> McpApprovalOutcome {
+    if env_override {
+        return McpApprovalOutcome::LoadAndPersist;
+    }
+    if non_interactive {
+        return McpApprovalOutcome::Drop;
+    }
+    if user_approved {
+        McpApprovalOutcome::LoadAndPersist
+    } else {
+        McpApprovalOutcome::Drop
+    }
 }
 
 #[cfg(test)]
@@ -486,6 +561,122 @@ mod tests {
         assert!(
             !is_approved(&proj),
             "legacy entry without hash must re-approve (safe default)"
+        );
+    }
+
+    // ── WO 45.31: env trust override ───────────────────────────────
+
+    // env_trust_override_matches reads a process-global env var; serialize
+    // the tests so a concurrent setter can't flip it mid-assertion.
+    static ENV_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn _env_override_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_OVERRIDE_LOCK.lock().unwrap()
+    }
+
+    struct EnvUnset;
+    impl Drop for EnvUnset {
+        fn drop(&mut self) {
+            std::env::remove_var("KF_MCP_AUTO_TRUST_PROJECT");
+        }
+    }
+
+    #[test]
+    fn env_override_matches_exact_path() {
+        let _g = _env_override_guard();
+        let _unset = EnvUnset;
+        let dir = tempfile::tempdir().unwrap();
+        let proj = std::fs::canonicalize(dir.path()).unwrap();
+        std::env::set_var("KF_MCP_AUTO_TRUST_PROJECT", &proj);
+        assert!(
+            env_trust_override_matches(&proj),
+            "exact path match must admit"
+        );
+    }
+
+    #[test]
+    fn env_override_rejects_mismatched_path() {
+        let _g = _env_override_guard();
+        let _unset = EnvUnset;
+        let dir = tempfile::tempdir().unwrap();
+        let proj = std::fs::canonicalize(dir.path()).unwrap();
+        std::env::set_var("KF_MCP_AUTO_TRUST_PROJECT", "/some/other/project");
+        assert!(
+            !env_trust_override_matches(&proj),
+            "a different path must not admit — the override is per-project, not blanket"
+        );
+    }
+
+    #[test]
+    fn env_override_unset_is_false() {
+        let _g = _env_override_guard();
+        let _unset = EnvUnset;
+        let dir = tempfile::tempdir().unwrap();
+        let proj = std::fs::canonicalize(dir.path()).unwrap();
+        assert!(
+            !env_trust_override_matches(&proj),
+            "no env var set → no override"
+        );
+    }
+
+    #[test]
+    fn env_override_empty_string_is_false() {
+        let _g = _env_override_guard();
+        let _unset = EnvUnset;
+        let dir = tempfile::tempdir().unwrap();
+        let proj = std::fs::canonicalize(dir.path()).unwrap();
+        std::env::set_var("KF_MCP_AUTO_TRUST_PROJECT", "");
+        assert!(
+            !env_trust_override_matches(&proj),
+            "empty string override is a no-op"
+        );
+    }
+
+    // ── WO 45.31: unapproved-project decision logic ────────────────
+
+    #[test]
+    fn decide_env_override_admits_even_non_interactive() {
+        // The env override is the CI escape hatch: it wins even in
+        // non-interactive mode (operator named the exact project).
+        assert_eq!(
+            decide_unapproved_mcp(true, true, false),
+            McpApprovalOutcome::LoadAndPersist
+        );
+    }
+
+    #[test]
+    fn decide_non_interactive_without_override_drops() {
+        assert_eq!(
+            decide_unapproved_mcp(true, false, false),
+            McpApprovalOutcome::Drop,
+            "non-interactive without override must never auto-approve"
+        );
+    }
+
+    #[test]
+    fn decide_interactive_user_yes_admits() {
+        assert_eq!(
+            decide_unapproved_mcp(false, false, true),
+            McpApprovalOutcome::LoadAndPersist
+        );
+    }
+
+    #[test]
+    fn decide_interactive_user_no_drops() {
+        assert_eq!(
+            decide_unapproved_mcp(false, false, false),
+            McpApprovalOutcome::Drop,
+            "a 'no' answer must not load and must not persist"
+        );
+    }
+
+    #[test]
+    fn decide_env_override_beats_user_no() {
+        // Env override is a stronger signal than the interactive answer:
+        // it represents a deliberate pre-authorization.
+        assert_eq!(
+            decide_unapproved_mcp(false, true, false),
+            McpApprovalOutcome::LoadAndPersist
         );
     }
 }

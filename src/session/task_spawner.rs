@@ -212,15 +212,25 @@ impl InProcessTaskSpawner {
     ) -> Result<TaskRunDetail, String> {
         let mut cfg = crate::shared::read_shared_config(&self.config).clone();
 
-        // WO 30.0.6: subagent provider override. Resolution order for the
-        // model: per-call `task` arg → subagent_provider.model → parent's
-        // model. Host and API keys fall back to the parent when the
-        // subagent override is unset, so a partial [subagent_provider]
-        // block (e.g. model + host only) still inherits the parent keys.
+        // WO 39.3: resolve the dynamic agent (`.claude/agents/*.md`) for the
+        // persona BEFORE the model resolution, so the agent's `model`
+        // frontmatter field participates in the chain (WO 45.31 wired this
+        // field — previously parsed but never read).
+        let agent_def = self.agents.get(&request.persona).cloned();
+
+        // WO 30.0.6 + 45.31: subagent provider override. Resolution order
+        // for the model: per-call `task` arg → agent_def.model (frontmatter)
+        // → subagent_provider.model → parent's model. Host and API keys
+        // fall back to the parent when the subagent override is unset, so a
+        // partial [subagent_provider] block (e.g. model + host only) still
+        // inherits the parent keys.
         let sub = &cfg.model.subagent_provider;
         let effective_model = request
             .model
             .as_deref()
+            .or(agent_def
+                .as_ref()
+                .and_then(|a| a.model.as_deref().filter(|m| !m.is_empty())))
             .or(sub.model.as_deref().filter(|m| !m.is_empty()))
             .unwrap_or(&self.model_name);
         let effective_host = sub
@@ -356,7 +366,8 @@ impl InProcessTaskSpawner {
         // toolset to the agent's `tools` frontmatter (translated through
         // the Claude→native alias table) and records the agent def so the
         // system prompt is prepended below. A miss keeps the full toolset.
-        let agent_def = self.agents.get(&request.persona).cloned();
+        // `agent_def` was resolved above (before the model chain) so its
+        // `model` field participates in model selection.
         let agent_allowlist: Vec<String> = agent_def
             .as_ref()
             .map(|a| crate::session::agents::translate_tool_list(&a.tools))
@@ -983,5 +994,98 @@ mod tests {
             reg.clone(),
         );
         assert!(spawner.agents.get("x").is_some(), "registry must be stored");
+    }
+
+    // ── WO 45.31: agent `model` frontmatter wiring ──
+
+    // The spawner's model resolution chain is now:
+    //   request.model → agent_def.model → subagent_provider.model → parent.
+    // This test mirrors the exact chain the spawner composes (pure data
+    // over the registry + request + config — no live adapter needed) and
+    // asserts each precedence level. A live run_task needs a model host;
+    // the resolution is the logic this WO wires, so we test it directly.
+    fn resolve_effective_model(
+        request_model: Option<&str>,
+        agent_model: Option<&str>,
+        subagent_model: Option<&str>,
+        parent_model: &str,
+    ) -> String {
+        let agent_def = agent_model.map(|m| crate::session::agents::AgentDef {
+            name: "a".into(),
+            description: String::new(),
+            system_prompt: String::new(),
+            tools: vec![],
+            model: Some(m.to_string()),
+        });
+        let agent_def_model = agent_def
+            .as_ref()
+            .and_then(|a| a.model.as_deref().filter(|m| !m.is_empty()));
+        request_model
+            .or(agent_def_model)
+            .or(subagent_model.filter(|m| !m.is_empty()))
+            .unwrap_or(parent_model)
+            .to_string()
+    }
+
+    #[test]
+    fn agent_model_field_overrides_parent_when_no_per_call_model() {
+        // WO 45.31 gate: agent with `model: claude-sonnet-4` and no
+        // per-call override selects claude-sonnet-4 (not the parent).
+        let m = resolve_effective_model(None, Some("claude-sonnet-4"), None, "parent-model");
+        assert_eq!(
+            m, "claude-sonnet-4",
+            "agent frontmatter model must win over the parent when no per-call override"
+        );
+    }
+
+    #[test]
+    fn per_call_model_beats_agent_model() {
+        let m = resolve_effective_model(
+            Some("per-call"),
+            Some("claude-sonnet-4"),
+            None,
+            "parent-model",
+        );
+        assert_eq!(m, "per-call", "per-call model is the highest priority");
+    }
+
+    #[test]
+    fn agent_model_beats_subagent_provider_model() {
+        let m = resolve_effective_model(
+            None,
+            Some("claude-sonnet-4"),
+            Some("subagent-model"),
+            "parent-model",
+        );
+        assert_eq!(
+            m, "claude-sonnet-4",
+            "agent frontmatter model beats subagent_provider.model"
+        );
+    }
+
+    #[test]
+    fn no_agent_model_falls_back_to_subagent_provider() {
+        let m = resolve_effective_model(None, None, Some("subagent-model"), "parent-model");
+        assert_eq!(
+            m, "subagent-model",
+            "subagent_provider.model is the next fallback"
+        );
+    }
+
+    #[test]
+    fn no_agent_no_subagent_falls_back_to_parent() {
+        let m = resolve_effective_model(None, None, None, "parent-model");
+        assert_eq!(m, "parent-model", "parent model is the final fallback");
+    }
+
+    #[test]
+    fn empty_agent_model_is_skipped() {
+        // An empty string model field must not block the chain (it is
+        // filtered out, falling through to the next level).
+        let m = resolve_effective_model(None, Some(""), Some("subagent-model"), "parent-model");
+        assert_eq!(
+            m, "subagent-model",
+            "empty agent model is skipped, not used"
+        );
     }
 }

@@ -1217,39 +1217,105 @@ Both systems coexist. MCP does not replace hooks, verifiers, or skills —
 it replaces the `tool` capability kind for new tools. Existing bespoke
 plugins that expose tools continue to work unchanged.
 
-### Claude compatibility layer (WO 39.2)
+### Claude compatibility layer (WO 39.2 / WO 39.3 / WO 45.31)
 
-kf-code reads three Claude-ecosystem markdown surfaces so a Claude
-plugin's skills, commands, and `.mcp.json` dropped into a project are
-picked up on the next start:
+kf-code reads four Claude-ecosystem surfaces so a Claude plugin's skills,
+commands, agents, and `.mcp.json` dropped into a project are picked up on
+the next start. This is an explicit product promise (Claude compat
+direction), not an accident — the loaders ship and are documented here.
 
-- **Skill trigger derivation**: `.claude/skills/*/SKILL.md` was already
-  scanned, but a skill without a `trigger` field was unreachable (dispatch
-  is `get_by_trigger` only). `parse_frontmatter` now derives `/<name>`
-  when `trigger` is empty, so every stock Claude skill becomes an
-  invocable slash command.
-- **Commands loader**: `.claude/commands/**/*.md` (+ optional
-  `~/.claude/commands`) files register as skills. The filename stem is
+**The four loaders:**
+
+- **Skills** (`.claude/skills/*/SKILL.md` → `skills.rs:126,159`): a skill
+  without a `trigger` field was historically unreachable (dispatch is
+  `get_by_trigger` only). `parse_frontmatter` derives `/<name>` when
+  `trigger` is empty, so every stock Claude skill becomes an invocable
+  slash command. Skills register in `SkillRegistry` and are dispatched by
+  `/<trigger>` in the agent loop.
+- **Commands** (`.claude/commands/**/*.md` + optional `~/.claude/commands`
+  → `skills.rs:160,406`): files register as skills. The filename stem is
   the trigger (`review.md` → `/review`); `$ARGUMENTS` and `$1`..`$9`
   placeholders are rewritten to `{{args}}` for the prompt renderer. An
   optional YAML frontmatter block is parsed for `name`/`description`/
   `model`; absent frontmatter falls back to the stem.
-- **`.mcp.json` discovery**: a project-root `.mcp.json` with an
-  `mcpServers` object is parsed into `McpServerConfig` entries (`command`/
-  `args`/`env` → stdio; `url`/`token` → http) and merged into the MCP config
-  before `McpClientManager::new`. The gate is
-  `tools.load_project_mcp_json` (config flag, default on) plus a
-  first-load-per-project approval prompt: a cloned repo's `.mcp.json` is
-  attacker-controllable spawn config, so the approval is persisted in the
-  data dir (`approved_mcp_projects.json`) and only approved projects load
-  silently on subsequent launches. The approval stores a sha256 content
-  hash alongside the project path (WO 42.5): a modified `.mcp.json` under
-  an already-approved path re-gates, closing the modified-after-approval
-  attack vector. Legacy approvals without a hash trigger re-approval (safe
-  default). `resolve_project_mcp` is a pure function over
-  `(config_flag, doc, already_approved)` so the gate logic is testable
-  without a terminal; the prompt UI is the caller's job (run_session
-  prints to stderr; a TUI modal is deferred — see Deferrals in the WO).
+- **Agents** (`.claude/agents/*.md` → `agents.rs:331`): Claude agent files
+  are markdown with YAML-like frontmatter (`name`, `description`, `tools`,
+  `model`) and a body that is the agent's system prompt. An unknown
+  `task`-tool persona name is looked up in the agent registry before
+  falling back to the hardcoded personas (`explore`, `plan`, `coder`). A
+  hit restricts the toolset to the agent's `tools` frontmatter (translated
+  through the alias table below) and prepends the agent's system prompt.
+  The `model` frontmatter field overrides the model for that agent's
+  calls (WO 45.31 wired this — resolution order: per-call `task` arg →
+  agent `model` → `subagent_provider.model` → parent model).
+- **`.mcp.json`** (project-root `.mcp.json` → `mcp_project.rs:52`): a
+  project-root file with an `mcpServers` object is parsed into
+  `McpServerConfig` entries (`command`/`args`/`env` → stdio;
+  `url`/`token` → http) and merged into the MCP config before
+  `McpClientManager::new`.
+
+**Tool-name alias table** (`agents.rs:53-67`, `CLAUDE_TOOL_ALIASES`):
+Claude tool names in agent `tools` frontmatter and command allowed-tools
+lists are mapped to kf-code native tool names before the allowlist filter:
+
+| Claude name | Native tool |
+|---|---|
+| `Read` | `read_file` |
+| `Write` | `write_file` |
+| `Edit` / `MultiEdit` | `edit_file` |
+| `Bash` | `bash` |
+| `Glob` | `glob` |
+| `Grep` | `grep` |
+| `WebFetch` | `web_fetch` |
+| `WebSearch` | `web_search` |
+| `NotebookEdit` | `notebook_edit` |
+| `TodoWrite` | `todo` |
+| `Task` / `Agent` | `task` |
+
+Unknown names pass through unchanged (forward-compat). A system-prompt
+suffix (`claude_alias_suffix`) appends the mapping so the model's prose
+references to "use Read" map to the native tool name.
+
+**Trust gates:**
+
+- **Agents** are gated by `plugin_trust_workspace` (`tools` config flag).
+  The workspace `.claude/agents/` directory is model-writable in-session,
+  so a dropped agent file can widen a subagent's toolset — the same threat
+  model as workspace plugins (ADR-057). When `plugin_trust_workspace =
+  false` (the default), workspace agents are refused with a `tracing::warn!`;
+  the operator opts in via the config flag. Agents under the canonical data
+  directory are always trusted.
+- **`.mcp.json`** is gated by `tools.load_project_mcp_json` (config flag,
+  default on) plus a first-load-per-project approval prompt. A cloned
+  repo's `.mcp.json` is attacker-controllable spawn config, so the approval
+  is persisted in the data dir (`approved_mcp_projects.json`) and only
+  approved projects load silently on subsequent launches. The approval
+  stores a sha256 content hash alongside the project path (WO 42.5): a
+  modified `.mcp.json` under an already-approved path re-gates, closing
+  the modified-after-approval attack vector. Legacy approvals without a
+  hash trigger re-approval (safe default).
+
+  The first-contact gate is a real interactive yes/no prompt (WO 45.31):
+  `prompt_mcp_approval` in `run_session.rs` prints the server list to
+  stderr and reads one line from stdin — `y`/`yes` admits, anything else
+  (including EOF) denies. The prompt runs once at session setup, before
+  the TUI or line-mode loop starts, so there is no competing stdin
+  reader. The decision logic is pure and testable
+  (`decide_unapproved_mcp` in `mcp_project.rs`): precedence is env
+  override > interactive prompt > non-interactive drop. An env override
+  `KF_MCP_AUTO_TRUST_PROJECT=<path>` is the CI/scripted escape hatch: it
+  pre-trusts a named project (path-canonicalized) without a prompt, which
+  is a real trust decision (the operator names the exact project, not a
+  blanket trust). Non-interactive without the override still drops —
+  never auto-approve spawned subprocesses from a script.
+
+**Honest limitations (deferred):**
+
+- **Hooks phase 3** (WO 39.4): the Claude hook stdin-JSON contract and
+  generic pre/post-tool events are not yet implemented. This is the
+  lowest-frequency artifact class and is tracked in
+  [39.4](docs/workorders/39.4-claude-compat-phase3.md). Skills, commands,
+  agents, and `.mcp.json` all ship; hooks do not.
 
 ---
 

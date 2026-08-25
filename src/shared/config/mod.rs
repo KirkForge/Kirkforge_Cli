@@ -7,7 +7,7 @@ mod tools;
 pub use display::DisplayConfig;
 pub use model::ModelConfig;
 pub use security::SecurityConfig;
-pub use session::SessionConfig;
+pub use session::{ArtifactPolicy, SessionConfig};
 pub use tools::ToolConfig;
 
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 ///   ModelConfig    32  (31 direct + subagent_provider sub-struct handle)
 ///   SecurityConfig 22  (19 direct + 3 sub-struct handles)
 ///   ToolConfig     33
-///   SessionConfig   8
+///   SessionConfig   7
 ///   DisplayConfig   7
 ///   Note: 1 field (seed) has #[serde(skip_serializing)], so serde
 ///   produces 97 keys; ToolConfig.memory_auto_populate and
@@ -43,7 +43,10 @@ use serde::{Deserialize, Serialize};
 // WO 41.1: bumped 105 → 106 (added SessionConfig.auto_apply_patch).
 // WO 43.17: bumped 106 → 107 (added ToolConfig.plugin_consent_ledger).
 // WO 44.22: bumped 107 → 108 (added ModelConfig.anthropic_api_base).
-pub const CONFIG_FIELD_COUNT: usize = 108;
+// WO 45.37: replaced SessionConfig.worktree_enabled + auto_apply_patch
+//           (2 bools) with SessionConfig.artifact_policy (1 enum):
+//           108 → 107.
+pub const CONFIG_FIELD_COUNT: usize = 107;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

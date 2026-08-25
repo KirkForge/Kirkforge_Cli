@@ -37,7 +37,7 @@ impl SandboxPosture {
             // CLONE_NEWNET is applied only when harden && no_network
             // (bash_runner setup_rlimits gate; --no-network requires --harden).
             network_namespace: config.security.sandbox.harden && config.security.sandbox.no_network,
-            worktree: config.session.worktree_enabled,
+            worktree: config.session.artifact_policy.is_worktree_enabled(),
         }
     }
 
@@ -97,7 +97,11 @@ mod tests {
         c.security.allowed_write_dirs = allowed_write_dirs.iter().map(|s| s.to_string()).collect();
         c.security.sandbox.harden = harden;
         c.security.sandbox.no_network = no_network;
-        c.session.worktree_enabled = worktree;
+        c.session.artifact_policy = if worktree {
+            crate::shared::ArtifactPolicy::PatchOnly
+        } else {
+            crate::shared::ArtifactPolicy::DirectWrite
+        };
         c
     }
 

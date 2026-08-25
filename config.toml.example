@@ -463,14 +463,20 @@
 # to the task summary. Default: false (subagents share the parent
 # workspace). Env: KF_CODE_WORKTREE_ENABLED.
 # [session]
-# worktree_enabled = false
-# auto_apply_patch = false
-# When true, the scout→coder→reviewer pipeline (`/workflow run --parallel`)
-# `git apply`s the coder's captured patch to the parent workspace
-# automatically after the Reviewer phase. On conflict/dirty-tree the error
-# is surfaced (not silent loss). Default: false — the patch is surfaced
-# in the TUI summary for explicit application. Only meaningful with
-# worktree_enabled=true. (WO 41.1)
+# artifact_policy = "direct_write"
+# WO 45.37: typed artifact policy replacing the worktree_enabled +
+# auto_apply_patch bool pair. Three variants:
+#   "direct_write" — no worktree; coder writes directly to parent (default).
+#   "patch_only"    — worktree isolation; patch surfaced as text in the
+#                    TUI summary for manual `git apply` / `/apply`.
+#   "auto_apply"   — worktree isolation; patch `git apply`'d to the parent
+#                    working tree automatically after the Reviewer phase.
+#                    On conflict/dirty-tree the error is surfaced (not silent
+#                    loss). The user still must `git commit` manually —
+#                    there is no auto-commit variant.
+# Legacy configs using `worktree_enabled` + `auto_apply_patch` are still
+# accepted: `true`/`false` → `patch_only`, `true`/`true` → `auto_apply`,
+# `false`/`_` → `direct_write`.
 
 # ---------------------------------------------------------------------------
 # Workspace plugin sources

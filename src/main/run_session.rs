@@ -104,7 +104,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         config.model.seed = Some(seed);
     }
     if worktree {
-        config.session.worktree_enabled = true;
+        config.session.artifact_policy = kf_code::shared::ArtifactPolicy::PatchOnly;
     }
     if docker {
         config.security.docker.enabled = true;
@@ -162,17 +162,19 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // WO 38.7: sweep stale worktree dirs from crashed sessions before
     // creating a new one (age-guarded; only dirs older than 24h).
     session::worktree::sweep_stale_worktrees();
-    let _worktree: Option<session::worktree::WorktreeSession> = if config.session.worktree_enabled {
-        let repo_root = std::env::current_dir()?;
-        let wt =
-            session::worktree::WorktreeSession::create(&session_id.to_string(), &repo_root).await?;
-        // Redirect sandbox to the worktree path
-        config.security.sandbox_dir = Some(wt.path().to_string_lossy().to_string());
-        // Also redirect the log path into the worktree
-        Some(wt)
-    } else {
-        None
-    };
+    let _worktree: Option<session::worktree::WorktreeSession> =
+        if config.session.artifact_policy.is_worktree_enabled() {
+            let repo_root = std::env::current_dir()?;
+            let wt =
+                session::worktree::WorktreeSession::create(&session_id.to_string(), &repo_root)
+                    .await?;
+            // Redirect sandbox to the worktree path
+            config.security.sandbox_dir = Some(wt.path().to_string_lossy().to_string());
+            // Also redirect the log path into the worktree
+            Some(wt)
+        } else {
+            None
+        };
 
     // Resolve the log path. Priority order:
     //   1. `--continue-session <value>` — id prefix OR full path

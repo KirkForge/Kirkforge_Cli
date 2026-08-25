@@ -30,7 +30,7 @@ pub(crate) const SUBAGENT_PATCH_MARKER: &str =
 // `plan` get read-only toolsets, so they keep the parent sandbox. The `_`
 // arm in the toolset filter below (full toolset) is the same predicate.
 fn subagent_worktree_wanted(cfg: &Config, persona: &str) -> bool {
-    cfg.session.worktree_enabled && !matches!(persona, "explore" | "plan")
+    cfg.session.artifact_policy.is_worktree_enabled() && !matches!(persona, "explore" | "plan")
 }
 
 // The repo the subagent worktree branches from: the parent's sandbox when it
@@ -612,11 +612,11 @@ mod tests {
     #[test]
     fn subagent_worktree_gated_on_flag_and_writer_persona() {
         let mut cfg = Config::default();
-        cfg.session.worktree_enabled = true;
+        cfg.session.artifact_policy = crate::shared::ArtifactPolicy::PatchOnly;
         assert!(subagent_worktree_wanted(&cfg, "coder"));
         assert!(!subagent_worktree_wanted(&cfg, "explore"));
         assert!(!subagent_worktree_wanted(&cfg, "plan"));
-        cfg.session.worktree_enabled = false;
+        cfg.session.artifact_policy = crate::shared::ArtifactPolicy::DirectWrite;
         assert!(
             !subagent_worktree_wanted(&cfg, "coder"),
             "flag off = shared sandbox"
@@ -871,7 +871,7 @@ mod tests {
 
         let mut cfg = Config::default();
         cfg.model.request_timeout_secs = 5;
-        cfg.session.worktree_enabled = true;
+        cfg.session.artifact_policy = crate::shared::ArtifactPolicy::PatchOnly;
         cfg.security.sandbox_dir = Some(repo.path().to_string_lossy().to_string());
         let config: SharedConfig = Arc::new(std::sync::RwLock::new(cfg));
         let spawner = Arc::new(InProcessTaskSpawner::new(

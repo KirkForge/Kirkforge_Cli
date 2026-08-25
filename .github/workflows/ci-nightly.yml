@@ -122,6 +122,43 @@ jobs:
       - name: Run smoke tests (nightly profile)
         run: cargo nextest run --profile nightly --no-fail-fast --locked -p kf-code --test smoke_test
 
+  # Nightly coverage for the two timeout-specific #[ignore]d lifecycle tests
+  # that have no non-ignored sibling (WO 45.59): the bash_jobs watcher
+  # timeout-detection branch (test_timeout_reaps_child_and_preserves_partial_output,
+  # 6s real wait) and the scheduled-job timeout enforcement
+  # (bash_job_timeout_is_enforced, 2s real wait). Both are inherently
+  # wall-clock-bound and cannot be made deterministic without a ProcessSpawner
+  # trait (deferred by WO 33.14 — CRITICAL blast radius), so they stay #[ignore]d
+  # for PR-feedback budget and run here nightly instead. --run-ignored all
+  # with exact-name test(=...) filters selects only these two tests — it does
+  # NOT sweep in the clipboard panic (src/tui/clipboard.rs) or the 64-subprocess
+  # stress test (WO 44.53 trap). nightly profile: 600s slow-timeout.
+  subprocess-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly-subprocess-lifecycle
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run ignored subprocess-lifecycle timeout tests
+        run: >
+          cargo nextest run --profile nightly --run-ignored all --no-fail-fast --locked
+          -p kf-code --lib --bins
+          -E 'test(=test_timeout_reaps_child_and_preserves_partial_output) | test(=bash_job_timeout_is_enforced)'
+
   # Full e2e suite. Same as ci-merge.yml `e2e`; runs nightly so a flaky e2e
   # failure does not block merge but is still observed. e2e profile
   # (binary(e2e), 300s slow-timeout) declaratively.

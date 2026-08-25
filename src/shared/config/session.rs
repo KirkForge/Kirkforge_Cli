@@ -71,7 +71,12 @@ fn default_preserve_recent_messages() -> usize {
 }
 
 fn default_checkpoint_interval_messages() -> usize {
-    0
+    // WO 45.42: default-on periodic checkpoints. 0 meant only tool-batch
+    // checkpoints ran; a long no-tool stretch that crashed lost everything
+    // back to the last tool batch. 20 closes the gap at sub-ms fsync cost
+    // per batch on a hot SSD (10-50ms on NFS — operators can lower via
+    // KF_CODE_CHECKPOINT_INTERVAL_MESSAGES).
+    20
 }
 
 fn default_compaction_use_heuristic() -> bool {

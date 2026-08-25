@@ -444,7 +444,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     let tool_ctx = tools::ToolContextBuilder {
         undo_stack: undo_stack.clone(),
         supports_images: adapter.model_info().supports_images,
-        deny_list: builtin_deny_list,
+        deny_list: builtin_deny_list.clone(),
         path_guard: builtin_path_guard,
         bash_sandbox_workdir: config.security.bash_sandbox_workdir,
         minify_write_side: config.tools.minify_write_side,
@@ -637,7 +637,10 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         if mcp_tool_count > 0 {
             toolset.add(Box::new(session::toolset::VecToolset::new(
                 "mcp",
-                session::mcp_tools::all_mcp_tools(mcp_mgr.clone()),
+                // WO 45.12: thread the built-in deny-list into MCP tool
+                // wrappers so args are scrubbed for denied URLs before the
+                // remote call. See McpToolWrapper trust-model doc.
+                session::mcp_tools::all_mcp_tools(mcp_mgr.clone(), builtin_deny_list.clone()),
             )));
             tracing::info!(count = mcp_tool_count, "MCP tools registered");
         }

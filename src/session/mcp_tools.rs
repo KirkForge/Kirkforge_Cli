@@ -14,6 +14,7 @@
 //! in `main.rs`.
 
 use crate::session::mcp_client::McpClientManager;
+use crate::shared::access::DenyList;
 use crate::shared::{intern_static_str, ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::sync::Arc;
@@ -23,6 +24,20 @@ use std::time::Duration;
 ///
 /// Stores an `Arc<McpClientManager>` and the full tool name. The `run()`
 /// method calls `manager.call_tool()` with the server-side name.
+///
+/// # Trust model (WO 45.12)
+///
+/// MCP tools execute on a remote server over a transport (stdio/HTTP). The
+/// local wrapper cannot sandbox code that runs elsewhere, so no `PathGuard`
+/// is applied — the operator's choice to list a server in
+/// `config.tools.mcp_servers` is the trust grant. The one local-side gate is
+/// argument scrubbing: before forwarding args, every string value is checked
+/// against the session `DenyList` so a denied URL (e.g. a cloud metadata
+/// endpoint) embedded in the args is blocked before it reaches the remote
+/// server. Result trust is the operator's responsibility — a compromised
+/// server's response returns to the model with no local content gate (this
+/// is inherent to the remote-execution model and documented in
+/// `docs/TECHNICAL.md`). See ADR-072 for the parallel sampling trust model.
 pub struct McpToolWrapper {
     /// The full tool name (e.g., "mcp/context-server/context").
     full_name: String,
@@ -30,6 +45,9 @@ pub struct McpToolWrapper {
     def: ToolDef,
     /// Shared manager for calling tools.
     manager: Arc<McpClientManager>,
+    /// URL/path deny-list reused from the built-in tools. Applied to args
+    /// before forwarding (WO 45.12).
+    deny_list: DenyList,
 }
 
 impl McpToolWrapper {
@@ -41,6 +59,7 @@ impl McpToolWrapper {
         description: String,
         parameters: serde_json::Value,
         manager: Arc<McpClientManager>,
+        deny_list: DenyList,
     ) -> Self {
         // Intern (not leak-per-call) so /reload plugins rebuilding these wrappers
         // does not accumulate fresh allocations. See `intern_static_str`.
@@ -54,6 +73,7 @@ impl McpToolWrapper {
                 parameters,
             },
             manager,
+            deny_list,
         }
     }
 }
@@ -65,6 +85,19 @@ impl Tool for McpToolWrapper {
     }
 
     async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
+        // WO 45.12: scan args for denied URLs before forwarding. The remote
+        // server executes outside the local sandbox, so a PathGuard is
+        // meaningless here, but a denied URL embedded in the args (e.g. a
+        // cloud metadata endpoint) is blocked at the boundary — mirrors
+        // web_fetch's deny-list check. See the trust-model doc on the struct.
+        if let Some(denied) = find_denied_url(&args, &self.deny_list) {
+            return ToolOutcome::Failure(ToolError::AccessDenied {
+                message: format!(
+                    "MCP tool '{name}' argument contains a denied URL: {denied}",
+                    name = self.full_name
+                ),
+            });
+        }
         // Defensive outer timeout in case `call_tool` gets stuck in a
         // reconnect loop. The manager has its own per-request timeout; this
         // catches any slow path above it.
@@ -80,17 +113,36 @@ impl Tool for McpToolWrapper {
     }
 }
 
+/// Walk a JSON value and return the first string that matches a deny-list URL
+/// prefix. Used to scrub MCP tool args before forwarding (WO 45.12).
+/// ponytail: depth-first scan, stops at the first hit — args are small.
+fn find_denied_url(value: &serde_json::Value, deny_list: &DenyList) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => deny_list.is_url_denied(s).then(|| s.clone()),
+        serde_json::Value::Array(arr) => arr.iter().find_map(|v| find_denied_url(v, deny_list)),
+        serde_json::Value::Object(map) => map.values().find_map(|v| find_denied_url(v, deny_list)),
+        _ => None,
+    }
+}
+
 /// Create Tool implementations for all MCP tools discovered by the manager.
 ///
 /// Returns a Vec of `Arc<dyn Tool>` that can be appended to the built-in
-/// tool list before passing to the Executor.
-pub fn all_mcp_tools(manager: Arc<McpClientManager>) -> Vec<Arc<dyn Tool>> {
+/// tool list before passing to the Executor. The `deny_list` is threaded
+/// into each wrapper so args are scrubbed before forwarding (WO 45.12).
+pub fn all_mcp_tools(manager: Arc<McpClientManager>, deny_list: DenyList) -> Vec<Arc<dyn Tool>> {
     // We need to re-request tool defs from the manager. The manager should
     // cache these. For now we'll rely on the manager exposing them.
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
 
     for (full_name, desc, params) in manager.tool_defs() {
-        let wrapper = McpToolWrapper::new(full_name.clone(), desc, params, manager.clone());
+        let wrapper = McpToolWrapper::new(
+            full_name.clone(),
+            desc,
+            params,
+            manager.clone(),
+            deny_list.clone(),
+        );
         tools.push(Arc::new(wrapper));
     }
 
@@ -101,6 +153,10 @@ pub fn all_mcp_tools(manager: Arc<McpClientManager>) -> Vec<Arc<dyn Tool>> {
 mod tests {
     use super::*;
 
+    fn default_dl() -> DenyList {
+        DenyList::default()
+    }
+
     #[test]
     fn test_wrapper_creation() {
         let mgr = Arc::new(McpClientManager::with_tools(vec![(
@@ -109,7 +165,7 @@ mod tests {
             serde_json::json!({"type": "object", "properties": {"message": {"type": "string"}}}),
         )]));
 
-        let tools = all_mcp_tools(mgr);
+        let tools = all_mcp_tools(mgr, default_dl());
         assert_eq!(tools.len(), 1);
         let def = tools[0].def();
         assert_eq!(def.name, "mcp/test/echo");
@@ -119,7 +175,7 @@ mod tests {
     #[test]
     fn test_all_mcp_tools_empty_manager_yields_no_tools() {
         let mgr = Arc::new(McpClientManager::with_tools(vec![]));
-        let tools = all_mcp_tools(mgr);
+        let tools = all_mcp_tools(mgr, default_dl());
         assert!(tools.is_empty());
     }
 
@@ -143,7 +199,7 @@ mod tests {
             ),
         ];
         let mgr = Arc::new(McpClientManager::with_tools(defs));
-        let tools = all_mcp_tools(mgr);
+        let tools = all_mcp_tools(mgr, default_dl());
         assert_eq!(tools.len(), 3);
         let names: Vec<&str> = tools.iter().map(|t| t.def().name).collect();
         assert!(names.contains(&"mcp/srv/a"));
@@ -166,7 +222,7 @@ mod tests {
             "Params check".to_string(),
             params.clone(),
         )]));
-        let tools = all_mcp_tools(mgr);
+        let tools = all_mcp_tools(mgr, default_dl());
         assert_eq!(tools.len(), 1);
         let def = tools[0].def();
         assert_eq!(def.name, "mcp/test/params");
@@ -181,7 +237,7 @@ mod tests {
             "Forward".to_string(),
             serde_json::json!({"type": "object"}),
         )]));
-        let tools = all_mcp_tools(mgr.clone());
+        let tools = all_mcp_tools(mgr.clone(), default_dl());
         assert_eq!(tools.len(), 1);
         let ctx = crate::tools::ToolContext::new();
         let outcome = tools[0].run(&ctx, serde_json::json!({"x": 1})).await;
@@ -189,5 +245,129 @@ mod tests {
             matches!(outcome, ToolOutcome::Failure(_)),
             "no live server → expected Failure, got {outcome:?}"
         );
+    }
+
+    // WO 45.12: a denied URL embedded in the args is blocked before the
+    // remote call. Asserts AccessDenied (the scrub gate), not the downstream
+    // Internal failure a live-less manager would return.
+    #[tokio::test]
+    async fn test_wrapper_run_blocks_denied_url_in_args() {
+        let mgr = Arc::new(McpClientManager::with_tools(vec![(
+            "mcp/test/deny".to_string(),
+            "Deny check".to_string(),
+            serde_json::json!({"type": "object"}),
+        )]));
+        let tools = all_mcp_tools(mgr, default_dl());
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tools[0]
+            .run(
+                &ctx,
+                serde_json::json!({"url": "http://169.254.169.254/latest/meta-data/"}),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Failure(ToolError::AccessDenied { message }) => {
+                assert!(
+                    message.contains("denied URL"),
+                    "expected denied-URL message, got: {message}"
+                );
+                assert!(
+                    message.contains("169.254.169.254"),
+                    "expected the blocked URL in the message, got: {message}"
+                );
+            }
+            other => panic!("expected AccessDenied, got {other:?}"),
+        }
+    }
+
+    // WO 45.12: the scrub walks nested JSON (arrays + objects), not just
+    // top-level string values.
+    #[tokio::test]
+    async fn test_wrapper_run_blocks_denied_url_nested_in_args() {
+        let mgr = Arc::new(McpClientManager::with_tools(vec![(
+            "mcp/test/nest".to_string(),
+            "Nested deny".to_string(),
+            serde_json::json!({"type": "object"}),
+        )]));
+        let tools = all_mcp_tools(mgr, default_dl());
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tools[0]
+            .run(
+                &ctx,
+                serde_json::json!({"items": [{"endpoint": "http://metadata.google.internal/x"}]}),
+            )
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
+            "expected AccessDenied for nested denied URL, got {outcome:?}"
+        );
+    }
+
+    // WO 45.12: a safe URL passes the scrub and reaches the manager (which
+    // then fails because no live server is connected). This proves the gate
+    // is not over-blocking.
+    #[tokio::test]
+    async fn test_wrapper_run_allows_safe_url_in_args() {
+        let mgr = Arc::new(McpClientManager::with_tools(vec![(
+            "mcp/test/safe".to_string(),
+            "Safe url".to_string(),
+            serde_json::json!({"type": "object"}),
+        )]));
+        let tools = all_mcp_tools(mgr, default_dl());
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tools[0]
+            .run(
+                &ctx,
+                serde_json::json!({"url": "https://api.example.com/v1/endpoint"}),
+            )
+            .await;
+        // Safe URL passes the scrub → reaches the manager → Internal (no live server).
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::Internal { .. })),
+            "expected Internal (no live server) for safe URL, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn find_denied_url_finds_top_level_string() {
+        let dl = default_dl();
+        assert_eq!(
+            find_denied_url(
+                &serde_json::json!("http://169.254.169.254/latest/meta-data/"),
+                &dl
+            ),
+            Some("http://169.254.169.254/latest/meta-data/".to_string())
+        );
+    }
+
+    #[test]
+    fn find_denied_url_walks_nested_object() {
+        let dl = default_dl();
+        assert!(find_denied_url(
+            &serde_json::json!({"a": {"b": "http://169.254.169.254/x"}}),
+            &dl
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn find_denied_url_walks_array() {
+        let dl = default_dl();
+        assert!(find_denied_url(
+            &serde_json::json!(["safe", 1, "http://metadata.google.internal/y"]),
+            &dl
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn find_denied_url_returns_none_for_safe_value() {
+        let dl = default_dl();
+        assert!(find_denied_url(&serde_json::json!("https://api.example.com/x"), &dl).is_none());
+        assert!(find_denied_url(&serde_json::json!(42), &dl).is_none());
+        assert!(find_denied_url(&serde_json::json!({"x": "safe"}), &dl).is_none());
     }
 }

@@ -708,10 +708,8 @@ workorders + 1 doc-audit workorder. See
 | 34.10 | [Approval dialog action-first](34.10-approval-dialog.md) | Done | — |
 | 34.11 | [Doc audit (CHANGELOG, state.md, TECHNICAL.md)](34.11-doc-audit.md) | Done | — |
 
-**12 sub-workorders.** All 11 implementation workorders (34.1-34.11) are
-pending; only the planning commit (`d94c575`) has landed. WO 34.11 (this
-doc audit) is in progress. The series is the TUI IA reset — no Rust
-architecture changes, no new ADRs expected.
+**12 sub-workorders.** All implementation workorders (34.1-34.11) are Done.
+The series was the TUI IA reset — no Rust architecture changes, no new ADRs.
 
 ### Series 35 — External review verification → orchestration hardening
 
@@ -921,3 +919,28 @@ tree, ~11 stale claims corrected in-line. See
 | 44.55 | [e2e test target is invisible to the PR gate and locally downgraded to a warning](44.55-e2e-compile-gate-invisible-on-pr.md) | Done |
 | 44.56 | [impact-fallback.sh runs uncapped workspace tests; documented OOM hazard](44.56-impact-fallback-uncapped-test-threads-oom.md) | Done |
 
+### Series 45 — External review verification + docs-honesty audit
+
+20 audit workorders from verifying ChatGPT's architecture review against the actual codebase.
+
+| 45.1 | [# Workorder 45.1 — Cross-cutting AgentRun identity contract](45.1-agent-run-identity-contract.md) | Planned |
+| 45.10 | [Event Type Audit (external reviewer claim)](45.10-event-type-audit.md) | Planned |
+| 45.11 | [Sandbox Policy Unification (external reviewer claim)](45.11-sandbox-policy-unification-audit.md) | Planned |
+| 45.12 | [MCP tool calls bypass all local sandbox policy](45.12-mcp-tool-no-sandbox.md) | Planned |
+| 45.16 | [Split `src/session/config/mod.rs` (2952 lines / 120477 bytes)](45.16-split-session-config-mod.md) | Planned |
+| 45.17 | [Split `crates/kf-workflow/src/lib.rs` (2707 lines / 105477 bytes)](45.17-split-kf-workflow-lib.md) | Planned |
+| 45.18 | [Split `crates/kf-context-index/src/lib.rs` (2706 lines / 103356 bytes)](45.18-split-kf-context-index-lib.md) | Planned |
+| 45.19 | [Split `src/session/prompt/mod.rs` (2693 lines / 102144 bytes)](45.19-split-session-prompt-mod.md) | Planned |
+| 45.20 | [Split `src/tools/task.rs` (2639 lines / 99487 bytes)](45.20-split-tools-task.md) | Planned |
+| 45.21 | [detect_shadowed_rules misses bash-command deny semantics (*→** promotion + prefix match)](45.21-shadow-detection-misses-bash-command-deny-semantics.md) | Planned |
+| 45.31 | [Claude compat support gaps: documentation + .mcp.json modal + .claude/agents model field](45.31-claude-compat-support-gaps.md) | Planned |
+| 45.32 | [Declarative agent definition: TOML/YAML config layer for subagents](45.32-declarative-agent-definition-gap.md) | Planned |
+| 45.36 | [Verifier Architecture Audit (external reviewer CLAIM A)](45.36-verifier-architecture-audit.md) | Planned |
+| 45.37 | [Worktree Artifact Policy Audit (external reviewer CLAIM B)](45.37-worktree-artifact-policy-audit.md) | Planned |
+| 45.41 | [Config knob count audit (external reviewer "400 knobs" claim)](45.41-config-knob-count-audit.md) | Planned |
+| 45.42 | [Operational maturity audit (external reviewer 8/10 score)](45.42-operational-maturity-audit.md) | Planned |
+| 45.43 | [Architectural simplicity audit (external reviewer 7/10 score)](45.43-architectural-simplicity-audit.md) | Planned |
+| 45.46 | [# Workorder 46.0 — Event Bus No-Drop Under Load Invariant](45.46-event-bus-no-drop-invariant.md) | Planned |
+| 45.47 | [# Workorder 46.1 — Verifier Verdict-Set Determinism Invariant](45.47-verifier-verdict-set-determinism.md) | Planned |
+| 45.51 | [state.md stale WO 44 status + HEAD SHA](45.51-state-md-stale-wo44-and-sha.md) | Planned |
+| 45.52 | [workorders/README.md WO 34 prose contradicts its own table](45.52-workorders-readme-wo34-prose-contradicts-table.md) | Planned |

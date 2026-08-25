@@ -81,12 +81,22 @@
   33.9 — all marked Done in their WO files + README index (WO status drift test
   enforces the two-source-of-truth agreement).
 
+- **WO 44 series COMPLETE** (25 workorders, 4 waves, all Done + merged):
+  Wave 1: 44.28, 44.22, 44.36, 44.52, 44.31, 44.46. Wave 2: 44.20, 44.21,
+  44.23, 44.24, 44.1, 44.29. Wave 3: 44.30, 44.2, 44.37, 44.38, 44.39,
+  44.45. Wave 4: 44.47, 44.48, 44.44, 44.53, 44.54, 44.55, 44.56.
+- **WO 45 series created** (20 audit workorders): external review verification
+  + docs-honesty audit. See [45.0 overview TBD]. Key findings: unified
+  execution identity gap confirmed (45.1), module sizes verified (45.16-45.20),
+  config knob count refuted (140 not 400), context economics stack confirmed
+  strong, Claude compat partially ships but undocumented (45.31).
+
 ## Pending / Deferred (open)
 
-- **WO 44 series (25 items)**: the next phase. Highest risk first: 44.20
-  (bash `&` allowlist bypass), 44.22 (Anthropic key → ollama_host), 44.36
-  (executor death-spin), 44.52 (PR CI silent skip). Full list in
-  [44.0](docs/workorders/44.0-wo44-overview.md).
+- **WO 45 series (20 items)**: architecture convergence + docs fixes from
+  the external-review verification. Priority: 45.1 (AgentRun identity),
+  45.16-45.20 (module splits), 45.31 (Claude compat docs), 45.51/45.52
+  (stale docs fixes). Full list in docs/workorders/45.*.md.
 - **WO 43.20 (deferred tail)**: http 0.2/http-body 0.4 dedup NOT achievable —
   aws `sign-http` itself needs http 0.2 and the newer crate set needs rustc
   ≥1.91 (toolchain is 1.88). Remaining: revisit at toolchain ≥1.94. Also
@@ -171,7 +181,7 @@
   (static, clippy, windows, e2e, full-tests). First fully green dev run
   since `32571059308` (2026-08-22); the 41-commit pile in between never
   had a valid green signal.
-- **main == dev == origin/main == origin/dev** at `138adff8`. Flow from
+- **main == dev == origin/main == origin/dev** at `aec47bfe`. Flow:
   now on (user directive): push to dev → CI green → fast-forward main.
 - **Windows CI debt cleared** (all inherited from the dead session, fixed
   this session): kf-budget-core README test count 923; complete_path +
@@ -186,5 +196,5 @@
 - **Cleanup**: 60 worktrees → 3 (main, dev-integration, user's external);
   all merged local + remote wo/* branches deleted (49 remote + 6 stale
   wo30* + locals); remote is just dev + main.
-- Last full local gate on `138adff8`: test-full 4905 passed / clippy
+- Last full local gate on `aec47bfe`: test-full 4953 passed / clippy
   (unix + windows cross) / fmt / check --locked all clean.

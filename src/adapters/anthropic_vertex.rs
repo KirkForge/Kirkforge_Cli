@@ -238,6 +238,25 @@ mod tests {
         assert!(!a.model_info().supports_thinking);
     }
 
+    // WO 45.62: current-shipping model families via Vertex.
+    #[test]
+    fn model_info_reasoning_for_claude_sonnet_5() {
+        let a = AnthropicVertexAdapter::new("claude-sonnet-5", "p", "us-central1", None, 30);
+        assert!(a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_reasoning_for_claude_opus_4_8() {
+        let a = AnthropicVertexAdapter::new("claude-opus-4-8", "p", "us-central1", None, 30);
+        assert!(a.model_info().supports_thinking);
+    }
+
+    #[test]
+    fn model_info_no_thinking_for_claude_haiku_4_5() {
+        let a = AnthropicVertexAdapter::new("claude-haiku-4-5", "p", "us-central1", None, 30);
+        assert!(!a.model_info().supports_thinking);
+    }
+
     #[test]
     fn model_info_no_images_for_claude_4() {
         let a = AnthropicVertexAdapter::new("claude-4-opus", "p", "us-central1", None, 30);

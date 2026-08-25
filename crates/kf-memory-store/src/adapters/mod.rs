@@ -20,6 +20,7 @@ pub mod sqlite;
 pub trait MemoryAdapter: Send + Sync {
     fn write(&self, obj: &MemoryObject) -> Result<()>;
     fn read(&self, id: &str) -> Result<Option<MemoryObject>>;
+    fn delete(&self, id: &str) -> Result<()>;
     fn query(&self, q: &MemoryQuery) -> Result<Vec<MemoryObject>>;
     fn stats(&self) -> Result<MemoryStats>;
     fn persist(&self) -> Result<()> {

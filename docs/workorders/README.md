@@ -956,7 +956,7 @@ tree, ~11 stale claims corrected in-line. See
 | 46.14 | [run_id/parent_run_id always None in workflow and scheduled jobs — WO 45.1 identity gap](46.14-run-id-threading-incomplete-workflow-jobs.md) | Planned |
 | 46.2 | [apply_patch_to_parent missing setup_process_group — grandchild survives timeout](46.2-parallel-orchestrator-patch-missing-process-group.md) | Planned |
 | 46.3 | [Daemon concurrency semaphore starved by long-lived instance push channels](46.3-daemon-semaphore-starved-by-instance-channels.md) | Planned |
-| 46.4 | [kf-memory-store eviction is count-only — TTL and max_entries limits are non-functional](46.4-memory-store-eviction-count-only-limits-nonfunctional.md) | Planned |
+| 46.4 | [kf-memory-store eviction is count-only — TTL and max_entries limits are non-functional](46.4-memory-store-eviction-count-only-limits-nonfunctional.md) | Done |
 | 46.5 | [minify_write_side serde default true vs Default false — config construction paths disagree](46.5-config-minify-write-side-serde-default-divergence.md) | Planned |
 | 46.6 | [EventBus inflight counter leaks when emit future is dropped — graceful_shutdown always times out](46.6-event-bus-inflight-leak-on-cancelled-emit.md) | Planned |
 | 46.7 | [WorkflowExecutor::run_fan_out does not honour cancellation mid-fan-out](46.7-workflow-fan-out-no-cancellation-mid-batch.md) | Planned |

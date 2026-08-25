@@ -86,13 +86,14 @@ impl MemoryStore {
             ..Default::default()
         };
         let all = self.adapter.query(&q)?;
-        let count = all
+        let to_evict: Vec<&MemoryObject> = all
             .iter()
             .filter(|o| o.timestamp.as_str() < cutoff.as_str())
-            .count();
-        // ponytail: the generic adapter has no DELETE; SQLite specialized
-        // path would handle this. We count the evictable set (matches TS).
-        Ok(count)
+            .collect();
+        for o in &to_evict {
+            self.adapter.delete(&o.id)?;
+        }
+        Ok(to_evict.len())
     }
 
     /// Evict oldest entries when over max_entries. Returns count evicted.
@@ -103,7 +104,21 @@ impl MemoryStore {
         let _g = self.lock.lock().expect("store lock poisoned");
         let stats = self.adapter.stats()?;
         let excess = stats.total_objects.saturating_sub(self.options.max_entries);
-        Ok(excess)
+        if excess == 0 {
+            return Ok(0);
+        }
+        // query returns newest-first (DESC by timestamp); drop the newest
+        // max_entries and evict the oldest tail.
+        let q = MemoryQuery {
+            limit: Some(stats.total_objects),
+            ..Default::default()
+        };
+        let all = self.adapter.query(&q)?;
+        let to_evict = &all[self.options.max_entries.min(all.len())..];
+        for o in to_evict {
+            self.adapter.delete(&o.id)?;
+        }
+        Ok(to_evict.len())
     }
 
     pub fn write_task_observation(&self, params: &TaskObservationInput) -> Result<()> {

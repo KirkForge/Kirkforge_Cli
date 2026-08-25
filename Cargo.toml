@@ -274,6 +274,10 @@ wiremock = "0.6"
 # (SESSION_MODE) which cannot be dependency-injected. Zero binary-size impact
 # (dev-dep only).
 serial_test = "3"
+# WO 45.61: generates real minisign signatures in loader tests to reproduce
+# the signed-manifest + swapped-script attack. Already in the workspace
+# lockfile via kf-plugin-host; dev-dep only, zero binary-size impact.
+minisign = "0.9"
 
 [[test]]
 name = "e2e"

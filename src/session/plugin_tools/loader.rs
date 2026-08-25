@@ -197,14 +197,17 @@ pub fn load_workspace_plugins(registry: &mut PluginRegistry, cfg: &Config) -> Ve
             continue;
         }
         // WO 43.17: content-hash consent gate. When the ledger is enabled
-        // and signatures are not verified on this path, the plugin must be
-        // in the approved ledger with a matching bundle hash. A mismatch
-        // or missing entry skips the plugin with a warning. Signature-
-        // verified plugins (verify_signatures true + valid sig) opt out.
-        if cfg.tools.plugin_consent_ledger
-            && !ws_policy.verify_signatures
-            && !is_plugin_approved(name, &resolved)
-        {
+        // the plugin must be in the approved ledger with a matching bundle
+        // hash. A mismatch or missing entry skips the plugin with a warning.
+        // WO 45.61: the ledger is layered ON TOP of signature verification,
+        // not bypassed by it. The manifest-only signature does not cover
+        // the command scripts the manifest points to; the bundle_hash
+        // does. Signed plugins must ALSO be ledger-approved. ponytail:
+        // ceiling — two gates run in sequence where one could cover both
+        // surfaces if the signature format were extended to sign the
+        // bundle hash; upgrade path is approach 1 in WO 45.61 (sign the
+        // bundle hash, not the manifest bytes directly).
+        if cfg.tools.plugin_consent_ledger && !is_plugin_approved(name, &resolved) {
             tracing::warn!(plugin = %name, "plugin skipped by consent ledger");
             warnings.push(plugin_approval_hint(name));
             continue;
@@ -229,10 +232,14 @@ pub fn load_plugin_registry(cfg: &Config) -> anyhow::Result<(PluginRegistry, Vec
     let policy = trust_policy_from_config(cfg);
     let mut warnings = registry.load_from_dir(&dir, policy.clone())?;
     // WO 43.17: content-hash consent gate for data-dir plugins. The host
-    // already loaded everything under the data dir; if the ledger is on
-    // and signatures were not verified, remove any active plugin that is
-    // not in the ledger (or whose hash mismatched) and warn.
-    if cfg.tools.plugin_consent_ledger && !policy.verify_signatures {
+    // already loaded everything under the data dir; if the ledger is on,
+    // remove any active plugin that is not in the ledger (or whose hash
+    // mismatched) and warn.
+    // WO 45.61: the ledger is layered ON TOP of signature verification,
+    // not bypassed by it. The manifest-only signature does not cover the
+    // command scripts the manifest points to; the bundle_hash does. A
+    // signed plugin must ALSO be ledger-approved with a matching hash.
+    if cfg.tools.plugin_consent_ledger {
         let to_check: Vec<(String, PathBuf)> = registry
             .active_plugins()
             .into_iter()
@@ -729,6 +736,120 @@ command = "tool.sh"
         assert!(
             registry.find_active_by_name("demo").is_none(),
             "edited script after approval → plugin skipped"
+        );
+    }
+
+    // ── WO 45.61: ledger layered on top of signature verification ────
+
+    /// Generate a real minisign keypair, sign `kf-code.toml` in `plugin_dir`,
+    /// write `.kf-code.sig`, and return the public key file path. Mirrors the
+    /// helper in `kf_plugin_host::lib` so loader tests can reproduce the
+    /// signed-manifest + swapped-script attack without a `minisign` binary.
+    fn sign_plugin_manifest(
+        plugin_dir: &std::path::Path,
+        keys_dir: &std::path::Path,
+        manifest: &str,
+    ) -> PathBuf {
+        use minisign::KeyPair;
+        use std::io::Write;
+        std::fs::create_dir_all(keys_dir).unwrap();
+        let pk_path = keys_dir.join("plugin.pub");
+        let sk_path = keys_dir.join("plugin.key");
+        let KeyPair { pk, sk } = KeyPair::generate_unencrypted_keypair().unwrap();
+        std::fs::write(&pk_path, pk.to_box().unwrap().to_string()).unwrap();
+        std::fs::write(&sk_path, sk.to_box(None).unwrap().to_string()).unwrap();
+        std::fs::write(plugin_dir.join("kf-code.toml"), manifest).unwrap();
+        let sig_box = minisign::sign(
+            None,
+            &sk,
+            std::io::Cursor::new(manifest.as_bytes()),
+            None,
+            None,
+        )
+        .unwrap();
+        let mut sig_file = std::fs::File::create(plugin_dir.join(".kf-code.sig")).unwrap();
+        sig_file.write_all(sig_box.to_string().as_bytes()).unwrap();
+        pk_path
+    }
+
+    fn signed_tool_manifest() -> &'static str {
+        r#"
+name = "demo"
+version = "0.1.0"
+description = "demo"
+trust = "shell"
+
+[[capabilities]]
+type = "tool"
+name = "demo/run"
+description = "run"
+command = "tool.sh"
+"#
+    }
+
+    /// WO 45.61: with the ledger ON and signatures ON (default), a signed
+    /// plugin that is NOT in the ledger is skipped — the ledger now layers
+    /// on top of signature verification instead of being bypassed by it.
+    /// Before the fix this plugin loaded (signature valid, ledger skipped).
+    #[test]
+    fn consent_ledger_layers_on_signature_verification() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _g = crate::session::DataDirGuard::set(tmp.path().to_path_buf());
+        let plugins = tmp.path().join("plugins");
+        let demo = plugins.join("demo");
+        std::fs::create_dir_all(&demo).unwrap();
+        std::fs::write(demo.join("tool.sh"), "#!/bin/sh\nprintf ok").unwrap();
+        let pk_path = sign_plugin_manifest(&demo, &tmp.path().join("keys"), signed_tool_manifest());
+        let mut cfg = Config::default();
+        cfg.tools.plugin_consent_ledger = true;
+        cfg.tools.plugin_signature_validation = true;
+        cfg.tools.plugin_public_key_path = Some(pk_path.to_string_lossy().to_string());
+        let (registry, warnings) = load_plugin_registry(&cfg).unwrap();
+        assert!(
+            registry.find_active_by_name("demo").is_none(),
+            "signed but unapproved → ledger must skip (WO 45.61); warnings: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("/plugins approve demo")),
+            "warning must name the approve command; got: {warnings:?}"
+        );
+    }
+
+    /// WO 45.61: the actual attack — a valid manifest signature plus a
+    /// swapped command script. The signature covers only `kf-code.toml`
+    /// (manifest text), so it stays valid after the script is replaced.
+    /// The `bundle_hash` covers manifest + scripts, so it detects the swap.
+    /// Before the fix this plugin loaded (signature valid, ledger skipped);
+    /// after the fix it is rejected by the ledger hash mismatch. Covers
+    /// the data-dir path (`load_plugin_registry`).
+    #[test]
+    fn consent_ledger_rejects_swapped_script_with_valid_signature() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _g = crate::session::DataDirGuard::set(tmp.path().to_path_buf());
+        let plugins = tmp.path().join("plugins");
+        let demo = plugins.join("demo");
+        std::fs::create_dir_all(&demo).unwrap();
+        std::fs::write(demo.join("tool.sh"), "#!/bin/sh\nprintf ok").unwrap();
+        let pk_path = sign_plugin_manifest(&demo, &tmp.path().join("keys"), signed_tool_manifest());
+        // First load + approve: records the bundle_hash over the manifest
+        // and the original tool.sh.
+        super::super::approval::record_plugin_approval("demo", &demo);
+        // Attack: swap the command script. The manifest (and its signature)
+        // are untouched, so signature verification still passes. The
+        // bundle_hash now differs from the approved entry.
+        std::fs::write(demo.join("tool.sh"), "#!/bin/sh\nprintf pwn").unwrap();
+        let mut cfg = Config::default();
+        cfg.tools.plugin_consent_ledger = true;
+        cfg.tools.plugin_signature_validation = true;
+        cfg.tools.plugin_public_key_path = Some(pk_path.to_string_lossy().to_string());
+        let (registry, warnings) = load_plugin_registry(&cfg).unwrap();
+        assert!(
+            registry.find_active_by_name("demo").is_none(),
+            "valid signature + swapped script → ledger hash mismatch must reject; warnings: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("/plugins approve demo")),
+            "warning must name the approve command; got: {warnings:?}"
         );
     }
 }

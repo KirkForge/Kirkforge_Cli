@@ -182,10 +182,13 @@ pub struct ToolConfig {
     // its servers merged into the MCP config (gated by first-load approval).
     #[serde(default = "default_load_project_mcp_json")]
     pub load_project_mcp_json: bool,
-    // WO 43.17: when true, plugins loaded from the data dir or workspace
-    // sources must be in the `approved_plugins.json` ledger with a matching
-    // content hash. Signature-verified plugins opt out (both gates
-    // independent). Defaults off so existing plugin loads are not broken.
+    // WO 43.17 / WO 45.61: when true, plugins loaded from the data dir or
+    // workspace sources must be in the `approved_plugins.json` ledger with
+    // a matching content hash. The ledger is layered on top of signature
+    // verification — a signed plugin must ALSO be ledger-approved, because
+    // the manifest-only signature does not cover the command scripts the
+    // manifest points to. Defaults off so existing plugin loads are not
+    // broken.
     #[serde(default)]
     pub plugin_consent_ledger: bool,
 }

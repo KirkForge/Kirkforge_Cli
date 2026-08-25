@@ -962,3 +962,30 @@ tree, ~11 stale claims corrected in-line. See
 | 46.7 | [WorkflowExecutor::run_fan_out does not honour cancellation mid-fan-out](46.7-workflow-fan-out-no-cancellation-mid-batch.md) | Planned |
 | 46.8 | [grep/glob spawn_blocking tasks not cancellable by tool timeout — hung subprocess leaks](46.8-grep-glob-spawn-blocking-not-cancellable.md) | Planned |
 | 46.9 | [bench compare --fail-on-regression bypasses telemetry shutdown via std::process::exit(1)](46.9-bench-compare-bypasses-telemetry-shutdown.md) | Planned |
+### WO 46 additions — DeepSeek + MiniMax audit findings
+
+| 46.15 | [kf-memory-store self-deadlock in write_run_and_emissions fallback (CRITICAL)](46.15-memory-store-self-deadlock-write-run-and-emissions.md) | Planned |
+| 46.16 | [Plugin hot-reload watcher dropped at call site — silently dead](46.16-plugin-hot-reload-watcher-dropped.md) | Planned |
+| 46.17 | [Process group missing in 3 more subprocess spawn sites (CRITICAL)](46.17-process-group-missing-three-more-spawn-sites.md) | Planned |
+| 46.18 | [kf-orchestrator observation outcome stores routing mode, not verdict — empirical router learns nothing](46.18-orchestrator-outcome-stores-mode-not-verdict.md) | Planned |
+| 46.19 | [Daemon state mutex held across write_response .await — single wedged client stalls whole daemon](46.19-daemon-state-mutex-held-across-await.md) | Planned |
+| 46.20 | [Never-ending bash job blocks scheduler and graceful shutdown — unshutdownable daemon](46.20-never-ending-job-blocks-scheduler-shutdown.md) | Planned |
+| 46.21 | [web_fetch buffers entire HTTP body before size cap — OOM from untrusted server](46.21-web-fetch-unbounded-body-read.md) | Planned |
+| 46.22 | [McpClient::Http Drop arm empty — in-flight calls hang 60s on swap](46.22-mcp-http-drop-empty-inflight-hangs.md) | Planned |
+| 46.23 | [ResponseCache::put holds sync Mutex across disk write + unbounded in-memory cache](46.23-response-cache-mutex-across-disk-write.md) | Planned |
+| 46.24 | [9 atomic-write sites use predictable .tmp + no O_NOFOLLOW — TOCTOU symlink race](46.24-predictable-tmp-filenames-toctou.md) | Planned |
+| 46.25 | [ci-local.sh set -e defeats run_step — failing step kills CI before remaining gates run](46.25-ci-local-set-e-defeats-gate-summary.md) | Planned |
+| 46.26 | [handle_bench_run_models silently exits 0 on 0/N pass rate — CI blind](46.26-handle-bench-run-models-missing-zero-guard.md) | Planned |
+| 46.27 | [mtime_rebuild/incremental_rebuild silently drop cached embeddings](46.27-context-index-rebuild-drops-cached-embeddings.md) | Planned |
+| 46.28 | [prune_oldest_in_dir ignores keep semantics — silent leak of oldest sessions](46.28-prune-oldest-ignores-keep-semantics.md) | Planned |
+| 46.29 | [start_daemon leaks a zombie child on every invocation](46.29-start-daemon-zombie-child.md) | Planned |
+| 46.30 | [bench run_task env-var leak on error paths](46.30-bench-run-task-env-var-leak.md) | Planned |
+| 46.31 | [apply_budget_slice TOCTOU — state read then re-lock](46.31-apply-budget-slice-toctou.md) | Planned |
+| 46.32 | [Daemon Unix socket has no explicit perms + auth token length leaks via timing](46.32-daemon-socket-no-perms-token-leak.md) | Planned |
+| 46.33 | [openai_compat spurious Error on DONE-before-finish_reason ordering](46.33-openai-compat-spurious-error-done-ordering.md) | Planned |
+| 46.34 | [kf-budget-core InMemoryOffloadStore evicts arbitrary entries, not oldest](46.34-budget-core-offload-store-arbitrary-eviction.md) | Planned |
+| 46.35 | [Parallel tool batches leave a ghost streaming card and mis-pair result entries](46.35-parallel-tool-batches-ghost-streaming-card.md) | Planned |
+| 46.36 | [bash_runner normal-exit path can spuriously fail + leak grandchild holding the pipe](46.36-bash-runner-normal-exit-drain-failure.md) | Planned |
+| 46.37 | [web_fetch/web_search ignore tool cancel token — cancelled turn waits full 30s](46.37-web-fetch-web-search-ignore-cancel-token.md) | Planned |
+| 46.38 | [verify_task cmd.env() doesn't env_remove() first — leaked parent env affects gate](46.38-verify-task-env-not-stripped.md) | Planned |
+| 46.39 | [Doc drift batch: CLI about, lib.rs path, test-doctor refs, test count, stale Cargo.lock, install.sh dead paths](46.39-doc-drift-batch-fixes.md) | Planned |

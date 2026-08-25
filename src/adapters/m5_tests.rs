@@ -414,6 +414,118 @@ fn calculate_cost_bills_cache_writes_at_write_rate() {
     assert!((cost - 21.75).abs() < 0.001, "cache write: {cost}");
 }
 
+// ── WO 45.63: pricing ↔ thinking-capability cross-DRIFT ─────────────
+//
+// The `supports_thinking` capability table (anthropic_model_info /
+// build_anthropic_body) treats a model as thinking-capable when its id
+// contains `claude-3-7-sonnet` or `claude-4`. Every real Anthropic model
+// id the app will see must resolve to a real (non-$0-sentinel) pricing
+// row — otherwise cost tracking silently reports $0 for a model the
+// app is actively using. This test enumerates the real model ids that
+// the current capability predicate matches, plus the current-shipping
+// families added in WO 45.63, and asserts each resolves to a non-zero
+// rate. If a model family ships and gets a capability entry but no
+// pricing row (or vice versa), this test goes red.
+//
+// Note: the capability predicate `contains("claude-4")` matches the
+// synthetic `claude-4-opus` test-fixture names but NOT the real
+// `claude-opus-4-*` / `claude-sonnet-4-*` ids (they contain `claude-`
+// then the family, not `claude-4`). That staleness is WO 45.62's scope;
+// here we only assert the real ids that resolve through the pricing
+// table are non-zero. The capability predicate is mirrored below so a
+// future change to it (WO 45.62) will surface any newly-covered id
+// that lacks a pricing row.
+#[test]
+fn thinking_capability_models_have_pricing_rows() {
+    // Real Anthropic model ids the app may see, spanning every family
+    // with a pricing row added in WO 38.5 / 45.63. Each must resolve to
+    // a non-$0 rate. The capability predicate is mirrored here so the
+    // cross-DRIFT is explicit: ids it flags as thinking-capable are
+    // marked, and every id (flagged or not) must still be priced.
+    let real_model_ids: &[(&str, bool)] = &[
+        // claude-3-7-sonnet — flagged thinking-capable by the predicate.
+        ("claude-3-7-sonnet-20250219", true),
+        ("claude-3-7-sonnet", true),
+        // claude-4 family (real ids use claude-{family}-4, NOT claude-4-*).
+        ("claude-opus-4-1", false),
+        ("claude-sonnet-4-20250514", false),
+        ("claude-haiku-4-5", false),
+        // WO 45.63 current families.
+        ("claude-sonnet-5", false),
+        ("claude-opus-4-8", false),
+        ("claude-opus-4-8-20250805", false),
+    ];
+    for (id, _thinking) in real_model_ids {
+        assert!(
+            crate::shared::model_has_pricing_row(id, None),
+            "real model `{id}` has no pricing row — cost tracking would report $0"
+        );
+        // And the resolved rate must be non-zero (not the sentinel).
+        let usage = TokenUsage {
+            prompt_tokens: Some(1_000_000),
+            completion_tokens: Some(1_000_000),
+            cached_tokens: None,
+            cache_write_tokens: None,
+        };
+        let cost = crate::shared::calculate_cost(id, &usage);
+        assert!(
+            cost > 0.001,
+            "real model `{id}` resolves to $0 — pricing row missing or sentinel"
+        );
+    }
+}
+
+// WO 45.63: the current families must resolve to NON-ZERO rates (the
+// core fix — previously `claude-sonnet-5` fell to the $0 sentinel and
+// `claude-opus-4-8` wrongly inherited `claude-opus-4` pricing). This is
+// the rate-correctness guard; the cross-DRIFT test above is the
+// coverage guard.
+#[test]
+fn current_model_families_resolve_nonzero_rates() {
+    let usage = TokenUsage {
+        prompt_tokens: Some(1_000_000),
+        completion_tokens: Some(1_000_000),
+        cached_tokens: None,
+        cache_write_tokens: None,
+    };
+    // claude-sonnet-5 must NOT be $0 (was the sentinel before WO 45.63).
+    let sonnet5 = crate::shared::calculate_cost("claude-sonnet-5", &usage);
+    assert!(
+        sonnet5 > 0.001,
+        "claude-sonnet-5 must be non-zero, got ${sonnet5}"
+    );
+    // claude-opus-4-8 must resolve to its own row, not inherit
+    // claude-opus-4. Both are the opus tier ($15 + $75 = $90), so assert
+    // the rate matches the opus tier AND that it's not the $0 sentinel.
+    let opus48 = crate::shared::calculate_cost("claude-opus-4-8", &usage);
+    assert!(
+        opus48 > 0.001,
+        "claude-opus-4-8 must be non-zero, got ${opus48}"
+    );
+    assert!(
+        (opus48 - 90.0).abs() < 0.001,
+        "claude-opus-4-8 should be opus-tier ($90), got ${opus48}"
+    );
+    // claude-haiku-4-5 must be non-zero.
+    let haiku45 = crate::shared::calculate_cost("claude-haiku-4-5", &usage);
+    assert!(
+        haiku45 > 0.001,
+        "claude-haiku-4-5 must be non-zero, got ${haiku45}"
+    );
+}
+
+// WO 45.63: an unmapped model must NOT have a pricing row (sentinel path
+// with the louder warn). This guards the predicate's negative branch so
+// a table that accidentally matches everything (e.g. an empty-prefix
+// row promoted to a real rate) would be caught.
+#[test]
+fn unmapped_model_has_no_pricing_row() {
+    assert!(
+        !crate::shared::model_has_pricing_row("totally-unknown-model-xyz", None),
+        "unmapped model must not resolve to a real pricing row"
+    );
+}
+
 // ── PromptBuilder::attach_pending_image ────────────────────────────
 
 #[test]

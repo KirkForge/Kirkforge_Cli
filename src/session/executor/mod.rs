@@ -205,6 +205,24 @@ impl Executor {
             read_gate,
         };
 
+        // WO 45.63: surface the unmapped-model pricing warning EAGERLY at
+        // session startup, not after the first turn's cost calc. The
+        // shared predicate dedups with `warn_unmapped_model`, so this
+        // logs once per model per process and the lazy turn-time warn
+        // becomes a no-op for the startup model. Operators on a model
+        // with no pricing row learn immediately that cost tracking will
+        // report $0.
+        if !crate::shared::model_has_pricing_row(
+            &model_name,
+            if cfg.model.price_overrides.is_empty() {
+                None
+            } else {
+                Some(&cfg.model.price_overrides)
+            },
+        ) {
+            crate::shared::warn_unmapped_model(&model_name);
+        }
+
         let audit_log_path = cfg
             .security
             .audit_log_path

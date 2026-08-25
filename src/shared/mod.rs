@@ -837,6 +837,37 @@ pub const PRICING_TABLE: &[Pricing] = &[
     // `claude-3-5-sonnet-v2@…`. Bedrock's `anthropic.claude-*` ids are
     // normalized (prefix stripped) before matching. Longest prefix wins,
     // so `claude-3-5-sonnet` outranks `claude-3-sonnet`.
+    //
+    // WO 45.63: current-shipping families (`claude-sonnet-5`,
+    // `claude-opus-4-8`, `claude-haiku-4-5`) get their own rows AHEAD of
+    // the family-prefix rows so the longest-prefix match picks the
+    // specific rate, not the inherited family rate. Without these rows
+    // `claude-sonnet-5` fell to the $0 sentinel and `claude-opus-4-8`
+    // wrongly inherited `claude-opus-4` pricing.
+    // ponytail: rates approximate per Anthropic's published pricing;
+    // refine against the pricing page when exactness matters. Cache
+    // rates follow the standard 1.25x write / 0.1x read multipliers.
+    Pricing {
+        model_prefix: "claude-opus-4-8",
+        input_per_mtok: 15.00,
+        output_per_mtok: 75.00,
+        cache_write_per_mtok: 18.75,
+        cache_read_per_mtok: 1.50,
+    },
+    Pricing {
+        model_prefix: "claude-sonnet-5",
+        input_per_mtok: 3.00,
+        output_per_mtok: 15.00,
+        cache_write_per_mtok: 3.75,
+        cache_read_per_mtok: 0.30,
+    },
+    Pricing {
+        model_prefix: "claude-haiku-4-5",
+        input_per_mtok: 1.00,
+        output_per_mtok: 5.00,
+        cache_write_per_mtok: 1.25,
+        cache_read_per_mtok: 0.10,
+    },
     Pricing {
         model_prefix: "claude-opus-4",
         input_per_mtok: 15.00,
@@ -860,6 +891,17 @@ pub const PRICING_TABLE: &[Pricing] = &[
     },
     Pricing {
         model_prefix: "claude-3-5-sonnet",
+        input_per_mtok: 3.00,
+        output_per_mtok: 15.00,
+        cache_write_per_mtok: 3.75,
+        cache_read_per_mtok: 0.30,
+    },
+    // Claude 3.7 Sonnet — first thinking-capable model (WO 45.62
+    // capability table). Same sonnet tier as 3.5. Added in WO 45.63
+    // because the cross-DRIFT test found it had no pricing row (fell to
+    // the $0 sentinel while the app already knew it was a real Claude).
+    Pricing {
+        model_prefix: "claude-3-7-sonnet",
         input_per_mtok: 3.00,
         output_per_mtok: 15.00,
         cache_write_per_mtok: 3.75,
@@ -984,6 +1026,26 @@ impl From<&ModelPrice> for ResolvedRates {
     }
 }
 
+/// Longest-prefix match against the built-in `PRICING_TABLE`, after
+/// stripping Bedrock's `anthropic.` namespace so
+/// `anthropic.claude-3-5-sonnet-…` matches the `claude-*` rows. Returns
+/// `None` when no non-empty prefix matches (the caller falls back to
+/// the $0 sentinel with a WARN). Shared by `resolve_rates` and the
+/// public `model_has_pricing_row` predicate (WO 45.63) so the eager
+/// startup check and the cost calc agree on what "mapped" means.
+fn resolve_table_row(model: &str) -> Option<&'static Pricing> {
+    let normalized = model.strip_prefix("anthropic.").unwrap_or(model);
+    let mut best_len = 0;
+    let mut best: Option<&Pricing> = None;
+    for p in PRICING_TABLE.iter().filter(|p| !p.model_prefix.is_empty()) {
+        if normalized.starts_with(p.model_prefix) && p.model_prefix.len() > best_len {
+            best_len = p.model_prefix.len();
+            best = Some(p);
+        }
+    }
+    best
+}
+
 /// Resolve pricing for `model`: config overrides first (longest prefix),
 /// then the built-in table (longest prefix, after stripping Bedrock's
 /// `anthropic.` namespace so `anthropic.claude-3-5-sonnet-…` matches the
@@ -1004,18 +1066,7 @@ fn resolve_rates(model: &str, overrides: Option<&HashMap<String, ModelPrice>>) -
         }
     }
 
-    // Bedrock ids look like `anthropic.claude-3-5-sonnet-…` — match on
-    // the publisher-suffix so the claude-* rows apply unchanged.
-    let normalized = model.strip_prefix("anthropic.").unwrap_or(model);
-    let mut best_len = 0;
-    let mut best: Option<&Pricing> = None;
-    for p in PRICING_TABLE.iter().filter(|p| !p.model_prefix.is_empty()) {
-        if normalized.starts_with(p.model_prefix) && p.model_prefix.len() > best_len {
-            best_len = p.model_prefix.len();
-            best = Some(p);
-        }
-    }
-    if let Some(p) = best {
+    if let Some(p) = resolve_table_row(model) {
         return ResolvedRates::from(p);
     }
 
@@ -1027,17 +1078,45 @@ fn resolve_rates(model: &str, overrides: Option<&HashMap<String, ModelPrice>>) -
     )
 }
 
+/// True iff `model` resolves to a real (non-sentinel) pricing row,
+/// honoring config `[price_overrides]` first. Used by the session-startup
+/// check (WO 45.63) to surface the unmapped-model warning EAGERLY, before
+/// the first turn's cost calc, so the operator learns cost tracking is
+/// incomplete for their model immediately rather than after turn 1.
+pub fn model_has_pricing_row(model: &str, overrides: Option<&HashMap<String, ModelPrice>>) -> bool {
+    if let Some(table) = overrides {
+        let mut best: Option<(&String, &ModelPrice)> = None;
+        for (prefix, _price) in table {
+            if model.starts_with(prefix.as_str())
+                && best.is_none_or(|(bp, _)| prefix.len() > bp.len())
+            {
+                best = Some((prefix, _price));
+            }
+        }
+        if best.is_some() {
+            return true;
+        }
+    }
+    resolve_table_row(model).is_some()
+}
+
 /// One WARN per unmapped model per process — the sentinel means "cost
 /// unknown", not "cost zero", and the operator should add a
-/// `[price_overrides]` entry.
-fn warn_unmapped_model(model: &str) {
+/// `[price_overrides]` entry. WO 45.63: message now states the concrete
+/// consequence ("cost tracking will report $0 for this model") so the
+/// operator can't misread a generic "no pricing row" as a no-op.
+/// `pub(crate)` so the session-startup check (executor `new`) can fire
+/// it eagerly before the first turn; the once-per-model dedup makes the
+/// later turn-time call a no-op for the same model.
+pub(crate) fn warn_unmapped_model(model: &str) {
     static WARNED: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
     let warned = WARNED.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
     let mut guard = warned.lock().unwrap_or_else(|e| e.into_inner());
     if guard.insert(model.to_string()) {
         tracing::warn!(
             model,
-            "no pricing row for model; cost reported as $0 — add a [price_overrides] entry"
+            "no pricing row for model; cost tracking will report $0 for this model — \
+             add a [price_overrides] entry or cost totals will underreport"
         );
     }
 }

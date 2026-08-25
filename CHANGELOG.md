@@ -11,6 +11,15 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 45.63 — pricing table no longer silently $0 for current Anthropic
+  model families. Added rows for `claude-sonnet-5`, `claude-opus-4-8`,
+  `claude-haiku-4-5`, and `claude-3-7-sonnet` (the last found by a new
+  pricing↔thinking cross-DRIFT test). `claude-opus-4-8` previously
+  wrongly inherited `claude-opus-4` pricing via partial prefix match;
+  `claude-sonnet-5`/`claude-haiku-4-5` fell to the $0 sentinel. The
+  unmapped-model warn now fires eagerly at session startup (was lazy —
+  only after turn 1) and its message names the concrete consequence.
+  [45.63](docs/workorders/45.63-pricing-table-stale-missing-current-models.md)
 - WO 44.30 — `max_tool_result_chars` now applies to file tools.
   `truncate_tool_output` only handled `ToolOutcome::Success` and was only
   called on the non-file branch of `record_tool_result`, so

@@ -47,6 +47,9 @@ pub(super) struct PreparedCall {
     /// Owning subagent task id (WO 36.2) — lands in the per-call
     /// `ToolContext.task_owner` so background bash jobs are attributable.
     task_owner: Option<String>,
+    /// Canonical run id (WO 45.1) — the session id, lands in the per-call
+    /// `ToolContext.run_id` so spawned tasks and bash jobs carry it.
+    run_id: Option<String>,
 }
 
 /// Phase-1 output: a buffered skip (denied/unknown tool/plan-mode/etc.) waiting
@@ -270,6 +273,14 @@ impl Executor {
                             .clone()
                             .map(|s| s as Arc<dyn crate::tools::task::TaskSpawner>),
                         task_owner: self.task_owner.clone(),
+                        // WO 45.1: thread the session id as the canonical
+                        // run_id so spawned tasks and bash jobs carry it.
+                        // `None` when session_id is empty (tests, bench).
+                        run_id: if self.session_id.is_empty() {
+                            None
+                        } else {
+                            Some(self.session_id.clone())
+                        },
                     });
                 }
                 PreRunVerdict::Skip { events, message } => {
@@ -711,6 +722,9 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
         task_spawner: prep.task_spawner.clone(),
         tools: None,
         task_owner: prep.task_owner.clone(),
+        // WO 45.1: thread the canonical run id (the session id) so
+        // spawned tasks and bash jobs carry it for replay/audit/cancel.
+        run_id: prep.run_id.clone(),
         event_tx: prep.event_tx,
     };
     let start = Instant::now();

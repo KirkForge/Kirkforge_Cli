@@ -805,6 +805,9 @@ fn spawn_executor(
     // change spawn_executor to return Result<JoinHandle<()>> and propagate
     // through run_tui (the audit's X1/X4 sandbox refusal surface).
     exe.set_session_id(state.session.session_id.clone());
+    // WO 45.1: stamp the canonical run_id on the global bash job registry
+    // so background jobs spawned by this session carry it. Idempotent.
+    crate::session::bash_jobs::global_registry().set_run_id(state.session.session_id.clone());
     // WO 38.8: attach the per-session budget/stratum stores to the executor
     // so the budget guard runs in production. Must come after set_session_id
     // because the stratum listener is keyed by session_id.

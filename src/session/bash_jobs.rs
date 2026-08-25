@@ -57,6 +57,12 @@ pub struct BashJob {
     /// jobs are never touched by task-cancel paths (`cancel_by_owner`
     /// only matches `Some(owner)`).
     pub owner: Option<String>,
+    /// Canonical run id (WO 45.1). The session id that owns this job —
+    /// a subagent's jobs carry the parent session's run_id so cancel /
+    /// audit / replay can join across subsystems on one key. Empty
+    /// string for jobs spawned before `set_run_id` was called (the
+    /// registry defaults to empty and is set once at session start).
+    pub run_id: String,
     /// Child process id, recorded so cancel can kill the process group
     /// without the `Child` mutex (the watcher parks on that mutex inside
     /// `wait().await` for the job's whole lifetime). `None` until the
@@ -70,11 +76,12 @@ pub struct BashJob {
 }
 
 impl BashJob {
-    fn new(id: u64, command: String, owner: Option<&str>) -> Self {
+    fn new(id: u64, command: String, owner: Option<&str>, run_id: &str) -> Self {
         Self {
             id,
             command,
             owner: owner.map(str::to_string),
+            run_id: run_id.to_string(),
             pid: None,
             status: JobStatus::Running,
             stdout: String::new(),
@@ -124,6 +131,11 @@ pub struct BashJobRegistry {
     /// can still reach and kill it instead of silently no-op'ing.
     children: Arc<Mutex<HashMap<u64, Arc<Mutex<Child>>>>>,
     next_id: Arc<AtomicU64>,
+    /// Canonical run id (WO 45.1) stamped on every job spawned by this
+    /// registry. Set once at session start via [`set_run_id`]; empty
+    /// string means `set_run_id` was never called (tests, daemons that
+    /// don't have a session). The session id is the root `RunId`.
+    run_id: Arc<std::sync::Mutex<String>>,
 }
 
 impl BashJobRegistry {
@@ -132,7 +144,15 @@ impl BashJobRegistry {
             jobs: Arc::new(Mutex::new(HashMap::new())),
             children: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
+            run_id: Arc::new(std::sync::Mutex::new(String::new())),
         }
+    }
+
+    /// Set the canonical run id (the session id) stamped on every job
+    /// this registry spawns (WO 45.1). Called once at session start;
+    /// idempotent. Jobs spawned before this call carry an empty run_id.
+    pub fn set_run_id(&self, run_id: impl Into<String>) {
+        *self.run_id.lock().unwrap() = run_id.into();
     }
 
     /// Spawn a bash command in the background and return a job ID.
@@ -263,7 +283,8 @@ impl BashJobRegistry {
         let mut child = proc.spawn()?;
 
         let pid = child.id();
-        let mut job = BashJob::new(id, command.to_string(), owner);
+        let run_id = self.run_id.lock().unwrap().clone();
+        let mut job = BashJob::new(id, command.to_string(), owner, &run_id);
         job.pid = pid;
         {
             let mut jobs = self.jobs.lock().await;
@@ -1190,6 +1211,7 @@ mod tests {
                     id,
                     command: "stuck".into(),
                     owner: None,
+                    run_id: String::new(),
                     pid: None,
                     status: JobStatus::Running,
                     stdout: String::new(),
@@ -1209,6 +1231,7 @@ mod tests {
                     id,
                     command: "done".into(),
                     owner: None,
+                    run_id: String::new(),
                     pid: None,
                     status: JobStatus::Completed(0),
                     stdout: String::new(),
@@ -1664,5 +1687,76 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
         crate::shared::test_util::remove_test_dir(&temp);
+    }
+
+    // ── WO 45.1: run_id threading ──────────────────────────────────
+
+    /// `set_run_id` stamps the canonical run id on every job the registry
+    /// spawns afterwards. A job spawned after `set_run_id` carries it;
+    /// a job spawned before (empty registry default) has an empty run_id.
+    #[tokio::test]
+    async fn set_run_id_threads_into_spawned_job() {
+        let reg = BashJobRegistry::new();
+        // Before set_run_id: default empty string.
+        let id_before = reg
+            .spawn(
+                "echo before",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        wait_for_job_done(&reg, id_before, Duration::from_secs(5)).await;
+        let job_before = reg.get(id_before).await.unwrap();
+        assert_eq!(
+            job_before.run_id, "",
+            "job spawned before set_run_id should have empty run_id"
+        );
+
+        // After set_run_id: stamped on every new job.
+        reg.set_run_id("20260825-session-01");
+        let id_after = reg
+            .spawn(
+                "echo after",
+                None,
+                None,
+                &DenyList::default(),
+                &PathGuard::default(),
+                false,
+                None,
+                Some("task-7"),
+            )
+            .await
+            .unwrap();
+        wait_for_job_done(&reg, id_after, Duration::from_secs(5)).await;
+        let job_after = reg.get(id_after).await.unwrap();
+        assert_eq!(
+            job_after.run_id, "20260825-session-01",
+            "job spawned after set_run_id should carry the run_id"
+        );
+        assert_eq!(
+            job_after.owner.as_deref(),
+            Some("task-7"),
+            "owner tag (task id) is independent of run_id"
+        );
+        let _ = reg.remove(id_before).await;
+        let _ = reg.remove(id_after).await;
+    }
+
+    /// `RunId` newtype round-trips through String and serializes as a
+    /// plain string (WO 45.1 contract: the on-wire shape is a string, not
+    /// a structured object, so older NDJSON lines deserialize cleanly).
+    #[test]
+    fn run_id_serializes_as_plain_string() {
+        let run_id = crate::shared::RunId::new("20260825-session-01");
+        let json = serde_json::to_string(&run_id).unwrap();
+        assert_eq!(json, "\"20260825-session-01\"");
+        let back: crate::shared::RunId = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.as_str(), "20260825-session-01");
     }
 }

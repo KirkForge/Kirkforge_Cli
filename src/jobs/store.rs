@@ -400,6 +400,7 @@ mod tests {
         let paths = store.create_run(&job.id, Utc::now()).unwrap();
         let run = JobRunSummary {
             run_id: paths.run_id.clone(),
+            parent_run_id: None,
             started_at: Utc::now(),
             finished_at: Utc::now(),
             status: crate::jobs::schedule::RunStatus::Success,

@@ -109,6 +109,11 @@ pub struct ToolContext {
     /// exactly the subagent's jobs (`BashJobRegistry::cancel_by_owner`).
     /// `None` (main session) jobs are never touched by those paths.
     pub task_owner: Option<String>,
+    /// Canonical run id (WO 45.1) — the session id that owns this tool
+    /// call. Threaded from the executor's `session_id` so spawned tasks
+    /// and bash jobs carry the run_id of their root session. `None` in
+    /// test / bench contexts that have no session.
+    pub run_id: Option<String>,
     /// Optional channel for streaming partial tool output (e.g. PTY
     /// output) to the TUI while a command runs. `None` in non-interactive
     /// or test contexts — tools must treat it as best-effort.
@@ -124,6 +129,7 @@ impl std::fmt::Debug for ToolContext {
             .field("task_spawner", &self.task_spawner.is_some())
             .field("tools", &self.tools.is_some())
             .field("task_owner", &self.task_owner)
+            .field("run_id", &self.run_id)
             .field("event_tx", &self.event_tx.is_some())
             .finish()
     }
@@ -138,6 +144,7 @@ impl ToolContext {
             task_spawner: None,
             tools: None,
             task_owner: None,
+            run_id: None,
             event_tx: None,
         }
     }
@@ -153,6 +160,7 @@ impl ToolContext {
             task_spawner: None,
             tools: None,
             task_owner: None,
+            run_id: None,
             event_tx: None,
         }
     }
@@ -166,6 +174,7 @@ impl ToolContext {
             task_spawner: Some(spawner),
             tools: None,
             task_owner: None,
+            run_id: None,
             event_tx: None,
         }
     }

@@ -754,6 +754,63 @@ impl std::fmt::Display for SessionId {
     }
 }
 
+// ── WO 45.1: canonical run identity ──────────────────────────────────
+//
+// A `RunId` is the canonical execution identity threaded through every
+// spawned unit (task, bash job, scheduled job, workflow step, turn). The
+// root run_id is the session_id (`SessionId`'s Display string); child
+// units carry the parent's run_id so replay/cancel/metrics/audit can join
+// across subsystems on one key. This is the contract WO 41.5 Phase 3 and
+// WO 43.10 both assume.
+//
+// Newtype over `String` so the type system distinguishes a run id from
+// any other string field. Cheap clone (Arc-backed) so threading it
+// through `ToolContext` / `TaskRequest` / `BashJob` adds no copy cost
+// over the existing `session_id: String`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RunId(pub std::sync::Arc<str>);
+
+impl RunId {
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(std::sync::Arc::from(s.into().as_str()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for RunId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for RunId {
+    fn from(s: String) -> Self {
+        Self::new(s)
+    }
+}
+
+impl From<&str> for RunId {
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+impl serde::Serialize for RunId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for RunId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(Self::new(s))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Pricing {
     pub model_prefix: &'static str,

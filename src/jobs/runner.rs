@@ -159,6 +159,7 @@ async fn run_bash_job(
 
                 let run = JobRunSummary {
                     run_id: paths.run_id,
+                    parent_run_id: None,
                     started_at,
                     finished_at,
                     status,
@@ -279,6 +280,7 @@ async fn run_workflow_job(
                 .with_context(|| "writing empty stderr for successful workflow run")?;
             let run = JobRunSummary {
                 run_id: paths.run_id,
+                parent_run_id: None,
                 started_at,
                 finished_at,
                 status: RunStatus::Success,
@@ -330,6 +332,7 @@ fn record_failure(
         .with_context(|| "writing stderr for failed run")?;
     let run = JobRunSummary {
         run_id: paths.run_id,
+        parent_run_id: None,
         started_at,
         finished_at,
         status: RunStatus::Failure,

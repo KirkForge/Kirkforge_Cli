@@ -269,6 +269,10 @@ impl Executor {
 
             let record = crate::session::replay::TurnRecord {
                 turn: 0, // TraceRecorder assigns this
+                // WO 45.1: thread the canonical run id (the session id) so
+                // a replay trace attributes to its run. Subagent executors
+                // inherit the parent session's id via `set_session_id`.
+                run_id: self.session_id.clone(),
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 prompt_messages,
                 model_response,

@@ -130,6 +130,11 @@ pub struct TaskMetadata {
     pub token_estimate: Option<u64>,
     /// Parent task id for subagent trees. `None` for top-level tasks.
     pub parent_task_id: Option<String>,
+    /// Canonical run id of the spawning session (WO 45.1). The root
+    /// session's id; a subagent spawned by another subagent carries the
+    /// same run_id (the root session's). `None` for tasks spawned
+    /// outside a session (tests, bench, workflows without a session).
+    pub parent_run_id: Option<String>,
 }
 
 impl Default for TaskMetadata {
@@ -142,6 +147,7 @@ impl Default for TaskMetadata {
             duration_ms: None,
             token_estimate: None,
             parent_task_id: None,
+            parent_run_id: None,
         }
     }
 }
@@ -458,6 +464,11 @@ pub struct PersistedTask {
     pub started_at: String,
     pub duration_ms: Option<u64>,
     pub parent_task_id: Option<String>,
+    /// Canonical run id of the spawning session (WO 45.1). `None` for
+    /// tasks spawned outside a session. Older persisted tasks
+    /// deserialize with `None` via `serde(default)`.
+    #[serde(default)]
+    pub parent_run_id: Option<String>,
 }
 
 impl PersistedTask {
@@ -488,6 +499,7 @@ impl PersistedTask {
             started_at: m.started_at.to_rfc3339(),
             duration_ms: m.duration_ms,
             parent_task_id: m.parent_task_id.clone(),
+            parent_run_id: m.parent_run_id.clone(),
         })
     }
 
@@ -803,6 +815,9 @@ impl Tool for Task {
             // WO 38.4: record the spawning (sub)agent's task id so task
             // trees are traceable — top-level spawns keep None.
             let parent_task_id = ctx.task_owner.clone();
+            // WO 45.1: thread the canonical run_id from the spawning
+            // context so the task attributes to its root session.
+            let parent_run_id = ctx.run_id.clone();
             let metadata = TaskMetadata {
                 model,
                 persona,
@@ -811,6 +826,7 @@ impl Tool for Task {
                 duration_ms: None,
                 token_estimate: None,
                 parent_task_id,
+                parent_run_id,
             };
             let handle = TaskHandle {
                 metadata,
@@ -1780,6 +1796,7 @@ mod tests {
                 duration_ms: Some(1_500),
                 token_estimate: None,
                 parent_task_id: Some("task-1".to_string()),
+                parent_run_id: None,
             },
             ..Default::default()
         }
@@ -2635,5 +2652,102 @@ mod tests {
             Some("explicit-model"),
             "explicit model arg must reach the spawner"
         );
+    }
+
+    // ── WO 45.1: parent_run_id threading ───────────────────────────
+
+    /// A background task spawned under a `ToolContext` carrying a `run_id`
+    /// records it on its `TaskMetadata.parent_run_id` and on the persisted
+    /// summary. This is the session→task leg of the threading contract.
+    #[tokio::test]
+    async fn background_task_inherits_parent_run_id_from_context() {
+        struct NoopSpawner;
+        #[async_trait::async_trait]
+        impl TaskSpawner for NoopSpawner {
+            async fn run_task(&self, _request: TaskRequest) -> Result<String, String> {
+                Ok("done".to_string())
+            }
+        }
+
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let task = Task::with_manager(manager.clone());
+        let mut ctx = ToolContext::with_spawner(Arc::new(NoopSpawner));
+        ctx.run_id = Some("20260825-session-42".to_string());
+
+        let outcome = task
+            .run(
+                &ctx,
+                serde_json::json!({ "prompt": "thread run_id", "background": true }),
+            )
+            .await;
+        let id = match outcome {
+            ToolOutcome::Success { content } => {
+                let s = content;
+                let prefix = "Started background task ";
+                let start = s.find(prefix).unwrap() + prefix.len();
+                let end = s.find('.').unwrap();
+                s[start..end].to_string()
+            }
+            other => panic!("expected Success, got {other:?}"),
+        };
+
+        // The metadata must carry the context's run_id as parent_run_id.
+        let handle = manager.lock().unwrap().get(&id).cloned();
+        let handle = handle.expect("task should be registered");
+        assert_eq!(
+            handle.metadata.parent_run_id.as_deref(),
+            Some("20260825-session-42"),
+            "TaskMetadata.parent_run_id must equal ctx.run_id"
+        );
+        assert_eq!(
+            handle.metadata.parent_task_id, None,
+            "top-level spawn: parent_task_id stays None (no task owner)"
+        );
+    }
+
+    /// `PersistedTask::from_handle` carries `parent_run_id` through to
+    /// the serialized form so `--resume` can attribute a task to its
+    /// session (WO 45.1 contract).
+    #[test]
+    fn persisted_task_carries_parent_run_id_from_metadata() {
+        let handle = TaskHandle {
+            result: Some("ok".to_string()),
+            metadata: TaskMetadata {
+                model: None,
+                persona: "explore".to_string(),
+                prompt_summary: "p".to_string(),
+                started_at: chrono::Local::now(),
+                duration_ms: Some(10),
+                token_estimate: None,
+                parent_task_id: Some("task-1".to_string()),
+                parent_run_id: Some("20260825-session-99".to_string()),
+            },
+            ..Default::default()
+        };
+        let persisted = PersistedTask::from_handle("task-200", &handle).unwrap();
+        assert_eq!(persisted.id, "task-200");
+        assert_eq!(
+            persisted.parent_run_id.as_deref(),
+            Some("20260825-session-99"),
+            "PersistedTask must carry parent_run_id from metadata"
+        );
+        assert_eq!(persisted.parent_task_id.as_deref(), Some("task-1"));
+
+        // Legacy persisted JSON without parent_run_id deserializes to None.
+        let legacy = serde_json::json!({
+            "id": "task-legacy",
+            "status": "completed",
+            "summary": "old",
+            "model": null,
+            "persona": "explore",
+            "prompt_summary": "x",
+            "started_at": "2026-07-01T00:00:00+00:00",
+            "duration_ms": 5,
+            "parent_task_id": null,
+        })
+        .to_string();
+        let back: PersistedTask = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(back.id, "task-legacy");
+        assert_eq!(back.parent_run_id, None, "legacy JSON defaults to None");
     }
 }

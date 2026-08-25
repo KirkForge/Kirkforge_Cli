@@ -82,6 +82,7 @@ mod tests {
             started_at: chrono::Local::now().to_rfc3339(),
             duration_ms: Some(duration_ms),
             parent_task_id: None,
+            parent_run_id: None,
         }
     }
 
@@ -234,6 +235,7 @@ mod tests {
             duration_ms: None,
             token_estimate: None,
             parent_task_id: None,
+            parent_run_id: None,
         };
         assert_eq!(m.persona, "x");
     }

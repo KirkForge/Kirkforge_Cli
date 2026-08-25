@@ -92,9 +92,19 @@ pub enum JobKind {
 }
 
 /// Result of a single scheduled-job execution.
+///
+/// `run_id` is the job-run-scoped id (unchanged from pre-WO 45.1).
+/// `parent_run_id` (WO 45.1) is the scheduling session's canonical
+/// `RunId` — `None` for daemon-spawned jobs with no owning session,
+/// `Some(session_id)` when a session triggered the run. Lets audit /
+/// replay join a scheduled run back to the session that caused it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobRunSummary {
     pub run_id: String,
+    /// Canonical run id of the scheduling session (WO 45.1). `None`
+    /// when the job was spawned by the daemon with no owning session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
     pub status: RunStatus,
@@ -437,6 +447,71 @@ mod tests {
         assert_eq!(
             generate_job_id(&jobs_dir).unwrap(),
             format!("job-{date}-004")
+        );
+    }
+
+    /// WO 45.1: `JobRunSummary.parent_run_id` is `None` by default and
+    /// `Some(session_id)` when a session triggered the run. Older
+    /// persisted summaries deserialize with `None` via `serde(default)`.
+    #[test]
+    fn job_run_summary_parent_run_id_defaults_none_and_round_trips() {
+        // New construction: parent_run_id is explicitly settable.
+        let with_parent = JobRunSummary {
+            run_id: "run-1".into(),
+            parent_run_id: Some("20260825-session-01".into()),
+            started_at: Utc::now(),
+            finished_at: Utc::now(),
+            status: RunStatus::Success,
+            exit_code: Some(0),
+            stdout_path: std::path::PathBuf::from("/tmp/out"),
+            stderr_path: std::path::PathBuf::from("/tmp/err"),
+            summary: "ok".into(),
+        };
+        let json = serde_json::to_string(&with_parent).unwrap();
+        assert!(
+            json.contains("\"parent_run_id\":\"20260825-session-01\""),
+            "parent_run_id should serialize when Some: {json}"
+        );
+        let back: JobRunSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.parent_run_id.as_deref(), Some("20260825-session-01"));
+
+        // Legacy NDJSON line written before WO 45.1 (no parent_run_id
+        // field) must still deserialize, defaulting to None.
+        let legacy = serde_json::json!({
+            "run_id": "run-legacy",
+            "started_at": "2026-08-01T00:00:00Z",
+            "finished_at": "2026-08-01T00:00:01Z",
+            "status": "success",
+            "exit_code": 0,
+            "stdout_path": "/tmp/out",
+            "stderr_path": "/tmp/err",
+            "summary": "legacy run",
+        })
+        .to_string();
+        let legacy_run: JobRunSummary = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(legacy_run.run_id, "run-legacy");
+        assert_eq!(
+            legacy_run.parent_run_id, None,
+            "legacy summary without parent_run_id must default to None"
+        );
+
+        // `skip_serializing_if = "Option::is_none"` — None is omitted,
+        // not emitted as null, so the wire shape stays clean.
+        let no_parent = JobRunSummary {
+            run_id: "run-2".into(),
+            parent_run_id: None,
+            started_at: Utc::now(),
+            finished_at: Utc::now(),
+            status: RunStatus::Cancelled,
+            exit_code: None,
+            stdout_path: std::path::PathBuf::from("/tmp/out2"),
+            stderr_path: std::path::PathBuf::from("/tmp/err2"),
+            summary: "cancelled".into(),
+        };
+        let json_none = serde_json::to_string(&no_parent).unwrap();
+        assert!(
+            !json_none.contains("parent_run_id"),
+            "None parent_run_id should be skipped on serialize: {json_none}"
         );
     }
 }

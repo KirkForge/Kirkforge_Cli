@@ -146,6 +146,9 @@ pub(super) async fn run_line_mode(
         Some(plugin_registry),
     )?;
     executor.set_session_id(session_id.clone());
+    // WO 45.1: stamp the canonical run_id on the global bash job registry
+    // so background jobs spawned by this session carry it. Idempotent.
+    session::bash_jobs::global_registry().set_run_id(session_id.clone());
     // WO 38.8: attach per-session budget/stratum stores so the budget guard
     // runs in production. Must come after set_session_id because the stratum
     // listener is keyed by session_id.

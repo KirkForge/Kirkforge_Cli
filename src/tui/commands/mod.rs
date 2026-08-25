@@ -199,6 +199,7 @@ mod tests {
             id,
             command: "echo hi".to_string(),
             owner: None,
+            run_id: String::new(),
             pid: None,
             status,
             stdout: String::new(),

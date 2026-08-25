@@ -425,6 +425,7 @@ impl StepRunner for TuiStepRunner {
                     summary: summary.clone(),
                     critique: None,
                     structured_output: None,
+                    run_id: None,
                 },
             );
         }

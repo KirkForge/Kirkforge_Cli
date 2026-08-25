@@ -41,9 +41,20 @@ pub enum TurnOutcome {
 }
 
 /// A single turn's complete trace record.
+///
+/// `run_id` (WO 45.1) is the canonical session id that recorded this
+/// turn — the root `RunId` of the execution. A replay trace can be
+/// attributed to a subagent or a job by joining on it. Older traces
+/// written before WO 45.1 deserialize with an empty `run_id` and are
+/// treated as root-session turns by replay.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnRecord {
     pub turn: u32,
+    /// Canonical run id (WO 45.1). Empty string for traces written
+    /// before the field was added — `serde(default)` keeps old NDJSON
+    /// lines loadable.
+    #[serde(default)]
+    pub run_id: String,
     pub timestamp: String,
     pub prompt_messages: Vec<RecordedMessage>,
     pub model_response: String,
@@ -398,6 +409,7 @@ mod tests {
 
         let r1 = TurnRecord {
             turn: 0,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![RecordedMessage {
                 role: "user".to_string(),
@@ -414,6 +426,7 @@ mod tests {
 
         let r2 = TurnRecord {
             turn: 0,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:01Z".to_string(),
             prompt_messages: vec![RecordedMessage {
                 role: "user".to_string(),
@@ -457,6 +470,7 @@ mod tests {
 
         let valid = serde_json::to_string(&TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![],
             model_response: "ok".to_string(),
@@ -533,6 +547,7 @@ mod tests {
     fn replay_format_turn_contains_key_fields() {
         let record = TurnRecord {
             turn: 3,
+            run_id: String::new(),
             timestamp: "2026-07-22T12:00:00Z".to_string(),
             prompt_messages: vec![RecordedMessage {
                 role: "user".to_string(),
@@ -565,6 +580,7 @@ mod tests {
     fn sample_record(turn: u32, response: &str) -> TurnRecord {
         TurnRecord {
             turn,
+            run_id: String::new(),
             timestamp: format!("2026-07-22T00:00:0{turn}Z"),
             prompt_messages: vec![RecordedMessage {
                 role: "user".to_string(),
@@ -662,6 +678,7 @@ mod tests {
         let long_response = "Y".repeat(600);
         let record = TurnRecord {
             turn: 7,
+            run_id: String::new(),
             timestamp: "2026-07-22T12:00:00Z".to_string(),
             prompt_messages: vec![RecordedMessage {
                 role: "user".to_string(),
@@ -705,6 +722,7 @@ mod tests {
     fn format_turn_error_outcome() {
         let record = TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![],
             model_response: "oops".to_string(),
@@ -722,6 +740,7 @@ mod tests {
     fn format_turn_cancelled_outcome() {
         let record = TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![],
             model_response: String::new(),
@@ -739,6 +758,7 @@ mod tests {
     fn format_turn_timeout_outcome() {
         let record = TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![],
             model_response: String::new(),
@@ -756,6 +776,7 @@ mod tests {
     fn format_turn_empty_prompt_messages() {
         let record = TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![],
             model_response: "response".to_string(),
@@ -776,6 +797,7 @@ mod tests {
         let long = "Z".repeat(500);
         let record = TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![RecordedMessage {
                 role: "user".to_string(),
@@ -798,6 +820,7 @@ mod tests {
         let long = "Y".repeat(500);
         let record = TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![],
             model_response: long.clone(),
@@ -816,6 +839,7 @@ mod tests {
     fn render_turn_full_empty_prompt_messages() {
         let record = TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![],
             model_response: "resp".to_string(),
@@ -836,6 +860,7 @@ mod tests {
     fn render_turn_full_empty_model_response() {
         let record = TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![],
             model_response: String::new(),
@@ -856,6 +881,7 @@ mod tests {
     fn render_turn_full_empty_tool_calls() {
         let record = TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![],
             model_response: "resp".to_string(),
@@ -876,6 +902,7 @@ mod tests {
     fn render_turn_full_includes_timestamp() {
         let record = TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T12:34:56Z".to_string(),
             prompt_messages: vec![],
             model_response: "resp".to_string(),
@@ -896,6 +923,7 @@ mod tests {
     fn render_turn_full_cancelled_outcome() {
         let record = TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![],
             model_response: String::new(),
@@ -913,6 +941,7 @@ mod tests {
     fn render_turn_full_timeout_outcome() {
         let record = TurnRecord {
             turn: 1,
+            run_id: String::new(),
             timestamp: "2026-07-22T00:00:00Z".to_string(),
             prompt_messages: vec![],
             model_response: String::new(),
@@ -984,5 +1013,71 @@ mod tests {
     fn turn_outcome_cancelled_and_timeout_are_distinct_variants() {
         assert!(matches!(TurnOutcome::Cancelled, TurnOutcome::Cancelled));
         assert!(matches!(TurnOutcome::Timeout, TurnOutcome::Timeout));
+    }
+
+    // ── WO 45.1: run_id threading ──────────────────────────────────
+
+    /// A `TurnRecord` with `run_id` round-trips through NDJSON and the
+    /// run_id survives a load. This is the replay trace's foreign key
+    /// back to the session that recorded it.
+    #[test]
+    fn turn_record_run_id_round_trips_through_ndjson() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run_id.trace.ndjson");
+        let mut recorder = TraceRecorder::open(&path).unwrap();
+
+        let record = TurnRecord {
+            turn: 0,
+            run_id: "20260825-session-01".to_string(),
+            timestamp: "2026-08-25T00:00:00Z".to_string(),
+            prompt_messages: vec![],
+            model_response: "resp".to_string(),
+            tool_calls: vec![],
+            outcome: TurnOutcome::Success,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+        };
+        recorder.record(record).unwrap();
+        drop(recorder);
+
+        let loaded = TraceRecorder::load(&path).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(
+            loaded[0].run_id, "20260825-session-01",
+            "run_id must survive a write/load cycle"
+        );
+    }
+
+    /// Legacy NDJSON lines written before WO 45.1 (no run_id field)
+    /// still load — `serde(default)` gives them an empty run_id so old
+    /// traces are not blanked.
+    #[test]
+    fn turn_record_legacy_line_without_run_id_loads_with_empty_run_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.trace.ndjson");
+        // Hand-write a line with no run_id field, exactly as a pre-WO
+        // 45.1 recorder would have written.
+        let legacy = serde_json::json!({
+            "turn": 1,
+            "timestamp": "2026-07-01T00:00:00Z",
+            "prompt_messages": [],
+            "model_response": "old",
+            "tool_calls": [],
+            "outcome": "success",
+            "tokens_in": 5,
+            "tokens_out": 3,
+            "duration_ms": 10,
+        })
+        .to_string();
+        std::fs::write(&path, format!("{legacy}\n")).unwrap();
+
+        let loaded = TraceRecorder::load(&path).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(
+            loaded[0].run_id, "",
+            "legacy line without run_id must default to empty, not fail"
+        );
+        assert_eq!(loaded[0].turn, 1);
     }
 }

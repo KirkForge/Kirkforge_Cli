@@ -869,6 +869,7 @@ mod tests {
                 summary: "z summary".into(),
                 critique: None,
                 structured_output: None,
+                run_id: None,
             },
         );
         summary.outputs.insert(
@@ -880,6 +881,7 @@ mod tests {
                 summary: "a summary".into(),
                 critique: None,
                 structured_output: None,
+                run_id: None,
             },
         );
         let json = summary_to_json(&summary);
@@ -905,6 +907,7 @@ mod tests {
                 summary: "summary".into(),
                 critique: Some("the critique".into()),
                 structured_output: None,
+                run_id: None,
             },
         );
         let json = summary_to_json(&summary);
@@ -928,6 +931,7 @@ mod tests {
                 summary: "summary".into(),
                 critique: None,
                 structured_output: None,
+                run_id: None,
             },
         );
         let json = summary_to_json(&summary);

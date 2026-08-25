@@ -256,6 +256,7 @@ mod tests {
     fn rec(turn: u32, response: &str) -> TurnRecord {
         TurnRecord {
             turn,
+            run_id: String::new(),
             timestamp: format!("2026-07-22T00:00:0{turn}Z"),
             prompt_messages: vec![],
             model_response: response.to_string(),

@@ -463,6 +463,18 @@ impl Executor {
         self.session_id = id;
     }
 
+    /// The canonical run id for this executor (WO 45.1). The session id
+    /// IS the root `RunId`; child tasks / bash jobs / scheduled jobs /
+    /// workflow steps derive their `parent_run_id` from it. Returns
+    /// `None` when `set_session_id` was never called (tests, bench).
+    pub fn run_id(&self) -> Option<crate::shared::RunId> {
+        if self.session_id.is_empty() {
+            None
+        } else {
+            Some(crate::shared::RunId::new(self.session_id.clone()))
+        }
+    }
+
     /// Set the turn-trace recorder for this session. Each completed turn
     /// will be serialized and appended to the trace file.
     pub fn set_trace(&mut self, recorder: crate::session::replay::TraceRecorder) {

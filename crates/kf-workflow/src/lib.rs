@@ -333,6 +333,11 @@ impl Workflow {
 }
 
 /// Output of a completed workflow step.
+///
+/// `run_id` (WO 45.1) is the canonical run id of the session that
+/// executed this workflow — `None` for workflows run outside a session
+/// (bench, tests). Lets a step's output be attributed back to its run
+/// for replay / metrics / audit.
 #[derive(Debug, Clone)]
 pub struct StepOutput {
     pub name: String,
@@ -343,6 +348,9 @@ pub struct StepOutput {
     /// Structured output parsed from the summary JSON. Set when the step's
     /// summary is valid JSON; enables `$(step.field)` lookups.
     pub structured_output: Option<serde_json::Value>,
+    /// Canonical run id of the executing session (WO 45.1). `None` when
+    /// the workflow was run outside a session (bench, tests).
+    pub run_id: Option<String>,
 }
 
 impl Default for StepOutput {
@@ -354,6 +362,7 @@ impl Default for StepOutput {
             summary: String::new(),
             critique: None,
             structured_output: None,
+            run_id: None,
         }
     }
 }
@@ -639,6 +648,7 @@ impl WorkflowExecutor {
                     summary: reason,
                     critique: None,
                     structured_output: None,
+                    run_id: None,
                 },
             );
         }
@@ -801,6 +811,7 @@ impl WorkflowExecutor {
                     summary: format!("fan-out failed: {e}"),
                     critique: None,
                     structured_output: None,
+                    run_id: None,
                 };
                 completed.insert(on_error.clone());
                 let error_output = StepOutput {
@@ -810,6 +821,7 @@ impl WorkflowExecutor {
                     summary: format!("error handler triggered by: {e}"),
                     critique: None,
                     structured_output: None,
+                    run_id: None,
                 };
                 outputs.insert(step.name.clone(), step_output);
                 outputs.insert(on_error.clone(), error_output);
@@ -840,6 +852,7 @@ impl WorkflowExecutor {
             summary: combined_summary,
             critique: None,
             structured_output: Some(combined_structured),
+            run_id: None,
         }))
     }
 
@@ -867,6 +880,7 @@ impl WorkflowExecutor {
             },
             critique: None,
             structured_output: None,
+            run_id: None,
         }
     }
 
@@ -921,6 +935,7 @@ impl WorkflowExecutor {
                     summary: format!("step failed: {error}"),
                     critique: None,
                     structured_output: None,
+                    run_id: None,
                 },
             );
             completed.insert(task.name.clone());
@@ -947,6 +962,7 @@ impl WorkflowExecutor {
                     summary: format!("error handler triggered by: {error}"),
                     critique: None,
                     structured_output: None,
+                    run_id: None,
                 },
             );
         }
@@ -985,6 +1001,7 @@ impl WorkflowExecutor {
                     summary: summary.clone(),
                     critique: None,
                     structured_output,
+                    run_id: None,
                 },
             );
             completed.insert(name.clone());
@@ -1014,6 +1031,7 @@ impl WorkflowExecutor {
                     summary: format!("step failed: {err}"),
                     critique: None,
                     structured_output: None,
+                    run_id: None,
                 },
             );
             completed.insert(name.clone());
@@ -1032,6 +1050,7 @@ impl WorkflowExecutor {
                     summary: format!("error handler triggered by: {trigger}"),
                     critique: None,
                     structured_output: None,
+                    run_id: None,
                 },
             );
             return Ok(());
@@ -1086,6 +1105,7 @@ impl WorkflowExecutor {
                         workflow_name: self.workflow.name.clone(),
                         outputs,
                         budget_exceeded: true,
+                        run_id: None,
                     });
                 }
             }
@@ -1258,6 +1278,7 @@ impl WorkflowExecutor {
                         summary: summary.to_string(),
                         critique,
                         structured_output,
+                        run_id: None,
                     },
                 );
             }
@@ -1267,6 +1288,7 @@ impl WorkflowExecutor {
             workflow_name: self.workflow.name.clone(),
             outputs,
             budget_exceeded: false,
+            run_id: None,
         })
     }
 }
@@ -1281,6 +1303,11 @@ pub struct WorkflowSummary {
     /// `outputs` and the workflow returns `Ok` with this flag set instead of
     /// bailing — so the configured handler output reaches the model.
     pub budget_exceeded: bool,
+    /// Canonical run id of the session that executed this workflow (WO
+    /// 45.1). `None` when the workflow ran outside a session (bench,
+    /// tests, scheduled jobs with no owning session). Each step's
+    /// `StepOutput.run_id` carries the same value.
+    pub run_id: Option<String>,
 }
 
 impl WorkflowSummary {
@@ -2259,6 +2286,7 @@ mod tests {
                 summary: "found 3 items".into(),
                 critique: None,
                 structured_output: None,
+                run_id: None,
             },
         );
         let result = resolve_step_refs("Result: $(explore)", &outputs);
@@ -2277,6 +2305,7 @@ mod tests {
                 summary: r#"{"count": 5, "items": ["a","b"]}"#.into(),
                 critique: None,
                 structured_output: Some(serde_json::json!({"count": 5, "items": ["a", "b"]})),
+                run_id: None,
             },
         );
         let result = resolve_step_refs("Count: $(explore.count)", &outputs);
@@ -2298,6 +2327,7 @@ mod tests {
                 summary: "plain text summary".into(),
                 critique: None,
                 structured_output: None,
+                run_id: None,
             },
         );
         let result = resolve_step_refs("$(explore.count)", &outputs);
@@ -2326,6 +2356,7 @@ mod tests {
                 structured_output: Some(serde_json::json!({
                     "a": {"b": {"c": "deep"}}
                 })),
+                run_id: None,
             },
         );
         let result = resolve_step_refs("$(step1.a.b.c)", &outputs);

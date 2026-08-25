@@ -1167,6 +1167,38 @@ trust-tier wiring, or minisign signatures. Servers that advertise
 unsupported capabilities (`resources`, `prompts`, `sampling`, `roots`) are
 logged as warnings at startup.
 
+##### MCP trust boundary and local sandbox policy
+
+MCP tool calls execute on a **remote server** over a transport (stdio/HTTP).
+The local wrapper (`McpToolWrapper`, `src/session/mcp_tools.rs`) cannot
+sandbox code that runs elsewhere, so it applies no `PathGuard` — the
+operator's choice to list a server in `config.tools.mcp_servers` (and, for
+project-local `.mcp.json`, the first-load approval gate) **is** the trust
+grant. This is distinct from the resource tools (`mcp_resource` /
+`mcp_prompt`), which validate URIs against the workspace
+(`validate_mcp_uri`, `src/session/mcp_resource_tools.rs`).
+
+The one local-side gate on the generic tool-call path is **argument
+scrubbing**: before forwarding `args` to `manager.call_tool`, every string
+value in the args JSON is checked against the session `DenyList` (the same
+list that gates `web_fetch` and bash). A denied URL embedded in the args
+(e.g. a cloud metadata endpoint) is blocked at the boundary with
+`AccessDenied`, before it reaches the remote server. This mirrors
+`web_fetch`'s `deny_list.is_url_denied` check. Path-pattern deny entries are
+not applied to MCP args (the remote server's filesystem is not the local
+one); only URL-prefix entries are scanned.
+
+**Result trust is the operator's responsibility.** A compromised server's
+response returns to the model with no local content gate. If the model then
+writes that content to a file, `PathGuard` gates the write — but the MCP
+call itself has no content gate. This is inherent to the remote-execution
+model and is not fixable locally. The parallel sampling trust model
+(server-initiated model calls) is documented in ADR-072.
+
+MCP is **not** unified under `SandboxPolicy` (the plugin trust-tier type).
+MCP servers are trusted by configuration, not by capability manifest, so a
+trust-tier check on `McpToolWrapper::run` would not match the trust model.
+
 #### When to use which
 
 | Need | Use |

@@ -8,9 +8,10 @@
 //! re-gates: the plugin is skipped with a warning naming
 //! `/plugins approve <name>`.
 //!
-//! Both gates are independent: a signature-verified plugin (minisign
-//! signature valid when `verify_signatures` is on) opts out of the
-//! ledger entirely — the signature already binds the bundle.
+//! Both gates are layered (WO 45.61): a signature-verified plugin still
+//! passes through the ledger. The manifest-only signature does not cover
+//! the command scripts the manifest points to; the bundle_hash does.
+//! A signed plugin must ALSO be ledger-approved with a matching hash.
 
 use kf_plugin_sdk::{Capability, PluginManifest};
 use std::path::{Path, PathBuf};

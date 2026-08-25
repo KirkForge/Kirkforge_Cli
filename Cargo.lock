@@ -2061,6 +2061,7 @@ dependencies = [
  "kf-testdoctor",
  "kf-workflow",
  "libc",
+ "minisign",
  "notify-debouncer-mini",
  "opentelemetry",
  "opentelemetry-otlp",

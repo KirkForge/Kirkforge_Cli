@@ -308,8 +308,13 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
     // flagged the PEM header. ──
     let flagged = events.iter().any(|e| match e {
         TurnEvent::Verification {
-            message, success, ..
-        } => !*success && message.to_lowercase().contains("secret"),
+            message, outcome, ..
+        } => {
+            matches!(
+                outcome,
+                kf_code::session::executor::VerificationOutcome::Failed
+            ) && message.to_lowercase().contains("secret")
+        }
         _ => false,
     });
     assert!(

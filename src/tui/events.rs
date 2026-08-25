@@ -216,11 +216,18 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
         }
         TurnEvent::Verification {
             message,
-            success,
+            outcome,
             file,
             line,
         } => {
-            let prefix = if success { "🔍" } else { "⚠️" };
+            // WO 45.36: `outcome` carries the typed Verdict discriminant.
+            // The icon preserves the prior success/failure split: 🔍 for
+            // non-failure (Clean/Skipped/Fixed/Suggestion), ⚠️ for Failed.
+            let prefix = if outcome.is_success() {
+                "🔍"
+            } else {
+                "⚠️"
+            };
             let loc = match (file, line) {
                 (Some(f), Some(l)) => format!(" {}:{}:", f.display(), l),
                 (Some(f), None) => format!(" {}:", f.display()),
@@ -1043,17 +1050,18 @@ mod tests {
         assert_eq!(entry.tool_output.as_deref(), Some(full.as_str()));
     }
 
-    /// `Verification` prefixes with 🔍 on success and ⚠️ on failure.
-    /// The same code path handles both — only the prefix and the
-    /// `success` flag differ.
+    /// `Verification` prefixes with 🔍 on a non-failure outcome and ⚠️ on
+    /// `Failed`. The same code path handles both — only the prefix and
+    /// the `outcome` discriminant differ. WO 45.36.
     #[test]
     fn verification_prefixes_reflect_success() {
+        use crate::session::executor::types::VerificationOutcome;
         let mut s = app_state();
         dispatch_turn_event(
             &mut s,
             TurnEvent::Verification {
                 message: "lint clean".into(),
-                success: true,
+                outcome: VerificationOutcome::Clean,
                 file: None,
                 line: None,
             },
@@ -1062,7 +1070,7 @@ mod tests {
             &mut s,
             TurnEvent::Verification {
                 message: "found 2 warnings".into(),
-                success: false,
+                outcome: VerificationOutcome::Failed,
                 file: None,
                 line: None,
             },

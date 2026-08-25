@@ -124,15 +124,20 @@ pub(super) fn emit_turn_events(
             }
             session::executor::TurnEvent::Verification {
                 message,
-                success,
+                outcome,
                 file,
                 line,
             } => {
                 if output == kf_code::shared::OutputFormat::StreamJson {
+                    // WO 45.36: keep the legacy `success` bool for wire
+                    // compatibility (existing consumers read it), and add
+                    // the typed `outcome` label so new consumers can
+                    // distinguish Skipped/Clean/Fixed/Suggestion/Failed.
                     let mut v = serde_json::json!({
                         "type": "verification",
                         "message": message,
-                        "success": success,
+                        "success": outcome.is_success(),
+                        "outcome": outcome.label(),
                     });
                     if let Some(f) = file {
                         v["file"] = serde_json::Value::String(f.display().to_string());

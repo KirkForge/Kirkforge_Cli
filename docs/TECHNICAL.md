@@ -1248,6 +1248,29 @@ direction), not an accident — the loaders ship and are documented here.
   The `model` frontmatter field overrides the model for that agent's
   calls (WO 45.31 wired this — resolution order: per-call `task` arg →
   agent `model` → `subagent_provider.model` → parent model).
+
+  Minimal example — drop this at `.claude/agents/code-reviewer.md` in
+  the project root, then invoke with `task` tool's `persona="code-reviewer"`
+  (the `task` tool description lists discovered agent names so the model
+  knows which persona values are valid):
+
+  ```markdown
+  ---
+  name: code-reviewer
+  description: Reviews code for bugs and style
+  tools: Read, Grep, Glob, Bash
+  model: claude-sonnet-4
+  ---
+  You are a senior code reviewer. Read the diff, flag bugs, style
+  issues, and security concerns. Be concise; cite file:line.
+  ```
+
+  Only `name` is required; `description`, `tools`, and `model` are
+  optional. `tools` is a comma- or space-separated list of Claude tool
+  names (translated through the alias table below). The body after the
+  closing `---` is the agent's system prompt. Files without valid
+  frontmatter are skipped with a `tracing::warn!` (a bad agent file does
+  not break the session).
 - **`.mcp.json`** (project-root `.mcp.json` → `mcp_project.rs:52`): a
   project-root file with an `mcpServers` object is parsed into
   `McpServerConfig` entries (`command`/`args`/`env` → stdio;

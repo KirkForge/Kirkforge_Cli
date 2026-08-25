@@ -502,6 +502,13 @@
 # default (false), unsigned workspace plugins are rejected at load. Set this
 # to true ONLY if no model/tool can write to any configured `plugin_sources`
 # path — otherwise a planted plugin loads with full user privileges.
+#
+# The same flag gates `.claude/agents/*.md` dynamic agent files (WO 39.3):
+# a dropped agent file widens a subagent's toolset, so the workspace
+# `.claude/agents/` dir is refused unless this is true (agents under the
+# canonical data dir are always trusted). See docs/TECHNICAL.md "Claude
+# compatibility layer" for the agent file format (frontmatter name /
+# description / tools / model + body = system prompt).
 # plugin_trust_workspace = false
 #
 # [plugin_sources]

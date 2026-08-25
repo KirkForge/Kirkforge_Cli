@@ -117,17 +117,17 @@ impl Tool for WorkflowTool {
             }
         };
 
-        match run_workflow(
-            &template,
-            &vars,
+        match run_workflow(WorkflowRunArgs {
+            template: &template,
+            vars: &vars,
             spawner,
-            ctx.tools.clone(),
-            ctx.token.clone(),
-            ctx.dry_run,
-            &self.deny_list,
-            &self.path_guard,
-            self.bash_sandbox_workdir,
-        )
+            toolset: ctx.tools.clone(),
+            cancel_token: ctx.token.clone(),
+            dry_run: ctx.dry_run,
+            deny_list: &self.deny_list,
+            path_guard: &self.path_guard,
+            bash_sandbox_workdir: self.bash_sandbox_workdir,
+        })
         .await
         {
             Ok(json) => ToolOutcome::Success { content: json },
@@ -138,18 +138,33 @@ impl Tool for WorkflowTool {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run_workflow(
-    template: &str,
-    vars: &HashMap<String, String>,
+// Bundles the 9 args to `run_workflow` so the signature stays under
+// clippy::too_many_arguments. Single caller: `WorkflowTool::run`. No
+// behavior change — pure parameter grouping.
+struct WorkflowRunArgs<'a> {
+    template: &'a str,
+    vars: &'a HashMap<String, String>,
     spawner: Arc<dyn TaskSpawner>,
     toolset: Option<Arc<CompositeToolset>>,
     cancel_token: CancellationToken,
     dry_run: bool,
-    deny_list: &DenyList,
-    path_guard: &PathGuard,
+    deny_list: &'a DenyList,
+    path_guard: &'a PathGuard,
     bash_sandbox_workdir: bool,
-) -> Result<String> {
+}
+
+async fn run_workflow(args: WorkflowRunArgs<'_>) -> Result<String> {
+    let WorkflowRunArgs {
+        template,
+        vars,
+        spawner,
+        toolset,
+        cancel_token,
+        dry_run,
+        deny_list,
+        path_guard,
+        bash_sandbox_workdir,
+    } = args;
     let path = kf_workflow::find_workflow_file(template)
         .with_context(|| format!("workflow template '{template}' not found"))?;
     let raw = std::fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;

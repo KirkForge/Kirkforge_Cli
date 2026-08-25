@@ -5,7 +5,7 @@
 use super::line_mode::run_line_mode;
 use super::turn_events::resolve_continue_path;
 use kf_code::{adapters, daemon, line_mode, session, tools, tui};
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 
 pub(crate) struct RunArgs {
     pub(crate) model: Option<String>,
@@ -566,7 +566,11 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // gated by an approval prompt (persisted in the data dir). Non-
     // interactive runs skip the prompt and silently drop unapproved
     // project servers — auto-approving spawned subprocesses from a
-    // script would defeat the gate.
+    // script would defeat the gate. The env override
+    // `KF_MCP_AUTO_TRUST_PROJECT=<path>` is the CI escape hatch (WO 45.31):
+    // it pre-trusts a named project without a prompt, which is a real
+    // trust decision (the operator names the exact project, not a blanket
+    // "trust everything").
     let mut mcp_servers = cfg_for_mcp.tools.mcp_servers.clone();
     if cfg_for_mcp.tools.load_project_mcp_json {
         let project_root =
@@ -574,41 +578,63 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         match session::mcp_project::parse_project_mcp_json(&project_root) {
             Ok(Some(doc)) => {
                 let approved = session::mcp_project::is_approved(&project_root);
+                let env_override = session::mcp_project::env_trust_override_matches(&project_root);
                 let (project_servers, prompt) = session::mcp_project::resolve_project_mcp(
                     cfg_for_mcp.tools.load_project_mcp_json,
                     Some(&doc),
                     approved,
                 );
-                if prompt && !non_interactive {
+                if prompt {
                     let names: Vec<&str> = doc.mcp_servers.keys().map(|s| s.as_str()).collect();
-                    eprintln!(
-                        "🔐 This project declares MCP servers in .mcp.json: [{}].",
-                        names.join(", ")
-                    );
-                    eprintln!(
-                        "   Approve loading them this session? Add the project to the \
-                         approval list by running this again after approving, or set \
-                         `load_project_mcp_json = false` in config.toml to suppress. \
-                         (This message is the first-load gate; approval persists per \
-                         project in the kf-code data dir.)"
-                    );
-                    // Record the approval so subsequent launches are silent.
-                    // In a full TUI impl this would be a modal; for phase 1
-                    // we prompt-then-record so the operator's next launch
-                    // loads the servers. ponytail: a real yes/no modal lands
-                    // when the TUI gains a generic prompt component; the
-                    // pure resolve_project_mcp + persistence is already
-                    // correct and test-covered.
-                    session::mcp_project::record_approval(&project_root);
-                    tracing::info!(
-                        project = %project_root.display(),
-                        servers = ?names,
-                        "project .mcp.json approval recorded (phase-1 prompt)"
-                    );
-                } else if prompt && non_interactive {
-                    tracing::info!(
-                        "project .mcp.json found but not approved; skipping in non-interactive mode"
-                    );
+                    // WO 45.31: real yes/no prompt. The phase-1 stub
+                    // unconditionally called record_approval; this asks
+                    // the operator for a real decision. The decision
+                    // logic lives in decide_unapproved_mcp (pure,
+                    // testable); only the stdin read is impure here.
+                    let user_approved = if env_override {
+                        // Env override pre-authorizes — no prompt needed.
+                        tracing::info!(
+                            project = %project_root.display(),
+                            "project .mcp.json admitted via KF_MCP_AUTO_TRUST_PROJECT override"
+                        );
+                        true
+                    } else if non_interactive {
+                        // No prompt in non-interactive mode; drop (the
+                        // decision helper confirms this below).
+                        false
+                    } else {
+                        prompt_mcp_approval(&names)
+                    };
+                    match session::mcp_project::decide_unapproved_mcp(
+                        non_interactive,
+                        env_override,
+                        user_approved,
+                    ) {
+                        session::mcp_project::McpApprovalOutcome::LoadAndPersist => {
+                            session::mcp_project::record_approval(&project_root);
+                            let servers = session::mcp_project::to_mcp_server_configs(&doc);
+                            tracing::info!(
+                                project = %project_root.display(),
+                                servers = ?names,
+                                count = servers.len(),
+                                "project .mcp.json approved; loading servers"
+                            );
+                            mcp_servers.extend(servers);
+                        }
+                        session::mcp_project::McpApprovalOutcome::Drop => {
+                            if non_interactive {
+                                tracing::info!(
+                                    "project .mcp.json found but not approved; skipping in non-interactive mode (set KF_MCP_AUTO_TRUST_PROJECT=<path> to pre-trust)"
+                                );
+                            } else {
+                                eprintln!("   .mcp.json servers not loaded this session. Re-run and approve to load, or set KF_MCP_AUTO_TRUST_PROJECT=<path>.");
+                                tracing::info!(
+                                    project = %project_root.display(),
+                                    "project .mcp.json approval declined by operator"
+                                );
+                            }
+                        }
+                    }
                 } else if !project_servers.is_empty() {
                     tracing::info!(
                         count = project_servers.len(),
@@ -917,6 +943,44 @@ async fn federate_index_with_lsp(
         total = edges_mut.len(),
         "LSP federation: resolved call-edge callee_files"
     );
+}
+
+/// Interactive yes/no prompt for a project's `.mcp.json` servers (WO
+/// 45.31). Prints the server list to stderr and reads one line from
+/// stdin. `y`/`yes` (case-insensitive) approves; anything else (including
+/// EOF / empty) denies. This replaces the phase-1 stub that
+/// unconditionally recorded approval.
+///
+/// Blocking stdin read is correct here: the prompt runs once at session
+/// setup, before the TUI or line-mode loop starts, so there is no
+/// competing stdin reader and no shutdown context to race. The TUI is not
+/// yet running at this point (raw mode is off), so a plain stdin line
+/// read works in both line-mode and TUI launch paths.
+fn prompt_mcp_approval(names: &[&str]) -> bool {
+    eprintln!(
+        "🔐 This project declares MCP servers in .mcp.json: [{}].",
+        names.join(", ")
+    );
+    eprintln!("   These are attacker-controllable spawn config (a cloned repo can ship them).");
+    eprint!("   Approve loading them this session? [y/N]: ");
+    if let Err(e) = std::io::stderr().flush() {
+        tracing::warn!(error = %e, "failed to flush stderr .mcp.json prompt");
+        return false;
+    }
+    use std::io::BufRead;
+    let mut answer = String::new();
+    let stdin = std::io::stdin();
+    match stdin.lock().read_line(&mut answer) {
+        Ok(0) => false, // EOF → deny
+        Ok(_) => {
+            let trimmed = answer.trim().to_ascii_lowercase();
+            trimmed == "y" || trimmed == "yes"
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to read .mcp.json approval answer from stdin");
+            false
+        }
+    }
 }
 
 /// Print a hint listing recent sessions when running non-interactively

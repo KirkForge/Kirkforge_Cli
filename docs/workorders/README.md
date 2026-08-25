@@ -934,13 +934,13 @@ tree, ~11 stale claims corrected in-line. See
 | 45.20 | [Split `src/tools/task.rs` (2639 lines / 99487 bytes)](45.20-split-tools-task.md) | Done |
 | 45.21 | [detect_shadowed_rules misses bash-command deny semantics (*→** promotion + prefix match)](45.21-shadow-detection-misses-bash-command-deny-semantics.md) | Done |
 | 45.31 | [Claude compat support gaps: documentation + .mcp.json modal + .claude/agents model field](45.31-claude-compat-support-gaps.md) | Done |
-| 45.32 | [Declarative agent definition: TOML/YAML config layer for subagents](45.32-declarative-agent-definition-gap.md) | Planned |
+| 45.32 | [Declarative agent definition: TOML/YAML config layer for subagents](45.32-declarative-agent-definition-gap.md) | Done |
 | 45.36 | [Verifier Architecture Audit (external reviewer CLAIM A)](45.36-verifier-architecture-audit.md) | Done |
 | 45.37 | [Worktree Artifact Policy Audit (external reviewer CLAIM B)](45.37-worktree-artifact-policy-audit.md) | Done |
-| 45.41 | [Config knob count audit (external reviewer "400 knobs" claim)](45.41-config-knob-count-audit.md) | Planned |
-| 45.42 | [Operational maturity audit (external reviewer 8/10 score)](45.42-operational-maturity-audit.md) | Planned |
-| 45.43 | [Architectural simplicity audit (external reviewer 7/10 score)](45.43-architectural-simplicity-audit.md) | Planned |
-| 45.46 | [# Workorder 46.0 — Event Bus No-Drop Under Load Invariant](45.46-event-bus-no-drop-invariant.md) | Planned |
+| 45.41 | [Config knob count audit (external reviewer "400 knobs" claim)](45.41-config-knob-count-audit.md) | Done |
+| 45.42 | [Operational maturity audit (external reviewer 8/10 score)](45.42-operational-maturity-audit.md) | Done |
+| 45.43 | [Architectural simplicity audit (external reviewer 7/10 score)](45.43-architectural-simplicity-audit.md) | Done |
+| 45.46 | [# Workorder 46.0 — Event Bus No-Drop Under Load Invariant](45.46-event-bus-no-drop-invariant.md) | Done |
 | 45.47 | [# Workorder 46.1 — Verifier Verdict-Set Determinism Invariant](45.47-verifier-verdict-set-determinism.md) | Done |
 | 45.51 | [state.md stale WO 44 status + HEAD SHA](45.51-state-md-stale-wo44-and-sha.md) | Done |
 | 45.52 | [workorders/README.md WO 34 prose contradicts its own table](45.52-workorders-readme-wo34-prose-contradicts-table.md) | Done |

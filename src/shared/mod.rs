@@ -27,6 +27,11 @@ pub mod event_bus;
 pub mod metrics;
 pub mod minify;
 pub mod permission;
+// WO 45.11: unified sandbox policy intake (seam). The trait + SandboxOp
+// enum are the single chokepoint every enforcement surface *could* route
+// through; no surface is migrated yet (deferred full migration — see
+// src/shared/sandbox_policy.rs ceiling comment + the WO audit).
+pub mod sandbox_policy;
 // WO 28.2: gated on the stratum feature because session_mode uses
 // kf_compress_core::mode::Mode, and kf-compress-core is only a dep when
 // stratum is enabled (mirrors `pub mod stratum;` gating in session/mod.rs).

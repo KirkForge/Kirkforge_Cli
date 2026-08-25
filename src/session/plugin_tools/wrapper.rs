@@ -75,6 +75,9 @@ pub struct PluginToolWrapper {
 
 impl PluginToolWrapper {
     /// Create a new wrapper for a single plugin tool.
+    // reason: each arg is a distinct field of the constructed wrapper; a
+    // params-struct would just be the struct mirrored into a constructor.
+    // Audited WO 45.54 — leave as-is.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,

@@ -324,6 +324,10 @@ fn line_color(s: &str) -> Color {
 /// Render the approval dialog from a pre-computed `visible_lines`
 /// list. Split out of `render_approval_dialog` so the cache-hit path
 /// and the cache-miss path share the layout/scroll/indicator logic.
+// reason: each arg is an independent rendering input (frame, areas, approval
+// state, pre-computed lines, scroll/window state); grouping would obscure
+// the cache-hit/cache-miss wiring this split exists to share. Audited WO
+// 45.54 — leave as-is.
 #[allow(clippy::too_many_arguments)]
 fn render_approval_dialog_from_lines(
     f: &mut Frame,

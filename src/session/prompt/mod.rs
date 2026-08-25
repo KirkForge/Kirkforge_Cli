@@ -425,6 +425,9 @@ impl PromptBuilder {
     /// `top_files` is a list of `(path, content)` pairs, sorted by
     /// access count descending. The content strings are already
     /// minified by the caller (using WO 17.4's minifier).
+    // reason: params mirror `build`'s volatile subset plus the `top_files`
+    // payload; a struct would duplicate `build`'s grouping. Audited WO
+    // 45.54 — leave as-is (overlaps the REASONED `build` site).
     #[allow(clippy::too_many_arguments)]
     pub fn build_with_top_files(
         &mut self,

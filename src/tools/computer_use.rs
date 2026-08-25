@@ -510,6 +510,9 @@ async fn run_hosted_action(
     }
 }
 
+// reason: each arg is a distinct closure over the headless_chrome Tab; a
+// struct of FnOnce fields would not group them meaningfully (each is used
+// once by exactly one action arm). Audited WO 45.54 — leave as-is.
 #[allow(clippy::too_many_arguments)]
 fn dispatch_action(
     action: &str,

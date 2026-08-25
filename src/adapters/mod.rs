@@ -492,6 +492,11 @@ pub fn adapter_for(
 
 /// Build the right adapter from a model name string, taking the Anthropic
 /// cloud provider hint into account.
+// reason: DEFERRED hub — 21 callers across 7 modules; a params-struct
+// (`AdapterConfig`) would centralize the 13 provider-routing params but the
+// blast radius is CRITICAL (49 impacted symbols). Refactor-on-touch: introduce
+// the struct when this signature next changes for a feature reason. Tracked
+// in WO 45.54 (too_many_arguments audit).
 #[allow(clippy::too_many_arguments)]
 pub fn adapter_for_with_provider(
     model_name: &str,

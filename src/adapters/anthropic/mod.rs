@@ -208,6 +208,11 @@ impl ModelAdapter for AnthropicAdapter {
 ///
 /// This function is `pub(crate)` so the Bedrock and Vertex adapters can reuse
 /// the same body construction without duplicating message translation.
+// reason: DEFERRED hub — 33 callers (31 in this module's test + stream paths
+// plus Bedrock/Vertex); an `AnthropicBodyParams` struct would reduce call-site
+// repetition but the blast radius is CRITICAL (34 impacted symbols).
+// Refactor-on-touch: introduce the struct when the next model family adds a
+// new body param. Tracked in WO 45.54 (too_many_arguments audit).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_anthropic_body(
     model: &str,

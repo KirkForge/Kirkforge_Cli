@@ -66,7 +66,9 @@ pub mod shell;
 // (data_dir/prompt deps). Not the routing store (crates/kf-memory-store).
 pub mod memory;
 
-pub use config::{Config, DisplayConfig, ModelConfig, SecurityConfig, SessionConfig, ToolConfig};
+pub use config::{
+    ArtifactPolicy, Config, DisplayConfig, ModelConfig, SecurityConfig, SessionConfig, ToolConfig,
+};
 
 /// Thread-safe shared configuration. Used by both the TUI and the executor
 /// so that config hot-reload affects live behavior without restarting.

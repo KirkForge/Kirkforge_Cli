@@ -234,7 +234,10 @@ async fn handle_run(
             });
         let (worktree_enabled, auto_apply_patch) = {
             let c = crate::shared::read_shared_config(&shared_cfg);
-            (c.session.worktree_enabled, c.session.auto_apply_patch)
+            (
+                c.session.artifact_policy.is_worktree_enabled(),
+                c.session.artifact_policy.is_auto_apply(),
+            )
         };
         // WO 38.4: constructed here (not inside the spawn) so the TUI
         // state keeps an Arc for `/workflow cancel` to reach.

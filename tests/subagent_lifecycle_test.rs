@@ -104,7 +104,11 @@ fn subagent_config(
     worktree_enabled: bool,
 ) -> SharedConfig {
     let mut cfg = Config::default();
-    cfg.session.worktree_enabled = worktree_enabled;
+    cfg.session.artifact_policy = if worktree_enabled {
+        kf_code::shared::ArtifactPolicy::PatchOnly
+    } else {
+        kf_code::shared::ArtifactPolicy::DirectWrite
+    };
     cfg.security.sandbox_dir = Some(parent_repo.to_string_lossy().to_string());
     cfg.security.auto_approve = auto_approve;
     cfg.security.audit_log_path = Some(audit_path.to_path_buf());

@@ -1224,10 +1224,12 @@ mod tests {
 
         // ── 1. Total struct-level fields ──────────────────────────
         // ModelConfig=34 (33 direct + subagent_provider sub-struct handle),
-        // SecurityConfig=22, ToolConfig=35, SessionConfig=9,
-        // DisplayConfig=7 → 108 total pub fields.
+        // SecurityConfig=22, ToolConfig=35, SessionConfig=8,
+        // DisplayConfig=7 → 107 total pub fields.
+        // (WO 45.37: SessionConfig 9 → 8 — worktree_enabled +
+        // auto_apply_patch replaced by artifact_policy enum.)
         assert_eq!(
-            CONFIG_FIELD_COUNT, 108,
+            CONFIG_FIELD_COUNT, 107,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -1395,7 +1397,7 @@ mod tests {
         // is: every struct field is EITHER handled by merge_toml OR
         // intentionally skipped. The same applies to apply_env_overrides.
         //
-        // Intentionally skipped by merge_toml (15 struct-level fields):
+        // Intentionally skipped by merge_toml (14 struct-level fields):
         //   ModelConfig:  summarize_enabled, subagent_allowed_models,
         //                 opencode_zen_api_key, opencode_zen_endpoint, seed
         //   SecurityConfig: permission_rules, docker (4 sub-fields),
@@ -1403,7 +1405,7 @@ mod tests {
         //   ToolConfig:  max_tool_result_chars,
         //                mcp_servers, lsp_servers, max_plugin_trust,
         //                stratum_mode, budget_ceiling, budget_approaching_ratio
-        //   SessionConfig: worktree_enabled, auto_apply_patch
+        //   SessionConfig: artifact_policy
         //
         // Additionally skipped by apply_env_overrides (4 more, beyond the 15):
         //   SecurityConfig: deny_paths, deny_urls, deny_extensions,

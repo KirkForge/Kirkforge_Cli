@@ -93,10 +93,14 @@
 
 ## Pending / Deferred (open)
 
-- **WO 45 series (20 items)**: architecture convergence + docs fixes from
-  the external-review verification. Priority: 45.1 (AgentRun identity),
-  45.16-45.20 (module splits), 45.31 (Claude compat docs), 45.51/45.52
-  (stale docs fixes). Full list in docs/workorders/45.*.md.
+- **WO 45 series COMPLETE** (27 workorders, 4 waves, all Done + merged):
+  45.1 (AgentRun identity), 45.10 (typed event bus), 45.11 (sandbox seam),
+  45.12 (MCP sandbox), 45.16-45.20 (5 module splits), 45.21 (shadow detection),
+  45.31 (Claude compat), 45.32 (declarative agent docs), 45.36 (verifier
+  outcome type), 45.37 (artifact policy enum), 45.41-45.43 (audit WOs),
+  45.46-45.47 (invariant tests), 45.51-45.54 (docs + params-struct),
+  45.59 (nightly subprocess tests), 45.61 (plugin signature hole),
+  45.62 (Anthropic thinking detection), 45.63 (pricing table).
 - **WO 43.20 (deferred tail)**: http 0.2/http-body 0.4 dedup NOT achievable —
   aws `sign-http` itself needs http 0.2 and the newer crate set needs rustc
   ≥1.91 (toolchain is 1.88). Remaining: revisit at toolchain ≥1.94. Also
@@ -181,7 +185,7 @@
   (static, clippy, windows, e2e, full-tests). First fully green dev run
   since `32571059308` (2026-08-22); the 41-commit pile in between never
   had a valid green signal.
-- **main == dev == origin/main == origin/dev** at `aec47bfe`. Flow:
+- **main == dev == origin/main == origin/dev** at `84825137`. Flow:
   now on (user directive): push to dev → CI green → fast-forward main.
 - **Windows CI debt cleared** (all inherited from the dead session, fixed
   this session): kf-budget-core README test count 923; complete_path +
@@ -196,5 +200,5 @@
 - **Cleanup**: 60 worktrees → 3 (main, dev-integration, user's external);
   all merged local + remote wo/* branches deleted (49 remote + 6 stale
   wo30* + locals); remote is just dev + main.
-- Last full local gate on `aec47bfe`: test-full 4953 passed / clippy
+- Last full local gate on `aec47bfe`: test-full 5007 passed / clippy
   (unix + windows cross) / fmt / check --locked all clean.

@@ -58,6 +58,66 @@ impl Default for EventBusOptions {
     }
 }
 
+/// Typed discriminator for [`Event`]. Closes the one untyped event
+/// surface (WO 45.10): the production-closed `artifact.*` kinds are
+/// variants; any other TS-shape kind flows through [`BusEventKind::Other`].
+///
+/// `as_str()` preserves the TS wire shape (`@kirkforge/core-events` emits
+/// string `kind`s); the bus is a deliberate TS port (ADR-006, WO 9.6) and
+/// the string kind is load-bearing for the `artifact.*` bridge (WO 36.6).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum BusEventKind {
+    /// `artifact.emitted` — files written to disk.
+    ArtifactEmitted,
+    /// `artifact.blocked` — writes rejected by the safety pipeline.
+    ArtifactBlocked,
+    /// `artifact.unterminated` — parser saw an open block with no terminator.
+    ArtifactUnterminated,
+    /// `artifact.truncated` — model emission hit a length limit.
+    ArtifactTruncated,
+    /// ponytail: TS-port fidelity escape hatch. The typed variants above
+    /// are the production-closed artifact set (the only kinds `EventBusSink`
+    /// emits today). Any other TS-shape kind — test fixtures like
+    /// `verify.lint`, or future producers that want the string wire shape —
+    /// flows through here without touching the enum. Upgrade path: promote
+    /// to a named variant when a producer moves from test-only to
+    /// production. Ceiling: the enum does not statically forbid misspelled
+    /// string kinds inside `Other` — that is the cost of TS-interop fidelity.
+    Other(String),
+}
+
+impl BusEventKind {
+    /// TS wire-shape string. Matches the `kind` literal the TS
+    /// `@kirkforge/core-events` `EventBus` emits and that
+    /// [`crate::session::event_sink_bridge::EventBusSink`] bridges.
+    pub fn as_str(&self) -> &str {
+        match self {
+            BusEventKind::ArtifactEmitted => "artifact.emitted",
+            BusEventKind::ArtifactBlocked => "artifact.blocked",
+            BusEventKind::ArtifactUnterminated => "artifact.unterminated",
+            BusEventKind::ArtifactTruncated => "artifact.truncated",
+            BusEventKind::Other(s) => s.as_str(),
+        }
+    }
+}
+
+impl<T: AsRef<str>> From<T> for BusEventKind {
+    /// Construct from a TS-shape kind string. Recognized artifact kinds
+    /// become typed variants; anything else becomes [`BusEventKind::Other`].
+    /// This is the backward-compat path for any producer still passing a
+    /// string kind (none in production today; `EventBusSink` is updated in
+    /// this same WO).
+    fn from(s: T) -> Self {
+        match s.as_ref() {
+            "artifact.emitted" => BusEventKind::ArtifactEmitted,
+            "artifact.blocked" => BusEventKind::ArtifactBlocked,
+            "artifact.unterminated" => BusEventKind::ArtifactUnterminated,
+            "artifact.truncated" => BusEventKind::ArtifactTruncated,
+            other => BusEventKind::Other(other.to_string()),
+        }
+    }
+}
+
 /// An event flowing through the bus. Generic shape covering the
 /// `KirkForgeEvent` union: `kind` discriminates, `sequence`/`stream_id`
 /// identify the stream, `value` carries the payload. The idempotency
@@ -65,7 +125,7 @@ impl Default for EventBusOptions {
 /// emits of the same event dedupe.
 #[derive(Debug, Clone)]
 pub struct Event {
-    pub kind: String,
+    pub kind: BusEventKind,
     pub schema_version: String,
     pub sequence: u64,
     pub stream_id: String,
@@ -85,7 +145,7 @@ impl Event {
             .map(|v| v.to_string())
             .unwrap_or_default();
         let mut h = Sha256::new();
-        h.update(self.kind.as_bytes());
+        h.update(self.kind.as_str().as_bytes());
         h.update([0u8]);
         h.update(self.stream_id.as_bytes());
         h.update([0u8]);
@@ -99,7 +159,7 @@ impl Event {
 }
 
 struct State {
-    handlers: HashMap<String, Vec<(u64, Handler)>>,
+    handlers: HashMap<BusEventKind, Vec<(u64, Handler)>>,
     buffer: VecDeque<Event>,
     buffer_capacity: usize,
     idempotency: HashMap<String, Instant>,
@@ -176,14 +236,18 @@ impl EventBus {
     /// Subscribe `handler` to events of `kind`. Returns an unsub callable;
     /// calling it removes the handler. Dropping the callable without
     /// calling it leaves the handler subscribed (matches TS semantics).
-    pub fn on<F, Fut>(&self, kind: &str, handler: F) -> Box<dyn FnOnce() + Send + Sync + 'static>
+    pub fn on<F, Fut>(
+        &self,
+        kind: &BusEventKind,
+        handler: F,
+    ) -> Box<dyn FnOnce() + Send + Sync + 'static>
     where
         F: Fn(Event) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = HandlerResult> + Send + 'static,
     {
         let handler: Handler = Arc::new(move |e: Event| Box::pin(handler(e)));
         let id = NEXT_HANDLER_ID.fetch_add(1, Ordering::Relaxed);
-        let kind_owned = kind.to_string();
+        let kind_owned = kind.clone();
         {
             // Poison-tolerant (WO 38.2), matching `read_shared_config`:
             // recovery is safe because every critical section below is a
@@ -340,12 +404,13 @@ mod tests {
         let bus = EventBus::default();
         let received = Arc::new(Mutex::new(Vec::new()));
         let recv_clone = Arc::clone(&received);
-        let _unsub = bus.on("verify.lint", move |e| {
+        let kind = BusEventKind::Other("verify.lint".into());
+        let _unsub = bus.on(&kind, move |e| {
             recv_clone.lock().unwrap().push(e);
             std::future::ready(Ok(()))
         });
         bus.emit(Event {
-            kind: "verify.lint".into(),
+            kind: BusEventKind::Other("verify.lint".into()),
             schema_version: "v3".into(),
             sequence: 1,
             stream_id: "s1".into(),
@@ -364,12 +429,13 @@ mod tests {
         let bus = EventBus::default();
         let count = Arc::new(Mutex::new(0u32));
         let count_clone = Arc::clone(&count);
-        let _unsub = bus.on("verify.types", move |_| {
+        let kind = BusEventKind::Other("verify.types".into());
+        let _unsub = bus.on(&kind, move |_| {
             *count_clone.lock().unwrap() += 1;
             std::future::ready(Ok(()))
         });
         let event = Event {
-            kind: "verify.types".into(),
+            kind: BusEventKind::Other("verify.types".into()),
             schema_version: "v3".into(),
             sequence: 1,
             stream_id: "s1".into(),
@@ -408,12 +474,13 @@ mod tests {
         let bus = EventBus::default();
         let count = Arc::new(Mutex::new(0u32));
         let count_clone = Arc::clone(&count);
-        let unsub = bus.on("verify.lint", move |_| {
+        let kind = BusEventKind::Other("verify.lint".into());
+        let unsub = bus.on(&kind, move |_| {
             *count_clone.lock().unwrap() += 1;
             std::future::ready(Ok(()))
         });
         bus.emit(Event {
-            kind: "verify.lint".into(),
+            kind: BusEventKind::Other("verify.lint".into()),
             schema_version: "v3".into(),
             sequence: 1,
             stream_id: "s1".into(),
@@ -424,7 +491,7 @@ mod tests {
         .unwrap();
         unsub();
         bus.emit(Event {
-            kind: "verify.lint".into(),
+            kind: BusEventKind::Other("verify.lint".into()),
             schema_version: "v3".into(),
             sequence: 2,
             stream_id: "s1".into(),
@@ -445,7 +512,7 @@ mod tests {
         // graceful_shutdown returns once inflight handlers complete.
         let bus = EventBus::default();
         bus.emit(Event {
-            kind: "no.handlers.kind".into(),
+            kind: BusEventKind::Other("no.handlers.kind".into()),
             schema_version: "v3".into(),
             sequence: 1,
             stream_id: "s1".into(),

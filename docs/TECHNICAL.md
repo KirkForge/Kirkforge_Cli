@@ -581,7 +581,11 @@ accepted the artifact events cheaply (kind/stream_id/timestamp/value carry
 over, `task_id` folds into the value, per-sink sequence keeps the
 idempotency key unique), so no TracingSink fallback was needed. Emit
 failures (bus shut down) log a warning — the bridge exists so artifact
-events are not silently swallowed.
+events are not silently swallowed. The `Event.kind` field is typed
+(`BusEventKind`): the four production `artifact.*` kinds are named
+variants, any other TS-shape kind flows through `BusEventKind::Other`
+(WO 45.10 — closes the one untyped event surface; `as_str()` preserves
+the TS wire shape for the `artifact.*` bridge).
 
 `ToolConfig.max_continuation_rounds` (default 5, clamped 0–50) caps how many
 times the turn loop will continue after `FinishReason::Length`. When the cap

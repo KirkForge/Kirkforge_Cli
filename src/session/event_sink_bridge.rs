@@ -8,7 +8,7 @@
 //! (the bus `Event` has no task field); a per-sink monotonic `sequence`
 //! keeps the idempotency key unique per emit.
 
-use crate::shared::event_bus::{Event, EventBus};
+use crate::shared::event_bus::{BusEventKind, Event, EventBus};
 use async_trait::async_trait;
 use kf_orchestrator::sink::{ArtifactEvent, EventSink};
 use serde_json::Value;
@@ -71,7 +71,7 @@ impl EventSink for EventBusSink {
             } => (task_id, stream_id, timestamp, value),
         };
         let bus_event = Event {
-            kind: kind.to_string(),
+            kind: BusEventKind::from(kind),
             schema_version: "v1".into(),
             sequence: self.sequence.fetch_add(1, Ordering::Relaxed),
             stream_id,
@@ -101,12 +101,12 @@ mod tests {
         let sink = EventBusSink::new(bus.clone());
         let seen: std::sync::Arc<Mutex<Vec<Event>>> = Default::default();
         let recorder = seen.clone();
-        let _unsub = bus.on("artifact.emitted", move |e| {
+        let _unsub = bus.on(&BusEventKind::ArtifactEmitted, move |e| {
             recorder.lock().unwrap().push(e);
             std::future::ready(Ok(()))
         });
         let recorder = seen.clone();
-        let _unsub2 = bus.on("artifact.blocked", move |e| {
+        let _unsub2 = bus.on(&BusEventKind::ArtifactBlocked, move |e| {
             recorder.lock().unwrap().push(e);
             std::future::ready(Ok(()))
         });
@@ -129,13 +129,13 @@ mod tests {
         let events = seen.lock().unwrap().clone();
         assert_eq!(events.len(), 2, "both artifact events must be delivered");
         let emitted = &events[0];
-        assert_eq!(emitted.kind, "artifact.emitted");
+        assert_eq!(emitted.kind, BusEventKind::ArtifactEmitted);
         assert_eq!(emitted.stream_id, "sig-1");
         assert_eq!(emitted.timestamp, "t100");
         assert_eq!(emitted.value.as_ref().unwrap()["taskId"], "t1");
         assert_eq!(emitted.value.as_ref().unwrap()["filesWritten"], 2);
         let blocked = &events[1];
-        assert_eq!(blocked.kind, "artifact.blocked");
+        assert_eq!(blocked.kind, BusEventKind::ArtifactBlocked);
         assert_eq!(blocked.sequence, emitted.sequence + 1);
     }
 
@@ -145,7 +145,7 @@ mod tests {
         let sink = EventBusSink::new(bus.clone());
         let seen: std::sync::Arc<Mutex<Vec<Event>>> = Default::default();
         let recorder = seen.clone();
-        let _unsub = bus.on("artifact.truncated", move |e| {
+        let _unsub = bus.on(&BusEventKind::ArtifactTruncated, move |e| {
             recorder.lock().unwrap().push(e);
             std::future::ready(Ok(()))
         });

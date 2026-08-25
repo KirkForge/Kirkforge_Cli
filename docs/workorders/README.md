@@ -924,7 +924,7 @@ tree, ~11 stale claims corrected in-line. See
 20 audit workorders from verifying ChatGPT's architecture review against the actual codebase.
 
 | 45.1 | [# Workorder 45.1 — Cross-cutting AgentRun identity contract](45.1-agent-run-identity-contract.md) | Done |
-| 45.10 | [Event Type Audit (external reviewer claim)](45.10-event-type-audit.md) | Planned |
+| 45.10 | [Event Type Audit (external reviewer claim)](45.10-event-type-audit.md) | Done |
 | 45.11 | [Sandbox Policy Unification (external reviewer claim)](45.11-sandbox-policy-unification-audit.md) | Planned |
 | 45.12 | [MCP tool calls bypass all local sandbox policy](45.12-mcp-tool-no-sandbox.md) | Planned |
 | 45.16 | [Split `src/session/config/mod.rs` (2952 lines / 120477 bytes)](45.16-split-session-config-mod.md) | Done |

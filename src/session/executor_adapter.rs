@@ -268,10 +268,13 @@ mod tests {
         let seen: std::sync::Arc<std::sync::Mutex<Vec<crate::shared::event_bus::Event>>> =
             Default::default();
         let recorder = seen.clone();
-        let _unsub = bus.on("artifact.emitted", move |e| {
-            recorder.lock().unwrap().push(e);
-            std::future::ready(Ok(()))
-        });
+        let _unsub = bus.on(
+            &crate::shared::event_bus::BusEventKind::ArtifactEmitted,
+            move |e| {
+                recorder.lock().unwrap().push(e);
+                std::future::ready(Ok(()))
+            },
+        );
 
         let orch = kf_orchestrator::Orchestrator::new(
             Arc::new(ExecutorAdapter::new(
@@ -322,7 +325,10 @@ mod tests {
             1,
             "artifact.emitted must reach the bus, got {events:?}"
         );
-        assert_eq!(events[0].kind, "artifact.emitted");
+        assert_eq!(
+            events[0].kind,
+            crate::shared::event_bus::BusEventKind::ArtifactEmitted
+        );
         assert!(events[0].value.as_ref().unwrap()["taskId"]
             .as_str()
             .is_some_and(|t| t.starts_with("task-")));

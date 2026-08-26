@@ -182,18 +182,27 @@ pub struct ToolConfig {
     // its servers merged into the MCP config (gated by first-load approval).
     #[serde(default = "default_load_project_mcp_json")]
     pub load_project_mcp_json: bool,
-    // WO 43.17 / WO 45.61: when true, plugins loaded from the data dir or
-    // workspace sources must be in the `approved_plugins.json` ledger with
-    // a matching content hash. The ledger is layered on top of signature
-    // verification — a signed plugin must ALSO be ledger-approved, because
-    // the manifest-only signature does not cover the command scripts the
-    // manifest points to. Defaults off so existing plugin loads are not
-    // broken.
-    #[serde(default)]
+    // WO 43.17 / WO 45.61 / WO 46.13: when true, plugins loaded from the
+    // data dir or workspace sources must be in the `approved_plugins.json`
+    // ledger with a matching content hash. The ledger is layered on top of
+    // signature verification — a signed plugin must ALSO be ledger-approved,
+    // because the manifest-only signature does not cover the command scripts
+    // the manifest points to. Defaults on (matching
+    // plugin_signature_validation's default) so the content-hash gate runs
+    // in the out-of-the-box config; set to false to opt out.
+    #[serde(default = "default_plugin_consent_ledger")]
     pub plugin_consent_ledger: bool,
 }
 
 fn default_plugin_signature_validation() -> bool {
+    true
+}
+
+// WO 46.13: defaults on to match plugin_signature_validation. The WO 45.61
+// fix (ledger layers on top of signatures) is inert when the ledger is off;
+// defaulting on closes the default-config hole where a signed manifest +
+// swapped command script passes both gates.
+fn default_plugin_consent_ledger() -> bool {
     true
 }
 
@@ -242,7 +251,7 @@ impl Default for ToolConfig {
             doom_loop_max_hits: default_doom_loop_max_hits(),
             doom_loop_action: default_doom_loop_action(),
             load_project_mcp_json: default_load_project_mcp_json(),
-            plugin_consent_ledger: false,
+            plugin_consent_ledger: true,
         }
     }
 }
@@ -276,8 +285,8 @@ mod tests {
             "WO 39.2: project .mcp.json discovery defaults on"
         );
         assert!(
-            !cfg.plugin_consent_ledger,
-            "WO 43.17: plugin consent ledger defaults off"
+            cfg.plugin_consent_ledger,
+            "WO 46.13: plugin consent ledger defaults on (matching plugin_signature_validation)"
         );
     }
 
@@ -306,5 +315,9 @@ doom_loop_action = "halt"
         assert!((cfg.budget_approaching_ratio - 0.8).abs() < f64::EPSILON);
         assert!(cfg.stratum_mode.is_none());
         assert!(cfg.plugin_signature_validation, "R7: serde default-on");
+        assert!(
+            cfg.plugin_consent_ledger,
+            "WO 46.13: serde default-on (matches plugin_signature_validation)"
+        );
     }
 }

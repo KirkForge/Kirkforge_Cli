@@ -695,6 +695,9 @@ command = "tools/greet.sh"
         // unsigned workspace plugins by default. Opt in so this test still
         // exercises the doctor's "missing tool command" path.
         cfg.tools.plugin_trust_workspace = true;
+        // WO 46.13: ledger defaults on; this test exercises the doctor's
+        // missing-tool-command path, not the consent gate, so opt out.
+        cfg.tools.plugin_consent_ledger = false;
         let out = doctor(&cfg);
         assert!(out.contains("Load warnings"), "{out}");
         assert!(out.contains("not accessible"), "{out}");

@@ -4,6 +4,17 @@
 
 ## Shipped (closed this session)
 
+- **WO 46.13**: Done. `plugin_consent_ledger` defaulted to `true`,
+  matching `plugin_signature_validation`'s default. The WO 45.61 fix
+  (ledger layers on top of signatures) was inert in the default config
+  because the ledger defaulted off — a signed manifest + swapped command
+  script passed both gates. Both gates now run out-of-the-box. The
+  coupling is at the default level (both default on independently), not
+  runtime, so a user who explicitly sets `plugin_consent_ledger = false`
+  still gets that. Three tests updated to explicitly opt out of the
+  ledger (they test workspace loading mechanics, not the consent gate).
+  Gate: `scripts/test-fast.sh` (4765 passed) + clippy + fmt + check all green.
+
 - **WO 46.25**: Done. `scripts/ci-local.sh` `run_step` returned non-zero
   on a failing step; with `set -euo pipefail` active, that killed the
   whole script on the first failure — remaining gates never ran and the

@@ -11,6 +11,13 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.13 — `plugin_consent_ledger` now defaults to `true`, matching
+  `plugin_signature_validation`'s default. The WO 45.61 fix (ledger
+  layers on top of signatures) was inert in the default config because
+  the ledger defaulted off; a signed manifest + swapped command script
+  passed both gates. Both gates now run out-of-the-box. Set
+  `plugin_consent_ledger = false` to opt out.
+  [46.13](docs/workorders/46.13-plugin-consent-ledger-default-off.md)
 - WO 46.26 — `bench run-models` now exits non-zero when any model gets
   0/N tasks passed, mirroring the WO 38.10 guard on `bench run`. A
   total-failure run previously exited 0, blinding CI. Reports and the

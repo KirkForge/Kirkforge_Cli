@@ -218,39 +218,41 @@ async fn handle_client(
             auth_token,
         } = req
         {
-            {
+            // WO 46.19: build the error response (if any) under the lock,
+            // then drop the guard before writing. Holding the mutex across
+            // write_response().await lets a client that stops reading stall
+            // the flush and wedge the single global state mutex — blocking
+            // every other daemon op.
+            let reject = {
                 let s = state.lock().await;
                 if let Err(e) = s.check_auth(auth_token.as_deref()) {
-                    if write_response(&mut stream, e).await.is_err() {
-                        break;
-                    }
-                    continue;
-                }
-                if !kf_rbac::has_permission(
+                    Some(e)
+                } else if !kf_rbac::has_permission(
                     &s.actor_for_token(auth_token.as_deref()),
                     kf_rbac::Permission::ViewerStatus,
                 ) {
-                    let resp = Response::error(format!(
+                    Some(Response::error(format!(
                         "forbidden: requires {}",
                         kf_rbac::Permission::ViewerStatus.as_str()
-                    ));
-                    if write_response(&mut stream, resp).await.is_err() {
-                        break;
-                    }
-                    continue;
-                }
-                if let Some(ref cv) = client_version {
+                    )))
+                } else if let Some(ref cv) = client_version {
                     let daemon_version = env!("CARGO_PKG_VERSION");
                     if cv != daemon_version {
-                        let resp = Response::error(format!(
+                        Some(Response::error(format!(
                             "version mismatch: client {cv}, daemon {daemon_version} — restart both halves"
-                        ));
-                        if write_response(&mut stream, resp).await.is_err() {
-                            break;
-                        }
-                        continue;
+                        )))
+                    } else {
+                        None
                     }
+                } else {
+                    None
                 }
+            };
+            if let Some(resp) = reject {
+                if write_response(&mut stream, resp).await.is_err() {
+                    break;
+                }
+                continue;
             }
             // InstanceRegister is a long-lived control channel, not a
             // request/response pair. Hand off to a dedicated handler that

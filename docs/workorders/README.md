@@ -968,7 +968,7 @@ tree, ~11 stale claims corrected in-line. See
 | 46.16 | [Plugin hot-reload watcher dropped at call site — silently dead](46.16-plugin-hot-reload-watcher-dropped.md) | Done |
 | 46.17 | [Process group missing in 3 more subprocess spawn sites (CRITICAL)](46.17-process-group-missing-three-more-spawn-sites.md) | Done |
 | 46.18 | [kf-orchestrator observation outcome stores routing mode, not verdict — empirical router learns nothing](46.18-orchestrator-outcome-stores-mode-not-verdict.md) | Planned |
-| 46.19 | [Daemon state mutex held across write_response .await — single wedged client stalls whole daemon](46.19-daemon-state-mutex-held-across-await.md) | Planned |
+| 46.19 | [Daemon state mutex held across write_response .await — single wedged client stalls whole daemon](46.19-daemon-state-mutex-held-across-await.md) | Done |
 | 46.20 | [Never-ending bash job blocks scheduler and graceful shutdown — unshutdownable daemon](46.20-never-ending-job-blocks-scheduler-shutdown.md) | Planned |
 | 46.21 | [web_fetch buffers entire HTTP body before size cap — OOM from untrusted server](46.21-web-fetch-unbounded-body-read.md) | Planned |
 | 46.22 | [McpClient::Http Drop arm empty — in-flight calls hang 60s on swap](46.22-mcp-http-drop-empty-inflight-hangs.md) | Planned |

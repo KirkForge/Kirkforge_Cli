@@ -11,6 +11,14 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.19 — daemon `InstanceRegister` handshake no longer holds the
+  global state mutex across `write_response().await` on the auth-fail /
+  RBAC-deny / version-mismatch paths. The error `Response` is built
+  under the lock, the guard is dropped, then the response is written.
+  A client that sends a bad token then stops reading can no longer
+  stall the flush and wedge the single state mutex — every other daemon
+  op stays responsive.
+  [46.19](docs/workorders/46.19-daemon-state-mutex-held-across-await.md)
 - WO 45.63 — pricing table no longer silently $0 for current Anthropic
   model families. Added rows for `claude-sonnet-5`, `claude-opus-4-8`,
   `claude-haiku-4-5`, and `claude-3-7-sonnet` (the last found by a new

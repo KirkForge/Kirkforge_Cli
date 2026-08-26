@@ -11,6 +11,14 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.27 — `incremental_rebuild` and `mtime_rebuild` now preserve
+  cached embeddings for symbols whose files did NOT change (WO 38.9
+  item 5 invariant). Both rebuild paths previously constructed via
+  `from_symbols_and_edges_and_calls`, which hard-codes
+  `embeddings: Vec::new()` — silently dropping every cached embedding
+  on every rebuild. Surviving embeddings are re-indexed to their new
+  positions after changed-file symbols are dropped.
+  [46.27](docs/workorders/46.27-context-index-rebuild-drops-cached-embeddings.md)
 - WO 46.26 — `bench run-models` now exits non-zero when any model gets
   0/N tasks passed, mirroring the WO 38.10 guard on `bench run`. A
   total-failure run previously exited 0, blinding CI. Reports and the

@@ -9,7 +9,7 @@
 //! ponytail: disk caching uses serde_json (not bincode — bincode is unmaintained).
 //! The upgrade path is a compact binary format if JSON size becomes a concern.
 
-use crate::{build_embeddings, CachedIndex, ContextIndex, CURRENT_FORMAT_VERSION};
+use crate::{build_embeddings, CachedIndex, ContextIndex, SymbolEmbedding, CURRENT_FORMAT_VERSION};
 
 impl ContextIndex {
     /// Save the index to a JSON file, along with the current git HEAD
@@ -92,23 +92,7 @@ impl ContextIndex {
             .map(|p| p.to_string_lossy().to_string())
             .collect();
 
-        let mut idx =
-            Self::from_symbols_and_edges_and_calls(cached.symbols, cached.edges, cached.call_edges);
-
-        idx.symbols
-            .retain(|s| !changed_set.contains(&s.file.to_string_lossy().to_string()));
-        idx.edges.retain(|e| {
-            !changed_set.contains(&e.source_file.to_string_lossy().to_string())
-                && e.resolved_file
-                    .as_ref()
-                    .is_none_or(|rf| !changed_set.contains(&rf.to_string_lossy().to_string()))
-        });
-        idx.call_edges.retain(|e| {
-            !changed_set.contains(&e.caller_file.to_string_lossy().to_string())
-                && e.callee_file
-                    .as_ref()
-                    .is_none_or(|cf| !changed_set.contains(&cf.to_string_lossy().to_string()))
-        });
+        let mut idx = Self::drop_changed(cached, &changed_set);
 
         for path in &changed_files {
             if path.is_file() {
@@ -171,23 +155,7 @@ impl ContextIndex {
             .map(|p| p.to_string_lossy().to_string())
             .collect();
 
-        let mut idx =
-            Self::from_symbols_and_edges_and_calls(cached.symbols, cached.edges, cached.call_edges);
-
-        idx.symbols
-            .retain(|s| !changed_set.contains(&s.file.to_string_lossy().to_string()));
-        idx.edges.retain(|e| {
-            !changed_set.contains(&e.source_file.to_string_lossy().to_string())
-                && e.resolved_file
-                    .as_ref()
-                    .is_none_or(|rf| !changed_set.contains(&rf.to_string_lossy().to_string()))
-        });
-        idx.call_edges.retain(|e| {
-            !changed_set.contains(&e.caller_file.to_string_lossy().to_string())
-                && e.callee_file
-                    .as_ref()
-                    .is_none_or(|cf| !changed_set.contains(&cf.to_string_lossy().to_string()))
-        });
+        let mut idx = Self::drop_changed(cached, &changed_set);
 
         for path in &changed_paths {
             if path.is_file() {
@@ -200,6 +168,71 @@ impl ContextIndex {
         idx.resolve_imports(repo_root);
         idx.resolve_call_edges();
         (idx, changed_paths.len())
+    }
+
+    /// Drop symbols/edges/call_edges whose file is in `changed_set`,
+    /// preserving cached embeddings for the surviving symbols (WO 38.9
+    /// item 5). `retain` shifts symbol positions, so surviving
+    /// embeddings must be re-indexed to their new positions.
+    ///
+    /// Symbols from changed files get no embedding here; the caller
+    /// re-indexes those files via `index_file` (which appends fresh
+    /// symbols without embeddings — the next `save` rebuilds the
+    /// full embedding set, or `retrieve_hybrid` recomputes per query).
+    fn drop_changed(cached: CachedIndex, changed_set: &std::collections::HashSet<String>) -> Self {
+        // Build old→new index map before retain shifts positions. Indexed
+        // by the ORIGINAL symbol position; None for dropped symbols.
+        let mut old_to_new: Vec<Option<usize>> = Vec::with_capacity(cached.symbols.len());
+        let mut kept_symbols: Vec<crate::Symbol> = Vec::new();
+        for sym in cached.symbols.iter() {
+            if changed_set.contains(&sym.file.to_string_lossy().to_string()) {
+                old_to_new.push(None);
+            } else {
+                old_to_new.push(Some(kept_symbols.len()));
+                kept_symbols.push(sym.clone());
+            }
+        }
+
+        // Re-index surviving embeddings to their new positions. An
+        // embedding survives iff its symbol survived retain (i.e. its
+        // file is not in changed_set).
+        let mut embeddings: Vec<SymbolEmbedding> = Vec::with_capacity(kept_symbols.len());
+        for emb in cached.embeddings {
+            if let Some(new_idx) = old_to_new.get(emb.symbol_idx).copied().flatten() {
+                embeddings.push(SymbolEmbedding {
+                    symbol_idx: new_idx,
+                    vector: emb.vector,
+                });
+            }
+        }
+
+        let edges: Vec<crate::ImportEdge> = cached
+            .edges
+            .into_iter()
+            .filter(|e| {
+                !changed_set.contains(&e.source_file.to_string_lossy().to_string())
+                    && e.resolved_file
+                        .as_ref()
+                        .is_none_or(|rf| !changed_set.contains(&rf.to_string_lossy().to_string()))
+            })
+            .collect();
+        let call_edges: Vec<crate::CallEdge> = cached
+            .call_edges
+            .into_iter()
+            .filter(|e| {
+                !changed_set.contains(&e.caller_file.to_string_lossy().to_string())
+                    && e.callee_file
+                        .as_ref()
+                        .is_none_or(|cf| !changed_set.contains(&cf.to_string_lossy().to_string()))
+            })
+            .collect();
+
+        Self {
+            symbols: kept_symbols,
+            edges,
+            call_edges,
+            embeddings,
+        }
     }
 }
 

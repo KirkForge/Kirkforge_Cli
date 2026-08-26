@@ -96,6 +96,19 @@ fn in_memory_stats_reports_count_and_last_write() {
     assert_eq!(s.last_write, "2024-01-01T00:00:00Z");
 }
 
+#[test]
+fn in_memory_delete_removes_entry() {
+    let a = InMemoryAdapter::new();
+    a.write(&obj("a", "obs", "2024-01-01T00:00:00Z")).unwrap();
+    a.write(&obj("b", "obs", "2024-02-01T00:00:00Z")).unwrap();
+    a.delete("a").unwrap();
+    assert!(a.read("a").unwrap().is_none());
+    assert_eq!(a.stats().unwrap().total_objects, 1);
+    // Deleting a missing id is a no-op, not an error.
+    a.delete("nope").unwrap();
+    assert_eq!(a.stats().unwrap().total_objects, 1);
+}
+
 // ── FileAdapter ────────────────────────────────────────────────────────────
 
 #[test]
@@ -214,6 +227,22 @@ fn file_adapter_reclaims_lock_with_unreadable_pid_via_age_fallback() {
     assert_eq!(got.kind, "obs");
 }
 
+#[test]
+fn file_adapter_delete_removes_and_persists() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("mem.json");
+    let a = FileAdapter::new(&path);
+    a.write(&obj("a", "obs", "2024-01-01T00:00:00Z")).unwrap();
+    a.write(&obj("b", "obs", "2024-02-01T00:00:00Z")).unwrap();
+    a.delete("a").unwrap();
+    assert!(a.read("a").unwrap().is_none());
+    assert_eq!(a.stats().unwrap().total_objects, 1);
+    // Re-open from the same file: the deletion must have been flushed.
+    let b = FileAdapter::new(&path);
+    assert!(b.read("a").unwrap().is_none());
+    assert_eq!(b.stats().unwrap().total_objects, 1);
+}
+
 // ── SqliteAdapter ──────────────────────────────────────────────────────────
 
 #[test]
@@ -231,6 +260,19 @@ fn sqlite_write_read_roundtrip() {
     let got = a.read("a").unwrap().unwrap();
     assert_eq!(got.kind, "obs");
     assert_eq!(got.tags, vec!["t1".to_string(), "python".to_string()]);
+}
+
+#[test]
+fn sqlite_delete_removes_entry() {
+    let a = SqliteAdapter::open_in_memory().unwrap();
+    a.write(&obj("a", "obs", "2024-01-01T00:00:00Z")).unwrap();
+    a.write(&obj("b", "obs", "2024-02-01T00:00:00Z")).unwrap();
+    a.delete("a").unwrap();
+    assert!(a.read("a").unwrap().is_none());
+    assert_eq!(a.stats().unwrap().total_objects, 1);
+    // Deleting a missing id is a no-op, not an error.
+    a.delete("nope").unwrap();
+    assert_eq!(a.stats().unwrap().total_objects, 1);
 }
 
 #[test]
@@ -656,6 +698,73 @@ fn store_evict_disabled_when_zero() {
     let store = store_with(InMemoryAdapter::new());
     assert_eq!(store.evict_expired().unwrap(), 0);
     assert_eq!(store.evict_overflow().unwrap(), 0);
+}
+
+#[test]
+fn store_evict_expired_actually_deletes() {
+    let adapter = InMemoryAdapter::new();
+    adapter
+        .write(&obj("old", "obs", "2000-01-01T00:00:00Z"))
+        .unwrap();
+    adapter
+        .write(&obj("new", "obs", "2099-01-01T00:00:00Z"))
+        .unwrap();
+    let store = MemoryStore::new(
+        adapter,
+        MemoryStoreOptions {
+            ttl_ms: 1,
+            max_entries: 0,
+        },
+    );
+    assert_eq!(store.evict_expired().unwrap(), 1);
+    assert_eq!(store.adapter().stats().unwrap().total_objects, 1);
+    assert!(store.adapter().read("old").unwrap().is_none());
+    assert!(store.adapter().read("new").unwrap().is_some());
+}
+
+#[test]
+fn store_evict_overflow_actually_deletes_oldest() {
+    let adapter = InMemoryAdapter::new();
+    for i in 0..5 {
+        adapter
+            .write(&obj(&format!("o{i}"), "obs", &format!("2024-01-0{i}")))
+            .unwrap();
+    }
+    let store = MemoryStore::new(
+        adapter,
+        MemoryStoreOptions {
+            ttl_ms: 0,
+            max_entries: 3,
+        },
+    );
+    assert_eq!(store.evict_overflow().unwrap(), 2);
+    assert_eq!(store.adapter().stats().unwrap().total_objects, 3);
+    // query returns newest-first; o4/o3 kept, o0/o1 (oldest) evicted.
+    assert!(store.adapter().read("o0").unwrap().is_none());
+    assert!(store.adapter().read("o1").unwrap().is_none());
+    assert!(store.adapter().read("o4").unwrap().is_some());
+}
+
+#[test]
+fn store_evict_overflow_actually_deletes_on_sqlite() {
+    let store = MemoryStore::new(
+        SqliteAdapter::open_in_memory().unwrap(),
+        MemoryStoreOptions {
+            ttl_ms: 0,
+            max_entries: 2,
+        },
+    );
+    for i in 0..4 {
+        store
+            .adapter()
+            .write(&obj(&format!("o{i}"), "obs", &format!("2024-01-0{i}")))
+            .unwrap();
+    }
+    assert_eq!(store.evict_overflow().unwrap(), 2);
+    assert_eq!(store.adapter().stats().unwrap().total_objects, 2);
+    assert!(store.adapter().read("o0").unwrap().is_none());
+    assert!(store.adapter().read("o1").unwrap().is_none());
+    assert!(store.adapter().read("o3").unwrap().is_some());
 }
 
 #[test]

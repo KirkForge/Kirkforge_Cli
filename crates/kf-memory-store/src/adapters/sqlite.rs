@@ -365,6 +365,12 @@ impl MemoryAdapter for SqliteAdapter {
         Ok(obj)
     }
 
+    fn delete(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        conn.execute("DELETE FROM observations WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
     fn query(&self, q: &MemoryQuery) -> Result<Vec<MemoryObject>> {
         let conn = self.conn.lock().expect("sqlite lock poisoned");
         let mut conditions: Vec<String> = Vec::new();

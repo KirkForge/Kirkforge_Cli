@@ -46,6 +46,12 @@ impl MemoryAdapter for InMemoryAdapter {
         Ok(guard.iter().find(|o| o.id == id).cloned())
     }
 
+    fn delete(&self, id: &str) -> Result<()> {
+        let mut guard = self.objects.lock().expect("in-memory lock poisoned");
+        guard.retain(|o| o.id != id);
+        Ok(())
+    }
+
     fn query(&self, q: &MemoryQuery) -> Result<Vec<MemoryObject>> {
         let guard = self.objects.lock().expect("in-memory lock poisoned");
         let mut results: Vec<MemoryObject> = guard

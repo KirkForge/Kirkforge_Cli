@@ -271,6 +271,23 @@ impl MemoryAdapter for FileAdapter {
         Ok(state.objects.iter().find(|o| o.id == id).cloned())
     }
 
+    fn delete(&self, id: &str) -> Result<()> {
+        let _lock = self
+            .acquire_lock(Duration::from_secs(3))
+            .ok_or_else(|| anyhow!("FileAdapter: could not acquire lock for delete after 3s"))?;
+        let mut state = self.state.lock().expect("file state lock poisoned");
+        self.ensure_loaded(&mut state);
+        if let Some(err) = &state.load_error {
+            return Err(anyhow!("FileAdapter unusable: {err}"));
+        }
+        let before = state.objects.len();
+        state.objects.retain(|o| o.id != id);
+        if state.objects.len() != before {
+            self.flush(&mut state)?;
+        }
+        Ok(())
+    }
+
     fn query(&self, q: &MemoryQuery) -> Result<Vec<MemoryObject>> {
         let mut state = self.state.lock().expect("file state lock poisoned");
         self.ensure_loaded(&mut state);

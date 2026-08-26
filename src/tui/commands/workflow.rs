@@ -318,6 +318,13 @@ async fn handle_run(
         return format!("🚀 Started workflow '{name}' — scout/coder/reviewer pipeline ({mode}).");
     }
 
+    // WO 45.1/46.14: capture before spawn (state borrow can't cross 'static).
+    let session_run_id = if state.session.session_id.is_empty() {
+        None
+    } else {
+        Some(state.session.session_id.clone())
+    };
+
     tokio::spawn(async move {
         let runner = TuiStepRunner {
             model_name,
@@ -332,7 +339,7 @@ async fn handle_run(
                 outputs: HashMap::new(),
             })),
         };
-        let executor = WorkflowExecutor::new(workflow);
+        let executor = WorkflowExecutor::new(workflow).with_run_id(session_run_id);
         let result = executor
             .run(std::sync::Arc::new(runner), Some(&cancel))
             .await;

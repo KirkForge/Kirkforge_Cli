@@ -11,13 +11,15 @@ why, and the gate evidence.
 
 ### Changed
 
-- WO 46.13 — `plugin_consent_ledger` now defaults to `true`, matching
-  `plugin_signature_validation`'s default. The WO 45.61 fix (ledger
-  layers on top of signatures) was inert in the default config because
-  the ledger defaulted off; a signed manifest + swapped command script
-  passed both gates. Both gates now run out-of-the-box. Set
-  `plugin_consent_ledger = false` to opt out.
-  [46.13](docs/workorders/46.13-plugin-consent-ledger-default-off.md)
+- WO 46.14 — closed the WO 45.1 identity gap for workflows and scheduled
+  jobs: `WorkflowSummary.run_id`, `StepOutput.run_id`, and
+  `JobRunSummary.parent_run_id` are now threaded from the session
+  `run_id` at all production construction sites (workflow tool, TUI
+  `/workflow run`, line-mode `/workflow run`, TUI `/jobs run-now`).
+  Daemon-triggered jobs remain `None` (no owning session, per the
+  `JobRunSummary` contract). See
+  [46.14](docs/workorders/46.14-run-id-threading-incomplete-workflow-jobs.md).
+
 - WO 46.26 — `bench run-models` now exits non-zero when any model gets
   0/N tasks passed, mirroring the WO 38.10 guard on `bench run`. A
   total-failure run previously exited 0, blinding CI. Reports and the

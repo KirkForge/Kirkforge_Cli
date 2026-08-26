@@ -15,11 +15,33 @@ use crate::{
 /// from a single task; otherwise the runner can fan out.
 pub struct WorkflowExecutor {
     workflow: Workflow,
+    // WO 45.1/46.14: canonical session run_id stamped onto every
+    // `StepOutput` and on the final `WorkflowSummary`. `None` in
+    // test/bench contexts that have no owning session.
+    run_id: Option<String>,
 }
 
 impl WorkflowExecutor {
     pub fn new(workflow: Workflow) -> Self {
-        Self { workflow }
+        Self {
+            workflow,
+            run_id: None,
+        }
+    }
+
+    /// Stamp the canonical session run_id onto every step output and the
+    /// final workflow summary. Builder; chained off `new`.
+    pub fn with_run_id(mut self, run_id: Option<String>) -> Self {
+        self.run_id = run_id;
+        self
+    }
+
+    fn stamp_run_id(&self, outputs: &mut HashMap<String, StepOutput>) {
+        if let Some(ref rid) = self.run_id {
+            for out in outputs.values_mut() {
+                out.run_id = Some(rid.clone());
+            }
+        }
     }
 
     /// Insert the synthetic `on_exceeded` step output (if configured and not
@@ -535,9 +557,12 @@ impl WorkflowExecutor {
                 ) {
                     return Ok(WorkflowSummary {
                         workflow_name: self.workflow.name.clone(),
-                        outputs,
+                        outputs: {
+                            self.stamp_run_id(&mut outputs);
+                            outputs
+                        },
                         budget_exceeded: true,
-                        run_id: None,
+                        run_id: self.run_id.clone(),
                     });
                 }
             }
@@ -724,9 +749,12 @@ impl WorkflowExecutor {
 
         Ok(WorkflowSummary {
             workflow_name: self.workflow.name.clone(),
-            outputs,
+            outputs: {
+                self.stamp_run_id(&mut outputs);
+                outputs
+            },
             budget_exceeded: false,
-            run_id: None,
+            run_id: self.run_id.clone(),
         })
     }
 }

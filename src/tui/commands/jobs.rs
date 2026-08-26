@@ -535,8 +535,15 @@ async fn handle_run_now_command(
     let config = crate::shared::read_shared_config(&state.services.config).clone();
     let id_owned = id.to_string();
     let bg = bg.clone();
+    // WO 45.1/46.14: thread the session run_id so the job summary can be
+    // joined back to the session that triggered it. Empty in tests.
+    let parent_run_id = if state.session.session_id.is_empty() {
+        None
+    } else {
+        Some(state.session.session_id.clone())
+    };
     tokio::spawn(async move {
-        let msg = match run_job(&mut job, &store, &config).await {
+        let msg = match run_job(&mut job, &store, &config, parent_run_id).await {
             Ok(run) => format!(
                 "▶️ Scheduled job {id_owned} ran now: {} — {} (exit {:?})\n  stdout: {}\n  stderr: {}",
                 run.status.label(),

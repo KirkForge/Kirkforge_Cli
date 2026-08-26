@@ -27,10 +27,17 @@ use std::time::Duration;
 
 /// Run a single scheduled job, recording its stdout/stderr artifacts and
 /// returning a [`JobRunSummary`].
+///
+/// `parent_run_id` is the canonical run_id of the session that triggered
+/// the run (WO 45.1/46.14). `None` when the job was spawned by the daemon
+/// with no owning session — see `src/jobs/schedule.rs` `JobRunSummary`.
+/// For workflow jobs, it is also threaded into the `WorkflowExecutor` so
+/// every `StepOutput` carries the same identity.
 pub async fn run_job(
     job: &mut ScheduledJob,
     store: &JobStore,
     config: &Config,
+    parent_run_id: Option<String>,
 ) -> Result<JobRunSummary> {
     let started_at = Utc::now();
     let paths = store
@@ -39,10 +46,29 @@ pub async fn run_job(
 
     match job.kind.clone() {
         JobKind::Bash { command } => {
-            run_bash_job(job, store, config, &command, started_at, paths).await
+            run_bash_job(
+                job,
+                store,
+                config,
+                &command,
+                started_at,
+                paths,
+                parent_run_id,
+            )
+            .await
         }
         JobKind::Workflow { template, vars } => {
-            run_workflow_job(job, store, config, &template, &vars, started_at, paths).await
+            run_workflow_job(
+                job,
+                store,
+                config,
+                &template,
+                &vars,
+                started_at,
+                paths,
+                parent_run_id,
+            )
+            .await
         }
     }
 }
@@ -54,6 +80,7 @@ async fn run_bash_job(
     command: &str,
     started_at: chrono::DateTime<Utc>,
     paths: RunPaths,
+    parent_run_id: Option<String>,
 ) -> Result<JobRunSummary> {
     // 1. Permission / approval gate.
     let (deny_list, path_guard, _read_gate) = access_from_config(config);
@@ -71,6 +98,7 @@ async fn run_bash_job(
                 started_at,
                 paths,
                 "Command denied by permission rules".into(),
+                parent_run_id.clone(),
             );
         }
         PermissionAction::Ask => {
@@ -80,6 +108,7 @@ async fn run_bash_job(
                 started_at,
                 paths,
                 "Command requires interactive approval. Add a permission rule or set scheduled_bash_auto_approve=true to run unattended.".into(),
+                parent_run_id.clone(),
             );
         }
         PermissionAction::Allow => {}
@@ -99,6 +128,7 @@ async fn run_bash_job(
             started_at,
             paths,
             format!("Safety gate blocked scheduled bash job: {denied}"),
+            parent_run_id.clone(),
         );
     }
 
@@ -126,6 +156,7 @@ async fn run_bash_job(
                 started_at,
                 paths,
                 format!("Failed to spawn scheduled bash job: {e:#}"),
+                parent_run_id.clone(),
             );
         }
     };
@@ -159,7 +190,7 @@ async fn run_bash_job(
 
                 let run = JobRunSummary {
                     run_id: paths.run_id,
-                    parent_run_id: None,
+                    parent_run_id: parent_run_id.clone(),
                     started_at,
                     finished_at,
                     status,
@@ -180,6 +211,7 @@ async fn run_bash_job(
                     started_at,
                     paths,
                     "Job record disappeared while running".into(),
+                    parent_run_id.clone(),
                 )?;
                 let _ = registry.remove(id).await;
                 return Ok(run);
@@ -189,6 +221,9 @@ async fn run_bash_job(
     }
 }
 
+// 8 params after WO 46.14 added parent_run_id; grouped refactor tracked
+// in WO 45.54 (too_many_arguments audit).
+#[allow(clippy::too_many_arguments)]
 async fn run_workflow_job(
     job: &mut ScheduledJob,
     store: &JobStore,
@@ -197,6 +232,7 @@ async fn run_workflow_job(
     vars: &std::collections::HashMap<String, String>,
     started_at: chrono::DateTime<Utc>,
     paths: RunPaths,
+    parent_run_id: Option<String>,
 ) -> Result<JobRunSummary> {
     // 1. Resolve the workflow template file.
     let wf_path = match kf_workflow::find_workflow_file(template) {
@@ -208,6 +244,7 @@ async fn run_workflow_job(
                 started_at,
                 paths,
                 format!("Workflow template '{template}' not found"),
+                parent_run_id.clone(),
             );
         }
     };
@@ -222,6 +259,7 @@ async fn run_workflow_job(
                 started_at,
                 paths,
                 format!("Failed to load workflow '{template}': {e:#}"),
+                parent_run_id.clone(),
             );
         }
     };
@@ -251,7 +289,7 @@ async fn run_workflow_job(
     };
 
     // 5. Execute with optional timeout (same pattern as run_bash_job).
-    let executor = WorkflowExecutor::new(workflow);
+    let executor = WorkflowExecutor::new(workflow).with_run_id(parent_run_id.clone());
     let cancel_token = runner.cancel_token.clone();
     let run_future = executor.run(std::sync::Arc::new(runner), None);
     let result = match job.timeout {
@@ -265,6 +303,7 @@ async fn run_workflow_job(
                     started_at,
                     paths,
                     format!("Workflow '{}' timed out after {}s", template, dur.as_secs()),
+                    parent_run_id.clone(),
                 );
             }
         },
@@ -280,7 +319,7 @@ async fn run_workflow_job(
                 .with_context(|| "writing empty stderr for successful workflow run")?;
             let run = JobRunSummary {
                 run_id: paths.run_id,
-                parent_run_id: None,
+                parent_run_id: parent_run_id.clone(),
                 started_at,
                 finished_at,
                 status: RunStatus::Success,
@@ -302,6 +341,7 @@ async fn run_workflow_job(
             started_at,
             paths,
             format!("Workflow '{template}' failed: {e:#}"),
+            parent_run_id.clone(),
         ),
     }
 }
@@ -324,6 +364,7 @@ fn record_failure(
     started_at: chrono::DateTime<Utc>,
     paths: RunPaths,
     message: String,
+    parent_run_id: Option<String>,
 ) -> Result<JobRunSummary> {
     let finished_at = Utc::now();
     write_artifact(&paths.stdout_path, "")
@@ -332,7 +373,7 @@ fn record_failure(
         .with_context(|| "writing stderr for failed run")?;
     let run = JobRunSummary {
         run_id: paths.run_id,
-        parent_run_id: None,
+        parent_run_id,
         started_at,
         finished_at,
         status: RunStatus::Failure,
@@ -395,7 +436,7 @@ mod tests {
         let (_tmp, store) = tmp_store();
         let mut job = bash_job("echo hi");
         let config = Config::default();
-        let run = run_job(&mut job, &store, &config).await.unwrap();
+        let run = run_job(&mut job, &store, &config, None).await.unwrap();
         assert_eq!(run.status, RunStatus::Failure);
         assert!(run.summary.contains("interactive approval"));
     }
@@ -406,7 +447,7 @@ mod tests {
         let mut job = bash_job("echo hello-scheduled");
         let mut config = Config::default();
         config.tools.scheduled_bash_auto_approve = true;
-        let run = run_job(&mut job, &store, &config).await.unwrap();
+        let run = run_job(&mut job, &store, &config, None).await.unwrap();
         assert_eq!(run.status, RunStatus::Success);
         assert_eq!(run.exit_code, Some(0));
         let stdout = std::fs::read_to_string(&run.stdout_path).unwrap();
@@ -419,7 +460,7 @@ mod tests {
         let mut job = bash_job("rm -rf /");
         let mut config = Config::default();
         config.tools.scheduled_bash_auto_approve = true;
-        let run = run_job(&mut job, &store, &config).await.unwrap();
+        let run = run_job(&mut job, &store, &config, None).await.unwrap();
         assert_eq!(run.status, RunStatus::Failure);
         assert!(run.summary.contains("Safety gate") || run.summary.contains("dangerous"));
     }
@@ -435,7 +476,7 @@ mod tests {
         let mut config = Config::default();
         config.tools.scheduled_bash_auto_approve = true;
         let start = std::time::Instant::now();
-        let run = run_job(&mut job, &store, &config).await.unwrap();
+        let run = run_job(&mut job, &store, &config, None).await.unwrap();
         let elapsed = start.elapsed();
         assert!(
             elapsed < std::time::Duration::from_secs(10),
@@ -457,7 +498,7 @@ mod tests {
         let mut job = bash_job("echo lifecycle-test && exit 42");
         let mut config = Config::default();
         config.tools.scheduled_bash_auto_approve = true;
-        let run = run_job(&mut job, &store, &config).await.unwrap();
+        let run = run_job(&mut job, &store, &config, None).await.unwrap();
         assert_eq!(run.exit_code, Some(42), "exit code should be captured");
         let stdout = std::fs::read_to_string(&run.stdout_path).unwrap();
         assert!(
@@ -489,7 +530,7 @@ mod tests {
             files: Vec::new(),
         };
         let config = Config::default();
-        let run = run_job(&mut job, &store, &config).await.unwrap();
+        let run = run_job(&mut job, &store, &config, None).await.unwrap();
         assert_eq!(run.status, RunStatus::Failure);
         assert!(
             run.summary.contains("not found"),

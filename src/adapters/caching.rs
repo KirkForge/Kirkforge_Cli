@@ -26,6 +26,12 @@ pub struct ResponseCache {
     memory: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<CacheKey, Vec<StreamEvent>>>>,
 }
 
+// ponytail: simple count-based cap, not true LRU. Adequate for a hot-key
+// layer backed by disk; eviction is arbitrary (HashMap order). Upgrade
+// path: an `IndexMap` + move-to-back on get for real LRU if hit-rate
+// measurement ever shows arbitrary eviction hurting (WO 46.23).
+const MAX_MEMORY_ENTRIES: usize = 100;
+
 impl ResponseCache {
     /// Create a cache. If `enabled` is false the cache never reads or
     /// writes, but the struct can still be passed around cheaply.
@@ -82,8 +88,7 @@ impl ResponseCache {
         let events: Vec<StreamEvent> = serde_json::from_slice(&bytes).ok()?;
 
         // Promote to memory for future hits.
-        let mut mem = self.memory.lock().unwrap_or_else(|e| e.into_inner());
-        mem.insert(key, events.clone());
+        self.insert_memory(key, events.clone());
         Some(events)
     }
 
@@ -110,8 +115,12 @@ impl ResponseCache {
             return;
         }
 
-        let mut mem = self.memory.lock().unwrap_or_else(|e| e.into_inner());
-        mem.insert(key.clone(), events.to_vec());
+        // Clone the data out of the lock first, then do ALL disk I/O
+        // (create_dir_all + to_vec + fs::write) OUTSIDE the memory lock.
+        // Holding the sync Mutex across fs::write lets a disk stall (NFS,
+        // full disk) block every subsequent stream call, and a panic in
+        // to_vec would poison the mutex (WO 46.23).
+        self.insert_memory(key.clone(), events.to_vec());
 
         let path = self.path_for(&key);
         if let Some(parent) = path.parent() {
@@ -132,6 +141,24 @@ impl ResponseCache {
                 );
             }
         }
+    }
+
+    // Insert into the memory map under a short-lived lock, enforcing the
+    // size cap. Disk I/O must NEVER happen while this lock is held (WO 46.23).
+    fn insert_memory(&self, key: CacheKey, events: Vec<StreamEvent>) {
+        let mut mem = self.memory.lock().unwrap_or_else(|e| e.into_inner());
+        // ponytail: arbitrary eviction (HashMap order), not LRU. See
+        // MAX_MEMORY_ENTRIES comment for upgrade path.
+        while mem.len() >= MAX_MEMORY_ENTRIES {
+            let drop = mem.keys().next().cloned();
+            match drop {
+                Some(k) => {
+                    mem.remove(&k);
+                }
+                None => break,
+            }
+        }
+        mem.insert(key, events);
     }
 
     fn path_for(&self, key: &CacheKey) -> PathBuf {
@@ -751,6 +778,46 @@ mod tests {
     fn cache_new_uses_default_dir_when_none() {
         let cache = ResponseCache::new(false, None);
         assert!(cache.dir.ends_with("cache"));
+    }
+
+    /// WO 46.23: the in-memory map is capped — inserting more distinct
+    /// keys than MAX_MEMORY_ENTRIES must not grow the map beyond the cap.
+    /// The newest entry is always kept.
+    #[test]
+    fn cache_memory_respects_size_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(dir.path().into()));
+        let events = vec![StreamEvent::Text("x".into())];
+        for i in 0..(MAX_MEMORY_ENTRIES + 20) {
+            cache.put(
+                "test-model",
+                &[message(crate::shared::Role::User, &format!("msg{i}"))],
+                &[],
+                None,
+                &events,
+            );
+        }
+        let mem = cache.memory.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            mem.len() <= MAX_MEMORY_ENTRIES,
+            "memory map grew to {} (cap {})",
+            mem.len(),
+            MAX_MEMORY_ENTRIES
+        );
+        // The most-recently inserted key must still be present.
+        let last_key = CacheKey::new(
+            "test-model",
+            &[message(
+                crate::shared::Role::User,
+                &format!("msg{}", MAX_MEMORY_ENTRIES + 19),
+            )],
+            &[],
+            None,
+        );
+        assert!(
+            mem.contains_key(&last_key),
+            "newest entry must survive eviction"
+        );
     }
 
     struct DummyAdapter {

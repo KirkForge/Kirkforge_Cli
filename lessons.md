@@ -1,5 +1,30 @@
 # Lessons — WO 43 session
 
+## WO 46.25 (ci-local.sh set -e vs run_step)
+
+- `set -euo pipefail` + a helper that `return 1`s on a recorded failure =
+  dead `failures[]` machinery. The non-zero return triggers `set -e` and
+  kills the script before the summary prints. Fix: the helper records
+  the failure and returns 0 (or just falls through); the final summary
+  exits non-zero based on `failures[]` content. General rule: under
+  `set -e`, any helper that wants to "record and continue" must NOT
+  return non-zero — `set -e` makes the return an immediate exit.
+- Host OOM under parallel worktree compiles is fierce: 6 sibling
+  worktrees each running full-workspace `cargo nextest`/`clippy`
+  simultaneously OOM-killed my `test-fast.sh` runs (exit 137, mid-link of
+  `kf-code`) until the siblings finished. `CARGO_BUILD_JOBS=2` +
+  waiting for the siblings to free memory was the only thing that
+  worked — `nextest`'s own thread pool doesn't cap build-jobs. When
+  blocked, a single small-crate `cargo test -p kf-budget-core --test
+  adr_xref_drift` (the WO's namesake drift gate) compiled and passed in
+  ~4 min and confirmed the WO/README status two-source-of-truth while
+  the full gate was impossible.
+- `scripts/test-fast.sh` does NOT invoke `scripts/ci-local.sh` — they're
+  independent. A change to ci-local.sh cannot affect test-fast.sh's Rust
+  results, so a green test-fast.sh is a "no Rust regression" signal, not
+  a "ci-local.sh logic is correct" signal. The ci-local.sh logic itself
+  was verified by `bash -n` + reading the flow.
+
 ## WO 43.23 (subprocess lifecycle)
 
 - libtest `--exact` does NOT match names built from `module_path!()` (it

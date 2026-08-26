@@ -4,6 +4,16 @@
 
 ## Shipped (closed this session)
 
+- **WO 46.25**: Done. `scripts/ci-local.sh` `run_step` returned non-zero
+  on a failing step; with `set -euo pipefail` active, that killed the
+  whole script on the first failure — remaining gates never ran and the
+  `failures[]` summary was dead code. Removed the `return 1` on the
+  failure path; the failure is still recorded in `failures[]`, the script
+  continues, runs every gate, and the final summary reports all failures
+  and exits non-zero. `failures[]` is now live. Scripts-only change, no
+  Rust touched. Gate: `bash -n` + `scripts/test-fast.sh` (4763 passed) +
+  `cargo fmt --check` + `adr_xref_drift` (6/6) all exit 0.
+
 - **WO 46.24**: Done. TOCTOU symlink-race fix — 10 atomic-write sites
   migrated to the shared `tools::atomic_write::atomic_write` helper
   (O_EXCL + random tmp name + fsync + rename). Sites: carryover save,

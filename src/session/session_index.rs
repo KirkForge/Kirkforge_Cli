@@ -182,32 +182,22 @@ impl SessionIndex {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create index directory {}", parent.display()))?;
         }
-        let tmp = self.path.with_extension("tmp");
-        {
-            use std::io::Write;
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(&tmp)
-                .with_context(|| format!("create temporary index {}", tmp.display()))?;
-            for e in &self.entries {
-                let line = serde_json::to_string(e)?;
-                writeln!(file, "{line}")?;
-            }
-            file.sync_all()?;
+        // WO 46.24: shared atomic_write uses O_EXCL + random tmp name +
+        // rename, closing the predictable-`.tmp` symlink race. Build the
+        // full NDJSON body in memory first so the helper writes it in one
+        // fsynced step.
+        let mut buf: Vec<u8> = Vec::with_capacity(self.entries.len() * 128);
+        use std::io::Write;
+        for e in &self.entries {
+            let line = serde_json::to_string(e)?;
+            writeln!(buf, "{line}")?;
         }
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("recreate index directory {}", parent.display()))?;
         }
-        crate::tools::atomic_write::rename_with_retry(&tmp, &self.path).with_context(|| {
-            format!(
-                "commit session index from {} to {}",
-                tmp.display(),
-                self.path.display()
-            )
-        })?;
+        crate::tools::atomic_write::atomic_write(&self.path, &buf)
+            .with_context(|| format!("commit session index to {}", self.path.display()))?;
         Ok(())
     }
 }

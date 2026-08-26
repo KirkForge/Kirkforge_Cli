@@ -245,14 +245,13 @@ impl UndoStack {
         let snap_path = self.snapshot_path(seq);
         let meta_path = self.meta_path(seq);
 
-        // Write snapshot atomically: temp + rename. A crash mid-write
-        // either leaves the old state intact (rename didn't happen)
-        // or the new snapshot fully visible. Never a half-truncated
-        // file the loader might mistake for valid.
-        let tmp_snap = snap_path.with_extension("snap.tmp");
-        std::fs::write(&tmp_snap, prev_bytes)
-            .with_context(|| format!("write undo snapshot {}", tmp_snap.display()))?;
-        crate::tools::atomic_write::rename_with_retry(&tmp_snap, &snap_path)
+        // Write snapshot atomically. WO 46.24: shared atomic_write uses
+        // O_EXCL + random tmp name + rename, so a predictable-`.snap.tmp`
+        // symlink can't redirect the write. A crash mid-write either
+        // leaves the old state intact (rename didn't happen) or the new
+        // snapshot fully visible. Never a half-truncated file the loader
+        // might mistake for valid.
+        crate::tools::atomic_write::atomic_write(&snap_path, prev_bytes)
             .with_context(|| format!("finalize undo snapshot {}", snap_path.display()))?;
 
         // Write the sidecar metadata.
@@ -321,21 +320,13 @@ impl UndoStack {
         let snap_path = self.snapshot_path(op.seq);
 
         if op.prev_existed {
-            // Atomic write: temp + rename. The user's old file is
-            // replaced in one filesystem step.
-            let tmp_target = op.path.with_extension(format!(
-                "{}.undo.tmp",
-                op.path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("tmp")
-            ));
+            // Atomic write: the user's old file is replaced in one
+            // filesystem step. WO 46.24: shared atomic_write uses O_EXCL +
+            // random tmp name + rename, closing the predictable-`.undo.tmp`
+            // symlink race.
             let bytes = std::fs::read(&snap_path)
                 .with_context(|| format!("read undo snapshot {}", snap_path.display()))?;
-            std::fs::write(&tmp_target, &bytes).with_context(|| {
-                format!("write undo restore temp file {}", tmp_target.display())
-            })?;
-            crate::tools::atomic_write::rename_with_retry(&tmp_target, &op.path)
+            crate::tools::atomic_write::atomic_write(&op.path, &bytes)
                 .with_context(|| format!("finalize undo restore {}", op.path.display()))?;
         } else {
             // The file was created by the edit — restore means

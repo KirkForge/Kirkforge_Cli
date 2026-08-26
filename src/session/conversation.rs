@@ -286,32 +286,21 @@ impl ConversationLog {
                 .map(|f| format!("{f}.checkpoint-{nanos}.ndjson"))
                 .unwrap_or_else(|| format!("conversation.checkpoint-{nanos}.ndjson"));
             let checkpoint_path = path.with_file_name(filename);
-            {
+            // WO 46.24: shared atomic_write uses O_EXCL + random tmp name +
+            // rename, closing the predictable-.ndjson.tmp symlink race.
+            let mut buf = Vec::with_capacity(lines.len() * 64);
+            for line in &lines {
                 use std::io::Write;
-                let tmp_path = checkpoint_path.with_extension("ndjson.tmp");
-                {
-                    let mut file = std::fs::OpenOptions::new()
-                        .create(true)
-                        .truncate(true)
-                        .write(true)
-                        .open(&tmp_path)
-                        .with_context(|| {
-                            format!("create temporary conversation log {}", tmp_path.display())
-                        })?;
-                    for line in &lines {
-                        writeln!(file, "{line}")?;
-                    }
-                    file.sync_all()?;
-                }
-                crate::tools::atomic_write::rename_with_retry(&tmp_path, &checkpoint_path)
-                    .with_context(|| {
-                        format!(
-                            "commit conversation log from {} to {}",
-                            tmp_path.display(),
-                            checkpoint_path.display()
-                        )
-                    })?;
+                writeln!(buf, "{line}")?;
             }
+            crate::tools::atomic_write::atomic_write(&checkpoint_path, &buf).with_context(
+                || {
+                    format!(
+                        "commit conversation log checkpoint to {}",
+                        checkpoint_path.display()
+                    )
+                },
+            )?;
 
             if let Some(parent) = path.parent() {
                 let prefix = checkpoint_prefix(&path);
@@ -397,39 +386,16 @@ impl ConversationLog {
     /// Static variant of [`write_atomic`] so it can be used inside
     /// `spawn_blocking` closures that do not capture `self`.
     fn write_atomic_static(path: &std::path::Path, messages: &[Message]) -> anyhow::Result<()> {
+        // WO 46.24: shared atomic_write uses O_EXCL + random tmp name +
+        // rename, closing the predictable-.ndjson.tmp symlink race.
+        let mut buf: Vec<u8> = Vec::with_capacity(messages.len() * 64);
         use std::io::Write;
-        let tmp_path = path.with_extension("ndjson.tmp");
-        let result = (|| -> anyhow::Result<()> {
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(&tmp_path)
-                .with_context(|| {
-                    format!("create temporary conversation log {}", tmp_path.display())
-                })?;
-            for msg in messages {
-                let line = serde_json::to_string(msg)?;
-                writeln!(file, "{line}")?;
-            }
-            file.sync_all()?;
-            drop(file);
-            crate::tools::atomic_write::rename_with_retry(&tmp_path, path).with_context(|| {
-                format!(
-                    "commit conversation log from {} to {}",
-                    tmp_path.display(),
-                    path.display()
-                )
-            })?;
-            Ok(())
-        })();
-        // On any failure (write, serialize, sync, or rename) remove the
-        // leftover .tmp so a half-written temp file does not accumulate
-        // across turns (mirrors atomic_write.rs:46-49).
-        if result.is_err() {
-            let _ = std::fs::remove_file(&tmp_path);
+        for msg in messages {
+            let line = serde_json::to_string(msg)?;
+            writeln!(buf, "{line}")?;
         }
-        result
+        crate::tools::atomic_write::atomic_write(path, &buf)
+            .with_context(|| format!("commit conversation log to {}", path.display()))
     }
 
     /// Replace the in-memory message list and rewrite the log file

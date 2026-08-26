@@ -79,13 +79,9 @@ impl PersistedTask {
         };
         match serde_json::to_string_pretty(self) {
             Ok(json) => {
-                // Atomic write: temp + rename so a crash mid-write cannot
-                // leave the task summary truncated (WO 43.21).
-                let tmp = path.with_extension("json.tmp");
-                if let Err(e) =
-                    std::fs::write(&tmp, &json).and_then(|()| std::fs::rename(&tmp, &path))
-                {
-                    let _ = std::fs::remove_file(&tmp);
+                // WO 46.24: shared atomic_write uses O_EXCL + random tmp
+                // name + rename, closing the predictable-.tmp symlink race.
+                if let Err(e) = crate::tools::atomic_write::atomic_write(&path, json.as_bytes()) {
                     tracing::warn!(
                         error = %e,
                         path = %path.display(),
@@ -252,11 +248,16 @@ mod tests {
         let path = tasks_dir.join("task-atom.json");
         let content = std::fs::read_to_string(&path).unwrap();
         let _: serde_json::Value = serde_json::from_str(&content).unwrap();
-        // No leftover temp file.
-        let tmp = tasks_dir.join("task-atom.json.tmp");
+        // No leftover temp file — the shared atomic_write cleans up its
+        // random-named temp on success. Only the target .json should remain.
+        let leftovers: Vec<_> = std::fs::read_dir(&tasks_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
         assert!(
-            !tmp.exists(),
-            "temp file must not remain after atomic write"
+            leftovers.iter().all(|n| n == "task-atom.json"),
+            "only the target .json should remain, got: {leftovers:?}"
         );
     }
 

@@ -338,6 +338,7 @@
   a more honest gate than a single fail-fast run that aborts on the first
   CPU-starved timing test.
 
+<<<<<<< HEAD
 ## WO 46.20 (never-ending job blocks scheduler shutdown)
 
 - The fix went in `src/jobs/daemon.rs`, NOT `src/jobs/runner.rs`, even
@@ -367,3 +368,32 @@
 - scope creep: none. Single file (`src/jobs/daemon.rs`), 3 logical
   lines (import + const + coercion), all within the WO's named scope
   (`daemon.rs:146-197`).
+||||||| 6b132e7a
+=======
+## WO 46.24 — predictable .tmp TOCTOU (session 2026-08-26)
+
+- The codebase already had the correct atomic-write pattern
+  (`tools/atomic_write.rs`: O_EXCL + random tmp name + fsync + rename +
+  permission preservation). 10 sites reimplemented it inline with
+  predictable `.tmp` names. The lazy fix was reuse, not a new helper —
+  the workorder's "create a `secure_atomic_write` helper" suggestion
+  would have duplicated what already exists. Ponytail ladder rung 2
+  ("already in this codebase? reuse it") applied.
+- The workorder listed 9 line numbers but 2 of them (`audit.rs:143`,
+  `cli_dispatch.rs:73`) were append-mode writes, not tmp+rename. They
+  are a DIFFERENT attack shape (symlink on the target, not the temp)
+  and need `O_NOFOLLOW`, not the tmp+rename migration. Disclosed as
+  deferred in the WO + state.md pending — not silently dropped.
+- Tests that asserted on a fixed `.tmp` path (`carryover.tmp`,
+  `task-atom.json.tmp`, `config.toml.tmp`) became stale once the helper
+  switched to random tmp names. The assertions were rewritten to check
+  the directory contents / target file directly, not a fixed temp name.
+  The stale predictable `.toml.tmp` is now harmless orphan litter — the
+  save no longer opens it, so the "stale tmp is cleaned up" guarantee
+  was rewritten as "stale tmp is never touched".
+- `cargo clippy --all-targets` under heavy sibling-worktree contention
+  took ~17 min; `cargo check --workspace --all-targets` ~8 min;
+  `test-fast.sh` ~6 min. Budget 30+ min for the full gate when other
+  worktrees are active. Run one gate at a time — parallel cargo
+  invocations on the same target dir contend on the file lock.
+>>>>>>> wo/wo46.24

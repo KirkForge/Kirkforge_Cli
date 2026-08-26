@@ -93,32 +93,27 @@ impl JobStore {
         }
 
         let path = self.job_path(&job.id);
-        let temp = path.with_extension("json.tmp");
+        // Serialize first so we can hand the bytes to the shared atomic
+        // writer. WO 46.24: shared atomic_write uses O_EXCL + a random
+        // tmp name + rename, closing the predictable-`.json.tmp` symlink
+        // race.
         let result = (|| -> Result<()> {
-            let file = fs::File::create(&temp)
-                .with_context(|| format!("creating temporary job file {}", temp.display()))?;
+            let bytes = serde_json::to_vec_pretty(job)
+                .with_context(|| format!("serializing job {}", job.id))?;
+            crate::tools::atomic_write::atomic_write(&path, &bytes)
+                .with_context(|| format!("commit job file to {}", path.display()))?;
+            // Enforce 0600 on the committed file (the helper preserves the
+            // pre-existing mode, but a brand-new file inherits the umask
+            // default 0644 — narrow it here, mirroring the old pre-rename
+            // chmod on the temp file).
             #[cfg(unix)]
             {
                 let perms = fs::Permissions::from_mode(0o600);
-                fs::set_permissions(&temp, perms)
-                    .with_context(|| format!("setting permissions on {}", temp.display()))?;
+                fs::set_permissions(&path, perms)
+                    .with_context(|| format!("setting permissions on {}", path.display()))?;
             }
-            serde_json::to_writer_pretty(file, job)
-                .with_context(|| format!("serializing job {}", job.id))?;
-            crate::tools::atomic_write::rename_with_retry(&temp, &path).with_context(|| {
-                format!(
-                    "renaming temporary job file {} to {}",
-                    temp.display(),
-                    path.display()
-                )
-            })?;
             Ok(())
         })();
-        // Remove a leftover .tmp on any failure so a half-written temp
-        // file does not accumulate (mirrors atomic_write.rs:46-49).
-        if result.is_err() {
-            let _ = fs::remove_file(&temp);
-        }
         result
     }
 
@@ -204,33 +199,22 @@ impl JobStore {
     pub fn record_run(&self, job: &mut ScheduledJob, run: &JobRunSummary) -> Result<()> {
         let runs_dir = self.runs_dir(&job.id);
         let summary_path = runs_dir.join(&run.run_id).join("run.json");
-        let temp = summary_path.with_extension("tmp");
+        // WO 46.24: shared atomic_write uses O_EXCL + random tmp name +
+        // rename, closing the predictable-`.tmp` symlink race.
         let result = (|| -> Result<()> {
-            let file = fs::File::create(&temp)
-                .with_context(|| format!("creating temporary run summary {}", temp.display()))?;
+            let bytes = serde_json::to_vec_pretty(run)
+                .with_context(|| format!("serializing run {}", run.run_id))?;
+            crate::tools::atomic_write::atomic_write(&summary_path, &bytes)
+                .with_context(|| format!("commit run summary to {}", summary_path.display()))?;
             #[cfg(unix)]
             {
                 let perms = fs::Permissions::from_mode(0o600);
-                fs::set_permissions(&temp, perms)
-                    .with_context(|| format!("setting permissions on {}", temp.display()))?;
+                fs::set_permissions(&summary_path, perms).with_context(|| {
+                    format!("setting permissions on {}", summary_path.display())
+                })?;
             }
-            serde_json::to_writer_pretty(file, run)
-                .with_context(|| format!("serializing run {}", run.run_id))?;
-            crate::tools::atomic_write::rename_with_retry(&temp, &summary_path).with_context(
-                || {
-                    format!(
-                        "renaming temporary run summary {} to {}",
-                        temp.display(),
-                        summary_path.display()
-                    )
-                },
-            )?;
             Ok(())
         })();
-        // Remove a leftover .tmp on any failure (mirrors atomic_write.rs:46-49).
-        if result.is_err() {
-            let _ = fs::remove_file(&temp);
-        }
         result?;
 
         job.last_run = Some(run.clone());

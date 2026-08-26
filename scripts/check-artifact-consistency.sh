@@ -87,7 +87,7 @@ fi
 # (WO 28.11 R1). The README count check (#3) already covers README.md;
 # this guards the per-task row table in TECHNICAL.md against silent
 # add/rename drift.
-TECHNICAL_ROWS=$(grep -cE '^\| `[^`]+\.toml` \|' docs/TECHNICAL.md 2>/dev/null || echo 0)
+TECHNICAL_ROWS=$(grep -cE '^\| `[^`]+\.toml` \|' docs/TECHNICAL.md 2>/dev/null || true)
 if [ "$TECHNICAL_ROWS" -eq "$EXPECTED_BENCHES" ]; then
   echo "✓ TECHNICAL.md bench row count ($TECHNICAL_ROWS) matches directory"
   PASS=$((PASS+1))

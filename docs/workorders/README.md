@@ -974,7 +974,7 @@ tree, ~11 stale claims corrected in-line. See
 | 46.22 | [McpClient::Http Drop arm empty — in-flight calls hang 60s on swap](46.22-mcp-http-drop-empty-inflight-hangs.md) | Done |
 | 46.23 | [ResponseCache::put holds sync Mutex across disk write + unbounded in-memory cache](46.23-response-cache-mutex-across-disk-write.md) | Done |
 | 46.24 | [9 atomic-write sites use predictable .tmp + no O_NOFOLLOW — TOCTOU symlink race](46.24-predictable-tmp-filenames-toctou.md) | Done |
-| 46.25 | [ci-local.sh set -e defeats run_step — failing step kills CI before remaining gates run](46.25-ci-local-set-e-defeats-gate-summary.md) | Planned |
+| 46.25 | [ci-local.sh set -e defeats run_step — failing step kills CI before remaining gates run](46.25-ci-local-set-e-defeats-gate-summary.md) | Done |
 | 46.26 | [handle_bench_run_models silently exits 0 on 0/N pass rate — CI blind](46.26-handle-bench-run-models-missing-zero-guard.md) | Planned |
 | 46.27 | [mtime_rebuild/incremental_rebuild silently drop cached embeddings](46.27-context-index-rebuild-drops-cached-embeddings.md) | Planned |
 | 46.28 | [prune_oldest_in_dir ignores keep semantics — silent leak of oldest sessions](46.28-prune-oldest-ignores-keep-semantics.md) | Planned |

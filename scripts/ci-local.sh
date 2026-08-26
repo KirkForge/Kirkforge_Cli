@@ -30,7 +30,9 @@ run_step() {
     else
         echo -e "${RED}FAILED${NC}: $name"
         failures+=("$name")
-        return 1
+        # Failure is recorded; fall through so set -e doesn't kill the
+        # script and the remaining gates still run. Final summary exits
+        # non-zero if failures[] is non-empty.
     fi
 }
 

@@ -127,11 +127,19 @@ impl WorkflowExecutor {
     }
 
     /// Execute a FanOut step: spawn concurrent sub-agents, collect results.
+    ///
+    /// Honours `cancellation` between spawns: on cancel, aborts the JoinSet
+    /// (so already-spawned children are dropped) and bails with the same
+    /// "workflow cancelled" string the driver uses — mirroring the top-of-
+    /// batch check in `run`. Without this, all N children run to completion
+    /// after Esc because the driver's cancel check only fires between batches
+    /// and a fan_out step holds the driver inside this function for all N.
     async fn run_fan_out(
         step: &Step,
         outputs: &mut HashMap<String, StepOutput>,
         runner: &Arc<dyn StepRunner>,
         completed: &mut HashSet<String>,
+        cancellation: Option<&std::sync::atomic::AtomicBool>,
     ) -> Result<Option<StepOutput>> {
         let over_expr = step
             .over
@@ -179,19 +187,48 @@ impl WorkflowExecutor {
         let mut child_structured = Vec::with_capacity(items.len());
         let mut results: Vec<(usize, serde_json::Value, String)> = Vec::with_capacity(items.len());
         let mut fan_out_err: Option<anyhow::Error> = None;
-        while let Some(res) = join_set.join_next().await {
-            match res {
-                Ok(Ok(tuple)) => results.push(tuple),
-                Ok(Err(e)) => {
-                    if fan_out_err.is_none() {
-                        fan_out_err = Some(e);
+        // Race drain against cancellation. On cancel, abort remaining tasks
+        // and bail with the driver's "workflow cancelled" string so the
+        // workflow.rs tool classifies it as cancellation, not a step error.
+        // The flag is an AtomicBool set by another thread (TUI Esc handler)
+        // with no associated wakeup, so the cancel arm busy-polls with
+        // yield_now — one poll per join completion, negligible cost.
+        // ponytail: polling loop — wire a tokio::sync::Notify or
+        // CancellationToken through the executor if the poll cost or latency
+        // ever matters (would change the public run() signature).
+        let mut cancel_fut = Box::pin(async {
+            if let Some(cancel) = cancellation {
+                loop {
+                    if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        return;
                     }
+                    tokio::task::yield_now().await;
                 }
-                Err(e) => {
-                    if fan_out_err.is_none() {
-                        fan_out_err = Some(anyhow!("fan-out task panicked: {e}"));
+            } else {
+                std::future::pending::<()>().await;
+            }
+        });
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut cancel_fut => {
+                    join_set.abort_all();
+                    bail!("workflow cancelled");
+                }
+                res = join_set.join_next() => match res {
+                    None => break,
+                    Some(Ok(Ok(tuple))) => results.push(tuple),
+                    Some(Ok(Err(e))) => {
+                        if fan_out_err.is_none() {
+                            fan_out_err = Some(e);
+                        }
                     }
-                }
+                    Some(Err(e)) => {
+                        if fan_out_err.is_none() {
+                            fan_out_err = Some(anyhow!("fan-out task panicked: {e}"));
+                        }
+                    }
+                },
             }
         }
         if let Some(e) = fan_out_err {
@@ -595,8 +632,14 @@ impl WorkflowExecutor {
                         });
                     }
                     StepKind::FanOut => {
-                        let result =
-                            Self::run_fan_out(step, &mut outputs, &runner, &mut completed).await?;
+                        let result = Self::run_fan_out(
+                            step,
+                            &mut outputs,
+                            &runner,
+                            &mut completed,
+                            cancellation,
+                        )
+                        .await?;
                         if let Some(output) = result {
                             outputs.insert(step.name.clone(), output);
                         }

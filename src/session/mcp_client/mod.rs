@@ -1323,9 +1323,17 @@ impl Drop for McpClient {
                     }
                 }
             }
-            McpClient::Http(_) => {
-                // HTTP transport has no child process; its background tasks
-                // are owned by the transport and disconnected explicitly.
+            McpClient::Http(c) => {
+                // Signal the SSE reader task to shut down. It owns the
+                // pending map and calls `fail_all_pending` at its shutdown
+                // branches (http.rs), so in-flight requests are failed
+                // immediately instead of waiting the full REQUEST_TIMEOUT.
+                if let Some(tx) = c.shutdown_tx.take() {
+                    crate::send_or_warn!(
+                        tx.send(()),
+                        "MCP HTTP shutdown receiver dropped during Drop"
+                    );
+                }
             }
         }
     }

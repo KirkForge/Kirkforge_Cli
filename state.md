@@ -4,16 +4,25 @@
 
 ## Shipped (closed this session)
 
-- **WO 46.13**: Done. `plugin_consent_ledger` defaulted to `true`,
-  matching `plugin_signature_validation`'s default. The WO 45.61 fix
-  (ledger layers on top of signatures) was inert in the default config
-  because the ledger defaulted off — a signed manifest + swapped command
-  script passed both gates. Both gates now run out-of-the-box. The
-  coupling is at the default level (both default on independently), not
-  runtime, so a user who explicitly sets `plugin_consent_ledger = false`
-  still gets that. Three tests updated to explicitly opt out of the
-  ledger (they test workspace loading mechanics, not the consent gate).
-  Gate: `scripts/test-fast.sh` (4765 passed) + clippy + fmt + check all green.
+- **WO 46.28**: Done. `prune_oldest_in_dir` deleted the wrong sessions:
+  entries are sorted newest-first, and `entries[keep..keep+delete_count]`
+  deleted the N sessions immediately *after* the keep window, leaving the
+  absolute oldest on disk — contradicting the documented "delete the
+  oldest N, keep K most recent" contract (4 doc sites agree). Fixed the
+  slice to `&entries[len - delete_count..]` (the tail = the N oldest);
+  the existing guard `len > keep + delete_count` guarantees the delete
+  window never overlaps keep. Rejected the workorder's proposed
+  `entries[..keep]` ("delete everything beyond keep") — that would make
+  `/sessions prune` (defaults N=5, K=10) erase 85 of 100 sessions, a
+  data-loss surprise. Corrected `test_prune_oldest_deletes_oldest`
+  (its name said "oldest" but its assertion matched the bug); added
+  `test_prune_oldest_in_dir_deletes_oldest_not_just_beyond_keep` with
+  the workorder's exact params (keep=3, delete=2, len=6). One-file
+  change (`src/session/session_index.rs`). Gate: 8/8 prune tests pass,
+  clippy/fmt/check clean; one pre-existing concurrency flake
+  (`attached_cancel_token_kills_inflight_bash_promptly`) failed in the
+  parallel gate run under load-18-42 contention, passes in isolation
+  (5.52s) — not caused by this change.
 
 - **WO 46.25**: Done. `scripts/ci-local.sh` `run_step` returned non-zero
   on a failing step; with `set -euo pipefail` active, that killed the

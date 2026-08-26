@@ -454,7 +454,10 @@ fn prune_oldest_in_dir(
     if entries.len() <= threshold {
         return Ok(Vec::new());
     }
-    let to_delete = &entries[keep..threshold];
+    // entries is newest-first; the oldest `delete_count` sessions are
+    // the tail. The guard above guarantees len - delete_count > keep,
+    // so this window never overlaps the keep window.
+    let to_delete = &entries[entries.len() - delete_count..];
     let mut deleted = Vec::with_capacity(to_delete.len());
     for e in to_delete {
         if let Err(err) = std::fs::remove_file(&e.path) {
@@ -778,11 +781,11 @@ mod tests {
             std::fs::write(sessions_dir.join(format!("{id}.conv.ndjson")), b"").unwrap();
         }
 
-        // Keep 1, delete 1 → the oldest of the two beyond keep is removed.
+        // Keep 1, delete 1 → the oldest session is removed.
         let deleted = prune_oldest_in_dir(&sessions_dir, 1, 1).unwrap();
-        assert_eq!(deleted, vec!["2026-06-02-session-02".to_string()]);
+        assert_eq!(deleted, vec!["2026-06-01-session-01".to_string()]);
         assert!(!sessions_dir
-            .join("2026-06-02-session-02.conv.ndjson")
+            .join("2026-06-01-session-01.conv.ndjson")
             .exists());
         assert!(sessions_dir
             .join("2026-06-03-session-03.conv.ndjson")
@@ -1105,6 +1108,58 @@ mod tests {
                 .count(),
             3,
             "5 - 2 = 3 sessions should remain"
+        );
+    }
+
+    /// Regression for WO 46.28: with keep=3, delete=2, the OLDEST 2 must
+    /// be deleted, not the 2 just beyond the keep window. Six sessions
+    /// newest-first; the tail (oldest 2) is what "delete the oldest N"
+    /// promises. The prior impl sliced `[keep..keep+delete_count]` and
+    /// leaked the absolute oldest.
+    #[test]
+    fn test_prune_oldest_in_dir_deletes_oldest_not_just_beyond_keep() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let ids = [
+            "2026-06-01-oldest",
+            "2026-06-02-old",
+            "2026-06-03-mid",
+            "2026-06-04-new",
+            "2026-06-05-newer",
+            "2026-06-06-newest",
+        ];
+        for id in ids {
+            std::fs::write(sessions_dir.join(format!("{id}.conv.ndjson")), b"").unwrap();
+        }
+        // keep=3, delete=2 → oldest 2 deleted, newest 3 + the 2
+        // just-beyond-keep survive.
+        let deleted = prune_oldest_in_dir(&sessions_dir, 3, 2).unwrap();
+        assert_eq!(
+            deleted,
+            vec![
+                "2026-06-02-old".to_string(),
+                "2026-06-01-oldest".to_string()
+            ]
+        );
+        let remaining: Vec<String> = std::fs::read_dir(&sessions_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().replace(".conv.ndjson", ""))
+            .filter(|n| n.starts_with("2026-"))
+            .collect();
+        assert_eq!(remaining.len(), 4, "6 - 2 = 4 sessions should remain");
+        assert!(
+            remaining.contains(&"2026-06-06-newest".to_string()),
+            "newest must survive"
+        );
+        assert!(
+            remaining.contains(&"2026-06-04-new".to_string()),
+            "the session just beyond keep must survive (it is not the oldest)"
+        );
+        assert!(
+            !remaining.contains(&"2026-06-01-oldest".to_string()),
+            "absolute oldest must be deleted"
         );
     }
 

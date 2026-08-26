@@ -11,6 +11,13 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.21 — `web_fetch` now streams the HTTP response body via
+  `response.bytes_stream()` with incremental `MAX_BODY_BYTES` (1 MiB)
+  enforcement per chunk, instead of buffering the entire body with
+  `response.bytes().await` and checking the cap afterward. A server
+  streaming a multi-GB body within the 30s timeout no longer OOMs the
+  process; the fetch aborts at the 1 MiB boundary.
+  [46.21](docs/workorders/46.21-web-fetch-unbounded-body-read.md)
 - WO 45.63 — pricing table no longer silently $0 for current Anthropic
   model families. Added rows for `claude-sonnet-5`, `claude-opus-4-8`,
   `claude-haiku-4-5`, and `claude-3-7-sonnet` (the last found by a new

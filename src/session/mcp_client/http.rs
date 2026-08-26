@@ -36,10 +36,11 @@ pub(super) struct McpHttpTransport {
     /// Channel used to inject outbound requests so the SSE reader task can
     /// keep reading while requests are in flight.
     request_tx: mpsc::UnboundedSender<HttpRequestEnvelope>,
-    // reason: held for Drop semantics; read only by #[cfg(test)] disconnect().
+    // reason: held for Drop semantics; read only by #[cfg(test)] disconnect()
+    // and the production Drop arm in the parent module.
     _reader_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     _poster_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
-    _shutdown_tx: Option<oneshot::Sender<()>>,
+    pub(super) shutdown_tx: Option<oneshot::Sender<()>>,
 }
 
 struct HttpRequestEnvelope {
@@ -131,7 +132,7 @@ impl McpHttpTransport {
             request_tx,
             _reader_task: tokio::sync::Mutex::new(Some(reader_task)),
             _poster_task: tokio::sync::Mutex::new(Some(poster_task)),
-            _shutdown_tx: Some(shutdown_tx),
+            shutdown_tx: Some(shutdown_tx),
         };
 
         let init_req = serde_json::json!({
@@ -505,7 +506,7 @@ impl McpHttpTransport {
     #[cfg(test)]
     pub(super) async fn disconnect(&mut self) {
         self.alive.store(false, Ordering::SeqCst);
-        if let Some(tx) = self._shutdown_tx.take() {
+        if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
         #[allow(unused_must_use)]

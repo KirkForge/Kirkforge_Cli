@@ -948,14 +948,14 @@ tree, ~11 stale claims corrected in-line. See
 
 14 workorders from the post-WO-45 codebase audit + GPT/Claude fresh-copy review.
 
-| 46.1 | [FileAuditSink::flush advances hash chain before write succeeds — breaks tamper-evidence on partial failure](46.1-audit-flush-partial-failure-breaks-tamper-evidence.md) | Planned |
+| 46.1 | [FileAuditSink::flush advances hash chain before write succeeds — breaks tamper-evidence on partial failure](46.1-audit-flush-partial-failure-breaks-tamper-evidence.md) | Done |
 | 46.10 | [context-index mtime_rebuild misses new files not in cache](46.10-context-index-cache-mtime-misses-new-files.md) | Planned |
 | 46.11 | [ci-merge.yml missing bench TOML [verify].type validation present in ci-pr.yml](46.11-ci-merge-missing-bench-toml-validation.md) | Planned |
 | 46.12 | [check-artifact-consistency grep-echo produces double output (false failure)](46.12-check-artifact-consistency-grep-double-output.md) | Planned |
 | 46.13 | [plugin_consent_ledger defaults to false — WO 45.61 fix only matters when ledger is opt-in](46.13-plugin-consent-ledger-default-off.md) | Planned |
 | 46.14 | [run_id/parent_run_id always None in workflow and scheduled jobs — WO 45.1 identity gap](46.14-run-id-threading-incomplete-workflow-jobs.md) | Planned |
-| 46.2 | [apply_patch_to_parent missing setup_process_group — grandchild survives timeout](46.2-parallel-orchestrator-patch-missing-process-group.md) | Planned |
-| 46.3 | [Daemon concurrency semaphore starved by long-lived instance push channels](46.3-daemon-semaphore-starved-by-instance-channels.md) | Planned |
+| 46.2 | [apply_patch_to_parent missing setup_process_group — grandchild survives timeout](46.2-parallel-orchestrator-patch-missing-process-group.md) | Done |
+| 46.3 | [Daemon concurrency semaphore starved by long-lived instance push channels](46.3-daemon-semaphore-starved-by-instance-channels.md) | Done |
 | 46.4 | [kf-memory-store eviction is count-only — TTL and max_entries limits are non-functional](46.4-memory-store-eviction-count-only-limits-nonfunctional.md) | Done |
 | 46.5 | [minify_write_side serde default true vs Default false — config construction paths disagree](46.5-config-minify-write-side-serde-default-divergence.md) | Planned |
 | 46.6 | [EventBus inflight counter leaks when emit future is dropped — graceful_shutdown always times out](46.6-event-bus-inflight-leak-on-cancelled-emit.md) | Planned |
@@ -964,9 +964,9 @@ tree, ~11 stale claims corrected in-line. See
 | 46.9 | [bench compare --fail-on-regression bypasses telemetry shutdown via std::process::exit(1)](46.9-bench-compare-bypasses-telemetry-shutdown.md) | Planned |
 ### WO 46 additions — DeepSeek + MiniMax audit findings
 
-| 46.15 | [kf-memory-store self-deadlock in write_run_and_emissions fallback (CRITICAL)](46.15-memory-store-self-deadlock-write-run-and-emissions.md) | Planned |
-| 46.16 | [Plugin hot-reload watcher dropped at call site — silently dead](46.16-plugin-hot-reload-watcher-dropped.md) | Planned |
-| 46.17 | [Process group missing in 3 more subprocess spawn sites (CRITICAL)](46.17-process-group-missing-three-more-spawn-sites.md) | Planned |
+| 46.15 | [kf-memory-store self-deadlock in write_run_and_emissions fallback (CRITICAL)](46.15-memory-store-self-deadlock-write-run-and-emissions.md) | Done |
+| 46.16 | [Plugin hot-reload watcher dropped at call site — silently dead](46.16-plugin-hot-reload-watcher-dropped.md) | Done |
+| 46.17 | [Process group missing in 3 more subprocess spawn sites (CRITICAL)](46.17-process-group-missing-three-more-spawn-sites.md) | Done |
 | 46.18 | [kf-orchestrator observation outcome stores routing mode, not verdict — empirical router learns nothing](46.18-orchestrator-outcome-stores-mode-not-verdict.md) | Planned |
 | 46.19 | [Daemon state mutex held across write_response .await — single wedged client stalls whole daemon](46.19-daemon-state-mutex-held-across-await.md) | Planned |
 | 46.20 | [Never-ending bash job blocks scheduler and graceful shutdown — unshutdownable daemon](46.20-never-ending-job-blocks-scheduler-shutdown.md) | Planned |

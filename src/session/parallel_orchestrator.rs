@@ -416,14 +416,16 @@ pub async fn apply_patch_to_parent(
     use tokio::io::AsyncWriteExt;
     const APPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let mut child = tokio::process::Command::new("git")
-        .arg("apply")
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.arg("apply")
         .arg("-")
         .current_dir(parent_cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    crate::session::process_group::setup_process_group(&mut cmd);
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn git apply: {e}"))?;
 

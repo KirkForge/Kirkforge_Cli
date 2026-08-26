@@ -1,5 +1,41 @@
 # Lessons — WO 43 session
 
+## WO 46.28 (prune_oldest_in_dir wrong slice)
+
+- External-model bug reports can misdiagnose root cause AND propose the
+  wrong fix. WO 46.28 framed this as "keep semantics leak" and proposed
+  `entries[..keep]` (delete everything beyond keep). That would have
+  been a data-loss regression: `/sessions prune` defaults N=5, K=10, so
+  on 100 sessions it would erase 85. The documented contract (4 doc
+  sites) is "delete the OLDEST N, keep K most recent" — delete-at-most-N
+  is a budget, not a vacuum. Reading the caller (sessions.rs arg parser
+  + help text) was what revealed the real intent. Lesson: when a bug
+  report proposes a fix, still verify the fix against every caller and
+  every doc site before applying it.
+- The actual bug was the *direction* of the slice in a newest-first
+  list: `entries[keep..keep+delete_count]` deletes the N just-beyond-keep
+  (newest of the surplus), leaving the absolute oldest alive. Correct:
+  `entries[len - delete_count..]` (the tail = oldest). Same guard, same
+  budget semantics, one slice index changed.
+- A test whose NAME/COMMENT says the right thing ("deletes oldest") but
+  whose ASSERTION encodes the bug (deletes the middle session) is a
+  tell: the author intuited the intent correctly, then copy-pasted the
+  actual output. Trust the name + the doc contract over the assertion
+  when they diverge — and fix the assertion to match.
+- GitNexus `detect_changes` reports "no changes" from a worktree: the
+  index is on the main checkout, so worktree diffs are invisible to it.
+  Expected per the worktree/LSP caveat in AGENTS.md. Rely on `git diff`
+  for worktree-scoped change review.
+- Build contention under 8+ parallel worktree compiles makes even
+  `cargo check` time out at 15-20 min; a single `cargo test -p kf-code`
+  cold build took 18m45s. Poll load and wait for siblings to drain
+  before launching gate runs. The one flake I hit
+  (`attached_cancel_token_kills_inflight_bash_promptly`, a 10s-window
+  subprocess-death assertion) is a load-induced timeout, not a logic
+  failure — it passes in 5.52s in isolation. Same class as AGENTS.md's
+  "Known flakes". When a gate test fails under heavy load, re-run it
+  ALONE before treating it as real.
+
 ## WO 46.25 (ci-local.sh set -e vs run_step)
 
 - `set -euo pipefail` + a helper that `return 1`s on a recorded failure =

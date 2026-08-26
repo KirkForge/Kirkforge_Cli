@@ -11,6 +11,17 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.28 — `prune_oldest_in_dir` now deletes the OLDEST `delete_count`
+  sessions (the tail of the newest-first list) instead of the `delete_count`
+  sessions immediately after the keep window. The prior slice
+  `entries[keep..keep+delete_count]` left the absolute oldest sessions on
+  disk, contradicting the documented "delete the oldest N, keep K most
+  recent" contract. The "delete at most N" budget semantics (defaults
+  N=5, K=10) are preserved; the workorder's proposed "delete everything
+  beyond keep" was rejected as a data-loss surprise. Existing test
+  `test_prune_oldest_deletes_oldest` corrected to match its own "oldest"
+  wording; new regression test pins the workorder's exact scenario.
+  [46.28](docs/workorders/46.28-prune-oldest-ignores-keep-semantics.md)
 - WO 46.26 — `bench run-models` now exits non-zero when any model gets
   0/N tasks passed, mirroring the WO 38.10 guard on `bench run`. A
   total-failure run previously exited 0, blinding CI. Reports and the

@@ -104,11 +104,11 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
                         let shutdown = shutdown.clone();
                         let concurrency = concurrency.clone();
                         tokio::spawn(async move {
-                            let Ok(_permit) = concurrency.acquire_owned().await else {
+                            let Ok(permit) = concurrency.acquire_owned().await else {
                                 tracing::warn!("daemon concurrency semaphore closed; dropping connection");
                                 return;
                             };
-                            handle_client(stream, state, shutdown).await;
+                            handle_client(stream, state, shutdown, permit).await;
                         });
                     }
                     Err(e) => {
@@ -177,6 +177,7 @@ async fn handle_client(
     stream: UnixStream,
     state: Arc<Mutex<DaemonState>>,
     shutdown: Arc<tokio::sync::Notify>,
+    permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     let mut stream = BufStream::new(stream);
     let mut line = String::new();
@@ -251,6 +252,14 @@ async fn handle_client(
                     }
                 }
             }
+            // InstanceRegister is a long-lived control channel, not a
+            // request/response pair. Hand off to a dedicated handler that
+            // holds the stream open and pushes events. Release the
+            // concurrency permit first: the handshake above (auth + version
+            // check) is done, and the push loop parks indefinitely — holding
+            // the permit for the connection lifetime would starve all 16
+            // slots once 16 TUIs attach, blocking new `kf-code run --attach`.
+            drop(permit);
             handle_instance_register(stream, state).await;
             return;
         }

@@ -455,3 +455,27 @@
   cache). The first `cargo check --lib` after edits took ~8 min because
   the shared target dir (wo46.5) was cold for this worktree's fingerprint.
   Budget 30+ min; run gates sequentially (file-lock contention).
+
+## WO 46.11 (ci-merge bench TOML [verify].type validation)
+
+- The ci-merge.yml static job had the bench-TOML required-key check
+  but was missing the [verify].type validation that ci-pr.yml:44-75
+  has. Copy-verbatim from ci-pr.yml was the correct minimal fix
+  (single YAML file, +9 lines). No new logic, no new deps.
+- `scripts/test-fast.sh` under 7 concurrent sibling worktrees (load
+  17-23, mem down to 1.6GB avail) repeatedly flaked the single
+  real-subprocess timing test
+  `attached_cancel_token_kills_inflight_bash_promptly` (fail-fast
+  killed the run at 1284/4766). Re-running with `--no-fail-fast`
+  completed all 4765 tests green (the flake test passed once the
+  scheduler gave it a full core). This is the documented Known flakes
+  pattern — a YAML-only change cannot affect Rust test logic. When
+  load >2x cores, judge test-fast.sh red on the flake tests only after
+  an isolation re-run; do NOT treat the load-induced flake as a
+  regression.
+- kf-code `--test` rustc compile in a cold worktree under mem
+  pressure: 25+ min for that one crate (RSS 2.3GB). Polling with
+  `setsid`-detached background + 90-115s sleep checks is the only way
+  to outlast the 2-min bash-tool cap. Don't trust a frozen "Compiling
+  kf-code" log line as stuck — check `ps STAT` (Sl = sleeping on
+  I/O, R = running) and RSS growth to confirm progress.

@@ -4,6 +4,15 @@
 
 ## Shipped (closed this session)
 
+- **WO 46.24**: Done. TOCTOU symlink-race fix — 10 atomic-write sites
+  migrated to the shared `tools::atomic_write::atomic_write` helper
+  (O_EXCL + random tmp name + fsync + rename). Sites: carryover save,
+  config save, conversation checkpoint + replace, undo push + pop,
+  session-index save, jobs store save + record_run, task persist. No
+  new helper, no new deps (reused the existing correct pattern). Tests
+  updated where they asserted on the old fixed `.tmp` names. Two
+  append-mode sites (audit log, tracing log) deferred — different fix
+  shape (O_NOFOLLOW), see pending.
 - **WO 43 SERIES COMPLETE** (all 43.x Done). Closed this session:
   - **WO 43.22**: adapter transport robustness — Bedrock forwards `[DONE]`
     only after terminal `message_stop` (mid-turn drop → Done{Error}, not
@@ -92,6 +101,23 @@
   strong, Claude compat partially ships but undocumented (45.31).
 
 ## Pending / Deferred (open)
+
+- **WO 46.24 (deferred tail)**: the two append-mode sites use
+  `OpenOptions::new().append(true).create(true).open()` without
+  `O_NOFOLLOW`, so an attacker who pre-creates the target as a symlink
+  makes appends follow the link (write INTO the target, no truncation).
+  Sites: `src/shared/audit.rs:143` (`AuditLog::new`) and
+  `src/main/cli_dispatch.rs:73` (`init_tracing`). The fix is
+  `O_NOFOLLOW` on the open via `std::os::unix::fs::OpenOptionsExt` on
+  Unix (Windows needs `FILE_FLAG_OPEN_REPARSE_POINT` or an explicit
+  acceptance note). Deferred because: (a) it's a different fix shape
+  from the tmp+rename migration the workorder scoped; (b) `O_NOFOLLOW`
+  is Unix-only and both sites have Windows callers; (c) the threat model
+  is "tamper with own audit/debug trail", not "clobber an arbitrary
+  file" (append never truncates, and the attacker already needs write
+  access to `~/.local/share/kf-code/`). Remaining work: add `O_NOFOLLOW`
+  to both opens on Unix + decide the Windows path. Tracked in
+  [46.24](docs/workorders/46.24-predictable-tmp-filenames-toctou.md).
 
 - **WO 45 series COMPLETE** (27 workorders, 4 waves, all Done + merged):
   45.1 (AgentRun identity), 45.10 (typed event bus), 45.11 (sandbox seam),

@@ -11,6 +11,16 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.24 — 10 atomic-write sites migrated to the shared
+  `tools::atomic_write::atomic_write` helper (O_EXCL + random tmp name +
+  fsync + rename), closing the predictable-`.tmp` symlink-race TOCTOU.
+  Sites: carryover save, config save, conversation checkpoint + replace,
+  undo push + pop, session-index save, jobs store save + record_run,
+  task persist. The two append-mode sites (audit log, tracing log) are
+  a different fix shape (O_NOFOLLOW) and are deferred — see WO file.
+
+### Changed
+
 - WO 45.63 — pricing table no longer silently $0 for current Anthropic
   model families. Added rows for `claude-sonnet-5`, `claude-opus-4-8`,
   `claude-haiku-4-5`, and `claude-3-7-sonnet` (the last found by a new

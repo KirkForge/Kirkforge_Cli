@@ -305,28 +305,17 @@ fn load_or_create_config_impl(strict: bool) -> anyhow::Result<Config> {
 /// Atomic: writes to a temp file, fsyncs, then renames over the target
 /// (WO 38.6). A crash mid-write leaves the original config intact instead
 /// of a truncated file that would load as all defaults and permanently
-/// erase the user's config on the next save.
+/// erase the user's config on the next save. WO 46.24: the shared
+/// `atomic_write` uses O_EXCL + a random tmp name, closing the
+/// predictable-`.toml.tmp` symlink race.
 pub fn save_config(config: &Config) -> anyhow::Result<()> {
     let path = super::config_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let content = toml::to_string_pretty(config)?;
-    let tmp = path.with_extension("toml.tmp");
-    {
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&tmp)
-            .with_context(|| format!("create temporary config {}", tmp.display()))?;
-        file.write_all(content.as_bytes())
-            .with_context(|| format!("write temporary config {}", tmp.display()))?;
-        file.sync_all()?;
-    }
-    crate::tools::atomic_write::rename_with_retry(&tmp, &path)
-        .with_context(|| format!("commit config from {} to {}", tmp.display(), path.display()))?;
+    crate::tools::atomic_write::atomic_write(&path, content.as_bytes())
+        .with_context(|| format!("commit config to {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1632,10 +1621,12 @@ mod tests {
 
     /// WO 38.6: `save_config` must be atomic — write to a temp file, fsync,
     /// then rename over the target. A crash mid-write leaves the original
-    /// intact. This test verifies (a) a successful save produces complete
-    /// content at the target with no `.toml.tmp` leftover, and (b) a stale
-    /// `.toml.tmp` from a previously crashed save is cleaned up (truncated +
-    /// rewritten) rather than corrupting the new save.
+    /// intact. WO 46.24: the shared `atomic_write` uses O_EXCL + a random
+    /// tmp name, so a stale predictable `.toml.tmp` left by a prior crash
+    /// is now harmless orphan litter (never opened, never followed) — the
+    /// new save writes to its own random temp and renames over the target.
+    /// This test verifies a successful save produces complete content at
+    /// the target and atomically replaces the original.
     #[test]
     fn save_config_atomic_leaves_no_temp_and_cleans_stale_tmp() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1660,9 +1651,12 @@ mod tests {
         let original = "ollama_host = \"http://original:1111\"\n";
         std::fs::write(&path, original).unwrap();
 
-        // Simulate a previously-crashed save that left a stale partial temp.
-        let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, "PARTIAL TORN WRITE").unwrap();
+        // A stale predictable .toml.tmp from a pre-46.24 crash. The new
+        // atomic_write uses a random temp name + O_EXCL, so this file is
+        // never opened or followed — it's orphan litter. Seed it to prove
+        // the save no longer depends on cleaning it up.
+        let stale_tmp = path.with_extension("toml.tmp");
+        std::fs::write(&stale_tmp, "PARTIAL TORN WRITE").unwrap();
 
         let mut cfg = Config::default();
         cfg.model.ollama_host = "http://new-host:2222".into();
@@ -1679,10 +1673,21 @@ mod tests {
             "stale temp content must not leak into the target"
         );
 
-        // No temp file must linger after a successful save.
+        // No new temp file must linger after a successful save. The stale
+        // predictable .toml.tmp is harmless orphan litter (not opened by
+        // the random-name path); we leave it in place rather than pretend
+        // the save cleans it up.
+        let leftovers: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
         assert!(
-            !tmp.exists(),
-            "save_config must remove the temp file after rename"
+            leftovers
+                .iter()
+                .all(|n| n == path.file_name().unwrap().to_str().unwrap()
+                    || n == "config.toml.tmp"),
+            "only the target and the pre-existing stale .toml.tmp should remain, got: {leftovers:?}"
         );
 
         // The original content is gone (replaced atomically), confirming the

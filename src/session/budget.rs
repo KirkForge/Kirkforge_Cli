@@ -269,17 +269,20 @@ pub fn apply_budget_slice(
     store: &SharedStore,
     session_id: &str,
 ) -> ToolOutcome {
-    let state = {
-        let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
-        guard.state()
-    };
+    // WO 46.31: one critical section spans the state read and the
+    // slice — a concurrent init_from_config/budget_set can no longer
+    // rewrite ceiling/approaching_ratio between decision and slice.
+    // maybe_escalate_stratum only locks SESSION_MODE (never the
+    // budget), and the guard is dropped before dispatch_sliced since
+    // listeners may lock the budget themselves.
+    let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
+    let state = guard.state();
     if state != BudgetState::Over && state != BudgetState::Approaching {
         return outcome;
     }
     if state == BudgetState::Approaching {
         maybe_escalate_stratum();
     }
-    let guard = budget.lock().unwrap_or_else(|e| e.into_inner());
     match outcome {
         ToolOutcome::Success { content } => {
             let original_size = content.len();

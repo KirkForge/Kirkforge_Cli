@@ -4,6 +4,17 @@
 
 ## Shipped (closed this session)
 
+- **WO 46.5**: Done. `minify_write_side` serde/`Default` divergence fixed
+  — `Default` impl line 220 now calls `default_minify_write_side()`
+  (matching the serde default `true` set by `da7524f6`). Two stale test
+  preconditions (`test_env_minify_write_side`, `test_merge_toml_minify_write_side`)
+  restructured to assert the new default + exercise a `false` override.
+  Two stale "(default)" comments in `read_file.rs` dropped. Direction:
+  aligned to `true` (the intended default per `da7524f6`,
+  `config.toml.example`, WO 38.13). DEFERRED: ADR-005:173 + ADR-053:53
+  still claim "(default `false`)" — pre-existing staleness from
+  `da7524f6`, ADR amendment is WO 38.13 doc-truth territory (see pending).
+
 - **WO 46.24**: Done. TOCTOU symlink-race fix — 10 atomic-write sites
   migrated to the shared `tools::atomic_write::atomic_write` helper
   (O_EXCL + random tmp name + fsync + rename). Sites: carryover save,
@@ -101,6 +112,14 @@
   strong, Claude compat partially ships but undocumented (45.31).
 
 ## Pending / Deferred (open)
+
+- **WO 46.5 (deferred tail)**: ADR-005:173 and ADR-053:53 still claim
+  `minify_write_side` "(default `false`)" — pre-existing staleness from
+  `da7524f6` (2026-08-13 flipped the default to `true` but didn't amend
+  the ADRs). Not introduced by WO 46.5; ADR amendment is WO 38.13
+  doc-truth territory. Remaining: amend both ADR lines to "(default
+  `true`)" and add a history note. Tracked in
+  [46.5](docs/workorders/46.5-config-minify-write-side-serde-default-divergence.md).
 
 - **WO 46.24 (deferred tail)**: the two append-mode sites use
   `OpenOptions::new().append(true).create(true).open()` without

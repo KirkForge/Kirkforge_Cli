@@ -580,10 +580,13 @@ mod tests {
     fn test_env_minify_write_side() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut cfg = Config::default();
-        assert!(!cfg.tools.minify_write_side);
-        let _env = set_env("KF_CODE_MINIFY_WRITE_SIDE", Some("true"));
+        assert!(
+            cfg.tools.minify_write_side,
+            "WO 46.5: serde and Default impl now agree on true"
+        );
+        let _env = set_env("KF_CODE_MINIFY_WRITE_SIDE", Some("false"));
         apply_env_overrides(&mut cfg);
-        assert!(cfg.tools.minify_write_side);
+        assert!(!cfg.tools.minify_write_side);
     }
 
     #[test]

@@ -114,7 +114,7 @@ impl Tool for ReadFile {
         // Auto-minify only fires when `minify_write_side` is true: then the
         // minified text is wrapped in a `<minified>` envelope that
         // `edit_file`/`write_file` expand back to source, so the model can
-        // round-trip it. With `minify_write_side=false` (default), an
+        // round-trip it. With `minify_write_side=false`, an
         // auto-minified read returns PLAIN minified text that can't match
         // `edit_file`'s raw-string compare — the model would stall on edits.
         // The model can still explicitly pass `minify=true` for token savings
@@ -336,7 +336,7 @@ mod tests {
         );
     }
 
-    /// Regression for WO 30.0.8: when `minify_write_side=false` (the default),
+    /// Regression for WO 30.0.8: when `minify_write_side=false`,
     /// auto-minify must NOT fire even for a large file with no explicit `minify`
     /// arg. Otherwise the plain (non-enveloped) minified text can't round-trip
     /// through `edit_file`'s raw-string match, stalling edits.

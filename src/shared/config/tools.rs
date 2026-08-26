@@ -217,7 +217,7 @@ impl Default for ToolConfig {
             max_continuation_rounds: default_max_continuation_rounds(),
             dry_run: false,
             hooks_dir: None,
-            minify_write_side: false,
+            minify_write_side: default_minify_write_side(),
             minify_above_bytes: default_minify_above_bytes(),
             follow_symlinks: false,
             block_binary_reads: false,

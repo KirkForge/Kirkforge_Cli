@@ -673,14 +673,17 @@ mod tests {
     #[test]
     fn test_merge_toml_minify_write_side() {
         let mut cfg = Config::default();
-        assert!(!cfg.tools.minify_write_side);
+        assert!(
+            cfg.tools.minify_write_side,
+            "WO 46.5: serde and Default impl now agree on true"
+        );
         let table: toml::Table = r#"
-            minify_write_side = true
+            minify_write_side = false
         "#
         .parse()
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
-        assert!(cfg.tools.minify_write_side);
+        assert!(!cfg.tools.minify_write_side);
     }
 
     #[test]

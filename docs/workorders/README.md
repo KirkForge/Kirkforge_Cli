@@ -953,7 +953,7 @@ tree, ~11 stale claims corrected in-line. See
 | 46.11 | [ci-merge.yml missing bench TOML [verify].type validation present in ci-pr.yml](46.11-ci-merge-missing-bench-toml-validation.md) | Planned |
 | 46.12 | [check-artifact-consistency grep-echo produces double output (false failure)](46.12-check-artifact-consistency-grep-double-output.md) | Planned |
 | 46.13 | [plugin_consent_ledger defaults to false — WO 45.61 fix only matters when ledger is opt-in](46.13-plugin-consent-ledger-default-off.md) | Planned |
-| 46.14 | [run_id/parent_run_id always None in workflow and scheduled jobs — WO 45.1 identity gap](46.14-run-id-threading-incomplete-workflow-jobs.md) | Planned |
+| 46.14 | [run_id/parent_run_id always None in workflow and scheduled jobs — WO 45.1 identity gap](46.14-run-id-threading-incomplete-workflow-jobs.md) | Done |
 | 46.2 | [apply_patch_to_parent missing setup_process_group — grandchild survives timeout](46.2-parallel-orchestrator-patch-missing-process-group.md) | Done |
 | 46.3 | [Daemon concurrency semaphore starved by long-lived instance push channels](46.3-daemon-semaphore-starved-by-instance-channels.md) | Done |
 | 46.4 | [kf-memory-store eviction is count-only — TTL and max_entries limits are non-functional](46.4-memory-store-eviction-count-only-limits-nonfunctional.md) | Done |

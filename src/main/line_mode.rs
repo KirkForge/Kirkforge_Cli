@@ -333,6 +333,11 @@ pub(super) async fn run_line_mode(
                                     undo_stack: None,
                                 };
                                 let result = kf_workflow::WorkflowExecutor::new(workflow)
+                                    .with_run_id(if session_id.is_empty() {
+                                        None
+                                    } else {
+                                        Some(session_id.clone())
+                                    })
                                     .run(std::sync::Arc::new(runner), Some(&cancel))
                                     .await;
                                 match result {

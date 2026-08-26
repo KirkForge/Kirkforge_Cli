@@ -127,6 +127,7 @@ impl Tool for WorkflowTool {
             deny_list: &self.deny_list,
             path_guard: &self.path_guard,
             bash_sandbox_workdir: self.bash_sandbox_workdir,
+            run_id: ctx.run_id.clone(),
         })
         .await
         {
@@ -151,6 +152,8 @@ struct WorkflowRunArgs<'a> {
     deny_list: &'a DenyList,
     path_guard: &'a PathGuard,
     bash_sandbox_workdir: bool,
+    // WO 45.1/46.14: canonical session run_id threaded from ToolContext.
+    run_id: Option<String>,
 }
 
 async fn run_workflow(args: WorkflowRunArgs<'_>) -> Result<String> {
@@ -164,6 +167,7 @@ async fn run_workflow(args: WorkflowRunArgs<'_>) -> Result<String> {
         deny_list,
         path_guard,
         bash_sandbox_workdir,
+        run_id,
     } = args;
     let path = kf_workflow::find_workflow_file(template)
         .with_context(|| format!("workflow template '{template}' not found"))?;
@@ -171,7 +175,7 @@ async fn run_workflow(args: WorkflowRunArgs<'_>) -> Result<String> {
     let mut workflow = Workflow::from_json(&raw)?;
     interpolate_vars(&mut workflow, vars);
 
-    let executor = WorkflowExecutor::new(workflow);
+    let executor = WorkflowExecutor::new(workflow).with_run_id(run_id);
     let runner = TaskSpawnerStepRunner {
         spawner,
         toolset,

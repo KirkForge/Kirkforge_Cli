@@ -175,7 +175,7 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
                         let store = store.lock().await;
                         store.clone()
                     };
-                    match run_job(&mut job, &store_guard, &config).await {
+                    match run_job(&mut job, &store_guard, &config, None).await {
                             Ok(run) => {
                                 tracing::info!(
                                     job_id = %job.id,

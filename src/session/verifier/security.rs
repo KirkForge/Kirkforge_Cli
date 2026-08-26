@@ -221,15 +221,21 @@ async fn trufflehog_scan(path: &Path) -> Option<Verdict> {
         Some(b) => b,
         None => return None,
     };
+    // WO 46.17: own process group so a hung trufflehog (and any Go
+    // detector helpers it spawns) can be reaped together with the
+    // direct child on timeout — kill_on_drop alone leaves grandchildren
+    // holding the stdout/stderr pipes open.
+    let mut trufflehog_cmd = tokio::process::Command::new(&binary);
+    trufflehog_cmd
+        .kill_on_drop(true)
+        .arg("filesystem")
+        .arg("--no-update")
+        .arg("--json")
+        .arg(path);
+    crate::session::process_group::setup_process_group(&mut trufflehog_cmd);
     let output = match tokio::time::timeout(
         std::time::Duration::from_secs(TRUFFLEHOG_TIMEOUT_SECS),
-        tokio::process::Command::new(&binary)
-            .kill_on_drop(true)
-            .arg("filesystem")
-            .arg("--no-update")
-            .arg("--json")
-            .arg(path)
-            .output(),
+        trufflehog_cmd.output(),
     )
     .await
     {

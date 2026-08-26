@@ -11,6 +11,11 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.26 — `bench run-models` now exits non-zero when any model gets
+  0/N tasks passed, mirroring the WO 38.10 guard on `bench run`. A
+  total-failure run previously exited 0, blinding CI. Reports and the
+  comparison are still written before bailing.
+  [46.26](docs/workorders/46.26-handle-bench-run-models-missing-zero-guard.md)
 - WO 46.21 — `web_fetch` now streams the HTTP response body via
   `response.bytes_stream()` with incremental `MAX_BODY_BYTES` (1 MiB)
   enforcement per chunk, instead of buffering the entire body with

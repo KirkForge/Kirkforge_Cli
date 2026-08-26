@@ -957,11 +957,11 @@ tree, ~11 stale claims corrected in-line. See
 | 46.2 | [apply_patch_to_parent missing setup_process_group — grandchild survives timeout](46.2-parallel-orchestrator-patch-missing-process-group.md) | Done |
 | 46.3 | [Daemon concurrency semaphore starved by long-lived instance push channels](46.3-daemon-semaphore-starved-by-instance-channels.md) | Done |
 | 46.4 | [kf-memory-store eviction is count-only — TTL and max_entries limits are non-functional](46.4-memory-store-eviction-count-only-limits-nonfunctional.md) | Done |
-| 46.5 | [minify_write_side serde default true vs Default false — config construction paths disagree](46.5-config-minify-write-side-serde-default-divergence.md) | Planned |
-| 46.6 | [EventBus inflight counter leaks when emit future is dropped — graceful_shutdown always times out](46.6-event-bus-inflight-leak-on-cancelled-emit.md) | Planned |
-| 46.7 | [WorkflowExecutor::run_fan_out does not honour cancellation mid-fan-out](46.7-workflow-fan-out-no-cancellation-mid-batch.md) | Planned |
+| 46.5 | [minify_write_side serde default true vs Default false — config construction paths disagree](46.5-config-minify-write-side-serde-default-divergence.md) | Done |
+| 46.6 | [EventBus inflight counter leaks when emit future is dropped — graceful_shutdown always times out](46.6-event-bus-inflight-leak-on-cancelled-emit.md) | Done |
+| 46.7 | [WorkflowExecutor::run_fan_out does not honour cancellation mid-fan-out](46.7-workflow-fan-out-no-cancellation-mid-batch.md) | Done |
 | 46.8 | [grep/glob spawn_blocking tasks not cancellable by tool timeout — hung subprocess leaks](46.8-grep-glob-spawn-blocking-not-cancellable.md) | Done |
-| 46.9 | [bench compare --fail-on-regression bypasses telemetry shutdown via std::process::exit(1)](46.9-bench-compare-bypasses-telemetry-shutdown.md) | Planned |
+| 46.9 | [bench compare --fail-on-regression bypasses telemetry shutdown via std::process::exit(1)](46.9-bench-compare-bypasses-telemetry-shutdown.md) | Done |
 ### WO 46 additions — DeepSeek + MiniMax audit findings
 
 | 46.15 | [kf-memory-store self-deadlock in write_run_and_emissions fallback (CRITICAL)](46.15-memory-store-self-deadlock-write-run-and-emissions.md) | Done |
@@ -975,7 +975,7 @@ tree, ~11 stale claims corrected in-line. See
 | 46.23 | [ResponseCache::put holds sync Mutex across disk write + unbounded in-memory cache](46.23-response-cache-mutex-across-disk-write.md) | Done |
 | 46.24 | [9 atomic-write sites use predictable .tmp + no O_NOFOLLOW — TOCTOU symlink race](46.24-predictable-tmp-filenames-toctou.md) | Done |
 | 46.25 | [ci-local.sh set -e defeats run_step — failing step kills CI before remaining gates run](46.25-ci-local-set-e-defeats-gate-summary.md) | Done |
-| 46.26 | [handle_bench_run_models silently exits 0 on 0/N pass rate — CI blind](46.26-handle-bench-run-models-missing-zero-guard.md) | Planned |
+| 46.26 | [handle_bench_run_models silently exits 0 on 0/N pass rate — CI blind](46.26-handle-bench-run-models-missing-zero-guard.md) | Done |
 | 46.27 | [mtime_rebuild/incremental_rebuild silently drop cached embeddings](46.27-context-index-rebuild-drops-cached-embeddings.md) | Planned |
 | 46.28 | [prune_oldest_in_dir ignores keep semantics — silent leak of oldest sessions](46.28-prune-oldest-ignores-keep-semantics.md) | Planned |
 | 46.29 | [start_daemon leaks a zombie child on every invocation](46.29-start-daemon-zombie-child.md) | Planned |

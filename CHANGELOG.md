@@ -9,6 +9,17 @@ why, and the gate evidence.
 
 ## [Unreleased]
 
+### Fixed
+
+- WO 46.30 — `bench run_task` no longer leaks `KF_CODE_BUDGET_CEILING`
+  when it exits early: a private RAII `BudgetEnvGuard` replaces the
+  success-path-only `remove_var`, so an error between env export and
+  cleanup (conversation open, executor build) can no longer poison
+  later tasks in the same `bench run` (the Token Budget Challenge runs
+  5 tasks per invocation). Drop restores the pre-task value rather
+  than blanket-removing, so a user-set global ceiling survives a bench
+  run.
+
 ### Changed
 
 - WO 46.28 — `prune_oldest_in_dir` now deletes the OLDEST `delete_count`

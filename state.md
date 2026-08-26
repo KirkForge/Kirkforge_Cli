@@ -4,6 +4,29 @@
 
 ## Shipped (closed this session)
 
+- **WO 46.30**: Done. `bench run_task` env-var leak on error paths —
+  `KF_CODE_BUDGET_CEILING` was set at the top of `run_task` but only
+  removed on the success path; any `?` between set and cleanup
+  (`create_dir_all`, `ConversationLog::open`,
+  `Executor::with_log_and_undo`) leaked the ceiling into every later
+  task in the same `bench run` (the Token Budget Challenge runs 5).
+  Fixed with a private RAII `BudgetEnvGuard` in bench.rs (set on
+  construction, Drop restores the prior value or unsets) — the shared
+  `test_util::EnvGuard` is `#[cfg(test)]`-only, production needed its
+  own. Restore-prior also stops a bench run from clobbering a
+  user-set global ceiling (old code blanket-removed). New test
+  `budget_env_guard_unsets_on_drop_and_restores_prior_value` (throwaway
+  var name — the real var is mutated by config tests under a
+  module-local ENV_LOCK). One-file change (`src/session/bench.rs`).
+  Gate: clippy/fmt/check green; test-fast could not go fully green on
+  this box — 3 sibling worktrees ran ~250 rustc threads (load 17-27)
+  and starved 30s-budget tests: run A failed only the documented WO
+  46.28 flake (isolation green, 8.79s), run B (--no-fail-fast) 4763/
+  4768 passed with 5 starvation anomalies — all 5 re-passed unstarved
+  immediately (edit_file 54/54, flake, loop_), run C flake green and
+  one different near-budget test (25.79s solo) timed out. Zero
+  anomalies touch bench.rs.
+
 - **WO 46.28**: Done. `prune_oldest_in_dir` deleted the wrong sessions:
   entries are sorted newest-first, and `entries[keep..keep+delete_count]`
   deleted the N sessions immediately *after* the keep window, leaving the

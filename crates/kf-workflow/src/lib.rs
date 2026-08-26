@@ -1424,6 +1424,104 @@ mod tests {
         );
     }
 
+    /// WO 46.7: `run_fan_out` must honour cancellation mid-fan-out — abort
+    /// the JoinSet and bail "workflow cancelled" instead of running all N
+    /// children to completion. The cancel flag flips after the first child
+    /// starts; we assert (a) the workflow errors with "cancelled" and (b)
+    /// fewer than all N children completed (records starts in a shared log).
+    #[tokio::test]
+    async fn fan_out_aborts_on_cancel_mid_fan_out() {
+        // 4 items, max_parallel=1 so children start one at a time and the
+        // cancel flag (flipped after the first child begins) is observed
+        // before the remaining 3 spawn — deterministically.
+        let wf = Workflow {
+            name: "fanout-cancel".into(),
+            steps: vec![
+                Step {
+                    name: "explore".into(),
+                    kind: StepKind::Agent,
+                    prompt: Some("List items".into()),
+                    persona: Some("explore".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec![],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: None,
+                    as_name: None,
+                    max_parallel: None,
+                },
+                Step {
+                    name: "fan".into(),
+                    kind: StepKind::FanOut,
+                    prompt: Some("Process ${item}".into()),
+                    persona: Some("coder".into()),
+                    command: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    depends_on: vec!["explore".into()],
+                    critique: None,
+                    condition: None,
+                    on_error: None,
+                    fork_from: None,
+                    over: Some(r#"$(explore)"#.into()),
+                    as_name: Some("item".into()),
+                    max_parallel: Some(1),
+                },
+            ],
+            budget: None,
+        };
+
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let starts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        // Runner: explore returns a 4-element array; each fan-out child
+        // records its name, then flips the cancel flag on the FIRST child so
+        // the remaining children are aborted before they start.
+        struct CancelRunner {
+            cancel: Arc<std::sync::atomic::AtomicBool>,
+            starts: Arc<Mutex<Vec<String>>>,
+        }
+        #[async_trait::async_trait]
+        impl StepRunner for CancelRunner {
+            async fn run_step(&self, name: &str, _prompt: &str, _persona: &str) -> Result<String> {
+                if name == "explore" {
+                    return Ok(r#"["a","b","c","d"]"#.to_string());
+                }
+                self.starts.lock().unwrap().push(name.to_string());
+                // Flip cancel after the first fan-out child records its start.
+                self.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                // Yield a few times so the select! cancel arm is polled.
+                for _ in 0..4 {
+                    tokio::task::yield_now().await;
+                }
+                Ok(format!("{name}:done"))
+            }
+        }
+
+        let runner = CancelRunner {
+            cancel: cancel.clone(),
+            starts: starts.clone(),
+        };
+        let exe = WorkflowExecutor::new(wf);
+        let err = exe
+            .run(Arc::new(runner), Some(&cancel))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("cancelled"),
+            "expected cancel bail, got: {err}"
+        );
+        let started = starts.lock().unwrap().clone();
+        assert!(
+            started.len() < 4,
+            "expected <4 children started (cancel aborted the rest), got {started:?}"
+        );
+    }
+
     #[test]
     fn resolve_step_refs_replaces_whole_summary() {
         let mut outputs = HashMap::new();

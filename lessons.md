@@ -393,3 +393,46 @@
   `test-fast.sh` ~6 min. Budget 30+ min for the full gate when other
   worktrees are active. Run one gate at a time — parallel cargo
   invocations on the same target dir contend on the file lock.
+
+## WO 46.7 — fan_out cancellation (this session)
+
+- The WO hint said "Read the existing `run_batch` code in the same file
+  for the pattern — it may already have cancellation." It does NOT.
+  `run_batch` (lib.rs:406) is a default trait method that delegates to
+  the runner; it has no in-executor cancellation. The pattern to mirror
+  is the driver's top-of-batch `cancel.load(SeqCst)` →
+  `bail!("workflow cancelled")` (executor.rs:481-485). `run_fan_out` was
+  the one place that held the driver past the top-of-batch check for the
+  full duration of N spawns — the bug was structural, not a missing
+  copy of an existing pattern.
+- The `cancellation` parameter is `Option<&AtomicBool>` — an
+  externally-set flag with no associated async wakeup. Racing it in a
+  `tokio::select!` requires either busy-polling (yield_now loop) or
+  converting to a `CancellationToken`. I chose busy-poll with
+  `yield_now` (one poll per join completion, negligible cost) and
+  marked it `ponytail:` with the upgrade path (wire a Notify/
+  CancellationToken through the executor if the poll cost ever
+  matters). Changing the public `run()` signature to take a
+  CancellationToken would ripple to `workflow.rs:184` and the TUI — out
+  of scope for a mid-fan-out cancel fix.
+- `bail!("workflow cancelled")` string is load-bearing: `workflow.rs`
+  inspects it (workflow.rs:256) to classify cancellation vs a normal
+  exit. The fan_out bail must use the SAME string or the tool reports
+  a step error instead of "cancelled by user".
+- The test uses `max_parallel=1` deliberately: with serial child starts,
+  the cancel flag (flipped by the first child) is observed before the
+  remaining children spawn, making the assertion deterministic. With
+  `max_parallel=N`, all N children could start before the flag flip and
+  the "fewer than N started" assertion would be flaky.
+- Gate flake under load: `attached_cancel_token_kills_inflight_bash_promptly`
+  (WO 35.3, `session::executor/tests/dispatch.rs:1121`) timed out at
+  30s ci-fast under 16+ parallel rustc processes from sibling worktrees.
+  Passes in 6.5–15s in isolation. Pre-existing, unrelated to kf-workflow.
+  Documented in state.md known flakes. Did NOT weaken the gate or add
+  `|| true` — the flake is environmental.
+- The GitNexus index is on the main checkout, not the worktree, so
+  `impact`/`context` couldn't resolve `run_fan_out` (private method,
+  indexed under a stale commit). Used grep to confirm the single caller
+  is `run` in the same file — risk LOW. The lesson: for private symbols
+  in worktrees, grep is the reliable impact tool; GitNexus sees the main
+  checkout's commit, not the worktree HEAD.

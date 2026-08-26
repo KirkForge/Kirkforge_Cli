@@ -38,6 +38,16 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.7 — `WorkflowExecutor::run_fan_out` now honours cancellation
+  mid-fan-out. Previously it drained its JoinSet with a plain
+  `while let join_next().await` loop that never polled the cancel flag,
+  so all N children ran to completion after Esc. Now races `join_next`
+  against the cancel flag via `tokio::select!`; on cancel,
+  `abort_all()` drops remaining children and bails
+  `"workflow cancelled"` (matches the driver's bail string so
+  `workflow.rs` classifies it as cancellation).
+  [46.7](docs/workorders/46.7-workflow-fan-out-no-cancellation-mid-batch.md)
+
 - WO 45.63 — pricing table no longer silently $0 for current Anthropic
   model families. Added rows for `claude-sonnet-5`, `claude-opus-4-8`,
   `claude-haiku-4-5`, and `claude-3-7-sonnet` (the last found by a new

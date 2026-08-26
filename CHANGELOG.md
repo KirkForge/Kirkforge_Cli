@@ -11,6 +11,14 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.34 — `InMemoryOffloadStore` (kf-budget-core) now evicts in true
+  FIFO order. `evict_if_over_cap` claimed "remove the oldest entries" but
+  took an arbitrary `HashMap` key slice, so a just-returned key could be
+  evicted while old entries survived (a `get` for it then races to
+  `NotFound`). The store now keeps a `VecDeque` insertion order alongside
+  the map (mirroring the kf-compress-core store's WO 42.7 fix); re-put of
+  a live key does not grow the order. Pinned by
+  `evict_if_over_cap_is_fifo` and `duplicate_put_does_not_grow_order`.
 - WO 46.28 — `prune_oldest_in_dir` now deletes the OLDEST `delete_count`
   sessions (the tail of the newest-first list) instead of the `delete_count`
   sessions immediately after the keep window. The prior slice

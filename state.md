@@ -4,6 +4,23 @@
 
 ## Shipped (closed this session)
 
+- **WO 46.34**: Done. `InMemoryOffloadStore::evict_if_over_cap`
+  (kf-budget-core) promised FIFO but took `guard.keys().take(excess)` on a
+  `HashMap` — arbitrary order, could evict a just-returned key. Mirrored
+  the kf-compress-core WO 42.7 fix: `Mutex<StoreData>` = map + insertion
+  `VecDeque`; re-put of a live key doesn't grow the order; eviction
+  pop_fronts until under cap. No new deps, no API change. 2 new tests
+  (`evict_if_over_cap_is_fifo`, `duplicate_put_does_not_grow_order`);
+  README Tests row 931 → 935 (2 new + 2 pre-existing drift caught by the
+  readme_drift gate — the row was already 2 stale before this WO).
+  Gate: kf-budget-core green, clippy/fmt/check clean. test-fast.sh ran
+  red 3x on 4 known/borderline load flakes (machine load 25-32 from
+  parallel worktree agents; `attached_cancel_token_kills_inflight_bash_promptly`
+  = the WO 46.28-documented flake, plus 3 tests sitting at the 30s
+  ci-fast slow-timeout edge) — all 4 proven passing in isolation;
+  full no-fail-fast run of the identical scope: 4765/4769 passed, the
+  same 4 flakes. Not caused by this change (kf-budget-core only).
+
 - **WO 46.28**: Done. `prune_oldest_in_dir` deleted the wrong sessions:
   entries are sorted newest-first, and `entries[keep..keep+delete_count]`
   deleted the N sessions immediately *after* the keep window, leaving the

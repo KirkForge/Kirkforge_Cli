@@ -191,6 +191,30 @@ impl State {
     }
 }
 
+// RAII guard for `inflight`. `emit` bumps it under lock, drops the lock,
+// then awaits handlers; if the emit future is dropped mid-await (caller
+// cancelled), the explicit decrement never runs and `inflight` leaks —
+// pinning `graceful_shutdown` at its 10s timeout. Decrementing (and
+// waking drain waiters when the counter hits 0 under a pending shutdown)
+// on Drop makes both the normal and cancelled paths release correctly.
+struct InflightGuard {
+    inner: Arc<Mutex<State>>,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        let mut s = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        s.inflight = s.inflight.saturating_sub(1);
+        if s.shutting_down && s.inflight == 0 {
+            let waiters = std::mem::take(&mut s.drain_waiters);
+            drop(s);
+            for tx in waiters {
+                let _ = tx.send(());
+            }
+        }
+    }
+}
+
 /// Inner shared state. Held inside an `Arc` so the unsub closure returned
 /// from `on` can capture a handle to the bus without a lifetime tie.
 #[derive(Clone)]
@@ -297,9 +321,16 @@ impl EventBus {
                 .get(&event.kind)
                 .map(|v| v.iter().map(|(_, h)| Arc::clone(h)).collect::<Vec<_>>())
                 .unwrap_or_default();
-            (handlers, event)
+            // Guard lives across the await below: dropping it (on normal
+            // return or future cancellation mid-await) decrements `inflight`
+            // and wakes drain waiters. This replaces the leak-prone manual
+            // decrement that never ran if the await was cancelled.
+            let guard = InflightGuard {
+                inner: Arc::clone(&self.inner),
+            };
+            (handlers, event, guard)
         };
-        let (handlers, event) = prepared;
+        let (handlers, event, _guard) = prepared;
 
         let mut first_err: Option<HandlerError> = None;
         for h in &handlers {
@@ -311,7 +342,12 @@ impl EventBus {
         }
 
         let mut s = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        s.inflight = s.inflight.saturating_sub(1);
+        // `_guard` is still alive here (it drops at fn return, after `s`),
+        // so `inflight` is still bumped during the buffer removal. The guard
+        // drops last (reverse declaration order: `s` at 344 before `_guard`
+        // at 333), so it reacquires the lock cleanly — no deadlock. On
+        // cancellation mid-await, the future's locals tear down and `_guard`
+        // drops the same way, so the decrement + drain-waker always run.
         // Remove the first buffer entry equal to this event by sequence+kind.
         if let Some(idx) = s
             .buffer
@@ -319,13 +355,6 @@ impl EventBus {
             .position(|e| e.sequence == event.sequence && e.kind == event.kind)
         {
             s.buffer.remove(idx);
-        }
-        if s.shutting_down && s.inflight == 0 {
-            let waiters = std::mem::take(&mut s.drain_waiters);
-            drop(s);
-            for tx in waiters {
-                let _ = tx.send(());
-            }
         }
         Ok(first_err)
     }
@@ -523,6 +552,67 @@ mod tests {
         .unwrap();
         // No inflight at this point — graceful_shutdown returns immediately.
         bus.graceful_shutdown(None).await;
+        assert!(!bus.running());
+    }
+
+    // WO 46.6: cancelling an emit future mid-await must not leak `inflight`.
+    // Before the InflightGuard fix, dropping the emit future between the
+    // lock-release and re-lock skipped the decrement, so `graceful_shutdown`
+    // parked on a oneshot that never fired and hit its 10s timeout. Here we
+    // spawn a slow-handler emit, cancel it mid-await, then assert shutdown
+    // returns promptly — which only holds if the guard decremented on drop.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_emit_does_not_leak_inflight() {
+        let bus = EventBus::default();
+        let kind = BusEventKind::Other("verify.lint".into());
+        // oneshot signals "handler has been polled" so the main task can
+        // cancel the emit only after the handler is truly in-flight.
+        // (Notify::notify_waiters drops the signal if no waiter is parked
+        // yet — a oneshot holds the value until the first recv.)
+        let (handler_started_tx, mut handler_started_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let _unsub = bus.on(&kind, move |_| {
+            let tx = handler_started_tx.clone();
+            Box::pin(async move {
+                let _ = tx.try_send(());
+                // Long sleep: the emit future will be cancelled while this
+                // handler is still pending, exercising the drop path.
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok(())
+            })
+        });
+
+        // Spawn the emit and wait until the handler has actually started.
+        let bus_clone = bus.clone();
+        let emit_task = tokio::spawn(async move {
+            bus_clone
+                .emit(Event {
+                    kind: BusEventKind::Other("verify.lint".into()),
+                    schema_version: "v3".into(),
+                    sequence: 1,
+                    stream_id: "s1".into(),
+                    timestamp: "now".into(),
+                    value: None,
+                })
+                .await
+        });
+        handler_started_rx.recv().await;
+        emit_task.abort();
+        // Reap the JoinError so the cancelled task is observed.
+        let _ = emit_task.await;
+
+        // The leak symptom: inflight should be 0 after cancellation. Before
+        // the fix it stayed at 1.
+        assert_eq!(bus.inflight_count(), 0, "cancelled emit leaked inflight");
+
+        // graceful_shutdown must return promptly, not wait the full 10s. Use
+        // a 2s outer timeout — far above the near-instant return the guard
+        // enables, far below the 10s timeout a leak would hit.
+        let shutdown =
+            tokio::time::timeout(Duration::from_secs(2), bus.graceful_shutdown(None)).await;
+        assert!(
+            shutdown.is_ok(),
+            "graceful_shutdown timed out — inflight leaked on cancelled emit"
+        );
         assert!(!bus.running());
     }
 

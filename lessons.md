@@ -394,45 +394,39 @@
   worktrees are active. Run one gate at a time — parallel cargo
   invocations on the same target dir contend on the file lock.
 
-## WO 46.7 — fan_out cancellation (this session)
+## WO 46.8 — grep/glob cancellable (session 2026-08-26)
 
-- The WO hint said "Read the existing `run_batch` code in the same file
-  for the pattern — it may already have cancellation." It does NOT.
-  `run_batch` (lib.rs:406) is a default trait method that delegates to
-  the runner; it has no in-executor cancellation. The pattern to mirror
-  is the driver's top-of-batch `cancel.load(SeqCst)` →
-  `bail!("workflow cancelled")` (executor.rs:481-485). `run_fan_out` was
-  the one place that held the driver past the top-of-batch check for the
-  full duration of N spawns — the bug was structural, not a missing
-  copy of an existing pattern.
-- The `cancellation` parameter is `Option<&AtomicBool>` — an
-  externally-set flag with no associated async wakeup. Racing it in a
-  `tokio::select!` requires either busy-polling (yield_now loop) or
-  converting to a `CancellationToken`. I chose busy-poll with
-  `yield_now` (one poll per join completion, negligible cost) and
-  marked it `ponytail:` with the upgrade path (wire a Notify/
-  CancellationToken through the executor if the poll cost ever
-  matters). Changing the public `run()` signature to take a
-  CancellationToken would ripple to `workflow.rs:184` and the TUI — out
-  of scope for a mid-fan-out cancel fix.
-- `bail!("workflow cancelled")` string is load-bearing: `workflow.rs`
-  inspects it (workflow.rs:256) to classify cancellation vs a normal
-  exit. The fan_out bail must use the SAME string or the tool reports
-  a step error instead of "cancelled by user".
-- The test uses `max_parallel=1` deliberately: with serial child starts,
-  the cancel flag (flipped by the first child) is observed before the
-  remaining children spawn, making the assertion deterministic. With
-  `max_parallel=N`, all N children could start before the flag flip and
-  the "fewer than N started" assertion would be flaky.
-- Gate flake under load: `attached_cancel_token_kills_inflight_bash_promptly`
-  (WO 35.3, `session::executor/tests/dispatch.rs:1121`) timed out at
-  30s ci-fast under 16+ parallel rustc processes from sibling worktrees.
-  Passes in 6.5–15s in isolation. Pre-existing, unrelated to kf-workflow.
-  Documented in state.md known flakes. Did NOT weaken the gate or add
-  `|| true` — the flake is environmental.
-- The GitNexus index is on the main checkout, not the worktree, so
-  `impact`/`context` couldn't resolve `run_fan_out` (private method,
-  indexed under a stale commit). Used grep to confirm the single caller
-  is `run` in the same file — risk LOW. The lesson: for private symbols
-  in worktrees, grep is the reliable impact tool; GitNexus sees the main
-  checkout's commit, not the worktree HEAD.
+- `tokio::select! { biased; _ = ctx.token.cancelled() => ..., out = child.wait_with_output() => ... }`
+  is the repo's established cancel pattern. When the cancel branch wins,
+  the unfinished `wait_with_output` future is dropped, which drops the
+  `Child`, which fires `kill_on_drop` — exactly the cancellation
+  semantics we want. No explicit `child.kill().await` needed. Pattern
+  references: `plugin_tools/wrapper.rs:324`, `session/bench.rs:61`,
+  `session/verifier/security.rs:236`, `tools/workflow.rs:313`.
+- `spawn_blocking` tasks CANNOT be killed from outside — dropping the
+  JoinHandle detaches the task; the blocking-pool thread runs to
+  completion. For `glob`/grep-fallback this is acceptable (the leaked
+  thread is bounded by the walk/read finishing on its own; no
+  subprocess). For `grep`'s `rg` it was NOT acceptable — the subprocess
+  could hang indefinitely. The fix was to move `rg` to
+  `tokio::process` (cancellable via `kill_on_drop`) rather than trying
+  to kill the `spawn_blocking` thread. Key distinction: a blocking
+  thread doing CPU/IO work is bounded; a blocking thread waiting on a
+  hung subprocess is not.
+- `tokio::process::Command::kill_on_drop` requires the `process` feature
+  on tokio — this repo has `features = ["full"]` so it's available. No
+  new dep needed.
+- When a sync helper becomes test-only (production path moved to async),
+  gate it with `#[cfg(test)]` AND gate its imports — otherwise
+  `dead_code` warnings fire in non-test builds. `std::process::Command`
+  was only used by the now-test-only `rg_available`/`run_rg_blocking`,
+  so the import got `#[cfg(test)]` too.
+- `tokio::process::Child::wait_with_output` consumes `self` (takes
+  ownership, not `&mut self`). `let mut child = ...` then
+  `child.wait_with_output()` triggers `unused_mut` — declare the child
+  as `let child = ...` (no `mut`) when only `wait_with_output` is used.
+- Full gate timing under sibling-worktree contention: clippy ~13 min,
+  check --workspace --all-targets ~11 min, test-fast ~7 min (after warm
+  cache). The first `cargo check --lib` after edits took ~8 min because
+  the shared target dir (wo46.5) was cold for this worktree's fingerprint.
+  Budget 30+ min; run gates sequentially (file-lock contention).

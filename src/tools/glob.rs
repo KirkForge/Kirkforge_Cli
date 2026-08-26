@@ -43,7 +43,7 @@ impl Tool for Glob {
         }
     }
 
-    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let pattern = match args.get("pattern").and_then(|p| p.as_str()) {
             Some(p) => p.to_string(),
             None => {
@@ -84,9 +84,16 @@ impl Tool for Glob {
         // for a large `base_dir` (e.g. model-supplied `base_dir="/"`).
         // `path_guard` is `Clone`; clone it into the `'static` closure.
         // `base_path` is cloned so the original remains for the result header.
+        //
+        // WO 46.8: race the blocking walk against `ctx.token.cancelled()` so
+        // a user/turn cancel returns promptly with `Cancelled`. The
+        // blocking-pool thread keeps walking to completion (spawn_blocking
+        // can't be killed), but the tool returns immediately and the leaked
+        // thread is bounded by the walk finishing on its own (no subprocess to
+        // leak). Pattern: `plugin_tools/wrapper.rs:324` (`Finish::Cancelled`).
         let path_guard = self.path_guard.clone();
         let walk_base = base_path.clone();
-        let mut matches = tokio::task::spawn_blocking(move || {
+        let walk = tokio::task::spawn_blocking(move || {
             let mut out = Vec::new();
             let walker = ignore::WalkBuilder::new(&walk_base)
                 .git_ignore(true)
@@ -116,9 +123,12 @@ impl Tool for Glob {
                 }
             }
             out
-        })
-        .await
-        .unwrap_or_default();
+        });
+        let mut matches = tokio::select! {
+            biased;
+            _ = ctx.token.cancelled() => return ToolOutcome::Failure(ToolError::Cancelled),
+            res = walk => res.unwrap_or_default(),
+        };
 
         matches.sort();
         let total = matches.len();

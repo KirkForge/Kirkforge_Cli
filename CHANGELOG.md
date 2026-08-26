@@ -11,14 +11,16 @@ why, and the gate evidence.
 
 ### Changed
 
-- WO 46.6 — `EventBus::emit` no longer leaks the `inflight` counter when
-  the emit future is dropped (cancelled) between lock release and re-lock.
-  An `InflightGuard` RAII Drop guard now decrements `inflight` (and wakes
-  `graceful_shutdown` drain waiters when the counter hits 0 under a pending
-  shutdown) on drop, so both the normal-completion and future-cancellation
-  paths release correctly. Before the fix, a cancelled emit left
-  `inflight` pinned at 1 and `graceful_shutdown` hit its 10s timeout.
-  [46.6](docs/workorders/46.6-event-bus-inflight-leak-on-cancelled-emit.md)
+- WO 46.8 — `grep` and `glob` tools now honour `ctx.token.cancelled()`.
+  `grep`'s `rg` subprocess switched from `spawn_blocking` +
+  `std::process::Command` to `tokio::process::Command` with
+  `kill_on_drop(true)` + a `tokio::select!` race against the cancel token,
+  so a hung `rg` is reaped promptly on user/turn cancel instead of
+  leaking a blocking-pool thread + subprocess past the tool timeout.
+  `glob`'s directory walk (still `spawn_blocking`) is now raced against
+  the cancel token so the tool returns `Cancelled` promptly (the
+  blocking-pool thread finishes on its own — no subprocess to leak).
+  [46.8](docs/workorders/46.8-grep-glob-spawn-blocking-not-cancellable.md)
 
 - WO 46.21 — `web_fetch` now streams the HTTP response body via
   `response.bytes_stream()` with incremental `MAX_BODY_BYTES` (1 MiB)
@@ -37,16 +39,6 @@ why, and the gate evidence.
   a different fix shape (O_NOFOLLOW) and are deferred — see WO file.
 
 ### Changed
-
-- WO 46.7 — `WorkflowExecutor::run_fan_out` now honours cancellation
-  mid-fan-out. Previously it drained its JoinSet with a plain
-  `while let join_next().await` loop that never polled the cancel flag,
-  so all N children ran to completion after Esc. Now races `join_next`
-  against the cancel flag via `tokio::select!`; on cancel,
-  `abort_all()` drops remaining children and bails
-  `"workflow cancelled"` (matches the driver's bail string so
-  `workflow.rs` classifies it as cancellation).
-  [46.7](docs/workorders/46.7-workflow-fan-out-no-cancellation-mid-batch.md)
 
 - WO 45.63 — pricing table no longer silently $0 for current Anthropic
   model families. Added rows for `claude-sonnet-5`, `claude-opus-4-8`,

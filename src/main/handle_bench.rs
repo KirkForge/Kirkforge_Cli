@@ -179,7 +179,7 @@ fn handle_bench_compare(
                 -delta.success_rate_delta * 100.0,
                 threshold_pct,
             );
-            std::process::exit(1);
+            anyhow::bail!("bench regression detected");
         }
         eprintln!(
             "✓ No bench regression (success rate delta {:+.0}%, threshold {:.0} percentage points).",

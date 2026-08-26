@@ -503,10 +503,14 @@ async fn teardown(
 fn spawn_plugin_watcher(
     shared_config: &crate::shared::SharedConfig,
     reload_tx: mpsc::UnboundedSender<kf_plugin_host::PluginRegistry>,
-) {
+) -> Option<notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>> {
     let (watch_tx, mut watch_rx) = mpsc::unbounded_channel::<()>();
     let plugins_dir = crate::session::plugin_tools::plugins_dir();
-    let _watcher = crate::session::plugin_tools::spawn_plugin_watcher(plugins_dir, watch_tx);
+    // The Debouncer must outlive this function: it's the keep-alive guard
+    // for the watcher thread in loader.rs. The caller (`run_tui`) holds it
+    // on its stack frame for the whole event loop. Returning it here so the
+    // caller can bind it — WO 46.16.
+    let watcher = crate::session::plugin_tools::spawn_plugin_watcher(plugins_dir, watch_tx)?;
     let watch_cfg = shared_config.clone();
     tokio::spawn(async move {
         while watch_rx.recv().await.is_some() {
@@ -524,6 +528,7 @@ fn spawn_plugin_watcher(
             }
         }
     });
+    Some(watcher)
 }
 
 #[cfg(unix)]
@@ -648,7 +653,12 @@ pub async fn run_tui(
     let (plugin_reload_tx, plugin_reload_rx) =
         mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
 
-    spawn_plugin_watcher(&shared_config, plugin_reload_tx.clone());
+    // Keep the Debouncer guard alive for the lifetime of `run_tui` (i.e.
+    // the whole event loop). The leading underscore silences
+    // `unused_variable` but does NOT drop the value — only bare `_`
+    // would. Dropping it kills the watcher thread and no plugin reloads
+    // ever reach the TUI (WO 46.16).
+    let _plugin_watcher = spawn_plugin_watcher(&shared_config, plugin_reload_tx.clone());
 
     let (persona_tx, mut persona_rx) = mpsc::unbounded_channel::<PersonaResult>();
     let (bg_tx, mut bg_rx) = mpsc::unbounded_channel::<crate::tui::commands::BgCmdDone>();

@@ -4,6 +4,20 @@
 
 ## Shipped (closed this session)
 
+- **WO 46.7**: Done. `run_fan_out` cancellation — the fan-out step held
+  the driver inside `run_fan_out` for all N spawns with a plain
+  `while let join_next().await` drain loop that never polled the cancel
+  flag, so all N children ran to completion after Esc. Now races
+  `join_set.join_next()` against the cancel flag via `tokio::select!`;
+  on cancel `join_set.abort_all()` drops the remaining children and the
+  function bails `"workflow cancelled"` (matches the driver's bail
+  string so `workflow.rs` classifies it as cancellation, not a step
+  error). Signature gained `cancellation: Option<&AtomicBool>`; the
+  single call site in `run` passes the flag through. Test
+  `fan_out_aborts_on_cancel_mid_fan_out`: max_parallel=1 so children
+  start one at a time, the first child flips the flag, assert error
+  contains "cancelled" and fewer than all 4 children started.
+
 - **WO 46.24**: Done. TOCTOU symlink-race fix — 10 atomic-write sites
   migrated to the shared `tools::atomic_write::atomic_write` helper
   (O_EXCL + random tmp name + fsync + rename). Sites: carryover save,
@@ -186,6 +200,14 @@
 
 ## Known flakes (pre-existing, not introduced this session)
 
+- `attached_cancel_token_kills_inflight_bash_promptly`
+  (`src/session/executor/tests/dispatch.rs:1121`, WO 35.3) — waits for
+  a bash subprocess to be killed via cancel token; under heavy
+  parallel-build CPU starvation (16+ rustc processes from sibling
+  worktrees) the kernel scheduling delay pushes the kill propagation
+  past the 30s ci-fast / 60s ci-full slow-timeout. Passes in isolation
+  (6.5–15s). Unrelated to kf-workflow; introduced well before the WO
+  46.7 branch point.
 - `same_ms_double_spawn_gets_distinct_{temp_dirs,worktrees}` — real-concurrency git tests, `#[cfg(unix)]` gated, flake under extreme parallel load. Pass in isolation.
 
 ## Architecture notes (load-bearing, not in WOs)

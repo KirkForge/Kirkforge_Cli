@@ -393,3 +393,40 @@
   `test-fast.sh` ~6 min. Budget 30+ min for the full gate when other
   worktrees are active. Run one gate at a time — parallel cargo
   invocations on the same target dir contend on the file lock.
+
+## WO 46.8 — grep/glob cancellable (session 2026-08-26)
+
+- `tokio::select! { biased; _ = ctx.token.cancelled() => ..., out = child.wait_with_output() => ... }`
+  is the repo's established cancel pattern. When the cancel branch wins,
+  the unfinished `wait_with_output` future is dropped, which drops the
+  `Child`, which fires `kill_on_drop` — exactly the cancellation
+  semantics we want. No explicit `child.kill().await` needed. Pattern
+  references: `plugin_tools/wrapper.rs:324`, `session/bench.rs:61`,
+  `session/verifier/security.rs:236`, `tools/workflow.rs:313`.
+- `spawn_blocking` tasks CANNOT be killed from outside — dropping the
+  JoinHandle detaches the task; the blocking-pool thread runs to
+  completion. For `glob`/grep-fallback this is acceptable (the leaked
+  thread is bounded by the walk/read finishing on its own; no
+  subprocess). For `grep`'s `rg` it was NOT acceptable — the subprocess
+  could hang indefinitely. The fix was to move `rg` to
+  `tokio::process` (cancellable via `kill_on_drop`) rather than trying
+  to kill the `spawn_blocking` thread. Key distinction: a blocking
+  thread doing CPU/IO work is bounded; a blocking thread waiting on a
+  hung subprocess is not.
+- `tokio::process::Command::kill_on_drop` requires the `process` feature
+  on tokio — this repo has `features = ["full"]` so it's available. No
+  new dep needed.
+- When a sync helper becomes test-only (production path moved to async),
+  gate it with `#[cfg(test)]` AND gate its imports — otherwise
+  `dead_code` warnings fire in non-test builds. `std::process::Command`
+  was only used by the now-test-only `rg_available`/`run_rg_blocking`,
+  so the import got `#[cfg(test)]` too.
+- `tokio::process::Child::wait_with_output` consumes `self` (takes
+  ownership, not `&mut self`). `let mut child = ...` then
+  `child.wait_with_output()` triggers `unused_mut` — declare the child
+  as `let child = ...` (no `mut`) when only `wait_with_output` is used.
+- Full gate timing under sibling-worktree contention: clippy ~13 min,
+  check --workspace --all-targets ~11 min, test-fast ~7 min (after warm
+  cache). The first `cargo check --lib` after edits took ~8 min because
+  the shared target dir (wo46.5) was cold for this worktree's fingerprint.
+  Budget 30+ min; run gates sequentially (file-lock contention).

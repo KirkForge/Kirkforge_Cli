@@ -11,6 +11,17 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.8 — `grep` and `glob` tools now honour `ctx.token.cancelled()`.
+  `grep`'s `rg` subprocess switched from `spawn_blocking` +
+  `std::process::Command` to `tokio::process::Command` with
+  `kill_on_drop(true)` + a `tokio::select!` race against the cancel token,
+  so a hung `rg` is reaped promptly on user/turn cancel instead of
+  leaking a blocking-pool thread + subprocess past the tool timeout.
+  `glob`'s directory walk (still `spawn_blocking`) is now raced against
+  the cancel token so the tool returns `Cancelled` promptly (the
+  blocking-pool thread finishes on its own — no subprocess to leak).
+  [46.8](docs/workorders/46.8-grep-glob-spawn-blocking-not-cancellable.md)
+
 - WO 46.21 — `web_fetch` now streams the HTTP response body via
   `response.bytes_stream()` with incremental `MAX_BODY_BYTES` (1 MiB)
   enforcement per chunk, instead of buffering the entire body with

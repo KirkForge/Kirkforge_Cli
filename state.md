@@ -4,6 +4,22 @@
 
 ## Shipped (closed this session)
 
+- **WO 46.8**: Done. grep/glob cancellable by tool timeout — `grep`'s `rg`
+  subprocess switched from `spawn_blocking` + `std::process::Command` to
+  `tokio::process::Command` with `kill_on_drop(true)` + a `tokio::select!`
+  race against `ctx.token.cancelled()`. On cancel the `Child` is dropped →
+  `kill_on_drop` reaps `rg` (no more blocking-pool thread + subprocess
+  leak past the tool timeout). Added an async `rg_available_async` probe
+  (also `tokio::process` + `kill_on_drop`). Extracted the `rg --json`
+  parse into a shared `parse_rg_output` helper used by both the new async
+  `run_rg` and the test-only sync `run_rg_blocking` (kept for the existing
+  regression test, now `#[cfg(test)]`). `glob`'s directory walk (still
+  `spawn_blocking`) is now raced against `ctx.token.cancelled()` → returns
+  `ToolError::Cancelled` promptly (the blocking thread finishes on its
+  own — no subprocess to leak). The grep fallback walk got the same
+  race. No new deps (`tokio` already `features = ["full"]`). Signature
+  unchanged. Pattern: `plugin_tools/wrapper.rs:324`.
+
 - **WO 46.24**: Done. TOCTOU symlink-race fix — 10 atomic-write sites
   migrated to the shared `tools::atomic_write::atomic_write` helper
   (O_EXCL + random tmp name + fsync + rename). Sites: carryover save,

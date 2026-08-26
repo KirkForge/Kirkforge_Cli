@@ -2,6 +2,7 @@ use crate::shared::access::{GuardVerdict, PathGuard};
 use crate::shared::{Match as SearchMatch, ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
+#[cfg(test)]
 use std::process::Command;
 
 /// Maximum file size in bytes we'll attempt to read for grep (10 MB).
@@ -10,12 +11,27 @@ const MAX_GREP_FILE_SIZE: u64 = 10 * 1024 * 1024;
 /// Maximum bytes read from a file at once for the content-based binary check.
 const BINARY_SCAN_BYTES: usize = 8192;
 
+#[cfg(test)]
 fn rg_available() -> bool {
     Command::new("rg")
         .arg("--version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Async variant of `rg_available` — used on the tool's hot path so the
+/// version probe itself does not need a `spawn_blocking` round-trip. WO 46.8.
+async fn rg_available_async() -> bool {
+    tokio::process::Command::new("rg")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .status()
+        .await
         .map(|s| s.success())
         .unwrap_or(false)
 }
@@ -29,28 +45,93 @@ impl Grep {
         Self { path_guard }
     }
 
+    /// Run `rg` as a cancellable async subprocess. WO 46.8: previously
+    /// this was `spawn_blocking` + `std::process::Command::output()`,
+    /// which is NOT cancellable — a hung `rg` leaked a blocking-pool
+    /// thread and the subprocess past the tool timeout. Now uses
+    /// `tokio::process::Command` with `kill_on_drop(true)` and races
+    /// `child.wait()` against `ctx.token.cancelled()`. On cancel (user
+    /// or turn timeout) the `Child` is dropped → `kill_on_drop` reaps
+    /// `rg` promptly. The blocking JSON parse is tiny vs the spawn and
+    /// runs on the async thread. Pattern: `plugin_tools/wrapper.rs:324`.
     async fn run_rg(
         &self,
+        ctx: &ToolContext,
         pattern: &str,
         path: &str,
         context_lines: usize,
         max_matches: usize,
     ) -> ToolOutcome {
-        let path_guard = self.path_guard.clone();
-        let pattern = pattern.to_string();
-        let path = path.to_string();
-        tokio::task::spawn_blocking(move || {
-            run_rg_blocking(&pattern, &path, context_lines, max_matches, &path_guard)
-        })
-        .await
-        .unwrap_or_else(|e| {
-            ToolOutcome::Failure(ToolError::Internal {
-                message: format!("grep blocking task failed: {e}"),
-            })
-        })
+        let search_path = PathBuf::from(shellexpand::tilde(path).as_ref());
+
+        if !search_path.exists() {
+            return ToolOutcome::Failure(ToolError::Internal {
+                message: format!("Path not found: {}", search_path.display()),
+            });
+        }
+
+        if let GuardVerdict::Denied(msg) = self.path_guard.check_read(&search_path) {
+            return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
+        }
+
+        let mut cmd = tokio::process::Command::new("rg");
+        cmd.arg("--json")
+            .arg("--context")
+            .arg(context_lines.to_string())
+            .arg("--max-count")
+            .arg(max_matches.to_string())
+            .arg("--")
+            .arg(pattern)
+            .arg(&search_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+
+        let child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                return ToolOutcome::Failure(ToolError::Internal {
+                    message: format!("Failed to run rg: {e}"),
+                });
+            }
+        };
+
+        // Race the subprocess against the cancel token. On cancel the
+        // `child` is dropped → kill_on_drop reaps rg. `biased` so a
+        // pre-cancelled token returns promptly without waiting for spawn.
+        let output = tokio::select! {
+            biased;
+            _ = ctx.token.cancelled() => {
+                return ToolOutcome::Failure(ToolError::Cancelled);
+            }
+            out = child.wait_with_output() => match out {
+                Ok(o) => o,
+                Err(e) => {
+                    return ToolOutcome::Failure(ToolError::Internal {
+                        message: format!("Failed to run rg: {e}"),
+                    });
+                }
+            },
+        };
+
+        if !output.status.success() {
+            let code = output.status.code().unwrap_or(1);
+            if code == 1 {
+                return ToolOutcome::Success {
+                    content: format!("No matches found for pattern: {pattern}"),
+                };
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return ToolOutcome::Failure(ToolError::Internal {
+                message: format!("rg error (exit {code}): {stderr}"),
+            });
+        }
+
+        parse_rg_output(&output.stdout, pattern, &search_path, max_matches)
     }
 }
 
+#[cfg(test)]
 fn run_rg_blocking(
     pattern: &str,
     path: &str,
@@ -100,10 +181,22 @@ fn run_rg_blocking(
         });
     }
 
+    parse_rg_output(&output.stdout, pattern, &search_path, max_matches)
+}
+
+/// Parse `rg --json` stdout into a `ToolOutcome`. Shared by the async
+/// (`run_rg`) and sync (`run_rg_blocking`) paths so the parse logic is
+/// not duplicated. WO 46.8.
+fn parse_rg_output(
+    stdout: &[u8],
+    pattern: &str,
+    search_path: &std::path::Path,
+    max_matches: usize,
+) -> ToolOutcome {
     let mut results = Vec::new();
     let mut total = 0usize;
 
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in String::from_utf8_lossy(stdout).lines() {
         let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
@@ -145,7 +238,7 @@ fn run_rg_blocking(
     }
 
     ToolOutcome::GrepMatches {
-        path: search_path,
+        path: search_path.to_path_buf(),
         matches: results,
         total,
     }
@@ -391,7 +484,7 @@ impl Tool for Grep {
         }
     }
 
-    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let pattern = match args.get("pattern").and_then(|p| p.as_str()) {
             Some(p) => p.to_string(),
             None => {
@@ -413,21 +506,27 @@ impl Tool for Grep {
             .and_then(|r| r.as_bool())
             .unwrap_or(false);
 
-        // rg_available spawns a subprocess — run it on the blocking pool.
-        let can_use_rg = !use_literal
-            && tokio::task::spawn_blocking(rg_available)
-                .await
-                .unwrap_or(false);
+        // WO 46.8: use the async rg probe so the version check itself does
+        // not need a `spawn_blocking` round-trip (and the spawned `rg` is
+        // `kill_on_drop`, so it can't leak past a cancel). Bypass rg for
+        // literal searches (the fallback walk handles those).
+        let can_use_rg = !use_literal && rg_available_async().await;
         if can_use_rg {
             return self
-                .run_rg(&pattern, path, context_lines, max_matches)
+                .run_rg(ctx, &pattern, path, context_lines, max_matches)
                 .await;
         }
 
         // Fallback walk + reads are blocking fs ops — offload to the pool.
+        // WO 46.8: race the blocking walk against the cancel token so a
+        // user/turn cancel returns promptly with `Cancelled`. The
+        // blocking-pool thread keeps running to completion (spawn_blocking
+        // can't be killed), but the tool returns immediately and the
+        // leaked thread is bounded by the walk finishing on its own (no
+        // subprocess to leak — the only leak class the rg path had).
         let path_guard = self.path_guard.clone();
         let path = path.to_string();
-        tokio::task::spawn_blocking(move || {
+        let walk = tokio::task::spawn_blocking(move || {
             fallback_search_blocking(
                 &pattern,
                 &path,
@@ -436,13 +535,15 @@ impl Tool for Grep {
                 use_literal,
                 &path_guard,
             )
-        })
-        .await
-        .unwrap_or_else(|e| {
-            ToolOutcome::Failure(ToolError::Internal {
+        });
+        let outcome = tokio::select! {
+            biased;
+            _ = ctx.token.cancelled() => ToolOutcome::Failure(ToolError::Cancelled),
+            res = walk => res.unwrap_or_else(|e| ToolOutcome::Failure(ToolError::Internal {
                 message: format!("grep blocking task failed: {e}"),
-            })
-        })
+            })),
+        };
+        outcome
     }
 }
 

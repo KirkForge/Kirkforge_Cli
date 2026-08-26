@@ -337,3 +337,33 @@
   --workspace --all-targets` (12-13 min) + `--no-fail-fast` full suite is
   a more honest gate than a single fail-fast run that aborts on the first
   CPU-starved timing test.
+
+## WO 46.20 (never-ending job blocks scheduler shutdown)
+
+- The fix went in `src/jobs/daemon.rs`, NOT `src/jobs/runner.rs`, even
+  though runner.rs is where `job.timeout` is consumed. runner.rs is
+  shared by the TUI "Run now" path (`src/tui/commands/jobs.rs:539`),
+  which the user may want to run without a default cap. Applying the
+  default in the daemon loop (before `tokio::spawn`) scopes the
+  coercion to the unattended path only. The "do NOT edit shared files"
+  rule plus "smallest diff" both point at the daemon, not the runner.
+- `cargo check --workspace --all-targets` on a cold worktree: 14m32s.
+  `cargo clippy --all-targets` after: 8m40s (warm). Budget 25+ min for
+  the check+clippy pair on a cold worktree; run them in background with
+  nohup and poll, don't block the foreground bash timeout.
+- The 3 `tools::edit_file` proptest timeouts in test-fast were the
+  documented CPU-oversubscription flake (3 sibling worktrees compiling
+  kf_code simultaneously held the package-cache lock and saturated the
+  CPU). Re-run in isolation: 3/3 PASS in 22.3s. My change is in
+  `src/jobs/daemon.rs` and has zero relationship to `tools::edit_file`
+  proptests — the flake is a load artifact, not a regression. AGENTS.md
+  §6 forbids rewriting tests to make red go green; the right move is to
+  re-run in isolation and disclose the flake.
+- The `ponytail:` ceiling comment on `DEFAULT_JOB_TIMEOUT` names the
+  upgrade path (per-kind defaults in `ScheduleSpec`). Long-running
+  scheduled workflows that legitimately exceed 300s will hit the cap
+  until they set an explicit `timeout` — that's the intended trade
+  (free the daemon) and the comment makes it grep-able.
+- scope creep: none. Single file (`src/jobs/daemon.rs`), 3 logical
+  lines (import + const + coercion), all within the WO's named scope
+  (`daemon.rs:146-197`).

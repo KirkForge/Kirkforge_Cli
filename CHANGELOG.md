@@ -11,6 +11,13 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.12 — `scripts/check-artifact-consistency.sh:90` no longer false-fails
+  on a zero-match `grep -c`. `grep -c ... || echo 0` produced `0\n0` (grep
+  prints `0` and exits 1 on no-match, so the `||` arm appended a second
+  `0`), making `[ -eq ]` throw under `set -e`. Replaced with `|| true` —
+  `grep -c` already prints `0`, so the capture stays a single line. Matches
+  the existing `|| true` pattern at lines 19/43/109/110.
+  [46.12](docs/workorders/46.12-check-artifact-consistency-grep-double-output.md)
 - WO 46.26 — `bench run-models` now exits non-zero when any model gets
   0/N tasks passed, mirroring the WO 38.10 guard on `bench run`. A
   total-failure run previously exited 0, blinding CI. Reports and the

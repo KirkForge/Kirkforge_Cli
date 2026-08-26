@@ -4,6 +4,19 @@
 
 ## Shipped (closed this session)
 
+- **WO 46.12**: Done. `scripts/check-artifact-consistency.sh:90` false-failure
+  fix — `grep -c ... || echo 0` produced `0\n0` on no-match (grep prints `0`
+  to stdout AND exits 1, so the `||` arm appended a second `0`), making
+  `[ "$TECHNICAL_ROWS" -eq ... ]` throw "integer expression expected" under
+  `set -euo pipefail` and killing the script even when the row count was
+  correct. Replaced `|| echo 0` with `|| true` (swallows the non-zero exit
+  without extra output; grep already printed `0`). Matches the `|| true`
+  pattern used at lines 19/43/109/110. Scripts-only change. Gate: `bash -n`
+  + script run 11/11 + `cargo fmt --check` + `scripts/test-fast.sh` 4765
+  passed via `--no-fail-fast` (one pre-existing timing flake failed under
+  load 20-30 from parallel worktrees but passed in isolation + in the full
+  suite). detect_changes: 0 changed symbols (scripts-only).
+
 - **WO 46.25**: Done. `scripts/ci-local.sh` `run_step` returned non-zero
   on a failing step; with `set -euo pipefail` active, that killed the
   whole script on the first failure — remaining gates never ran and the

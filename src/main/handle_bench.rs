@@ -140,6 +140,21 @@ async fn handle_bench_run_models(
         std::fs::write(&md_path, &comparison)?;
         eprintln!("comparison written to {}", md_path.display());
     }
+    // WO 46.26: mirror the WO 38.10 0/N guard from handle_bench_run. A
+    // model whose tasks all failed is a CI failure; previously the
+    // command exited 0 unconditionally. We bail after writing the
+    // per-model reports + comparison so the user keeps the artifacts.
+    // A run with 0 tasks already bailed above.
+    if let Some(failed) = reports
+        .iter()
+        .find(|r| r.summary.tasks_run > 0 && r.summary.tasks_passed == 0)
+    {
+        anyhow::bail!(
+            "bench run-models: model {} got 0/{} tasks passed (0%)",
+            failed.model,
+            failed.summary.tasks_run
+        );
+    }
     Ok(())
 }
 

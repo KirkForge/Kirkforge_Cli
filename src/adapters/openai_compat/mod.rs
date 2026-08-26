@@ -258,7 +258,14 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                             // until [DONE] / stream end so a trailing usage
                             // frame is not missed (WO 38.5).
                             if let Some(reason) = finish.and_then(|r| r.as_str()) {
-                                if reason == "tool_calls" && pending_tool_calls.is_empty()
+                                // WO 46.33: a finish_reason arriving after
+                                // [DONE] sees an empty accumulator because
+                                // [DONE] already drained it — not because
+                                // the model emitted no calls. Skip the
+                                // spurious error; Done was already sent.
+                                if reason == "tool_calls"
+                                    && pending_tool_calls.is_empty()
+                                    && !done_emitted
                                     && !super::ollama_ndjson::send_or_bail(
                                         &tx,
                                         StreamEvent::Error(
@@ -984,6 +991,48 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, StreamEvent::Text(s) if s == "hi")));
+    }
+
+    /// Regression (WO 46.33): some proxies send finish_reason:"tool_calls"
+    /// AFTER the [DONE] sentinel. [DONE] already flushed the accumulated
+    /// calls, so the late frame must not trip the "no parseable tool
+    /// calls" error on a successfully-parsed turn.
+    #[tokio::test]
+    async fn finish_reason_tool_calls_after_done_does_not_error() {
+        let events = run_sse(vec![
+            sse_data(json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call_1",
+                            "function": {"name": "read_file", "arguments": "{}"}
+                        }]
+                    }
+                }]
+            })),
+            sse_done(),
+            sse_data(json!({
+                "choices": [{"delta": {}, "finish_reason": "tool_calls"}]
+            })),
+        ])
+        .await;
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ToolCall(tc) if tc.name == "read_file")),
+            "expected the flushed tool call, got {events:?}"
+        );
+        let dones: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::Done { .. }))
+            .collect();
+        assert_eq!(dones.len(), 1, "expected exactly one Done, got {events:?}");
+        assert!(
+            !events.iter().any(|e| matches!(e, StreamEvent::Error(_))),
+            "spurious Error on late finish_reason, got {events:?}"
+        );
     }
 
     /// Regression: some OpenAI-compatible servers and reverse proxies emit

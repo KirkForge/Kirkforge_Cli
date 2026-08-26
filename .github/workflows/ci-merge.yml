@@ -42,6 +42,9 @@ jobs:
           #    tasks (`name`, `difficulty`, `prompt`) —
           #    ponytail: heuristic ceiling; bump this set when a legitimate
           #    task lands without one of these keys (none today).
+          #    Also validates the [verify].type against the known VerifySpec
+          #    variants so a typo like `output_contains` fails CI before the
+          #    bench suite fails to load (WO 39.1).
           python3 - <<'PY'
           import pathlib, sys
           try:
@@ -51,6 +54,7 @@ jobs:
               sys.exit(1)
           root = pathlib.Path("benches/tasks")
           required = ("name", "difficulty", "prompt")
+          valid_verify_types = {"test_passes", "file_contains", "command_exits_zero"}
           bad = []
           checked = 0
           if root.is_dir():
@@ -64,11 +68,17 @@ jobs:
                   missing = [k for k in required if k not in data]
                   if missing:
                       bad.append((str(f), f"missing required keys: {missing}"))
+                  verify = data.get("verify", {})
+                  vt = verify.get("type")
+                  if vt is None:
+                      bad.append((str(f), "missing [verify].type"))
+                  elif vt not in valid_verify_types:
+                      bad.append((str(f), f"unknown verify type '{vt}', expected one of {sorted(valid_verify_types)}"))
           if bad:
               for f, e in bad:
                   print(f"::error file={f}::{e}")
               sys.exit(1)
-          print(f"benches/tasks/: {checked} TOML files parse OK with required keys {required}")
+          print(f"benches/tasks/: {checked} TOML files parse OK with required keys {required} + valid verify types")
           PY
 
       - name: Check artifact/install/release consistency

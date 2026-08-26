@@ -219,26 +219,41 @@ impl Tool for WebFetch {
             .unwrap_or("")
             .to_ascii_lowercase();
 
-        let body_bytes = match response.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                return ToolOutcome::Failure(ToolError::Internal {
-                    message: format!("Failed to read response body from {trimmed}: {e}"),
-                });
+        // Stream the body incrementally and abort the moment we cross
+        // MAX_BODY_BYTES. `response.bytes().await` would buffer the entire
+        // body first — a server streaming multi-GB within the 30s timeout
+        // would OOM the process before the post-hoc cap fired (WO 46.21).
+        use tokio_stream::StreamExt;
+        let mut stream = response.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut exceeded = false;
+        while let Some(chunk_res) = stream.next().await {
+            let chunk = match chunk_res {
+                Ok(c) => c,
+                Err(e) => {
+                    return ToolOutcome::Failure(ToolError::Internal {
+                        message: format!("Failed to read response body from {trimmed}: {e}"),
+                    });
+                }
+            };
+            // Enforce the cap BEFORE extending, so we never hold an
+            // oversized buffer even briefly.
+            if buf.len() + chunk.len() > MAX_BODY_BYTES {
+                exceeded = true;
+                break;
             }
-        };
-
-        if body_bytes.len() > MAX_BODY_BYTES {
+            buf.extend_from_slice(&chunk);
+        }
+        if exceeded {
             return ToolOutcome::Failure(ToolError::Internal {
-                message: format!(
-                    "Response from {trimmed} is {} bytes, exceeds {MAX_BODY_BYTES} byte cap",
-                    body_bytes.len()
-                ),
+                message: format!("Response from {trimmed} exceeds {MAX_BODY_BYTES} byte cap"),
             });
         }
 
+        let body_bytes: &[u8] = &buf;
+
         if !status.is_success() {
-            let preview = String::from_utf8_lossy(&body_bytes)
+            let preview = String::from_utf8_lossy(body_bytes)
                 .chars()
                 .take(200)
                 .collect::<String>();
@@ -249,7 +264,7 @@ impl Tool for WebFetch {
             });
         }
 
-        let raw = String::from_utf8_lossy(&body_bytes).into_owned();
+        let raw = String::from_utf8_lossy(body_bytes).into_owned();
         let output = if content_type.contains("text/html") || looks_like_html(&raw) {
             html_to_text(&raw)
         } else {

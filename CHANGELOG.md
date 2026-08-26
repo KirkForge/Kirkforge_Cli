@@ -11,22 +11,13 @@ why, and the gate evidence.
 
 ### Changed
 
-- WO 46.19 — daemon `InstanceRegister` handshake no longer holds the
-  global state mutex across `write_response().await` on the auth-fail /
-  RBAC-deny / version-mismatch paths. The error `Response` is built
-  under the lock, the guard is dropped, then the response is written.
-  A client that sends a bad token then stops reading can no longer
-  stall the flush and wedge the single state mutex — every other daemon
-  op stays responsive.
-  [46.19](docs/workorders/46.19-daemon-state-mutex-held-across-await.md)
-||||||| 6b132e7a
-
-- WO 46.20 — scheduled jobs without an explicit `timeout` now get a 300s
-  default. A bash job that never exits used to keep the daemon's
-  `handles.await` stuck forever, so SIGTERM/SIGINT/Shutdown could not
-  reach the loop's select arm and the process died only via SIGKILL.
-  The default is applied in the daemon loop before spawning `run_job`;
-  user-set timeouts are respected as-is. [46.20](docs/workorders/46.20-never-ending-job-blocks-scheduler-shutdown.md)
+- WO 46.21 — `web_fetch` now streams the HTTP response body via
+  `response.bytes_stream()` with incremental `MAX_BODY_BYTES` (1 MiB)
+  enforcement per chunk, instead of buffering the entire body with
+  `response.bytes().await` and checking the cap afterward. A server
+  streaming a multi-GB body within the 30s timeout no longer OOMs the
+  process; the fetch aborts at the 1 MiB boundary.
+  [46.21](docs/workorders/46.21-web-fetch-unbounded-body-read.md)
 - WO 45.63 — pricing table no longer silently $0 for current Anthropic
   model families. Added rows for `claude-sonnet-5`, `claude-opus-4-8`,
   `claude-haiku-4-5`, and `claude-3-7-sonnet` (the last found by a new

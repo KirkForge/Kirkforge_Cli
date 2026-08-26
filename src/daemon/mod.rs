@@ -444,16 +444,23 @@ impl DaemonState {
     /// Check the supplied token against `expected_token`. Returns `Ok(())`
     /// if auth is disabled (no token configured) or the token matches.
     /// Returns `Err(response)` if the token is wrong or missing when
-    /// required. Uses constant-time comparison to avoid timing leaks.
+    /// required. Both sides are hashed to a fixed-size digest before the
+    /// constant-time compare so timing cannot leak token length (WO 46.32).
     pub fn check_auth(&self, supplied: Option<&str>) -> Result<(), Response> {
         match &self.expected_token {
             None => Ok(()),
             Some(expected) => match supplied {
                 None => Err(Response::error("authentication required")),
                 Some(given) => {
-                    let expected_bytes = expected.as_bytes();
-                    let given_bytes = given.as_bytes();
-                    if subtle::ConstantTimeEq::ct_eq(expected_bytes, given_bytes).into() {
+                    use sha2::{Digest, Sha256};
+                    let expected_digest = Sha256::digest(expected.as_bytes());
+                    let given_digest = Sha256::digest(given.as_bytes());
+                    if subtle::ConstantTimeEq::ct_eq(
+                        expected_digest.as_slice(),
+                        given_digest.as_slice(),
+                    )
+                    .into()
+                    {
                         Ok(())
                     } else {
                         Err(Response::error("authentication failed"))

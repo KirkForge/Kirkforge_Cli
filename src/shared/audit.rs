@@ -686,18 +686,26 @@ impl FileAuditSink {
         let key = self.hmac_key.as_deref();
         // Rotate before writing if the active file is already over the cap.
         self.rotate();
+        // Compute every chain_hash and serialize into a temp vec first; only
+        // advance last_hash and clear buf once write_all succeeds. If
+        // serialization or the write fails, leave both untouched so the next
+        // flush re-attempts from the same starting state — otherwise a
+        // partial advance would let the next flush re-seal the same events
+        // with different chain hashes, breaking tamper-evidence (WO 46.1).
+        let mut prev = last.clone();
         let mut lines: Vec<String> = Vec::with_capacity(buf.len());
         for event in buf.iter() {
-            let chain = chain_hash_of(&last, event, key);
+            let chain = chain_hash_of(&prev, event, key);
             let mut sealed = event.clone();
             sealed.chain_hash = chain.clone();
-            *last = chain;
             match serde_json::to_string(&sealed) {
-                Ok(s) => lines.push(s),
+                Ok(s) => {
+                    lines.push(s);
+                    prev = chain;
+                }
                 Err(_) => return false,
             }
         }
-        drop(last);
         let content = lines.join("\n") + "\n";
         let result = std::fs::OpenOptions::new()
             .append(true)
@@ -707,6 +715,7 @@ impl FileAuditSink {
         if result.is_err() {
             return false;
         }
+        *last = prev;
         buf.clear();
         true
     }
@@ -2015,6 +2024,69 @@ mod tests {
         assert!(
             sink3.verify_chain(),
             "chain must verify after resume + new event"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── WO 46.1: flush leaves last_hash + buf untouched on write failure ──
+
+    #[cfg(unix)]
+    #[test]
+    fn file_sink_flush_failure_leaves_last_hash_and_buf_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+        // If flush's write_all fails mid-batch, last_hash must NOT be advanced
+        // and buf must NOT be cleared — otherwise the next flush re-seals the
+        // same events with different chain hashes, breaking tamper-evidence.
+        // We force write_all to fail by pointing the sink at a path inside a
+        // read-only directory (open with append/create returns EACCES).
+        let dir = fresh_audit_dir("flush_fail");
+        let path = dir.join("audit.jsonl");
+        // Buffer two events, then make the directory read-only so the append
+        // open fails. flush_size is large so write() only buffers, no auto-flush.
+        let sink = FileAuditSink::new(path.clone(), None, 50 * 1024 * 1024, 10, 100);
+        assert!(sink.write(base_event()));
+        let mut e2 = base_event();
+        e2.id = "evt-2".into();
+        e2.sequence = 2;
+        assert!(sink.write(e2));
+        let genesis = sink.last_hash.lock().unwrap().clone();
+        // Make the directory read-only → open(..., append, create) fails.
+        std::fs::set_permissions(&dir, PermissionsExt::from_mode(0o555)).unwrap();
+        // flush must fail (write_all cannot open the file).
+        assert!(
+            !sink.flush(),
+            "flush must report failure when the write fails"
+        );
+        // last_hash must be unchanged (NOT advanced into the batch).
+        assert_eq!(
+            sink.last_hash.lock().unwrap().clone(),
+            genesis,
+            "last_hash must not advance on write failure"
+        );
+        // buf must still hold both events (NOT cleared).
+        assert_eq!(
+            sink.buffer.lock().unwrap().len(),
+            2,
+            "buf must not be cleared on write failure"
+        );
+        // Restore write access; the next flush re-seals the same two events
+        // from the same genesis hash, so the chain matches what a fresh sink
+        // would produce (tamper-evidence preserved — no hash divergence).
+        std::fs::set_permissions(&dir, PermissionsExt::from_mode(0o755)).unwrap();
+        assert!(sink.flush(), "flush must succeed once the dir is writable");
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2, "both buffered events must land on disk");
+        // The chain on disk must verify.
+        assert!(sink.verify_chain(), "chain must verify after retry flush");
+        // And the on-disk first event's chain_hash must equal what a fresh
+        // sink would compute from genesis for the same event (proves no
+        // partial-advance divergence).
+        let first: AuditEvent = serde_json::from_str(lines[0]).unwrap();
+        let expected_first = chain_hash_of(&genesis, &base_event(), None);
+        assert_eq!(
+            first.chain_hash, expected_first,
+            "first event must chain from the original genesis, not a partially-advanced hash"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

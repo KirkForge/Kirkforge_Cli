@@ -4,6 +4,19 @@
 
 ## Shipped (closed this session)
 
+- **WO 46.6**: Done. EventBus inflight-leak-on-cancelled-emit —
+  `EventBus::emit` bumped `inflight` under lock, dropped the lock, awaited
+  handlers, then re-locked to decrement. If the emit future was dropped
+  mid-await (caller task cancelled, e.g. `EventBusSink` teardown), the
+  decrement never ran → `inflight` leaked at 1 → `graceful_shutdown`
+  parked on a oneshot that never fired and hit its 10s timeout. Fixed
+  with an `InflightGuard` RAII Drop guard (holds `Arc<Mutex<State>>`,
+  decrements via `saturating_sub` + wakes drain waiters on drop) created
+  inside the prepared block and bound across the await, so both the
+  normal and cancelled paths release. Regression test
+  `cancelled_emit_does_not_leak_inflight` proves it (abort mid-await →
+  `inflight==0` → shutdown returns <2s). No new deps, no shared-file
+  edits, no API change. `src/shared/event_bus.rs` only.
 - **WO 46.24**: Done. TOCTOU symlink-race fix — 10 atomic-write sites
   migrated to the shared `tools::atomic_write::atomic_write` helper
   (O_EXCL + random tmp name + fsync + rename). Sites: carryover save,

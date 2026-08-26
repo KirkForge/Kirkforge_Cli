@@ -11,6 +11,15 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.6 — `EventBus::emit` no longer leaks the `inflight` counter when
+  the emit future is dropped (cancelled) between lock release and re-lock.
+  An `InflightGuard` RAII Drop guard now decrements `inflight` (and wakes
+  `graceful_shutdown` drain waiters when the counter hits 0 under a pending
+  shutdown) on drop, so both the normal-completion and future-cancellation
+  paths release correctly. Before the fix, a cancelled emit left
+  `inflight` pinned at 1 and `graceful_shutdown` hit its 10s timeout.
+  [46.6](docs/workorders/46.6-event-bus-inflight-leak-on-cancelled-emit.md)
+
 - WO 46.21 — `web_fetch` now streams the HTTP response body via
   `response.bytes_stream()` with incremental `MAX_BODY_BYTES` (1 MiB)
   enforcement per chunk, instead of buffering the entire body with

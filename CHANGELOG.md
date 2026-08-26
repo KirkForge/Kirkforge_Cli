@@ -11,6 +11,12 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 46.20 — scheduled jobs without an explicit `timeout` now get a 300s
+  default. A bash job that never exits used to keep the daemon's
+  `handles.await` stuck forever, so SIGTERM/SIGINT/Shutdown could not
+  reach the loop's select arm and the process died only via SIGKILL.
+  The default is applied in the daemon loop before spawning `run_job`;
+  user-set timeouts are respected as-is. [46.20](docs/workorders/46.20-never-ending-job-blocks-scheduler-shutdown.md)
 - WO 45.63 — pricing table no longer silently $0 for current Anthropic
   model families. Added rows for `claude-sonnet-5`, `claude-opus-4-8`,
   `claude-haiku-4-5`, and `claude-3-7-sonnet` (the last found by a new

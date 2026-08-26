@@ -18,9 +18,20 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, Notify, Semaphore};
 use tokio::time::{sleep_until, Instant};
+
+/// Default per-run wall-clock cap for scheduled jobs that don't set one.
+/// Without this a bash job that never exits keeps Running forever: the
+/// daemon's `handles.await` never completes and SIGTERM/SIGINT can't reach
+/// the loop's shutdown select arm. 300s is long enough for legitimate jobs
+/// (cron-style checks, builds, pulls) and short enough to free a wedged
+/// daemon within 5 minutes.
+// ponytail: ceiling — bump (or set per-job timeout) for long-running
+// scheduled workflows; upgrade path: per-kind defaults in ScheduleSpec.
+const DEFAULT_JOB_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Run the scheduled-job daemon.
 ///
@@ -145,6 +156,12 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
         if !due_jobs.is_empty() {
             let mut handles = Vec::new();
             for mut job in due_jobs {
+                // Enforce a default timeout so a never-ending bash job can't
+                // wedge the daemon past SIGTERM/SIGINT. The user-set value is
+                // respected as-is; only the unset (None) case is coerced.
+                if job.timeout.is_none() {
+                    job.timeout = Some(DEFAULT_JOB_TIMEOUT);
+                }
                 let store = store.clone();
                 let sem = semaphore.clone();
                 let config = config.clone();

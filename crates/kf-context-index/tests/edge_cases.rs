@@ -329,3 +329,46 @@ fn mtime_rebuild_single_file_change() {
         "old function should be removed, got {names:?}"
     );
 }
+
+/// WO 46.10: `mtime_rebuild` previously only checked files in
+/// `cached.file_mtimes`, so a file added to the repo after the cache
+/// was written was never detected. The fix walks the repo for
+/// indexable files not in the cache and re-indexes them.
+#[test]
+fn mtime_rebuild_detects_new_file_not_in_cache() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path();
+
+    let a_path = tmp.path().join("a.rs");
+    std::fs::write(&a_path, "fn alpha() {}\n").unwrap();
+
+    let mut idx = ContextIndex::new();
+    idx.index_dir(repo_root).unwrap();
+    assert_eq!(idx.symbols().len(), 1);
+
+    let cache_path = tmp.path().join("cache.json");
+    let head = "0000000000000000000000000000000000000000".to_string();
+    idx.save(&cache_path, &head).unwrap();
+
+    // Add a NEW file after the cache was written. It is not in
+    // cached.file_mtimes, so the old mtime loop never saw it.
+    let b_path = tmp.path().join("b.rs");
+    std::fs::write(&b_path, "fn beta() {}\n").unwrap();
+
+    let cached = ContextIndex::load(&cache_path).unwrap();
+    let (rebuilt, changed) = ContextIndex::mtime_rebuild(cached, repo_root);
+
+    assert_eq!(
+        changed, 1,
+        "the new file b.rs should be detected as changed"
+    );
+    let names: Vec<&str> = rebuilt.symbols().iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        names.contains(&"alpha"),
+        "existing symbol should survive, got {names:?}"
+    );
+    assert!(
+        names.contains(&"beta"),
+        "new file's symbol should be indexed, got {names:?}"
+    );
+}

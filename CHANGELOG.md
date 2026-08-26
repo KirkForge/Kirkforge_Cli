@@ -16,6 +16,11 @@ why, and the gate evidence.
   total-failure run previously exited 0, blinding CI. Reports and the
   comparison are still written before bailing.
   [46.26](docs/workorders/46.26-handle-bench-run-models-missing-zero-guard.md)
+- WO 46.10 — `ContextIndex::mtime_rebuild` now detects files added to
+  the repo after the cache was written (previously only checked files
+  in `cached.file_mtimes`, so new files were invisible). Walks the repo
+  with `walkdir` for indexable files not in the cache.
+  [46.10](docs/workorders/46.10-context-index-cache-mtime-misses-new-files.md)
 - WO 46.21 — `web_fetch` now streams the HTTP response body via
   `response.bytes_stream()` with incremental `MAX_BODY_BYTES` (1 MiB)
   enforcement per chunk, instead of buffering the entire body with

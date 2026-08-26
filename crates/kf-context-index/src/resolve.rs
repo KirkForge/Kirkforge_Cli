@@ -38,7 +38,7 @@ impl ContextIndex {
     // ponytail: skip build/vendored/VCS dirs so a huge `target/` or `.git`
     // does not make the index-walk spin for minutes. The upgrade path is a
     // proper .gitignore-aware walker.
-    fn is_ignored_dir(name: &std::ffi::OsStr) -> bool {
+    pub(crate) fn is_ignored_dir(name: &std::ffi::OsStr) -> bool {
         matches!(
             name.to_str(),
             Some(

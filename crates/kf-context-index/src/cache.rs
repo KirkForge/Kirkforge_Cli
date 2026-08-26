@@ -162,6 +162,31 @@ impl ContextIndex {
             }
         }
 
+        // Detect NEW files added after the cache was written: the mtime map
+        // only knows about files that existed at cache time, so a brand-new
+        // file is invisible to the loop above. Walk the repo for indexable
+        // files whose path is not in the cache and add them to the re-index
+        // set. Mirrors what `incremental_rebuild` gets from `git_diff_files`
+        // (which lists added files) — the mtime path has no git-diff source.
+        let known: std::collections::HashSet<&String> = cached.file_mtimes.keys().collect();
+        for entry in walkdir::WalkDir::new(repo_root)
+            .into_iter()
+            .filter_entry(|e| !Self::is_ignored_dir(e.file_name()))
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if crate::detect_language(path).is_none() {
+                continue;
+            }
+            let key = path.to_string_lossy().to_string();
+            if !known.contains(&key) {
+                changed_paths.push(path.to_path_buf());
+            }
+        }
+
         if changed_paths.is_empty() {
             return (Self::from_cached(cached), 0);
         }

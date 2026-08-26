@@ -175,11 +175,19 @@ impl Bash {
         // build_docker_args just stringifies it for the bind-mount source.
         let docker_args = build_docker_args(cfg, &resolved_workdir, cmd, timeout_secs);
 
-        let mut child = tokio::process::Command::new("docker")
+        // WO 46.17: own process group so a timeout-driven kill reaches
+        // container-spawned helper processes too — kill_on_drop only
+        // reaps the direct `docker` child, leaving in-container
+        // grandchildren holding the stdout/stderr pipes open past the
+        // timeout (same class as WO 46.2 / 43.23).
+        let mut docker_cmd = tokio::process::Command::new("docker");
+        docker_cmd
             .args(&docker_args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        crate::session::process_group::setup_process_group(&mut docker_cmd);
+        let mut child = docker_cmd
             .spawn()
             .map_err(|e| ShellError::Spawn(format!("docker spawn failed: {e}")))?;
 

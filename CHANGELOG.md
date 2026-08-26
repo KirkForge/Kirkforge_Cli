@@ -11,23 +11,18 @@ why, and the gate evidence.
 
 ### Changed
 
-- WO 46.12 — `scripts/check-artifact-consistency.sh:90` no longer false-fails
-  on a zero-match `grep -c`. `grep -c ... || echo 0` produced `0\n0` (grep
-  prints `0` and exits 1 on no-match, so the `||` arm appended a second
-  `0`), making `[ -eq ]` throw under `set -e`. Replaced with `|| true` —
-  `grep -c` already prints `0`, so the capture stays a single line. Matches
-  the existing `|| true` pattern at lines 19/43/109/110.
-  [46.12](docs/workorders/46.12-check-artifact-consistency-grep-double-output.md)
+- WO 46.13 — `plugin_consent_ledger` now defaults to `true`, matching
+  `plugin_signature_validation`'s default. The WO 45.61 fix (ledger
+  layers on top of signatures) was inert in the default config because
+  the ledger defaulted off; a signed manifest + swapped command script
+  passed both gates. Both gates now run out-of-the-box. Set
+  `plugin_consent_ledger = false` to opt out.
+  [46.13](docs/workorders/46.13-plugin-consent-ledger-default-off.md)
 - WO 46.26 — `bench run-models` now exits non-zero when any model gets
   0/N tasks passed, mirroring the WO 38.10 guard on `bench run`. A
   total-failure run previously exited 0, blinding CI. Reports and the
   comparison are still written before bailing.
   [46.26](docs/workorders/46.26-handle-bench-run-models-missing-zero-guard.md)
-- WO 46.10 — `ContextIndex::mtime_rebuild` now detects files added to
-  the repo after the cache was written (previously only checked files
-  in `cached.file_mtimes`, so new files were invisible). Walks the repo
-  with `walkdir` for indexable files not in the cache.
-  [46.10](docs/workorders/46.10-context-index-cache-mtime-misses-new-files.md)
 - WO 46.21 — `web_fetch` now streams the HTTP response body via
   `response.bytes_stream()` with incremental `MAX_BODY_BYTES` (1 MiB)
   enforcement per chunk, instead of buffering the entire body with

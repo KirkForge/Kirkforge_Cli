@@ -648,7 +648,8 @@ prompt = "hi"
 
     #[test]
     fn consent_ledger_off_loads_without_approval() {
-        // Default config (ledger off) → plugin loads even without approval.
+        // Ledger explicitly off → plugin loads even without approval.
+        // WO 46.13: the default flipped to on, so this test must opt out.
         let tmp = tempfile::tempdir().unwrap();
         let _g = crate::session::DataDirGuard::set(tmp.path().to_path_buf());
         let plugins = tmp.path().join("plugins");
@@ -656,6 +657,7 @@ prompt = "hi"
         make_demo_plugin(&demo);
         let mut cfg = Config::default();
         cfg.tools.plugin_signature_validation = false;
+        cfg.tools.plugin_consent_ledger = false;
         let (registry, warnings) = load_plugin_registry(&cfg).unwrap();
         assert!(
             registry.find_active_by_name("demo").is_some(),

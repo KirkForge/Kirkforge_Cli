@@ -153,6 +153,12 @@ The largest module (~30 submodules). It owns:
    path, so signature verification on workspace plugins is enforced unless
    the operator opts in via `plugin_trust_workspace = true` (H10 / WO 27.4).
    Data-dir plugins use the global `plugin_signature_validation` toggle.
+   The content-hash consent ledger (`plugin_consent_ledger`, default on
+   since WO 46.13) layers on top of signature verification: a signed
+   plugin must ALSO be ledger-approved with a matching `bundle_hash`
+   (which covers manifest + command scripts). The manifest-only
+   signature does not cover the scripts the manifest points to; the
+   ledger does. Set `plugin_consent_ledger = false` to opt out.
 - **Plugin ops** (`plugin_ops.rs`): shared plugin-ops layer used by both the
   TUI `/plugins` slash-command family and the `kf-code plugin` CLI
   subcommand (`list`, `enable`, `disable`, `toggle`, `validate`, `reload`,
@@ -1135,7 +1141,10 @@ triggers / tool names / verifier names within a single manifest.
 
 `read-only` < `shell` < `network` < `unsafe`. The host caps plugins at
 `max_plugin_trust` (config: default `shell`). Over-tier plugins are rejected or
-downgraded. Optional minisign detached-signature verification (`.kf-code.sig`).
+downgraded. Optional minisign detached-signature verification (`.kf-code.sig`)
+covers the manifest only (`kf-code.toml`); the content-hash consent ledger
+(`plugin_consent_ledger`, default on) covers the manifest + command scripts
+and layers on top of signature verification (WO 45.61 / WO 46.13).
 
 ### Capability kinds
 

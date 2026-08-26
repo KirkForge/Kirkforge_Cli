@@ -285,6 +285,9 @@ prompt = "hello"
     };
     cfg.tools.enabled_plugins = vec!["workspace-demo".to_string()];
     cfg.tools.plugin_trust_workspace = true;
+    // WO 46.13: ledger defaults on; these tests exercise workspace loading
+    // mechanics, not the consent gate, so opt out explicitly.
+    cfg.tools.plugin_consent_ledger = false;
 
     let mut registry = PluginRegistry::new();
     let warnings = load_workspace_plugins(&mut registry, &cfg);
@@ -382,6 +385,9 @@ command = "hello.sh"
         .collect();
     cfg.tools.enabled_plugins = vec!["demo".to_string()];
     cfg.tools.plugin_trust_workspace = true;
+    // WO 46.13: ledger defaults on; this test exercises the data-dir
+    // fallback path, not the consent gate, so opt out explicitly.
+    cfg.tools.plugin_consent_ledger = false;
 
     let mut registry = PluginRegistry::new();
     let warnings = load_workspace_plugins(&mut registry, &cfg);

@@ -951,8 +951,8 @@ tree, ~11 stale claims corrected in-line. See
 | 46.1 | [FileAuditSink::flush advances hash chain before write succeeds — breaks tamper-evidence on partial failure](46.1-audit-flush-partial-failure-breaks-tamper-evidence.md) | Done |
 | 46.10 | [context-index mtime_rebuild misses new files not in cache](46.10-context-index-cache-mtime-misses-new-files.md) | Planned |
 | 46.11 | [ci-merge.yml missing bench TOML [verify].type validation present in ci-pr.yml](46.11-ci-merge-missing-bench-toml-validation.md) | Planned |
-| 46.12 | [check-artifact-consistency grep-echo produces double output (false failure)](46.12-check-artifact-consistency-grep-double-output.md) | Done |
-| 46.13 | [plugin_consent_ledger defaults to false — WO 45.61 fix only matters when ledger is opt-in](46.13-plugin-consent-ledger-default-off.md) | Planned |
+| 46.12 | [check-artifact-consistency grep-echo produces double output (false failure)](46.12-check-artifact-consistency-grep-double-output.md) | Planned |
+| 46.13 | [plugin_consent_ledger defaults to false — WO 45.61 fix only matters when ledger is opt-in](46.13-plugin-consent-ledger-default-off.md) | Done |
 | 46.14 | [run_id/parent_run_id always None in workflow and scheduled jobs — WO 45.1 identity gap](46.14-run-id-threading-incomplete-workflow-jobs.md) | Planned |
 | 46.2 | [apply_patch_to_parent missing setup_process_group — grandchild survives timeout](46.2-parallel-orchestrator-patch-missing-process-group.md) | Done |
 | 46.3 | [Daemon concurrency semaphore starved by long-lived instance push channels](46.3-daemon-semaphore-starved-by-instance-channels.md) | Done |

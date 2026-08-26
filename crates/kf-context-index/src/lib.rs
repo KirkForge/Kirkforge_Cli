@@ -1553,4 +1553,85 @@ mod tests {
         );
         let _ = fs::remove_dir_all(&dir);
     }
+
+    /// WO 46.27: `mtime_rebuild` must preserve cached embeddings for
+    /// symbols whose files did NOT change (WO 38.9 item 5 invariant).
+    /// Before the fix, both rebuild paths constructed via
+    /// `from_symbols_and_edges_and_calls`, which hard-codes
+    /// `embeddings: Vec::new()` — silently dropping every cached
+    /// embedding on every rebuild. This test asserts the surviving
+    /// symbol's embedding is preserved AND re-indexed to its new
+    /// position (the dropped file's symbols were ahead of it in the
+    /// original ordering, so its `symbol_idx` must shift down).
+    #[test]
+    fn mtime_rebuild_preserves_surviving_embeddings() {
+        let dir = std::env::temp_dir().join(format!(
+            "kf-code-context-rebuild-emb-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let a_path = dir.join("a.rs");
+        let b_path = dir.join("b.rs");
+        fs::write(&a_path, "fn alpha() {}\n").unwrap();
+        fs::write(&b_path, "fn beta() {}\n").unwrap();
+
+        let mut idx = ContextIndex::new();
+        idx.index_file(&a_path, &fs::read_to_string(&a_path).unwrap())
+            .unwrap();
+        idx.index_file(&b_path, &fs::read_to_string(&b_path).unwrap())
+            .unwrap();
+        // Symbol order: alpha@0, beta@1.
+        assert_eq!(idx.symbols.len(), 2);
+
+        let cache_path = dir.join(".kf-code/context-index/cache.json");
+        idx.save(&cache_path, "head_v1").unwrap();
+        let cached = ContextIndex::load(&cache_path).unwrap();
+        assert_eq!(cached.embeddings.len(), 2, "cache should have 2 embeddings");
+        // beta's cached embedding points at index 1 (its original position).
+        let beta_cached = cached
+            .embeddings
+            .iter()
+            .find(|e| e.symbol_idx == 1)
+            .expect("beta embedding at idx 1");
+        let beta_vector = beta_cached.vector.clone();
+
+        // Change a.rs content + mtime. b.rs untouched.
+        fs::write(&a_path, "fn alpha_v2() {}\nfn new_func() {}\n").unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&a_path)
+            .unwrap();
+        file.set_modified(later).unwrap();
+        drop(file);
+
+        let (rebuilt, changed) = ContextIndex::mtime_rebuild(cached, &dir);
+        assert_eq!(changed, 1, "only a.rs changed");
+
+        // beta survived and must keep its cached embedding, re-indexed
+        // to its new position. After drop_changed, kept_symbols = [beta]
+        // (new idx 0); index_file then appends alpha_v2 + new_func at 1, 2.
+        let beta_new_idx = rebuilt
+            .symbols
+            .iter()
+            .position(|s| s.name == "beta")
+            .expect("beta must survive rebuild");
+        let beta_emb = rebuilt
+            .embeddings
+            .iter()
+            .find(|e| e.symbol_idx == beta_new_idx)
+            .expect("beta must have a preserved embedding at its new idx");
+        assert_eq!(
+            beta_emb.vector, beta_vector,
+            "beta's preserved embedding vector must match the cached one"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

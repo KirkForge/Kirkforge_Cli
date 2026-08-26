@@ -18,7 +18,6 @@ why, and the gate evidence.
   streaming a multi-GB body within the 30s timeout no longer OOMs the
   process; the fetch aborts at the 1 MiB boundary.
   [46.21](docs/workorders/46.21-web-fetch-unbounded-body-read.md)
-||||||| 6b132e7a
 
 - WO 46.24 — 10 atomic-write sites migrated to the shared
   `tools::atomic_write::atomic_write` helper (O_EXCL + random tmp name +

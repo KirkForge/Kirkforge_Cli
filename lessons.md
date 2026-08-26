@@ -338,7 +338,6 @@
   a more honest gate than a single fail-fast run that aborts on the first
   CPU-starved timing test.
 
-<<<<<<< HEAD
 ## WO 46.20 (never-ending job blocks scheduler shutdown)
 
 - The fix went in `src/jobs/daemon.rs`, NOT `src/jobs/runner.rs`, even
@@ -368,8 +367,6 @@
 - scope creep: none. Single file (`src/jobs/daemon.rs`), 3 logical
   lines (import + const + coercion), all within the WO's named scope
   (`daemon.rs:146-197`).
-||||||| 6b132e7a
-=======
 ## WO 46.24 — predictable .tmp TOCTOU (session 2026-08-26)
 
 - The codebase already had the correct atomic-write pattern
@@ -396,4 +393,3 @@
   `test-fast.sh` ~6 min. Budget 30+ min for the full gate when other
   worktrees are active. Run one gate at a time — parallel cargo
   invocations on the same target dir contend on the file lock.
->>>>>>> wo/wo46.24

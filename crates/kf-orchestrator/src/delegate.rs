@@ -290,6 +290,20 @@ impl Orchestrator {
 
         if !task.suppress_memory {
             if let Some(store) = &self.memory {
+                // WO 46.18: store the task verdict, not the routing mode.
+                // The reducer already folded result.packet.verification.overall
+                // (Pass/Fail/Warn); normalize_outcome maps anything else to
+                // "error" (neutral), so Unknown/absent packet → "error".
+                let outcome = result
+                    .packet
+                    .as_ref()
+                    .map(|p| match p.verification.overall {
+                        kf_routing::correction::OverallVerdict::Pass => "pass",
+                        kf_routing::correction::OverallVerdict::Fail => "fail",
+                        kf_routing::correction::OverallVerdict::Warn => "error",
+                        kf_routing::correction::OverallVerdict::Unknown => "error",
+                    })
+                    .unwrap_or("error");
                 let _ =
                     store.write_task_observation(&kf_memory_store::types::TaskObservationInput {
                         task_id: task_id.clone(),
@@ -298,7 +312,7 @@ impl Orchestrator {
                         mode: decision.mode.as_str().into(),
                         model: result.emission.model.clone(),
                         provider_key: Some(self.provider_key.clone()),
-                        outcome: Some(decision.mode.as_str().into()),
+                        outcome: Some(outcome.into()),
                         tokens: result.emission.total_tokens,
                         duration_ms: now_millis() - started,
                         ..Default::default()
@@ -459,6 +473,17 @@ mod tests {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         assert_eq!(mode, "schema-contract", "audit routes to schema-contract");
+        // WO 46.18: outcome must be the task verdict (pass/fail/error), not
+        // the routing mode. A clean schema-contract delegation folds to Pass.
+        let outcome = objs[0]
+            .properties
+            .get("outcome")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert_eq!(
+            outcome, "pass",
+            "outcome should be the verdict, not the mode"
+        );
     }
 
     #[tokio::test]

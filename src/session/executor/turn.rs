@@ -51,6 +51,25 @@ impl Drop for PostTurnHookGuard {
     }
 }
 
+// Fill the result of the newest same-name RecordedToolCall that has no
+// result yet, falling back to the newest same-name call. TurnEvent carries
+// no call id, so parallel same-name calls can't pair exactly; first-result-
+// fills-next-empty-slot keeps every call's output instead of overwriting
+// one slot twice (WO 46.35).
+fn fill_recorded_tool_result(
+    tool_calls: &mut [crate::session::replay::RecordedToolCall],
+    name: &str,
+    output: &str,
+) {
+    let idx = tool_calls
+        .iter()
+        .rposition(|tc| tc.tool == name && tc.result.is_empty())
+        .or_else(|| tool_calls.iter().rposition(|tc| tc.tool == name));
+    if let Some(i) = idx {
+        tool_calls[i].result = output.to_string();
+    }
+}
+
 impl Executor {
     pub async fn run_turn(
         &mut self,
@@ -240,12 +259,10 @@ impl Executor {
                         output,
                         success: _,
                     } => {
-                        // Fill in the result of the most recent matching
-                        // tool call. In the common case (one tool call per
-                        // name per turn), this is correct.
-                        if let Some(tc) = tool_calls.iter_mut().rev().find(|tc| tc.tool == *name) {
-                            tc.result = output.clone();
-                        }
+                        // Fill in the result of the matching tool call
+                        // (WO 46.35: prefer the newest unfilled slot so
+                        // parallel same-name calls each keep their output).
+                        fill_recorded_tool_result(&mut tool_calls, name, output);
                     }
                     TurnEvent::Token(s) => {
                         model_response.push_str(s);
@@ -1335,5 +1352,52 @@ impl Executor {
                 .await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod fill_recorded_tool_result_tests {
+    use super::fill_recorded_tool_result;
+    use crate::session::replay::RecordedToolCall;
+
+    fn call(tool: &str) -> RecordedToolCall {
+        RecordedToolCall {
+            tool: tool.into(),
+            args: serde_json::json!({}),
+            result: String::new(),
+            duration_ms: 0,
+        }
+    }
+
+    // WO 46.35: parallel same-name calls each keep their own output —
+    // the second result must not overwrite the first-filled slot.
+    // Without call ids the pairing is positional: the first result to
+    // arrive fills the newest empty slot.
+    #[test]
+    fn parallel_same_name_calls_each_keep_their_output() {
+        let mut calls = vec![call("bash"), call("bash")];
+        fill_recorded_tool_result(&mut calls, "bash", "out-1");
+        fill_recorded_tool_result(&mut calls, "bash", "out-2");
+        assert_eq!(calls[1].result, "out-1");
+        assert_eq!(calls[0].result, "out-2");
+    }
+
+    #[test]
+    fn fills_only_the_matching_name() {
+        let mut calls = vec![call("grep"), call("edit_file")];
+        fill_recorded_tool_result(&mut calls, "edit_file", "edited");
+        assert_eq!(calls[0].result, "");
+        assert_eq!(calls[1].result, "edited");
+    }
+
+    // Duplicate results for one call (error paths emit a synthetic
+    // ToolResult after the real one) keep the pre-46.35 behavior:
+    // newest same-name slot is overwritten.
+    #[test]
+    fn duplicate_result_overwrites_newest() {
+        let mut calls = vec![call("bash")];
+        fill_recorded_tool_result(&mut calls, "bash", "first");
+        fill_recorded_tool_result(&mut calls, "bash", "second");
+        assert_eq!(calls[0].result, "second");
     }
 }

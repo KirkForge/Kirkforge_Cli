@@ -199,16 +199,10 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             let (lines, bytes) = AppState::tool_output_metrics(&output, 80);
             let summary =
                 format!("🔧 {name} (done) — {lines} lines, {bytes} bytes [Enter or Tab to expand]");
-            // Avoid two entries per tool call: if the most recent message
-            // is the matching "🔧 name ..." placeholder (or a streaming
-            // entry for this tool), replace it.
-            if let Some(last) = state.conversation.messages.back() {
-                if last.role == "tool"
-                    && (last.content == format!("🔧 {name} ...") || last.streaming)
-                {
-                    state.conversation.messages.pop_back();
-                }
-            }
+            // Avoid two entries per tool call: replace this tool's
+            // placeholder card (see `remove_tool_placeholder` — parallel
+            // batches make "just check back()" corrupt, WO 46.35).
+            remove_tool_placeholder(&mut state.conversation.messages, &name);
             state
                 .conversation
                 .messages
@@ -532,6 +526,39 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 }
             }
         }
+    }
+}
+
+/// Remove this tool's streaming placeholder so `ToolResult` replaces
+/// it in place instead of stacking two entries per call.
+///
+/// Parallel tool batches push placeholders back-to-back (WO 46.35):
+/// matching only `back()` pops the WRONG card and strands the sibling
+/// as a ghost "streaming" row. Search backwards for the newest
+/// streaming card whose content starts with `🔧 {name} ` — the
+/// trailing space keeps `bash` from matching `bash_verbose`, and the
+/// prefix survives PTY chunks appending to the card (including the
+/// defense-in-depth fresh-card form "🔧 bash …").
+///
+/// Fallback: the PTY tail-budget rewrite (>64 KiB) strips the 🔧
+/// header entirely, so if no named card exists, take the back card
+/// when it is still streaming (the pre-46.35 behavior).
+///
+/// ponytail: TurnEvent carries no call id, so same-name parallel calls
+/// pair by position (newest first) — visually equivalent, but the
+/// true fix needs a call_id threaded through ToolStart/ToolResult.
+fn remove_tool_placeholder(messages: &mut VecDeque<ConversationEntry>, name: &str) {
+    let prefix = format!("🔧 {name} ");
+    let idx = messages
+        .iter()
+        .rposition(|m| m.role == "tool" && m.streaming && m.content.starts_with(&prefix));
+    if let Some(idx) = idx {
+        messages.remove(idx);
+    } else if messages
+        .back()
+        .is_some_and(|m| m.role == "tool" && m.streaming)
+    {
+        messages.pop_back();
     }
 }
 
@@ -1021,6 +1048,124 @@ mod tests {
         assert!(s.conversation.messages[1]
             .content
             .contains("chunk for bash"));
+    }
+
+    /// WO 46.35: parallel tool batches push placeholders back-to-back.
+    /// `ToolResult` must replace ITS OWN tool's placeholder — not just
+    /// "the last streaming card" — or the sibling card is stranded as a
+    /// ghost spinner and the completed result lands out of order.
+    #[test]
+    fn parallel_tool_batch_results_replace_their_own_placeholders() {
+        let mut s = app_state();
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolStart {
+                name: "edit_file".into(),
+                args: serde_json::json!({"path": "a.rs"}),
+            },
+        );
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({"cmd": "ls"}),
+            },
+        );
+
+        // First result is for edit_file — NOT the most recent card.
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "edit_file".into(),
+                output: "ok".into(),
+                success: true,
+            },
+        );
+        assert_eq!(
+            s.conversation.messages.len(),
+            2,
+            "edit_file's result replaced its own placeholder; bash's remains"
+        );
+        // messages[0] is bash's still-open placeholder.
+        assert!(
+            s.conversation.messages[0].streaming,
+            "bash placeholder still open"
+        );
+        assert!(s.conversation.messages[0].content.contains("bash"));
+        // messages[1] is edit_file's finalized card.
+        assert!(!s.conversation.messages[1].streaming);
+        assert!(s.conversation.messages[1]
+            .content
+            .contains("edit_file (done)"));
+
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: "ran".into(),
+                success: true,
+            },
+        );
+        assert_eq!(
+            s.conversation.messages.len(),
+            2,
+            "both results replaced their placeholders — no ghost cards"
+        );
+        assert!(!s.conversation.messages[0].streaming);
+        assert!(!s.conversation.messages[1].streaming);
+        assert!(s.conversation.messages[1].content.contains("bash (done)"));
+        assert_eq!(
+            s.conversation.messages[1].tool_output.as_deref(),
+            Some("ran")
+        );
+    }
+
+    /// WO 46.35: same-name parallel calls — each result consumes one
+    /// placeholder; neither is left streaming.
+    #[test]
+    fn same_name_parallel_tool_results_leave_no_ghost() {
+        let mut s = app_state();
+        for path in ["x.rs", "y.rs"] {
+            dispatch_turn_event(
+                &mut s,
+                TurnEvent::ToolStart {
+                    name: "read_file".into(),
+                    args: serde_json::json!({ "path": path }),
+                },
+            );
+        }
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "read_file".into(),
+                output: "one".into(),
+                success: true,
+            },
+        );
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "read_file".into(),
+                output: "two".into(),
+                success: true,
+            },
+        );
+        assert_eq!(
+            s.conversation.messages.len(),
+            2,
+            "two calls → exactly two finalized cards"
+        );
+        assert!(
+            s.conversation.messages.iter().all(|m| !m.streaming),
+            "no ghost streaming cards"
+        );
+        let outs: Vec<_> = s
+            .conversation
+            .messages
+            .iter()
+            .map(|m| m.tool_output.as_deref())
+            .collect();
+        assert!(outs.contains(&Some("one")) && outs.contains(&Some("two")));
     }
 
     /// `ToolResult` is the v1.1 contract: full output goes into

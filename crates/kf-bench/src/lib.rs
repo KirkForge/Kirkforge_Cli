@@ -168,6 +168,8 @@ pub fn load_tasks(path: &Path) -> Result<Vec<BenchTask>> {
 /// task's curated env (`budget_env()`, currently `KF_CODE_BUDGET_CEILING`
 /// when set) so verification runs under the same env conditions the agent
 /// operated under, regardless of process-env drift between run and verify.
+/// Curated var names are scrubbed from the inherited env first — a leaked
+/// parent value must not silently affect the gate (WO 46.38).
 pub fn verify_task(task: &BenchTask, sandbox: &Path) -> Result<bool> {
     let curated = task.budget_env();
     match &task.verify {
@@ -179,6 +181,9 @@ pub fn verify_task(task: &BenchTask, sandbox: &Path) -> Result<bool> {
                 .env("CARGO_TERM_COLOR", "never")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null());
+            // WO 46.38: scrub inherited values first so the gate doesn't
+            // depend on parent-env state. Keys must match budget_env().
+            cmd.env_remove(BUDGET_CEILING_ENV);
             if let Some((k, v)) = curated {
                 cmd.env(k, v.to_string());
             }
@@ -200,6 +205,9 @@ pub fn verify_task(task: &BenchTask, sandbox: &Path) -> Result<bool> {
                 .current_dir(sandbox)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null());
+            // WO 46.38: scrub inherited values first so the gate doesn't
+            // depend on parent-env state. Keys must match budget_env().
+            cmd.env_remove(BUDGET_CEILING_ENV);
             if let Some((k, v)) = curated {
                 cmd.env(k, v.to_string());
             }

@@ -163,7 +163,23 @@ impl Tool for WriteFile {
             });
         }
 
-        match crate::tools::atomic_write::atomic_write(&path, &content) {
+        // WO 47.34: check_write verified the CANONICALIZED parent, but the
+        // write below resolves the LITERAL path again at rename time — a
+        // symlink swapped into a parent component between the check and
+        // the rename redirects the write outside the sandbox
+        // (atomic_write's O_EXCL guards the temp file, not the directory).
+        // Anchor the write to the freshly canonicalized parent so no
+        // ancestor symlink is re-traversed at rename time, and re-run the
+        // guard on the anchored path — a swap made before the
+        // canonicalization is caught here, immediately before the rename.
+        let write_target = anchored_write_target(&path).unwrap_or_else(|| path.clone());
+        if let crate::shared::access::GuardVerdict::Denied(msg) =
+            self.path_guard.check_write(&write_target).await
+        {
+            return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
+        }
+
+        match crate::tools::atomic_write::atomic_write(&write_target, &content) {
             Ok(_) => match snapshot_for_undo(&self.undo, &path, prev_existed, &prev_bytes) {
                 Ok(()) => {
                     let mut msg = format!("Wrote {} bytes to {}", content.len(), path.display());
@@ -186,6 +202,19 @@ impl Tool for WriteFile {
             }),
         }
     }
+}
+
+/// Canonical-parent-anchored copy of `path` for the destructive write.
+/// Resolving every ancestor once, up front, means the rename inside
+/// `atomic_write` traverses no symlinks — only the file name is resolved
+/// at rename time. Returns `None` for degenerate paths (no file name, or
+/// an unresolvable parent); the caller falls back to the literal path,
+/// which the follow-up guard check re-verifies.
+fn anchored_write_target(path: &std::path::Path) -> Option<PathBuf> {
+    let name = path.file_name()?;
+    let parent = path.parent().unwrap_or(std::path::Path::new(""));
+    let canonical_parent = parent.canonicalize().ok()?;
+    Some(canonical_parent.join(name))
 }
 
 /// Push a snapshot onto the undo stack. Returns an error so the caller
@@ -601,6 +630,92 @@ mod tests {
     fn snapshot_for_undo_none_returns_ok() {
         let result = snapshot_for_undo(&None, std::path::Path::new("/tmp/x"), false, &[]);
         assert!(result.is_ok());
+    }
+
+    /// WO 47.34: the write must be anchored to the canonicalized parent —
+    /// `anchored_write_target` resolves a symlinked parent to the real
+    /// directory, so the rename never re-traverses an ancestor symlink.
+    #[cfg(unix)]
+    #[test]
+    fn anchored_write_target_resolves_parent_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let anchored = anchored_write_target(&link.join("f.txt")).unwrap();
+        assert_eq!(anchored, real.join("f.txt"));
+    }
+
+    /// WO 47.34: writing through a symlinked parent still lands in the real
+    /// directory (the anchoring must not break alias workflows), and leaves
+    /// no temp file behind in either directory.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_file_through_parent_symlink_lands_in_real_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let tool = WriteFile::new(
+            None,
+            crate::shared::access::PathGuard::default(),
+            false,
+            false,
+        );
+        let out = tool
+            .run(
+                &ToolContext::new(),
+                args(&link.join("f.txt").display().to_string(), "body"),
+            )
+            .await;
+        assert!(matches!(out, ToolOutcome::Success { .. }), "got {out:?}");
+        assert_eq!(std::fs::read_to_string(real.join("f.txt")).unwrap(), "body");
+        assert_eq!(
+            std::fs::read_dir(&real).unwrap().count(),
+            1,
+            "no temp file left in the real dir"
+        );
+    }
+
+    /// WO 47.34: the pre-rename re-verify runs against the ANCHORED
+    /// (canonical) path — a deny pattern matching the real directory
+    /// denies a write requested through a symlink alias that the first
+    /// (literal-path) check let through.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_file_symlink_alias_denied_by_canonical_deny_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("secretzone");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = dir.path().join("alias");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let guard = crate::shared::access::PathGuard {
+            deny_list: crate::shared::access::DenyList::new(
+                vec!["**/secretzone/**".to_string()],
+                vec![],
+            ),
+            ..Default::default()
+        };
+        let tool = WriteFile::new(None, guard, false, false);
+        let out = tool
+            .run(
+                &ToolContext::new(),
+                args(&link.join("f.txt").display().to_string(), "body"),
+            )
+            .await;
+        assert!(
+            matches!(out, ToolOutcome::Failure(ToolError::AccessDenied { .. })),
+            "write through symlink alias must be denied on the anchored path, got {out:?}"
+        );
+        assert!(
+            !real.join("f.txt").exists(),
+            "denied write must not create the file in the real dir"
+        );
     }
 
     #[tokio::test]

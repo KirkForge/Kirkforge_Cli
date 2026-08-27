@@ -624,3 +624,23 @@
   drifted from its name (already used DataDirGuard-style paths? no — it
   used EnvGuard). When migrating a test to a different override mechanism,
   rename it in the same commit or the next reader trusts a lie.
+
+## WO 47.29 session (adapter wire fixes)
+
+- `gitnexus detect_changes` MCP runs `git diff` in the MAIN checkout by
+  default — for worktree work pass the `worktree` param explicitly (it
+  worked: 21 symbols, correct scope). Without it you get a false "No
+  changes detected".
+- `percent_encoding` has no `percent_encode_str` — the str API is
+  `utf8_percent_encode(&str, &AsciiSet)` (`percent_encode_str` is a
+  phantom I invented; the crate has `percent_decode_str` for decode only).
+- Under sibling-worktree load (12-26), a cold `cargo test -p kf-code --lib`
+  takes 15-25 min; a warm incremental one 8-10 min. Piped commands die with
+  the tool timeout and lose everything — run detached via
+  `setsid bash -c '... > log 2>&1; echo EXIT=$? >> log' &` and poll. Give
+  EACH detached run its own log file: two runs sharing one log interleave
+  (sparse overwrites) and produce fake-looking errors (an E0425 from run A
+  appeared after run B had already fixed the source).
+- The anthropic SSE stream tests all live in `anthropic/mod.rs`, not
+  `sse.rs` — but `sse.rs` accepts its own `#[cfg(test)] mod tests` fine,
+  which is the scope-clean place for them when `mod.rs` is out of scope.

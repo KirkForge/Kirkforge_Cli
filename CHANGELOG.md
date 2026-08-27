@@ -11,6 +11,17 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 47.29 — four adapter wire-format defects: Bedrock SigV4 now signs
+  `content-length` (was omitted from the signed header set while reqwest
+  sent it); both SSE parsers (Anthropic + OpenAI-compat) scan for `data: `
+  line-anchored instead of as a raw substring, so an embedded `data: ` in
+  a payload/non-data line is no longer misparsed as a frame; both
+  `OpenAiCompatAdapter` ctors strip exactly one trailing `/v1`
+  (`with_base_url_and_key` de-duped nothing, `new`'s `trim_end_matches`
+  erased legitimate `/v1/v1` bases); Vertex endpoint path segments
+  (project/region/model) are percent-encoded so ids containing `/`, `?`,
+  `#` cannot reshape the URL.
+  [47.29](docs/workorders/47.29-adapter-wire-format-fixes.md)
 - WO 47.16 — jobd auth and socket hardening (the disclosed WO 46.32
   deferral): the jobs daemon's private `check_auth` did a raw
   constant-time compare on token bytes (length-leaking timing oracle)

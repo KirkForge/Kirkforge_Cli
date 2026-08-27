@@ -4,6 +4,28 @@
 
 ## Shipped (closed this session)
 
+- **WO 47.29**: Done. Four adapter wire-format defects, one gated commit
+  each on `wo/wo47.29` (not merged/pushed — parallel-wave worktree):
+  (1) Bedrock SigV4 signs `content-length` — the header is added to the
+  signable request before signing, so the signed and sent values are
+  identical (mm-H13; the wiremock matcher hid this from real AWS).
+  (2) SSE frame scan line-anchored in BOTH parsers (`anthropic/sse.rs`,
+  `openai_compat/mod.rs`) via a local `find_data_frame_start` — an
+  occurrence qualifies only at buffer start or right after `\n`/`\r`,
+  so a `data: ` substring inside a non-data line/payload is not a frame
+  (mm-H14; helper duplicated per file because `adapters/mod.rs` is a
+  shared file outside this WO's scope). (3) Both
+  `OpenAiCompatAdapter` ctors trim slashes then `strip_suffix` exactly
+  one `/v1` — `with_base_url_and_key` de-duped nothing and `new`'s
+  `trim_end_matches("/v1")` erased legitimate `/v1/v1` bases
+  (mm-H15/H16). (4) Vertex `endpoint()` percent-encodes the
+  project/region/model path segments with the existing `percent-encoding`
+  dep (RFC 3986 pchar set; `:streamRawPredict` stays literal) — a model
+  id with `/` or `?` no longer corrupts the URL (mm-H17). 7 new tests
+  across the four sites; phase-B impact: parse_anthropic_stream HIGH
+  (28 direct callers, ~25 are the test suite — all 211 anthropic +
+  openai_compat tests green post-change), rest LOW. detect_changes
+  (worktree-aware): 21 symbols / 4 files, all in scope, 0 processes.
 - **WO 47.16**: Done. jobd auth timing oracle + world-connectable socket
   (the disclosed WO 46.32 deferral). Extracted the session daemon's
   SHA-256-then-ct_eq logic into `pub fn check_auth_ct(supplied, expected)`

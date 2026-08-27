@@ -176,14 +176,14 @@ async fn run_bash_job(
             Some(j) => j,
             None => {
                 // Job disappeared (e.g. registry evicted it). Record failure.
-                return Ok(record_failure(
+                return record_failure(
                     job,
                     store,
                     started_at,
                     paths,
                     "Job record disappeared while running".into(),
                     parent_run_id.clone(),
-                )?);
+                );
             }
         };
         match j.status {
@@ -541,21 +541,36 @@ mod tests {
     // child racing the watcher's reap).
     #[tokio::test]
     async fn cancelled_bash_job_records_drained_output() {
-        let (_tmp, store) = tmp_store();
+        let (dir, store) = tmp_store();
         let marker = "cancel-settle-marker";
-        let mut job = bash_job(&format!("echo {marker}; sleep 30"));
+        // The sentinel file proves the child already executed the first
+        // echo before we cancel — otherwise a loaded machine can kill the
+        // child before it writes anything, and the empty stdout is correct
+        // rather than a recording race.
+        let sentinel = dir.path().join("sentinel");
+        let command = format!("echo {marker}; touch {sentinel:?}; sleep 30");
+        let mut job = bash_job(&command);
         let mut config = Config::default();
         config.tools.scheduled_bash_auto_approve = true;
 
         let run_handle =
             tokio::spawn(async move { run_job(&mut job, &store, &config, None).await.unwrap() });
 
-        // Find the spawned registry job and cancel it once running.
+        // Find the spawned registry job and cancel it once it has produced
+        // output (sentinel exists).
         let registry = global_registry();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         let id = 'find: loop {
+            if !sentinel.exists() {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "scheduled job never produced output"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                continue;
+            }
             for j in registry.list().await {
-                if j.command.contains(marker) && j.status == JobStatus::Running {
+                if j.command == command && j.status == JobStatus::Running {
                     break 'find j.id;
                 }
             }

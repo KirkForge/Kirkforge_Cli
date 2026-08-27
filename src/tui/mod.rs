@@ -712,7 +712,7 @@ pub async fn run_tui(
             plan_rx,
             plugin_reload_rx,
         },
-    });
+    })?;
 
     if let Some(path) = started_empty_banner {
         let display = path
@@ -831,7 +831,7 @@ struct ExecutorSpawnArgs<'a> {
     channels: ExecutorChannels,
 }
 
-fn spawn_executor(args: ExecutorSpawnArgs) -> tokio::task::JoinHandle<()> {
+fn spawn_executor(args: ExecutorSpawnArgs) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     let ExecutorSpawnArgs {
         adapter,
         tools,
@@ -869,13 +869,11 @@ fn spawn_executor(args: ExecutorSpawnArgs) -> tokio::task::JoinHandle<()> {
         carryover_target,
         undo_stack,
         Some(plugin_registry),
-    )
-    .expect("executor construction failed");
-    // ponytail: wo/20.3.0 changed Executor::new/with_log_and_undo_and_plugins
-    // to return Result for sandbox-config validation. spawn_executor returns
-    // JoinHandle<()>, so we expect() here instead of propagating. Upgrade path:
-    // change spawn_executor to return Result<JoinHandle<()>> and propagate
-    // through run_tui (the audit's X1/X4 sandbox refusal surface).
+    )?;
+    // WO 47.36: wo/20.3.0 changed Executor::new/with_log_and_undo_and_plugins
+    // to return Result for sandbox-config validation. spawn_executor now
+    // propagates through run_tui instead of expect()ing at startup (the
+    // audit's X1/X4 sandbox refusal surface).
     exe.set_session_id(state.session.session_id.clone());
     // WO 45.1: stamp the canonical run_id on the global bash job registry
     // so background jobs spawned by this session carry it. Idempotent.
@@ -894,7 +892,7 @@ fn spawn_executor(args: ExecutorSpawnArgs) -> tokio::task::JoinHandle<()> {
     if let Some(recorder) = trace_recorder {
         exe.set_trace(recorder);
     }
-    tokio::spawn(async move {
+    Ok(tokio::spawn(async move {
         if let Err(e) = exe
             .run(
                 input_rx,
@@ -913,7 +911,7 @@ fn spawn_executor(args: ExecutorSpawnArgs) -> tokio::task::JoinHandle<()> {
         {
             tracing::error!(error = %e, "executor task exited with an error");
         }
-    })
+    }))
 }
 
 // reason: each arg is a distinct mpsc channel end; grouping would obscure the wiring.

@@ -40,6 +40,22 @@ async fn send_done_once(
     }
 }
 
+// Line-anchored scan for the next `data: ` frame start (mm-H14, WO
+// 47.29): only buffer start or a byte right after `\n`/`\r` qualifies —
+// a `data: ` substring inside a non-data line or a JSON payload must
+// not be parsed as a frame boundary.
+fn find_data_frame_start(buffer: &[u8]) -> Option<usize> {
+    let mut from = 0;
+    while let Some(i) = find_subseq(&buffer[from..], b"data: ") {
+        let at = from + i;
+        if at == 0 || matches!(buffer[at - 1], b'\n' | b'\r') {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
+}
+
 /// Drive an OpenAI-compatible `/v1/chat/completions` SSE byte stream into
 /// `StreamEvent` events.
 ///
@@ -94,7 +110,7 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                 // replacement characters and corrupt the JSON.
                 // This mirrors the NDJSON parser's byte-buffer
                 // approach in `ollama_ndjson.rs`.
-                while let Some(start) = find_subseq(&buffer, b"data: ") {
+                while let Some(start) = find_data_frame_start(&buffer) {
                     let after_start = start + 6;
                     let after = &buffer[after_start..];
                     let sep = [
@@ -834,6 +850,35 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, StreamEvent::Text(s) if s == "ok")),
             "expected valid frame after invalid one, got {events:?}"
+        );
+    }
+
+    // mm-H14 (WO 47.29): a `data: ` substring inside a non-data line
+    // must not be parsed as a frame — the pre-fix scan emitted a JSON
+    // parse error for the "not-a-frame" text.
+    #[tokio::test]
+    async fn sse_data_substring_in_non_data_line_is_not_a_frame() {
+        let wire = concat!(
+            "event: ping data: not-a-frame\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let events = run_sse(vec![wire]).await;
+        assert!(
+            !events.iter().any(|e| matches!(e, StreamEvent::Error(_))),
+            "embedded data: substring must not produce an error: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Text(s) if s == "ok")),
+            "expected the real frame's text, got {events:?}"
+        );
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Done { .. })),
+            "expected Done, got {:?}",
+            events.last()
         );
     }
 

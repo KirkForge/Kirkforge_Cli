@@ -45,6 +45,38 @@ run_step() {
     fi
 }
 
+# Coverage threshold enforcement (local mirror of the CI gate; thresholds
+# match .github/workflows ci.yml). A separate function so run_step can
+# record its failure in failures[] instead of a bare `exit 1` that
+# bypasses the summary (WO 47.31).
+enforce_coverage_thresholds() {
+    python3 - <<'PY'
+        import xml.etree.ElementTree as ET
+        import sys
+        tree = ET.parse('cobertura.xml')
+        root = tree.getroot()
+        packages = root.find('packages')
+        targets = {'src/session': 68.5, 'src/tools': 76.0, 'src/adapters': 75.0}
+        failed = False
+        for prefix, threshold in targets.items():
+            lines_valid = 0
+            lines_covered = 0
+            for pkg in packages.findall('package'):
+                name = pkg.attrib.get('name', '')
+                if name == prefix or name.startswith(prefix + '/'):
+                    for cls in pkg.findall('classes/class'):
+                        for line in cls.findall('lines/line'):
+                            lines_valid += 1
+                            if int(line.attrib.get('hits', 0)) > 0:
+                                lines_covered += 1
+            rate = (lines_covered / lines_valid * 100) if lines_valid > 0 else 0.0
+            print(f'{prefix}/: {lines_covered}/{lines_valid} lines covered ({rate:.1f}%, threshold {threshold}%)')
+            if rate < threshold:
+                failed = True
+        sys.exit(1 if failed else 0)
+PY
+}
+
 # Core checks always run.
 # Cap test threads: the workspace fans out ~38 integration test binaries;
 # uncapped `cargo test --workspace` OOMs the host (killed a prior session).
@@ -151,37 +183,10 @@ if [ "$MODE" = "full" ]; then
 
     if command -v cargo-tarpaulin >/dev/null 2>&1; then
         run_step "Generate coverage" cargo tarpaulin --out Xml --locked --lib --timeout 120 -- --skip test_build_fork_tree_nests_children
-        echo
-        echo "==> Enforce coverage thresholds (local-only; ci-nightly uploads the report, ADR-074)"
-        if ! python3 - <<'PY'; then
-            import xml.etree.ElementTree as ET
-            import sys
-            tree = ET.parse('cobertura.xml')
-            root = tree.getroot()
-            packages = root.find('packages')
-            targets = {'src/session': 68.5, 'src/tools': 76.0, 'src/adapters': 75.0}
-            failed = False
-            for prefix, threshold in targets.items():
-                lines_valid = 0
-                lines_covered = 0
-                for pkg in packages.findall('package'):
-                    name = pkg.attrib.get('name', '')
-                    if name == prefix or name.startswith(prefix + '/'):
-                        for cls in pkg.findall('classes/class'):
-                            for line in cls.findall('lines/line'):
-                                lines_valid += 1
-                                if int(line.attrib.get('hits', 0)) > 0:
-                                    lines_covered += 1
-                rate = (lines_covered / lines_valid * 100) if lines_valid > 0 else 0.0
-                print(f'{prefix}/: {lines_covered}/{lines_valid} lines covered ({rate:.1f}%, threshold {threshold}%)')
-                if rate < threshold:
-                    failed = True
-            sys.exit(1 if failed else 0)
-PY
-            echo -e "${RED}FAILED${NC}: Coverage gate (below threshold)"
-            exit 1
-        fi
-        echo -e "${GREEN}OK${NC}: Coverage gate"
+        # Local-only enforcement; ci-nightly uploads the report (ADR-074).
+        # Routed through run_step so a threshold failure lands in failures[]
+        # and the remaining gates still run (WO 47.31).
+        run_step "Enforce coverage thresholds" enforce_coverage_thresholds
     else
         echo
         echo -e "${YELLOW}WARNING${NC}: cargo-tarpaulin not installed; skipping coverage gate."

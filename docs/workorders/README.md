@@ -1001,7 +1001,7 @@ tree, ~11 stale claims corrected in-line. See
 | 47.13 | [TUI command diet (trim set ≈ 3-4K shipped lines)](47.13-tui-command-diet.md) | Planned |
 | 47.14 | [Unify the two verifier trait systems (LAST + riskiest)](47.14-unify-verifier-traits.md) | Planned |
 | 47.2 | [Generic env-override loader (91 hand-parsed KF_* vars in 4 layers)](47.2-generic-env-loader.md) | Planned |
-| 47.3 | [Delete the dead JWT/JWKS half of kf-rbac (keep the live RBAC core)](47.3-delete-kf-rbac.md) | Planned |
+| 47.3 | [Delete the dead JWT/JWKS half of kf-rbac (keep the live RBAC core)](47.3-delete-kf-rbac.md) | Done |
 | 47.4 | [Fold kf-routing + kf-memory-store into kf-orchestrator (0 direct src/ refs)](47.4-fold-routing-memory-crates.md) | Planned |
 | 47.5 | [Feature-gate bench + testdoctor out of the default binary (~5K lines)](47.5-devtools-out-of-binary.md) | Planned |
 | 47.6 | [Six live compression layers → two (stratum modes should map to 2 pipelines)](47.6-compression-layers-6-to-2.md) | Planned |

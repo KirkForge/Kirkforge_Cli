@@ -5,25 +5,11 @@ edition = "2021"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/KirkForge/KirkForge-Cli"
-description = "RBAC, timing-safe API-key auth, and OIDC JWT/JWKS verification — Rust port of @kirkforge/core-rbac"
+description = "RBAC and timing-safe API-key auth — Rust port of @kirkforge/core-rbac"
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 chrono = { workspace = true }
 # Constant-time comparison for API-key auth (timing-safe padding).
 subtle = "2"
-# JWT/JWKS signature verification (RS/ES/PS/EdDSA). Uses ring, not openssl.
-jsonwebtoken = "9"
-# OIDC discovery + JWKS fetch (remote path only; local JWKS needs no network).
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-
-[dev-dependencies]
-# Test-only keypair generation for RS256/ES256 JWT signing. Dev-deps do not
-# affect the release binary.
-rsa = { version = "0.9", features = ["pem"] }
-p256 = { version = "0.13", features = ["pem"] }
-rand = "0.8"
-base64 = "0.22"
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

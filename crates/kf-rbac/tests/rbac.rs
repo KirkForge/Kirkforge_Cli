@@ -1,12 +1,12 @@
-//! Port of `@kirkforge/core-rbac/tests/index.test.ts` (46 RBAC tests).
+//! Port of `@kirkforge/core-rbac/tests/index.test.ts` (RBAC tests).
 //! `unknown role` tests (TS #8, #42) become `Role::from_str` rejection tests:
 //! the TS deny-by-default for unknown roles is enforced at the Rust parse
 //! boundary because the `Role` enum makes invalid roles unconstructable.
+//! JWT-scoped tests were deleted with the JWT half (WO 47.3).
 
 use kf_rbac::{
-    actor_from_api_key, actor_from_jwt, authorize, authorize_tenant, has_permission, resolve_role,
-    role_permissions, Aud, AuthDecision, AuthErrorCode, GroupRoleMapping, JwtClaims, OidcConfig,
-    Permission, Role,
+    actor_from_api_key, authorize, authorize_tenant, has_permission, resolve_role,
+    role_permissions, AuthDecision, AuthErrorCode, GroupRoleMapping, Permission, Role,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -18,20 +18,6 @@ fn actor(id: &str, role: Role) -> kf_rbac::Actor {
         tenant_id: "t1".to_string(),
         auth_method: kf_rbac::AuthMethod::Oidc,
         verified_at: "2026-01-01T00:00:00.000Z".to_string(),
-    }
-}
-
-fn claims(sub: &str, exp: i64, iat: i64) -> JwtClaims {
-    JwtClaims {
-        sub: sub.to_string(),
-        iss: "https://auth.example.com".to_string(),
-        aud: Aud::One("kirkforge".to_string()),
-        exp,
-        iat,
-        roles: None,
-        groups: None,
-        tenant: None,
-        scope: None,
     }
 }
 
@@ -206,102 +192,6 @@ fn resolve_role_defaults_to_viewer_without_mapping() {
     assert_eq!(resolve_role(&["any-group".to_string()], None), Role::Viewer);
 }
 
-// ── validateJwtClaims ───────────────────────────────────────────────────────
-
-fn config() -> OidcConfig {
-    OidcConfig {
-        issuer: "https://auth.example.com".to_string(),
-        audience: "kirkforge".to_string(),
-        jwks_uri: None,
-        clock_skew_sec: None,
-    }
-}
-
-#[test]
-fn validate_claims_accepts_valid_claims() {
-    let now = 1_700_000_000_000_i64;
-    let c = claims("user1", now / 1000 + 3600, now / 1000 - 60);
-    assert!(kf_rbac::validate_jwt_claims(&c, &config(), Some(now)).is_ok());
-}
-
-#[test]
-fn validate_claims_rejects_wrong_issuer() {
-    let now = 1_700_000_000_000_i64;
-    let mut c = claims("user1", now / 1000 + 3600, now / 1000 - 60);
-    c.iss = "https://evil.com".to_string();
-    let err = kf_rbac::validate_jwt_claims(&c, &config(), Some(now)).unwrap_err();
-    assert_eq!(err.code, AuthErrorCode::InvalidToken);
-}
-
-#[test]
-fn validate_claims_rejects_wrong_audience() {
-    let now = 1_700_000_000_000_i64;
-    let mut c = claims("user1", now / 1000 + 3600, now / 1000 - 60);
-    c.aud = Aud::One("wrong-aud".to_string());
-    assert!(kf_rbac::validate_jwt_claims(&c, &config(), Some(now)).is_err());
-}
-
-#[test]
-fn validate_claims_rejects_expired_token() {
-    let now = 1_700_000_000_000_i64;
-    let c = claims("user1", now / 1000 - 100, now / 1000 - 3600);
-    let err = kf_rbac::validate_jwt_claims(&c, &config(), Some(now)).unwrap_err();
-    assert!(err.message.contains("expired"));
-}
-
-#[test]
-fn validate_claims_rejects_future_issued_at() {
-    let now = 1_700_000_000_000_i64;
-    let c = claims("user1", now / 1000 + 7200, now / 1000 + 3600);
-    let err = kf_rbac::validate_jwt_claims(&c, &config(), Some(now)).unwrap_err();
-    assert!(err.message.contains("future"));
-}
-
-#[test]
-fn validate_claims_accepts_audience_as_array() {
-    let now = 1_700_000_000_000_i64;
-    let mut c = claims("user1", now / 1000 + 3600, now / 1000 - 60);
-    c.aud = Aud::Many(vec!["kirkforge".to_string(), "other".to_string()]);
-    assert!(kf_rbac::validate_jwt_claims(&c, &config(), Some(now)).is_ok());
-}
-
-#[test]
-fn validate_claims_allows_clock_skew_tolerance() {
-    let now = 1_700_000_000_000_i64;
-    let cfg = OidcConfig {
-        clock_skew_sec: Some(120),
-        ..config()
-    };
-    let c = claims("user1", now / 1000 - 60, now / 1000 - 3600);
-    assert!(kf_rbac::validate_jwt_claims(&c, &cfg, Some(now)).is_ok());
-}
-
-// ── actorFromJwt ────────────────────────────────────────────────────────────
-
-#[test]
-fn actor_from_jwt_extracts_actor_with_group_mapping() {
-    let m = GroupRoleMapping(
-        [
-            ("admins".to_string(), Role::Admin),
-            ("devs".to_string(), Role::Developer),
-        ]
-        .into_iter()
-        .collect(),
-    );
-    let mut c = claims("user1", 9999999999, 1000);
-    c.groups = Some(vec!["devs".to_string()]);
-    let a = actor_from_jwt(&c, &config(), Some(&m)).unwrap();
-    assert_eq!(a.role, Role::Developer);
-    assert_eq!(a.auth_method, kf_rbac::AuthMethod::Oidc);
-}
-
-#[test]
-fn actor_from_jwt_defaults_to_viewer_without_groups() {
-    let c = claims("user1", 9999999999, 1000);
-    let a = actor_from_jwt(&c, &config(), None).unwrap();
-    assert_eq!(a.role, Role::Viewer);
-}
-
 // ── actorFromApiKey ─────────────────────────────────────────────────────────
 
 #[test]
@@ -425,41 +315,6 @@ fn authorize_tenant_calls_audit_hook_on_grant() {
 }
 
 // ── negative auth scenarios ─────────────────────────────────────────────────
-
-#[test]
-fn negative_accepts_jwt_with_missing_required_claims() {
-    // TS: empty sub is technically valid; claims validation accepts it. Same here.
-    let c = claims("", 9999999999, 1000);
-    assert!(kf_rbac::validate_jwt_claims(&c, &config(), None).is_ok());
-}
-
-#[test]
-fn negative_rejects_jwt_with_malformed_issuer_trailing_slash() {
-    let now = 1_700_000_000_000_i64;
-    let mut c = claims("user1", 9999999999, 1000);
-    c.iss = "https://auth.example.com/".to_string();
-    let err = kf_rbac::validate_jwt_claims(&c, &config(), Some(now)).unwrap_err();
-    assert!(err.message.contains("issuer mismatch"));
-}
-
-#[test]
-fn negative_rejects_jwt_with_empty_audience() {
-    let mut c = claims("user1", 9999999999, 1000);
-    c.aud = Aud::One(String::new());
-    assert!(kf_rbac::validate_jwt_claims(&c, &config(), None).is_err());
-}
-
-#[test]
-fn negative_rejects_deeply_expired_jwt() {
-    let now = 1_700_000_000_000_i64;
-    let cfg = OidcConfig {
-        clock_skew_sec: Some(30),
-        ..config()
-    };
-    let c = claims("user1", now / 1000 - 86400, now / 1000 - 100000);
-    let err = kf_rbac::validate_jwt_claims(&c, &cfg, Some(now)).unwrap_err();
-    assert!(err.message.contains("expired"));
-}
 
 #[test]
 fn negative_rejects_api_key_with_length_mismatch() {

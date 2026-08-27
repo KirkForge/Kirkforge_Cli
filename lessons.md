@@ -708,3 +708,25 @@
 - **Commit-per-defect with entangled edits**: stage an honest intermediate
   state (defect-1-only), verify, commit, then layer defect 2. Cheaper
   than git add -p surgery through a CLI.
+
+## WO 47.3 session (delete dead JWT half of kf-rbac)
+
+- gitnexus does NOT index crates/kf-rbac at all (cypher: zero File nodes)
+  — impact() is a no-op for this crate; the cross-layer grep IS the
+  impact analysis for kf-rbac changes.
+- scope creep (necessary, disclosed): crates/kf-rbac/Cargo.toml +
+  Cargo.lock + crates/kf-budget-core/README.md were not in the WO file
+  list — the deps (jsonwebtoken/reqwest/rsa/p256/rand/base64/tokio-dev)
+  existed solely for the deleted file, and the budget-core Tests row
+  counts #[test] under all of crates/ (941 → 925, confirmed by
+  readme_drift). `thiserror` was ALREADY unused in kf-rbac pre-WO —
+  removed while editing the same file.
+- README Tests-row arithmetic: only `#[test]` lines count — `#[tokio::test]`
+  (all 11 async ones in tests/jwt.rs) are invisible to the drift test.
+- WO gate "git grep kf_rbac::jwt → zero hits" is self-referential: the WO
+  file itself quotes the string, so the honest reading is "zero CODE hits"
+  (verified: hits are only docs/workorders/47.3 itself).
+- kf-code --lib daemon filter run took ~20 min under sibling-worktree
+  contention (wo47.1/wo47.2 compiling concurrently, load 23); the log
+  looking frozen at "Compiling similar" was normal — confirm via
+  `pgrep -a rustc` out-dir before assuming a hang.

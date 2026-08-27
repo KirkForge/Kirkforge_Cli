@@ -19,7 +19,7 @@ pub(super) struct StreamPreamble {
 }
 
 impl Executor {
-    pub(super) fn build_stream_preamble(&mut self, user_input: &str) -> StreamPreamble {
+    pub(super) async fn build_stream_preamble(&mut self, user_input: &str) -> StreamPreamble {
         let model_info = self.adapter.model_info();
         let tool_defs: Vec<ToolDef> = self.tools.definitions();
         let tool_names: Vec<&str> = tool_defs.iter().map(|t| t.name).collect();
@@ -89,36 +89,44 @@ impl Executor {
         let top_file_paths = self
             .sandbox
             .top_files(crate::session::prompt::cache_stem::DEFAULT_TOP_N_FILES);
-        let top_files: Vec<(std::path::PathBuf, String)> = top_file_paths
-            .iter()
-            .filter_map(|p| {
-                let content = std::fs::read_to_string(p).ok()?;
-                // ponytail: minify each file to keep the stem small; if
-                // minification fails or inflates, use the raw content as a
-                // fallback so the file is still present in the stem.
-                let minified = crate::shared::minify::minify_source_safe(p, &content);
-                if minified.len() < content.len() {
-                    Some((p.clone(), minified))
-                } else {
-                    // Minification didn't help; use a truncated version of
-                    // the raw content to keep the stem bounded.
-                    // ponytail: truncate at 4 KiB default, configurable via stem_file_cap —
-                    // enough for context, small enough for cache.
-                    // Keep in sync with Config::default().compaction.stem_file_cap
-                    const STEM_FILE_CAP: usize = 4096;
-                    let cap = stem_file_cap.unwrap_or(STEM_FILE_CAP);
-                    if content.len() > cap {
-                        // Walk back to a UTF-8 char boundary so a
-                        // multibyte char straddling the cap doesn't
-                        // panic the turn (WO 43.25).
-                        let end = truncate_at_char_boundary(&content, cap);
-                        Some((p.clone(), format!("{} [...truncated]", &content[..end])))
+        // The reads + minify are sync filesystem work — batch them on a
+        // blocking thread (WO 47.26) instead of stalling the tokio worker
+        // each turn. A panicking read task degrades to an empty top-files
+        // set, matching the per-file `.ok()?` skip spirit below.
+        let top_files: Vec<(std::path::PathBuf, String)> = tokio::task::spawn_blocking(move || {
+            top_file_paths
+                .iter()
+                .filter_map(|p| {
+                    let content = std::fs::read_to_string(p).ok()?;
+                    // ponytail: minify each file to keep the stem small; if
+                    // minification fails or inflates, use the raw content as a
+                    // fallback so the file is still present in the stem.
+                    let minified = crate::shared::minify::minify_source_safe(p, &content);
+                    if minified.len() < content.len() {
+                        Some((p.clone(), minified))
                     } else {
-                        Some((p.clone(), content))
+                        // Minification didn't help; use a truncated version of
+                        // the raw content to keep the stem bounded.
+                        // ponytail: truncate at 4 KiB default, configurable via stem_file_cap —
+                        // enough for context, small enough for cache.
+                        // Keep in sync with Config::default().compaction.stem_file_cap
+                        const STEM_FILE_CAP: usize = 4096;
+                        let cap = stem_file_cap.unwrap_or(STEM_FILE_CAP);
+                        if content.len() > cap {
+                            // Walk back to a UTF-8 char boundary so a
+                            // multibyte char straddling the cap doesn't
+                            // panic the turn (WO 43.25).
+                            let end = truncate_at_char_boundary(&content, cap);
+                            Some((p.clone(), format!("{} [...truncated]", &content[..end])))
+                        } else {
+                            Some((p.clone(), content))
+                        }
                     }
-                }
-            })
-            .collect();
+                })
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
 
         let system = if top_files.is_empty() {
             self.prompt_builder.build(

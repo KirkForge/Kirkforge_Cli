@@ -161,12 +161,14 @@ fn extract_user_preferences(user_msg: &str) -> Vec<MemoryFact> {
     let lower = user_msg.to_lowercase();
     let mut facts = Vec::new();
 
-    for pat in USER_PREFS {
-        if let Some(idx) = lower.find(pat) {
-            let fact_text = user_msg[idx..].trim();
-            if fact_text.len() < MIN_FACT_LEN || is_chaff(fact_text) {
-                continue;
-            }
+    // mm-H21: every pattern match contributes the message tail from its
+    // match index, so nested matches ("make sure to always use X" hits
+    // both "make sure to" and "always use") inserted the same fact once
+    // per pattern. All tails overlap; keep only the earliest (most
+    // complete) match.
+    if let Some(idx) = USER_PREFS.iter().filter_map(|p| lower.find(p)).min() {
+        let fact_text = user_msg[idx..].trim();
+        if fact_text.len() >= MIN_FACT_LEN && !is_chaff(fact_text) {
             facts.push(new_fact("user-pref-", fact_text, "user"));
         }
     }
@@ -178,12 +180,10 @@ fn extract_corrections(user_msg: &str) -> Vec<MemoryFact> {
     let lower = user_msg.to_lowercase();
     let mut facts = Vec::new();
 
-    for pat in CORRECTIONS {
-        if let Some(idx) = lower.find(pat) {
-            let fact_text = user_msg[idx..].trim();
-            if fact_text.len() < MIN_FACT_LEN || is_chaff(fact_text) {
-                continue;
-            }
+    // Same earliest-match rule as extract_user_preferences (mm-H21).
+    if let Some(idx) = CORRECTIONS.iter().filter_map(|p| lower.find(p)).min() {
+        let fact_text = user_msg[idx..].trim();
+        if fact_text.len() >= MIN_FACT_LEN && !is_chaff(fact_text) {
             facts.push(new_fact("feedback-", fact_text, "feedback"));
         }
     }
@@ -486,5 +486,53 @@ mod tests {
     }
 
     // ── WO 47.27 mm-H21: nested pattern matches dedup to one insert ────
-    // (added with the earliest-match dedup change)
+
+    #[test]
+    fn nested_preference_patterns_dedup_to_single_fact() {
+        // Matches both "make sure to" and "always use" — same statement.
+        let facts = extract_user_preferences("make sure to always use anyhow for errors");
+        assert_eq!(facts.len(), 1, "nested matches must dedup: {facts:?}");
+        assert!(
+            facts[0].body.starts_with("make sure to"),
+            "earliest (most complete) match should win: {}",
+            facts[0].body
+        );
+    }
+
+    #[test]
+    fn nested_correction_patterns_dedup_to_single_fact() {
+        // Matches both "that's wrong" and "wrong, it should".
+        let facts = extract_corrections("that's wrong, it should be anyhow instead");
+        assert_eq!(facts.len(), 1, "nested matches must dedup: {facts:?}");
+        assert!(
+            facts[0].body.starts_with("that's wrong"),
+            "earliest (most complete) match should win: {}",
+            facts[0].body
+        );
+    }
+
+    #[test]
+    fn preferences_and_corrections_extract_independently() {
+        // One fact per extractor; the two never collapse into each other.
+        let facts = extract_facts(
+            "Actually that's wrong, the right way is anyhow. I prefer anyhow strongly.",
+            "",
+        );
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|f| f.metadata.get("type").unwrap() == "feedback")
+                .count(),
+            1,
+            "{facts:?}"
+        );
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|f| f.metadata.get("type").unwrap() == "user")
+                .count(),
+            1,
+            "{facts:?}"
+        );
+    }
 }

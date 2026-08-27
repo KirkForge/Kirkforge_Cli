@@ -109,67 +109,112 @@ pub struct PermissionRule {
 /// - `?` — exactly one char (does NOT cross `/`).
 /// - Anything else — literal char match.
 ///
-/// **Why hand-rolled, not a crate:** the matcher is short, called at
-/// most once per tool invocation (cheap), and must be UTF-8 safe.
+/// **Why hand-rolled, not a crate:** the matcher is short, linear-time
+/// (NFA state-set simulation — the previous recursive backtracker was
+/// exponential on overlapping `**` patterns), and must be UTF-8 safe.
 /// Adding a `glob` or `globset` dependency for this would cost more
 /// compile time + binary size than the function itself.
 ///
 /// Returns `true` iff the pattern matches the entire value (anchored
 /// on both ends — `pattern="cargo"` does NOT match `"cargo test"`).
 pub fn glob_match(pattern: &str, value: &str) -> bool {
-    let pat: Vec<char> = pattern.chars().collect();
-    let val: Vec<char> = value.chars().collect();
-    glob_match_recurse(&pat, 0, &val, 0)
+    let tokens = tokenize_glob(pattern);
+    let n = tokens.len();
+    // NFA simulation: `states[i]` is true when the matcher can be "about
+    // to consume token i". Linear in |pattern| × |value| — no state is
+    // re-explored, so overlapping `**` runs cannot backtrack
+    // combinatorially (WO 47.34).
+    let mut states = vec![false; n + 1];
+    states[0] = true;
+    close_over_empty_matches(&tokens, &mut states);
+    for c in value.chars() {
+        let mut next = vec![false; n + 1];
+        for i in 0..n {
+            if !states[i] {
+                continue;
+            }
+            match tokens[i] {
+                GlobToken::Literal(ch) => {
+                    if ch == c {
+                        next[i + 1] = true;
+                    }
+                }
+                GlobToken::Question => {
+                    if c != '/' {
+                        next[i + 1] = true;
+                    }
+                }
+                GlobToken::SingleStar => {
+                    if c != '/' {
+                        // Absorb c into the run, or end the run at c.
+                        next[i] = true;
+                        next[i + 1] = true;
+                    }
+                }
+                GlobToken::DoubleStar => {
+                    // Matches any chars including `/` — absorb or end.
+                    next[i] = true;
+                    next[i + 1] = true;
+                }
+            }
+        }
+        close_over_empty_matches(&tokens, &mut next);
+        states = next;
+    }
+    states[n]
 }
 
-/// Recursive matcher with proper backtracking. Handles `*` (no slash)
-/// and `**` (slash-crossing) by trying the longest match first, then
-/// progressively shorter matches, on mismatch.
-fn glob_match_recurse(pat: &[char], pi: usize, val: &[char], vi: usize) -> bool {
-    // Base case: pattern exhausted.
-    if pi == pat.len() {
-        return vi == val.len();
-    }
-    // Detect `**` (two consecutive `*`s). Treat as "match any chars
-    // including `/`" — try consuming the whole rest of the value first,
-    // then back up one char at a time on recursive mismatch.
-    if pat[pi] == '*' && pi + 1 < pat.len() && pat[pi + 1] == '*' {
-        // Try every possible "rest" length from 0 to val.len() - vi.
-        for end in vi..=val.len() {
-            if glob_match_recurse(pat, pi + 2, val, end) {
-                return true;
+/// One matcher atom. A maximal run of `k` stars collapses to a single
+/// token: `k == 1` is the segment-bound `*`, `k >= 2` is `**` — a run of
+/// 3+ stars parses left-to-right as `**` (`.*`) followed by more stars,
+/// and every such continuation contains ε, so the whole run is exactly
+/// `.*`, same as `**`. Identical to the previous recursive matcher's
+/// pairwise-star parse.
+#[derive(Clone, Copy, PartialEq)]
+enum GlobToken {
+    /// `**` (any maximal star run of length >= 2): zero-or-more chars
+    /// including `/`.
+    DoubleStar,
+    /// `*`: zero-or-more chars, never `/`.
+    SingleStar,
+    /// `?`: exactly one char, never `/`.
+    Question,
+    Literal(char),
+}
+
+fn tokenize_glob(pattern: &str) -> Vec<GlobToken> {
+    let mut tokens = Vec::with_capacity(pattern.len());
+    let mut chars = pattern.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '*' {
+            let mut run = 1usize;
+            while chars.peek() == Some(&'*') {
+                chars.next();
+                run += 1;
             }
+            tokens.push(if run >= 2 {
+                GlobToken::DoubleStar
+            } else {
+                GlobToken::SingleStar
+            });
+        } else if ch == '?' {
+            tokens.push(GlobToken::Question);
+        } else {
+            tokens.push(GlobToken::Literal(ch));
         }
-        return false;
     }
-    // Single `*` — does NOT cross `/`. Try every possible length within
-    // the current segment.
-    if pat[pi] == '*' {
-        // Limit: don't cross the next `/` in the value.
-        let mut end = vi;
-        while end <= val.len() {
-            if glob_match_recurse(pat, pi + 1, val, end) {
-                return true;
-            }
-            if end == val.len() || val[end] == '/' {
-                break;
-            }
-            end += 1;
+    tokens
+}
+
+/// ε-closure: `*` and `**` both match the empty string, so a live state
+/// on such a token also activates the following state. One left-to-right
+/// sweep reaches the fixpoint because propagation only moves forward.
+fn close_over_empty_matches(tokens: &[GlobToken], states: &mut [bool]) {
+    for i in 0..tokens.len() {
+        if states[i] && matches!(tokens[i], GlobToken::SingleStar | GlobToken::DoubleStar) {
+            states[i + 1] = true;
         }
-        return false;
     }
-    // `?` matches exactly one non-`/` char.
-    if pat[pi] == '?' {
-        if vi >= val.len() || val[vi] == '/' {
-            return false;
-        }
-        return glob_match_recurse(pat, pi + 1, val, vi + 1);
-    }
-    // Literal char.
-    if vi < val.len() && pat[pi] == val[vi] {
-        return glob_match_recurse(pat, pi + 1, val, vi + 1);
-    }
-    false
 }
 
 /// Evaluate the rules for a single tool call. Returns the action the
@@ -1856,8 +1901,9 @@ mod tests {
                 prop_assert_eq!(glob_match("", &value), value.is_empty());
             }
 
-            // Long inputs must not overflow the stack. The matcher is
-            // recursive; cap the length so CI is fast but the path is
+            // Long inputs must not overflow the stack or blow up. The
+            // matcher is iterative and linear (NFA state-set, WO 47.34);
+            // the length is capped so CI stays fast while the path is
             // exercised.
             #[test]
             fn glob_match_long_inputs_dont_panic(
@@ -1875,6 +1921,19 @@ mod tests {
             assert!(glob_match("***", "abc"));
             assert!(glob_match("***", "a/b"));
             assert!(glob_match("***", ""));
+        }
+
+        /// WO 47.34: overlapping `**` patterns must complete in linear
+        /// time. The previous recursive backtracker explored this
+        /// exponentially (Θ(n⁴) recursive calls here — minutes, i.e. a
+        /// DoS on the tool-call permission path via config-authored
+        /// patterns); the NFA matcher finishes it instantly.
+        #[test]
+        fn glob_match_overlapping_double_stars_stay_linear() {
+            let value = "a".repeat(200);
+            assert!(!glob_match("**a**a**a**b", &value));
+            assert!(glob_match("**a**a**a**a", &value));
+            let _ = glob_match(&"**a".repeat(50), &value);
         }
 
         #[test]

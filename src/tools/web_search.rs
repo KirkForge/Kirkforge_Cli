@@ -49,7 +49,7 @@ impl Tool for WebSearch {
         }
     }
 
-    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let api_key = match self.api_key.as_deref() {
             Some(k) if !k.is_empty() => k,
             _ => {
@@ -74,7 +74,17 @@ impl Tool for WebSearch {
             .map(|c| c.clamp(1, 20) as u32)
             .unwrap_or(10);
 
-        match search_brave(api_key, query, count).await {
+        // WO 46.37: race the Brave request against the cancel token so a
+        // cancelled turn doesn't wait out the 30s HTTP timeout. Dropping
+        // the in-flight future aborts the request. Pattern: `tools/grep.rs:102`.
+        let result = tokio::select! {
+            biased;
+            _ = ctx.token.cancelled() => {
+                return ToolOutcome::Failure(crate::shared::ToolError::Cancelled);
+            }
+            res = search_brave(api_key, query, count) => res,
+        };
+        match result {
             Ok(results) => ToolOutcome::Success {
                 content: format_results(&results),
             },
@@ -185,6 +195,24 @@ mod tests {
             matches!(
                 outcome,
                 ToolOutcome::Failure(crate::shared::ToolError::InvalidArgs { .. })
+            ),
+            "got {outcome:?}"
+        );
+    }
+
+    // WO 46.37: a cancelled token short-circuits before any HTTP is
+    // issued (the biased select never polls the Brave future), so this
+    // test is network-free and deterministic.
+    #[tokio::test]
+    async fn cancelled_token_returns_cancelled() {
+        let tool = WebSearch::with_key("dummy");
+        let ctx = ToolContext::new();
+        ctx.token.cancel();
+        let outcome = tool.run(&ctx, serde_json::json!({"query": "rust"})).await;
+        assert!(
+            matches!(
+                outcome,
+                ToolOutcome::Failure(crate::shared::ToolError::Cancelled)
             ),
             "got {outcome:?}"
         );

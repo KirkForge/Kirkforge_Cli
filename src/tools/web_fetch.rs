@@ -130,7 +130,7 @@ impl Tool for WebFetch {
         }
     }
 
-    async fn run(&self, _ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
+    async fn run(&self, ctx: &ToolContext, args: serde_json::Value) -> ToolOutcome {
         let url = match args.get("url").and_then(|u| u.as_str()) {
             Some(u) => u,
             None => {
@@ -170,8 +170,17 @@ impl Tool for WebFetch {
         // guard resolutions on a blocking thread so a wedged resolver
         // cannot stall a runtime worker. A panic in the blocking task
         // fails closed.
-        let (resolves_internal, pin) =
-            resolve_guards_off_worker(trimmed.to_string(), self.resolver.clone()).await;
+        // WO 46.37: race the guard await against the cancel token —
+        // getaddrinfo can hang for seconds and a cancelled turn must not
+        // wait it out. The blocking-pool task runs to completion; only
+        // the tool return is prompt. Pattern: `tools/grep.rs:102`.
+        let (resolves_internal, pin) = tokio::select! {
+            biased;
+            _ = ctx.token.cancelled() => {
+                return ToolOutcome::Failure(ToolError::Cancelled);
+            }
+            g = resolve_guards_off_worker(trimmed.to_string(), self.resolver.clone()) => g,
+        };
         if resolves_internal {
             return ToolOutcome::Failure(ToolError::AccessDenied {
                 message: "URL host resolves to a private/internal IP".into(),
@@ -202,13 +211,22 @@ impl Tool for WebFetch {
             }
         };
 
-        let response = match client.execute(request).await {
-            Ok(r) => r,
-            Err(e) => {
-                return ToolOutcome::Failure(ToolError::Internal {
-                    message: format!("Failed to fetch {trimmed}: {e}"),
-                });
+        // WO 46.37: race the request against the cancel token so a
+        // cancelled turn doesn't wait out FETCH_TIMEOUT (30s). Dropping
+        // the in-flight future aborts the request.
+        let response = tokio::select! {
+            biased;
+            _ = ctx.token.cancelled() => {
+                return ToolOutcome::Failure(ToolError::Cancelled);
             }
+            r = client.execute(request) => match r {
+                Ok(r) => r,
+                Err(e) => {
+                    return ToolOutcome::Failure(ToolError::Internal {
+                        message: format!("Failed to fetch {trimmed}: {e}"),
+                    });
+                }
+            },
         };
 
         let status = response.status();
@@ -223,11 +241,19 @@ impl Tool for WebFetch {
         // MAX_BODY_BYTES. `response.bytes().await` would buffer the entire
         // body first — a server streaming multi-GB within the 30s timeout
         // would OOM the process before the post-hoc cap fired (WO 46.21).
+        // WO 46.37: each chunk await is raced against the cancel token so
+        // a slow-drip body can't hold a cancelled turn hostage.
         use tokio_stream::StreamExt;
         let mut stream = response.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();
         let mut exceeded = false;
-        while let Some(chunk_res) = stream.next().await {
+        while let Some(chunk_res) = tokio::select! {
+            biased;
+            _ = ctx.token.cancelled() => {
+                return ToolOutcome::Failure(ToolError::Cancelled);
+            }
+            c = stream.next() => c,
+        } {
             let chunk = match chunk_res {
                 Ok(c) => c,
                 Err(e) => {
@@ -1221,6 +1247,38 @@ mod tests {
         assert!(
             matches!(outcome, ToolOutcome::Success { .. }),
             "got {outcome:?}"
+        );
+    }
+
+    // WO 46.37: a cancelled token must abort an in-flight fetch instead
+    // of waiting out the server delay (previously the full 30s
+    // FETCH_TIMEOUT). The mock delays 15s; without the cancel race the
+    // 5s timeout below fails the test.
+    #[tokio::test]
+    async fn cancelled_fetch_returns_promptly() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(15)),
+            )
+            .mount(&server)
+            .await;
+
+        let tool = test_tool_for(&server);
+        let ctx = ToolContext::new();
+        let token = ctx.token.clone();
+        let run =
+            tokio::spawn(async move { tool.run(&ctx, json!({"url": "http://test.local/"})).await });
+        // Let the request reach the wire, then cancel mid-flight.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        token.cancel();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), run)
+            .await
+            .expect("cancel must return within 5s, not wait the 15s server delay")
+            .expect("spawned run must not panic");
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::Cancelled)),
+            "expected Cancelled, got {outcome:?}"
         );
     }
 

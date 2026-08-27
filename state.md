@@ -4,6 +4,24 @@
 
 ## Shipped (closed this session)
 
+- **WO 47.16**: Done. jobd auth timing oracle + world-connectable socket
+  (the disclosed WO 46.32 deferral). Extracted the session daemon's
+  SHA-256-then-ct_eq logic into `pub fn check_auth_ct(supplied, expected)`
+  (src/daemon/mod.rs) — `DaemonState::check_auth` delegates (signature
+  unchanged), and jobd's private `check_auth` now routes through it
+  instead of raw `ct_eq` on token bytes (length-leaking). jobd's
+  `UnixListener::bind` is followed by fail-closed
+  `set_permissions(0o600)` (mirrors session-daemon server.rs; jobs
+  module already cfg(unix)). New regression test
+  `jobd_socket_is_owner_only` (jobs/daemon.rs tests). Files:
+  src/daemon/mod.rs, src/jobs/daemon.rs. Gate: clippy/fmt/check green;
+  test-fast red only on the documented load flakes — machine at load
+  17.9-24.1/8 cores (parallel worktree agents): runs A+B failed only
+  the WO 46.28 flake `attached_cancel_token_kills_inflight_bash_promptly`
+  (isolation green, 7.95s); run C (--no-fail-fast, identical scope)
+  4780/4782 passed with the flake GREEN and 2 edit_file 30s-timeout-edge
+  tests timing out (both isolation green, 13.2s/16.5s). Zero anomalies
+  touch daemon/jobs.
 - **WO 46.30**: Done. `bench run_task` env-var leak on error paths —
   `KF_CODE_BUDGET_CEILING` was set at the top of `run_task` but only
   removed on the success path; any `?` between set and cleanup

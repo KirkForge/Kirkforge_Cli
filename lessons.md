@@ -572,3 +572,20 @@
   graphs: after touching kf-budget-core, the kf-code libtest binary
   relinks (~20+ min under load) even though nextest artifacts are warm.
   Budget accordingly; don't mistake it for a hang.
+
+## WO 47.16 session (jobd auth timing oracle + socket perms)
+- `check_auth_ct` extraction: keep `DaemonState::check_auth`'s signature
+  (`Result<(), Response>`) and map the free fn's `Result<(), String>`
+  via `.map_err(Response::error)` — zero churn at the 9 server.rs call
+  sites + 5 test sites.
+- jobs/daemon.rs already unix-gated via jobs/mod.rs, so PermissionsExt
+  needed no cfg wrapper.
+- The WO 46.28 flake + the edit_file 30s-edge pair flake as a SET under
+  load: each test-fast run fails a different subset (cancel-test twice,
+  then cancel GREEN and both edit_file tests timing out in the
+  no-fail-fast run). Machine load 17-24 on 8 cores. All pass in
+  isolation. Don't chase whichever one fired — check load first
+  (`uptime`).
+- cargo nextest vs libtest artifact graphs again: after `--lib` nextest
+  runs, `cargo test --lib` relinks (10+ min under load). Budget gates
+  accordingly.

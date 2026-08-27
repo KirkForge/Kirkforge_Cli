@@ -11,6 +11,14 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 47.16 — jobd auth and socket hardening (the disclosed WO 46.32
+  deferral): the jobs daemon's private `check_auth` did a raw
+  constant-time compare on token bytes (length-leaking timing oracle)
+  and bound its socket with umask-default perms (0o755 — any local
+  user could connect and call Shutdown). The SHA-256-then-compare logic
+  is now a shared `check_auth_ct` free fn used by both the session
+  daemon and jobd, and jobd tightens its socket to 0o600 after bind
+  (fail-closed), with a `jobd_socket_is_owner_only` regression test.
 - WO 46.30 — `bench run_task` no longer leaks `KF_CODE_BUDGET_CEILING`
   when it exits early: a private RAII `BudgetEnvGuard` replaces the
   success-path-only `remove_var`, so an error between env export and

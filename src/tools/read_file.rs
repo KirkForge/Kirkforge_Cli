@@ -780,6 +780,8 @@ mod tests {
     /// WO 47.33: the whole-file raw display must stay byte-exact after the
     /// streaming rewrite — CRLF terminators and the trailing newline are
     /// preserved verbatim (partial reads already normalized them before).
+    /// WO 47.35: the display is wrapped in untrusted-content delimiters; the
+    /// file bytes inside them must stay exact.
     #[tokio::test]
     async fn whole_file_read_preserves_crlf_and_trailing_newline() {
         let tmp = std::env::temp_dir().join(format!(
@@ -800,7 +802,11 @@ mod tests {
             ToolOutcome::FileContent {
                 content, truncated, ..
             } => {
-                assert_eq!(content, source, "whole-file display must be byte-exact");
+                assert_eq!(
+                    content,
+                    wrap_untrusted(source.to_string()),
+                    "whole-file display must be byte-exact inside the untrusted delimiters"
+                );
                 assert!(!truncated);
             }
             other => panic!("expected FileContent, got {other:?}"),

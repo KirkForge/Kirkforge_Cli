@@ -1045,8 +1045,8 @@ tree, ~11 stale claims corrected in-line. See
 | 47.30 | [jobd: notify_one loses shutdown/reload + run_bash_job double-completion race](47.30-jobd-shutdown-and-double-completion.md) | Done |
 | 47.31 | [ci-local failures[] integrity (tarpaulin bypass + compound run_step) + CHANGELOG 23 missing WO 46 entries](47.31-ci-local-integrity-and-changelog.md) | Done |
 | 47.32 | [Docker bash path: unbounded output buffering + timeout/signal codes conflated](47.32-docker-output-caps-and-signals.md) | Done |
-| 47.33 | [Web/read hardening bundle: IPv6 unspecified, DNS-pin fail-open, body-cap config, read_file streaming, computer_use SSRF gate, scan_files cap](47.33-web-and-read-hardening-bundle.md) | Planned |
+| 47.33 | [Web/read hardening bundle: IPv6 unspecified, DNS-pin fail-open, body-cap config, read_file streaming, computer_use SSRF gate, scan_files cap](47.33-web-and-read-hardening-bundle.md) | Done |
 | 47.34 | [write_file parent-dir TOCTOU + permission glob matcher catastrophic backtracking](47.34-write-file-tocou-and-glob-matcher.md) | Planned |
-| 47.35 | [Untrusted-content delimiters for tool output (prompt-injection defense) + template push_value hardening](47.35-untrusted-content-delimiters.md) | Planned |
+| 47.35 | [Untrusted-content delimiters for tool output (prompt-injection defense) + template push_value hardening](47.35-untrusted-content-delimiters.md) | Done |
 | 47.36 | [Mutex-poison + expect hygiene batch + lib unwrap gate + test EnvGuard fixes](47.36-mutex-poison-and-expect-hygiene.md) | Planned |
 | 47.37 | [Test-theater batch: e2e scenarios accept any outcome + bench TOMLs missing requires_model + tarpaulin nightly verify](47.37-test-theater-batch.md) | Done |

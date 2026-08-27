@@ -119,6 +119,12 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
         loop {
             tokio::select! {
                 _ = socket_shutdown.notified() => {
+                    // notify_one() (signal handlers, handle_client) wakes
+                    // exactly ONE of this loop and the scheduler loop.
+                    // Re-broadcast so the loser wakes too (WO 47.30):
+                    // without this, a shutdown the accept loop wins leaves
+                    // the scheduler running on a dead socket.
+                    socket_shutdown.notify_waiters();
                     tracing::info!("jobd accept loop shutting down");
                     break;
                 }
@@ -254,6 +260,10 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
         last_check = now;
         tokio::select! {
             _ = shutdown.notified() => {
+                // Mirror of the accept loop's re-broadcast (WO 47.30):
+                // when the scheduler wins the notify_one() race, forward
+                // the shutdown to the accept loop so it stops accepting.
+                shutdown.notify_waiters();
                 tracing::info!("jobd shutting down gracefully");
                 break;
             }
@@ -323,7 +333,9 @@ async fn handle_client(stream: UnixStream, shutdown: Arc<Notify>, reload: Arc<No
                     continue;
                 }
                 let _ = send_response(&mut stream, &Response::ok_empty()).await;
-                shutdown.notify_one();
+                // Broadcast: both the accept loop and the scheduler loop
+                // await this Notify (WO 47.30).
+                shutdown.notify_waiters();
                 break;
             }
             Request::QuitAll { auth_token, .. } => {
@@ -332,7 +344,7 @@ async fn handle_client(stream: UnixStream, shutdown: Arc<Notify>, reload: Arc<No
                     continue;
                 }
                 let _ = send_response(&mut stream, &Response::ok_empty()).await;
-                shutdown.notify_one();
+                shutdown.notify_waiters();
                 break;
             }
             // Treat List/Resolve/Touch/Claim/InstanceRegister as reload
@@ -349,6 +361,9 @@ async fn handle_client(stream: UnixStream, shutdown: Arc<Notify>, reload: Arc<No
                     continue;
                 }
                 let _ = send_response(&mut stream, &Response::ok_empty()).await;
+                // Single waiter (the scheduler loop), so notify_one is
+                // correct — and its stored permit survives the scheduler
+                // being mid-iteration, which notify_waiters() would drop.
                 reload.notify_one();
             }
         }

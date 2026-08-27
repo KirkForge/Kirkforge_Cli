@@ -18,6 +18,14 @@ why, and the gate evidence.
   `spawn_blocking` batch instead of on the tokio worker; the verdict
   cache is bounded (256 entries, FIFO eviction) instead of unbounded.
   [47.26](docs/workorders/47.26-verifier-parallel-execution.md)
+- WO 47.31 — ci-local.sh integrity: the tarpaulin coverage-threshold
+  gate is routed through `run_step` (a below-threshold failure lands in
+  `failures[]` and the summary runs, instead of a bare `exit 1`), and
+  `run_step` disables errexit around `"$@"` so a compound command shape
+  can't abort the script before `failures[]` records it (WO 46.25
+  residual); 31 WO 46.x CHANGELOG entries lost in merge resolutions
+  backfilled.
+  [47.31](docs/workorders/47.31-ci-local-integrity-and-changelog.md)
 
 - WO 46.1 — `FileAuditSink::flush` no longer advances the hash chain
   before the write succeeds; tamper-evidence is preserved on partial

@@ -579,6 +579,7 @@ async fn post_request(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_sse_reader(
     client: reqwest::Client,
     url: String,

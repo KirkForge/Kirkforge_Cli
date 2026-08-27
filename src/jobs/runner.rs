@@ -539,6 +539,7 @@ mod tests {
     // artifacts carry the drained output instead of an empty mid-cancel
     // snapshot — and must not remove() the entry (which would kill the
     // child racing the watcher's reap).
+    #[cfg(unix)]
     #[tokio::test]
     async fn cancelled_bash_job_records_drained_output() {
         let (dir, store) = tmp_store();
@@ -547,6 +548,10 @@ mod tests {
         // echo before we cancel — otherwise a loaded machine can kill the
         // child before it writes anything, and the empty stdout is correct
         // rather than a recording race.
+        // WO 47.30 disclosure: Unix-only. The drained-output-after-cancel
+        // contract relies on the process-group kill order (drain, then
+        // killpg) preserving pipe contents. Windows TerminateProcess
+        // discards pipe buffers, so the marker legitimately never lands.
         let sentinel = dir.path().join("sentinel");
         let command = format!("echo {marker}; touch {sentinel:?}; sleep 30");
         let mut job = bash_job(&command);

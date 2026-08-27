@@ -572,3 +572,17 @@
   graphs: after touching kf-budget-core, the kf-code libtest binary
   relinks (~20+ min under load) even though nextest artifacts are warm.
   Budget accordingly; don't mistake it for a hang.
+
+## WO 47.15 session (secret-env scrub, 3+1 spawn sites)
+- Scope creep: `src/session/bench.rs` (verify_task_bounded) — sibling
+  `sh -c` site of the exact WO class, same crate, one-line fix; fixed here
+  rather than left leaking. Cross-crate siblings (kf-bench, kf-workflow)
+  deferred — helper is pub(crate), promotion is an API change (follow-up WO).
+- `scrub_secrets_from_child_env` order matters: scrub the inherited env
+  BEFORE explicit `.env(k, v)` sets, so deliberate context vars win even if
+  a name collides with a secret-shaped parent var.
+- `attached_cancel_token_kills_inflight_bash_promptly` is load-flaky: fails
+  at ~18s under full-suite parallel churn, passes solo in 8s. If it fires
+  during test-fast.sh, rerun solo before diagnosing.
+- Fresh worktree = ~20 min per cold cargo pass (check, clippy, test each).
+  Budget an hour+ for gates; don't panic at silent long builds.

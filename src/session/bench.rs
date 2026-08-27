@@ -48,6 +48,10 @@ async fn verify_task_bounded(
     if matches!(task.verify, VerifySpec::TestPasses { .. }) {
         cmd.env("CARGO_TERM_COLOR", "never");
     }
+    // WO 47.15: verify commands are file-driven shell strings — scrub
+    // credential-shaped env vars so a bench task cannot exfiltrate
+    // provider/session secrets via `printenv`. Mirrors the bash paths.
+    crate::session::bash_runner::scrub_secrets_from_child_env(&mut cmd);
     if let Some((k, v)) = curated {
         cmd.env(k, v.to_string());
     }

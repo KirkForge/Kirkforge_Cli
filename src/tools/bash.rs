@@ -186,6 +186,11 @@ impl Bash {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // WO 47.15: scrub credential-shaped env vars so container children
+        // cannot exfiltrate provider/session secrets via `printenv` — the
+        // docker client forwards its full env into `docker run` by default.
+        // Mirrors the foreground/background bash paths (WO 43.28).
+        crate::session::bash_runner::scrub_secrets_from_child_env(&mut docker_cmd);
         crate::session::process_group::setup_process_group(&mut docker_cmd);
         let mut child = docker_cmd
             .spawn()

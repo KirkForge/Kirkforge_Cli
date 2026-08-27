@@ -310,6 +310,10 @@ async fn apply_command_fix(
         .kill_on_drop(true)
         .stdin(std::process::Stdio::null());
     crate::session::process_group::setup_process_group(&mut proc);
+    // WO 47.15: the formatter command comes from config and is resolved
+    // via PATH — a PATH-shadowed shim must not inherit provider/session
+    // secrets. Mirrors the hook runner (hooks.rs).
+    crate::session::bash_runner::scrub_secrets_from_child_env(&mut proc);
     let mut child = match proc.spawn() {
         Ok(c) => c,
         Err(e) => {

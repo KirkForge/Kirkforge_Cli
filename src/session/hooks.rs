@@ -626,6 +626,10 @@ async fn run_hook_script(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     setup_process_group(&mut cmd);
+    // WO 47.15: scrub credential-shaped env vars BEFORE setting the KF_*
+    // context vars, so a hook script cannot exfiltrate provider/session
+    // secrets via `printenv`. Explicit env_vars set below still win.
+    crate::session::bash_runner::scrub_secrets_from_child_env(&mut cmd);
     for (k, v) in env_vars {
         cmd.env(k, v);
     }

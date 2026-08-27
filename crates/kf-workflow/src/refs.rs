@@ -111,14 +111,26 @@ const CONDITION_TIMEOUT_SECS: u64 = 2;
 /// `kill_on_drop`. Returns `true` if the condition exits 0, `false`
 /// otherwise — including timeout and spawn failure, so a hung condition
 /// skips the step instead of wedging the workflow.
+///
+/// `prepare` is an optional pre-spawn hook applied to the `sh -c`
+/// `Command` before spawn (WO 47.25): the bin side passes the same
+/// landlock+rlimit pre_exec the foreground bash tool gets, so condition
+/// evals and bash steps share one sandboxed spawn path instead of two
+/// with diverging guarantees. `None` spawns bare (crate default, tests).
 /// ponytail: sh -c eval — upgrade to expression parser if needed.
-pub async fn eval_condition_bounded(condition: &str) -> bool {
+pub async fn eval_condition_bounded(
+    condition: &str,
+    prepare: Option<&(dyn Fn(&mut tokio::process::Command) + Send + Sync)>,
+) -> bool {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c")
         .arg(condition)
         .kill_on_drop(true)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
+    if let Some(prep) = prepare {
+        prep(&mut cmd);
+    }
     let status_fut = cmd.status();
     let timeout_fut = tokio::time::sleep(std::time::Duration::from_secs(CONDITION_TIMEOUT_SECS));
     tokio::pin!(status_fut);

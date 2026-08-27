@@ -4,11 +4,11 @@ use crate::shared::shell::{
     global_registry, is_timeout_marker, run_shell_with_token, JobStatus, ShellError, ShellOutput,
 };
 use crate::shared::{DockerConfig, SandboxConfig, ToolDef, ToolError, ToolOutcome};
+use crate::session::bash_runner::{cap_to_string, drain_capped, MAX_BASH_OUTPUT_BYTES};
 use crate::tools::bash_minify;
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
 use std::process::Stdio;
-use tokio::io::AsyncReadExt;
 
 // ponytail: PTY support (portable-pty) deferred — adds ~2 MB to the
 // release binary. Current pipe-based stdout/stderr capture is sufficient
@@ -205,16 +205,14 @@ impl Bash {
             .take()
             .ok_or_else(|| ShellError::Spawn("no stderr".into()))?;
 
-        let out_handle = tokio::spawn(async move {
-            let mut buf = Vec::new();
-            let mut reader = tokio::io::BufReader::new(stdout);
-            reader.read_to_end(&mut buf).await.map(|_| buf)
-        });
-        let err_handle = tokio::spawn(async move {
-            let mut buf = Vec::new();
-            let mut reader = tokio::io::BufReader::new(stderr);
-            reader.read_to_end(&mut buf).await.map(|_| buf)
-        });
+        // WO 47.32: capped drain. read_to_end into unbounded Vecs let a
+        // runaway container command OOM the host process — this is the
+        // same MAX_BASH_OUTPUT_BYTES cap every other bash spawn path
+        // enforces (run_shell_with_token, workflow bash). The drainer
+        // keeps reading past the cap into a sink, so the container never
+        // blocks on a full pipe and the marker reports the dropped count.
+        let out_handle = tokio::spawn(drain_capped(stdout, MAX_BASH_OUTPUT_BYTES));
+        let err_handle = tokio::spawn(drain_capped(stderr, MAX_BASH_OUTPUT_BYTES));
 
         let status = tokio::select! {
             status = child.wait() => status.map_err(|e| ShellError::Spawn(format!("docker wait: {e}")))?,
@@ -244,19 +242,25 @@ impl Bash {
             }
         };
 
-        let out_bytes = out_handle
-            .await
-            .unwrap_or_else(|_| Ok(Vec::new()))
-            .unwrap_or_default();
-        let err_bytes = err_handle
-            .await
-            .unwrap_or_else(|_| Ok(Vec::new()))
-            .unwrap_or_default();
+        let (out_bytes, out_dropped) = join_capped_drain(out_handle).await;
+        let (err_bytes, err_dropped) = join_capped_drain(err_handle).await;
 
-        let stdout_str = String::from_utf8_lossy(&out_bytes).to_string();
-        let stderr_str = String::from_utf8_lossy(&err_bytes).to_string();
+        let stdout_str = cap_to_string(out_bytes, out_dropped);
+        let stderr_str = cap_to_string(err_bytes, err_dropped);
 
         Ok((status.code().unwrap_or(-1), stdout_str, stderr_str))
+    }
+}
+
+// Best-effort join of a capped drain task: a join error, io error, or
+// deadline miss yields an empty capture instead of failing the whole
+// invocation (same semantics as the old unwrap-or-default chain).
+async fn join_capped_drain(
+    handle: tokio::task::JoinHandle<std::io::Result<(Vec<u8>, u64)>>,
+) -> (Vec<u8>, u64) {
+    match handle.await {
+        Ok(Ok(pair)) => pair,
+        _ => (Vec::new(), 0),
     }
 }
 

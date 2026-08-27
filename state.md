@@ -4,6 +4,26 @@
 
 ## Shipped (closed this session)
 
+- **WO 47.26**: Done. Verifier-panel perf, three items, one commit each.
+  (1) `verify_event` runs verifiers concurrently via futures-util
+  `buffer_unordered(4)` — worst case drops from sum(14 verifiers × 30s cap)
+  to ceil(14/4) × 30s; results re-sorted to registration order so the
+  Unfixable>Fixable first-in-priority tie-break stays deterministic. Gotcha:
+  building the futures through a stream `.map` closure (even calling a named
+  async fn) trips rustc's higher-ranked Send-inference limitation — 5
+  downstream spawn sites (tui, executor_adapter, task_spawner, persona) went
+  red with "implementation of `Send` is not general enough"; the fix is a
+  plain loop collecting futures into a Vec, then `stream::iter(vec)`.
+  (2) `build_stream_preamble` is async; top-file reads+minify run as one
+  `spawn_blocking` batch. (3) `verdict_cache` → bounded `VerdictCache`
+  (map + insertion VecDeque, FIFO past 256, mirrors WO 46.34), resolves the
+  `ponytail: unbounded` annotation; new test
+  `verdict_cache_is_bounded_with_fifo_eviction`. Note: the `Verifier` trait
+  is async (not sync `BusVerifier` as the WO assumed), so bounded futures
+  — not spawn_blocking-per-verifier — is the right shape. dispatch.rs:185
+  bus-under-mutex stays deferred (WO 43.26 tail). Files:
+  verifier/handler.rs, verifier/mod.rs (stale truth-model doc fixed),
+  verifier/tests.rs, executor/stream.rs, executor/turn.rs, TECHNICAL.md.
 - **WO 47.16**: Done. jobd auth timing oracle + world-connectable socket
   (the disclosed WO 46.32 deferral). Extracted the session daemon's
   SHA-256-then-ct_eq logic into `pub fn check_auth_ct(supplied, expected)`

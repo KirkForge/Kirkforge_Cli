@@ -300,9 +300,14 @@ mod unix_imp {
     }
 
     /// Try to start a daemon process in the background.
-    fn start_daemon() -> anyhow::Result<()> {
+    ///
+    /// Uses `tokio::process` (not std): dropping the tokio `Child` moves it to
+    /// the runtime's orphan queue, which reaps it when the daemon eventually
+    /// exits. The std `Child` we used before never reaps, so every auto-start
+    /// left a `<defunct>` zombie under a still-running parent (e.g. the TUI).
+    async fn start_daemon() -> anyhow::Result<()> {
         let current_exe = std::env::current_exe().context("get current executable")?;
-        let mut cmd = std::process::Command::new(current_exe);
+        let mut cmd = tokio::process::Command::new(current_exe);
         cmd.arg("daemon");
         // Detach the daemon from the parent's stdio so it cannot hold the
         // parent's piped stdout/stderr open. Without this, any caller that
@@ -313,6 +318,8 @@ mod unix_imp {
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
+        // Dropping the Child is deliberate: kill_on_drop is false (default),
+        // so the daemon outlives this client while the runtime reaps it later.
         cmd.spawn().context("spawn daemon process")?;
         Ok(())
     }
@@ -336,7 +343,7 @@ mod unix_imp {
             return Ok(());
         }
         tracing::info!("starting session daemon in the background");
-        start_daemon()?;
+        start_daemon().await?;
         wait_for_daemon(std::time::Duration::from_secs(2)).await
     }
 

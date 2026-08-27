@@ -19,6 +19,98 @@ why, and the gate evidence.
   cache is bounded (256 entries, FIFO eviction) instead of unbounded.
   [47.26](docs/workorders/47.26-verifier-parallel-execution.md)
 
+- WO 46.1 — `FileAuditSink::flush` no longer advances the hash chain
+  before the write succeeds; tamper-evidence is preserved on partial
+  failure. [46.1](docs/workorders/46.1-audit-flush-partial-failure-breaks-tamper-evidence.md)
+- WO 46.2 — `apply_patch_to_parent` sets up a process group so a
+  grandchild doesn't survive the timeout.
+  [46.2](docs/workorders/46.2-parallel-orchestrator-patch-missing-process-group.md)
+- WO 46.3 — daemon concurrency semaphore no longer starved by
+  long-lived instance push channels.
+  [46.3](docs/workorders/46.3-daemon-semaphore-starved-by-instance-channels.md)
+- WO 46.4 — kf-memory-store eviction enforces TTL and max_entries, not
+  just count.
+  [46.4](docs/workorders/46.4-memory-store-eviction-count-only-limits-nonfunctional.md)
+- WO 46.5 — `minify_write_side` serde default aligned across config
+  construction paths (was true on one path, `Default::false` on the
+  other). [46.5](docs/workorders/46.5-config-minify-write-side-serde-default-divergence.md)
+- WO 46.6 — EventBus inflight counter decrements when an emit future is
+  dropped; `graceful_shutdown` no longer always times out.
+  [46.6](docs/workorders/46.6-event-bus-inflight-leak-on-cancelled-emit.md)
+- WO 46.7 — `WorkflowExecutor::run_fan_out` honors cancellation
+  mid-fan-out. [46.7](docs/workorders/46.7-workflow-fan-out-no-cancellation-mid-batch.md)
+- WO 46.8 — grep/glob `spawn_blocking` tasks are cancellable by the
+  tool timeout (no more hung-subprocess leaks).
+  [46.8](docs/workorders/46.8-grep-glob-spawn-blocking-not-cancellable.md)
+- WO 46.9 — bench compare `--fail-on-regression` runs telemetry
+  shutdown before `exit(1)`.
+  [46.9](docs/workorders/46.9-bench-compare-bypasses-telemetry-shutdown.md)
+- WO 46.10 — context-index `mtime_rebuild` picks up new files that are
+  absent from the cache.
+  [46.10](docs/workorders/46.10-context-index-cache-mtime-misses-new-files.md)
+- WO 46.11 — ci-merge.yml validates bench TOML `[verify].type`
+  (parity with ci-pr.yml).
+  [46.11](docs/workorders/46.11-ci-merge-missing-bench-toml-validation.md)
+- WO 46.12 — check-artifact-consistency.sh `grep -c || echo 0` no
+  longer produces double output / a false failure under `set -e`.
+  [46.12](docs/workorders/46.12-check-artifact-consistency-grep-double-output.md)
+- WO 46.13 — `plugin_consent_ledger` defaults on, so the WO 45.61
+  consent fix applies without opt-in.
+  [46.13](docs/workorders/46.13-plugin-consent-ledger-default-off.md)
+- WO 46.14 — `run_id`/`parent_run_id` threaded through workflow and
+  scheduled jobs (WO 45.1 identity gap).
+  [46.14](docs/workorders/46.14-run-id-threading-incomplete-workflow-jobs.md)
+- WO 46.15 — kf-memory-store self-deadlock in the
+  `write_run_and_emissions` fallback fixed.
+  [46.15](docs/workorders/46.15-memory-store-self-deadlock-write-run-and-emissions.md)
+- WO 46.16 — plugin hot-reload watcher is kept alive at the call site
+  (was dropped — silently dead).
+  [46.16](docs/workorders/46.16-plugin-hot-reload-watcher-dropped.md)
+- WO 46.17 — process group set on 3 more subprocess spawn sites
+  (children die with the parent).
+  [46.17](docs/workorders/46.17-process-group-missing-three-more-spawn-sites.md)
+- WO 46.18 — kf-orchestrator observation outcome stores the verdict,
+  not the routing mode — the empirical router can actually learn.
+  [46.18](docs/workorders/46.18-orchestrator-outcome-stores-mode-not-verdict.md)
+- WO 46.19 — daemon state mutex no longer held across
+  `write_response` `.await` (one wedged client can't stall the daemon).
+  [46.19](docs/workorders/46.19-daemon-state-mutex-held-across-await.md)
+- WO 46.20 — a never-ending bash job no longer blocks the scheduler
+  and graceful shutdown.
+  [46.20](docs/workorders/46.20-never-ending-job-blocks-scheduler-shutdown.md)
+- WO 46.23 — `ResponseCache::put` no longer holds the sync Mutex
+  across the disk write; the in-memory cache is bounded.
+  [46.23](docs/workorders/46.23-response-cache-mutex-across-disk-write.md)
+- WO 46.25 — ci-local.sh failing steps record into `failures[]` and
+  the summary still runs (set -e no longer kills the script first).
+  [46.25](docs/workorders/46.25-ci-local-set-e-defeats-gate-summary.md)
+- WO 46.27 — context-index `mtime_rebuild`/`incremental_rebuild`
+  preserve cached embeddings instead of silently dropping them.
+  [46.27](docs/workorders/46.27-context-index-rebuild-drops-cached-embeddings.md)
+- WO 46.29 — `start_daemon` reaps its child (no zombie per
+  invocation). [46.29](docs/workorders/46.29-start-daemon-zombie-child.md)
+- WO 46.31 — `apply_budget_slice` re-locks before slicing (TOCTOU
+  between state read and slice fixed).
+  [46.31](docs/workorders/46.31-apply-budget-slice-toctou.md)
+- WO 46.32 — daemon socket perms + constant-time auth token compare —
+  fixed via WO 47.16 (disclosed deferral; see its entry above).
+  [46.32](docs/workorders/46.32-daemon-socket-no-perms-token-leak.md)
+- WO 46.33 — openai_compat tolerates DONE-before-`finish_reason`
+  ordering (no spurious Error at stream end).
+  [46.33](docs/workorders/46.33-openai-compat-spurious-error-done-ordering.md)
+- WO 46.35 — parallel tool batches leave no ghost streaming card;
+  result entries pair correctly with their calls.
+  [46.35](docs/workorders/46.35-parallel-tool-batches-ghost-streaming-card.md)
+- WO 46.36 — bash_runner normal-exit path drains the pipe (no
+  spurious failure, no grandchild holding the pipe open).
+  [46.36](docs/workorders/46.36-bash-runner-normal-exit-drain-failure.md)
+- WO 46.38 — `verify_task` `env_remove()`s the parent env before
+  `cmd.env()` — the gate sees only the intended vars.
+  [46.38](docs/workorders/46.38-verify-task-env-not-stripped.md)
+- WO 46.39 — doc drift batch: CLI about, lib.rs path, testdoctor
+  refs, test count, stale Cargo.lock, install.sh dead paths.
+  [46.39](docs/workorders/46.39-doc-drift-batch-fixes.md)
+
 ### Fixed
 
 - WO 47.20 — response cache key + async disk tier: `CacheKey` hashed

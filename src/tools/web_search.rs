@@ -1,4 +1,5 @@
 use crate::shared::{ToolDef, ToolOutcome};
+use crate::tools::web_fetch::wrap_untrusted;
 use crate::tools::{Tool, ToolContext};
 
 /// Search the web via the Brave Search API.
@@ -86,7 +87,9 @@ impl Tool for WebSearch {
         };
         match result {
             Ok(results) => ToolOutcome::Success {
-                content: format_results(&results),
+                // WO 47.35: result titles/descriptions are untrusted web
+                // content — wrap before it reaches the model.
+                content: wrap_untrusted(format_results(&results)),
             },
             Err(e) => ToolOutcome::Error {
                 message: format!("Brave Search request failed: {e}"),

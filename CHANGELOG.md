@@ -11,6 +11,10 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 47.35 — prompt-injection defense: web_fetch/web_search/read_file now wrap
+  untrusted bodies in `<untrusted_content>` delimiters + a system-prompt
+  data-not-instructions rule; template `{{var}}` substitutions capped at 1024
+  chars with control chars rejected.
 - WO 47.28 — MCP HTTP transport sent `McpServerConfig.bearer_token` nowhere:
   it is now attached as `Authorization: Bearer <token>` on both the SSE GET
   and every POST (omitted when empty). `EventBus::emit` removed the in-flight

@@ -1,5 +1,6 @@
 use crate::shared::access::PathGuard;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
+use crate::tools::web_fetch::wrap_untrusted;
 use crate::tools::{Tool, ToolContext};
 use std::io::BufRead;
 use std::path::PathBuf;
@@ -244,7 +245,9 @@ impl Tool for ReadFile {
         tracing::info!(tool = "read_file", duration_ms = start.elapsed().as_millis(), path = %path.display(), "file tool completed");
         ToolOutcome::FileContent {
             path,
-            content: display,
+            // WO 47.35: file bodies are untrusted content — wrap before
+            // they reach the model (header rides along inside; conservative).
+            content: wrap_untrusted(display),
             truncated,
         }
     }
@@ -482,6 +485,38 @@ mod tests {
             !content.contains("(minified, was"),
             "raw output must not carry the minified header: {content}"
         );
+    }
+
+    // WO 47.35: file content must reach the model wrapped in untrusted
+    // delimiters (the empty-file marker carries no file content and is
+    // tool-generated, so it stays unwrapped).
+    #[tokio::test]
+    async fn file_content_is_wrapped_in_untrusted_delimiters() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kf_code_read_file_untrusted_{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, "alpha\nbeta\n").unwrap();
+        let tool = ReadFile::new(PathGuard::default(), false, 4096);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({ "path": tmp.to_string_lossy() }),
+            )
+            .await;
+        std::fs::remove_file(&tmp).ok();
+        let ToolOutcome::FileContent { content, .. } = outcome else {
+            panic!("expected FileContent, got {outcome:?}");
+        };
+        assert!(
+            content.starts_with("<untrusted_content>\n"),
+            "missing opening delimiter: {content}"
+        );
+        assert!(
+            content.ends_with("\n</untrusted_content>"),
+            "missing closing delimiter: {content}"
+        );
+        assert!(content.contains("alpha"));
     }
 
     #[tokio::test]

@@ -987,5 +987,5 @@ tree, ~11 stale claims corrected in-line. See
 | 46.35 | [Parallel tool batches leave a ghost streaming card and mis-pair result entries](46.35-parallel-tool-batches-ghost-streaming-card.md) | Done |
 | 46.36 | [bash_runner normal-exit path can spuriously fail + leak grandchild holding the pipe](46.36-bash-runner-normal-exit-drain-failure.md) | Planned |
 | 46.37 | [web_fetch/web_search ignore tool cancel token — cancelled turn waits full 30s](46.37-web-fetch-web-search-ignore-cancel-token.md) | Planned |
-| 46.38 | [verify_task cmd.env() doesn't env_remove() first — leaked parent env affects gate](46.38-verify-task-env-not-stripped.md) | Planned |
+| 46.38 | [verify_task cmd.env() doesn't env_remove() first — leaked parent env affects gate](46.38-verify-task-env-not-stripped.md) | Done |
 | 46.39 | [Doc drift batch: CLI about, lib.rs path, test-doctor refs, test count, stale Cargo.lock, install.sh dead paths](46.39-doc-drift-batch-fixes.md) | Planned |

@@ -16,6 +16,12 @@ impl EnvGuard {
         std::env::remove_var(key);
         Self { key, old }
     }
+
+    fn set(key: &'static str, val: &str) -> Self {
+        let old = std::env::var(key).ok();
+        std::env::set_var(key, val);
+        Self { key, old }
+    }
 }
 
 impl Drop for EnvGuard {
@@ -212,10 +218,34 @@ fn verify_file_contains_missing_file() {
 
 #[test]
 fn verify_task_inherits_curated_budget_env() {
-    // A task with a budget ceiling must export KF_CODE_BUDGET_CEILING to
-    // the verify command. The verify command prints the var; FileContains
-    // would need a file, so use CommandExitsZero with a shell test that
-    // succeeds only when the env var matches the curated value.
+    // WO 46.38 phase 1: a leaked parent KF_CODE_BUDGET_CEILING must NOT
+    // reach the verify command when the task pins no ceiling — verify_task
+    // env_remove()s curated keys before applying the task's own env.
+    {
+        let dir = TempDir::new().unwrap();
+        let _leak = EnvGuard::set(BUDGET_CEILING_ENV, "999999");
+        let task = BenchTask {
+            name: "leaked-env".into(),
+            difficulty: Difficulty::Easy,
+            prompt: String::new(),
+            setup: HashMap::new(),
+            verify: VerifySpec::CommandExitsZero {
+                command: format!("test -z \"${BUDGET_CEILING_ENV}\""),
+            },
+            requires_model: false,
+            budget_ceiling: None,
+            kf_only: false,
+        };
+        assert!(
+            verify_task(&task, dir.path()).unwrap(),
+            "verify command must not see a leaked parent budget ceiling"
+        );
+    }
+    // Phase 2: a task with a budget ceiling must export
+    // KF_CODE_BUDGET_CEILING to the verify command. The verify command
+    // prints the var; FileContains would need a file, so use
+    // CommandExitsZero with a shell test that succeeds only when the env
+    // var matches the curated value.
     let dir = TempDir::new().unwrap();
     let _env = EnvGuard::remove(BUDGET_CEILING_ENV);
     let task = BenchTask {

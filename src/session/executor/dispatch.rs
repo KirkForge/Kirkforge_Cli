@@ -185,45 +185,46 @@ impl Executor {
                         .unwrap_or_default(),
                     changed_files: vec![std::path::PathBuf::from(path)],
                 };
-                if let Ok(mut bus) = bus_lock.lock() {
-                    bus.run(&ctx);
-                    for entry in bus.verdicts() {
-                        let is_error =
-                            entry.severity == crate::session::verifier::bus::Severity::Error;
-                        // WO 45.36: prior `success: !is_error` mapped Error
-                        // → failure (false) and Info/Warning → success (true).
-                        // Preserve that partition exactly with the typed
-                        // outcome: Error → Failed; Info/Warning → Clean (the
-                        // advisory findings were not verifier failures).
-                        let outcome = if is_error {
-                            crate::session::executor::types::VerificationOutcome::Failed
-                        } else {
-                            crate::session::executor::types::VerificationOutcome::Clean
-                        };
-                        corrections.push(CorrectionResult {
-                            verifier: format!("{}", entry.source),
-                            outcome,
-                            message: format!(
-                                "[{}] {}:{} {}",
-                                entry.severity,
-                                entry
-                                    .file
-                                    .as_ref()
-                                    .map(|f| f.display().to_string())
-                                    .unwrap_or_else(|| "—".to_string()),
-                                entry
-                                    .line
-                                    .map(|l| l.to_string())
-                                    .unwrap_or_else(|| "—".to_string()),
-                                entry.message
-                            ),
-                            fix: None,
-                            file: entry.file.clone(),
-                            line: entry.line,
-                        });
-                    }
-                    bus.clear();
+                // WO 47.19: recover from poison instead of skipping — a
+                // panic that crossed this guard must not silently disable
+                // bus verification for the rest of the session.
+                let mut bus = bus_lock.lock().unwrap_or_else(|e| e.into_inner());
+                bus.run(&ctx);
+                for entry in bus.verdicts() {
+                    let is_error = entry.severity == crate::session::verifier::bus::Severity::Error;
+                    // WO 45.36: prior `success: !is_error` mapped Error
+                    // → failure (false) and Info/Warning → success (true).
+                    // Preserve that partition exactly with the typed
+                    // outcome: Error → Failed; Info/Warning → Clean (the
+                    // advisory findings were not verifier failures).
+                    let outcome = if is_error {
+                        crate::session::executor::types::VerificationOutcome::Failed
+                    } else {
+                        crate::session::executor::types::VerificationOutcome::Clean
+                    };
+                    corrections.push(CorrectionResult {
+                        verifier: format!("{}", entry.source),
+                        outcome,
+                        message: format!(
+                            "[{}] {}:{} {}",
+                            entry.severity,
+                            entry
+                                .file
+                                .as_ref()
+                                .map(|f| f.display().to_string())
+                                .unwrap_or_else(|| "—".to_string()),
+                            entry
+                                .line
+                                .map(|l| l.to_string())
+                                .unwrap_or_else(|| "—".to_string()),
+                            entry.message
+                        ),
+                        fix: None,
+                        file: entry.file.clone(),
+                        line: entry.line,
+                    });
                 }
+                bus.clear();
             }
         }
 

@@ -62,7 +62,7 @@ fn format_duration_ms(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::test_util::EnvGuard;
+    use crate::session::DataDirGuard;
     use crate::tools::task::{PersistedTask, TaskMetadata};
 
     fn persisted(
@@ -95,7 +95,7 @@ mod tests {
     #[tokio::test]
     async fn tasks_command_empty_when_no_files() {
         let dir = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+        let _dd = DataDirGuard::set(dir.path().to_path_buf());
         let out = handle_tasks_command("").await;
         assert!(out.contains("No persisted"), "got: {out}");
     }
@@ -103,7 +103,7 @@ mod tests {
     #[tokio::test]
     async fn tasks_command_lists_persisted_completed_task() {
         let dir = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+        let _dd = DataDirGuard::set(dir.path().to_path_buf());
         write_task_to_disk(&persisted(
             "task-42",
             "completed",
@@ -123,7 +123,7 @@ mod tests {
     #[tokio::test]
     async fn tasks_command_lists_cancelled_task_with_status() {
         let dir = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+        let _dd = DataDirGuard::set(dir.path().to_path_buf());
         write_task_to_disk(&persisted(
             "task-7",
             "cancelled",
@@ -141,7 +141,7 @@ mod tests {
     #[tokio::test]
     async fn tasks_command_lists_failed_task() {
         let dir = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+        let _dd = DataDirGuard::set(dir.path().to_path_buf());
         write_task_to_disk(&persisted("task-9", "failed", Some("boom"), "explore", 200));
 
         let out = handle_tasks_command("").await;
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn load_persisted_tasks_sorted_by_numeric_id() {
         let dir = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+        let _dd = DataDirGuard::set(dir.path().to_path_buf());
         write_task_to_disk(&persisted("task-10", "completed", Some("a"), "x", 1));
         write_task_to_disk(&persisted("task-2", "completed", Some("b"), "x", 1));
         write_task_to_disk(&persisted("task-1", "completed", Some("c"), "x", 1));
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn load_persisted_tasks_skips_malformed_json() {
         let dir = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+        let _dd = DataDirGuard::set(dir.path().to_path_buf());
         let tasks_dir = crate::session::tasks_dir().unwrap();
         std::fs::write(tasks_dir.join("garbage.json"), "{not json").unwrap();
         write_task_to_disk(&persisted("task-5", "completed", Some("ok"), "x", 1));
@@ -213,11 +213,14 @@ mod tests {
     }
 
     // ── session::tasks_dir smoke ──
-
+    // WO 47.21: now uses the thread-local DataDirGuard (env-var mutation
+    // raced parallel tests); the KF_CODE_DATA_DIR env path itself is
+    // covered by session::data_dir_respects_env_override under the
+    // shared test lock.
     #[test]
-    fn tasks_dir_respects_env_override() {
+    fn tasks_dir_respects_data_dir_override() {
         let dir = tempfile::tempdir().unwrap();
-        let _env = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+        let _dd = DataDirGuard::set(dir.path().to_path_buf());
         let tasks = crate::session::tasks_dir().unwrap();
         assert!(tasks.ends_with("tasks"));
     }

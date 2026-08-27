@@ -141,7 +141,7 @@ pub fn load_persisted_tasks() -> Vec<PersistedTask> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::test_util::EnvGuard;
+    use crate::session::DataDirGuard;
     use crate::shared::ToolOutcome;
     use crate::tools::task::test_helpers::{
         extract_task_id, poll_until, CooperativeProbe, MockSpawner,
@@ -151,10 +151,14 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
 
-    fn env_guard_tmp() -> (tempfile::TempDir, EnvGuard) {
+    // WO 47.21: thread-local override instead of KF_CODE_DATA_DIR env
+    // mutation — parallel tests in other threads are unaffected, no
+    // EnvGuard race. The persist worker runs via tokio::spawn on the
+    // same (current_thread) test thread, so it sees the override.
+    fn data_dir_tmp() -> (tempfile::TempDir, DataDirGuard) {
         let dir = tempfile::tempdir().unwrap();
-        let env = EnvGuard::set("KF_CODE_DATA_DIR", dir.path().as_os_str());
-        (dir, env)
+        let guard = DataDirGuard::set(dir.path().to_path_buf());
+        (dir, guard)
     }
 
     fn terminal_handle(
@@ -184,7 +188,7 @@ mod tests {
 
     #[test]
     fn persist_then_reload_completed_task() {
-        let (_dir, _env) = env_guard_tmp();
+        let (_dir, _env) = data_dir_tmp();
         let handle = terminal_handle(Some("did it"), false, None, None);
         persist_task_summary("task-100", &handle);
 
@@ -204,7 +208,7 @@ mod tests {
 
     #[test]
     fn persist_then_reload_cancelled_task() {
-        let (_dir, _env) = env_guard_tmp();
+        let (_dir, _env) = data_dir_tmp();
         let handle = terminal_handle(None, true, Some("partial"), None);
         persist_task_summary("task-3", &handle);
 
@@ -216,7 +220,7 @@ mod tests {
 
     #[test]
     fn persist_then_reload_failed_task() {
-        let (_dir, _env) = env_guard_tmp();
+        let (_dir, _env) = data_dir_tmp();
         let handle = terminal_handle(None, false, None, Some("boom"));
         persist_task_summary("task-9", &handle);
 
@@ -228,7 +232,7 @@ mod tests {
 
     #[test]
     fn persist_skips_non_terminal_handle() {
-        let (_dir, _env) = env_guard_tmp();
+        let (_dir, _env) = data_dir_tmp();
         let handle = TaskHandle {
             started: Arc::new(AtomicBool::new(true)),
             ..Default::default()
@@ -240,7 +244,7 @@ mod tests {
     // WO 43.21: atomic write leaves no .tmp file behind and the JSON is valid.
     #[test]
     fn persist_to_disk_uses_atomic_write_no_tmp_left() {
-        let (dir, _env) = env_guard_tmp();
+        let (dir, _env) = data_dir_tmp();
         let handle = terminal_handle(Some("done"), false, None, None);
         persist_task_summary("task-atom", &handle);
         let tasks_dir = dir.path().join("tasks");
@@ -266,7 +270,7 @@ mod tests {
     // exist with the correct content after the task finishes.
     #[tokio::test]
     async fn background_task_persists_summary_on_completion() {
-        let (_dir, _env) = env_guard_tmp();
+        let (_dir, _env) = data_dir_tmp();
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let task = Task::with_manager(manager.clone());
         let spawner: Arc<dyn TaskSpawner> = Arc::new(MockSpawner {
@@ -314,7 +318,7 @@ mod tests {
     // output in `summary` (from `cancelled_result`).
     #[tokio::test]
     async fn background_cancelled_task_persists_as_cancelled() {
-        let (_dir, _env) = env_guard_tmp();
+        let (_dir, _env) = data_dir_tmp();
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let task = Task::with_manager(manager.clone());
         let probe = CooperativeProbe::new();

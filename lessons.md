@@ -572,3 +572,26 @@
   graphs: after touching kf-budget-core, the kf-code libtest binary
   relinks (~20+ min under load) even though nextest artifacts are warm.
   Budget accordingly; don't mistake it for a hang.
+
+## WO 47.21 session (ensure_private_data_dir OnceLock)
+
+- The WO's claim that the OnceLock explains the `same_ms_double_spawn_*`
+  flakes is WRONG for those two tests specifically: they create temp dirs
+  via `std::env::temp_dir()` + `WorktreeSession::create`, never through
+  `data_dir()`/`tasks_dir()`/`jobs_dir()`, and nextest gives each test its
+  own process (fresh OnceLock). Their real flake: 10s readiness deadline
+  starved when ~50 nextest processes oversubscribe 8 cores (load 43 with
+  sibling worktree agents). They pass solo. Fix for them is a deadline
+  bump / nextest slow-timeout override — NOT the OnceLock change. Filed in
+  state.md Pending.
+- `DataDirGuard` is safe across `tokio::spawn` in `#[tokio::test]` DEFAULT
+  flavor (current_thread): spawned tasks run on the calling thread, so the
+  thread-local override is visible to the worker. Would NOT hold for
+  `multi_thread` flavor tests or `spawn_blocking`.
+- `cargo check/clippy --all-targets` took ~15-16 min each at load 40+ with
+  6 sibling cargo processes; budget an hour for the full gate matrix in
+  that regime. test-fast: ~260-400s.
+- `tasks_dir_respects_env_override` in tui/commands/tasks.rs silently
+  drifted from its name (already used DataDirGuard-style paths? no — it
+  used EnvGuard). When migrating a test to a different override mechanism,
+  rename it in the same commit or the next reader trusts a lie.

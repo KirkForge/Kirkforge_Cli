@@ -162,62 +162,79 @@ async fn run_bash_job(
     };
 
     let poll_interval = Duration::from_millis(250);
+    // cancel() flips the registry status to Cancelled BEFORE killing the
+    // child; the watcher then completes the record (drained output,
+    // finished_at) within its reap (2s) and drain-join (2s) caps.
+    // Completed/Failed are set in the same lock acquisition as their
+    // output — born final — so only Cancelled needs a settle window
+    // before the snapshot is recorded (WO 47.30).
+    const CANCEL_SETTLE_WINDOW: Duration = Duration::from_secs(5);
+    let mut cancel_seen: Option<tokio::time::Instant> = None;
     loop {
         tokio::time::sleep(poll_interval).await;
-        match registry.get(id).await {
-            Some(j) if j.status != JobStatus::Running => {
-                let finished_at = Utc::now();
-                let (status, exit_code, summary) = match j.status {
-                    JobStatus::Completed(code) => {
-                        let summary = if code == 0 {
-                            "Completed successfully".into()
-                        } else {
-                            format!("Completed with exit code {code}")
-                        };
-                        (RunStatus::Success, Some(code), summary)
-                    }
-                    JobStatus::Failed(ref msg) => {
-                        (RunStatus::Failure, None, format!("Failed: {msg}"))
-                    }
-                    JobStatus::Cancelled => (RunStatus::Cancelled, None, "Cancelled".into()),
-                    JobStatus::Running => unreachable!(),
-                };
-
-                write_artifact(&paths.stdout_path, &j.stdout)
-                    .with_context(|| "writing scheduled job stdout")?;
-                write_artifact(&paths.stderr_path, &j.stderr)
-                    .with_context(|| "writing scheduled job stderr")?;
-
-                let run = JobRunSummary {
-                    run_id: paths.run_id,
-                    parent_run_id: parent_run_id.clone(),
-                    started_at,
-                    finished_at,
-                    status,
-                    exit_code,
-                    stdout_path: paths.stdout_path,
-                    stderr_path: paths.stderr_path,
-                    summary,
-                };
-                store.record_run(job, &run)?;
-                let _ = registry.remove(id).await;
-                return Ok(run);
-            }
+        let j = match registry.get(id).await {
+            Some(j) => j,
             None => {
                 // Job disappeared (e.g. registry evicted it). Record failure.
-                let run = record_failure(
+                return record_failure(
                     job,
                     store,
                     started_at,
                     paths,
                     "Job record disappeared while running".into(),
                     parent_run_id.clone(),
-                )?;
-                let _ = registry.remove(id).await;
-                return Ok(run);
+                );
             }
-            _ => continue,
+        };
+        match j.status {
+            JobStatus::Running => continue,
+            JobStatus::Cancelled => {
+                let seen = cancel_seen.get_or_insert_with(tokio::time::Instant::now);
+                if tokio::time::Instant::now() - *seen < CANCEL_SETTLE_WINDOW {
+                    continue;
+                }
+            }
+            JobStatus::Completed(_) | JobStatus::Failed(_) => {}
         }
+
+        let finished_at = Utc::now();
+        let (status, exit_code, summary) = match j.status {
+            JobStatus::Completed(code) => {
+                let summary = if code == 0 {
+                    "Completed successfully".into()
+                } else {
+                    format!("Completed with exit code {code}")
+                };
+                (RunStatus::Success, Some(code), summary)
+            }
+            JobStatus::Failed(ref msg) => (RunStatus::Failure, None, format!("Failed: {msg}")),
+            JobStatus::Cancelled => (RunStatus::Cancelled, None, "Cancelled".into()),
+            JobStatus::Running => unreachable!(),
+        };
+
+        write_artifact(&paths.stdout_path, &j.stdout)
+            .with_context(|| "writing scheduled job stdout")?;
+        write_artifact(&paths.stderr_path, &j.stderr)
+            .with_context(|| "writing scheduled job stderr")?;
+
+        let run = JobRunSummary {
+            run_id: paths.run_id,
+            parent_run_id: parent_run_id.clone(),
+            started_at,
+            finished_at,
+            status,
+            exit_code,
+            stdout_path: paths.stdout_path,
+            stderr_path: paths.stderr_path,
+            summary,
+        };
+        store.record_run(job, &run)?;
+        // The terminal entry stays in the registry on purpose: remove()
+        // kills a still-live child, racing cancel()'s kill and the
+        // watcher's reap (WO 47.30). Terminal entries follow the standard
+        // registry lifecycle (MAX_JOBS cap eviction in spawn(), /jobs
+        // clean), same as interactive background jobs.
+        return Ok(run);
     }
 }
 
@@ -513,6 +530,64 @@ mod tests {
         assert!(
             stdout.contains("lifecycle-test"),
             "stdout should contain output: {stdout}"
+        );
+    }
+
+    // WO 47.30: cancel() flips the registry status before the child dies;
+    // the watcher completes the record (drained output) a bounded time
+    // later. run_bash_job must wait out that window so a cancelled run's
+    // artifacts carry the drained output instead of an empty mid-cancel
+    // snapshot — and must not remove() the entry (which would kill the
+    // child racing the watcher's reap).
+    #[tokio::test]
+    async fn cancelled_bash_job_records_drained_output() {
+        let (dir, store) = tmp_store();
+        let marker = "cancel-settle-marker";
+        // The sentinel file proves the child already executed the first
+        // echo before we cancel — otherwise a loaded machine can kill the
+        // child before it writes anything, and the empty stdout is correct
+        // rather than a recording race.
+        let sentinel = dir.path().join("sentinel");
+        let command = format!("echo {marker}; touch {sentinel:?}; sleep 30");
+        let mut job = bash_job(&command);
+        let mut config = Config::default();
+        config.tools.scheduled_bash_auto_approve = true;
+
+        let run_handle =
+            tokio::spawn(async move { run_job(&mut job, &store, &config, None).await.unwrap() });
+
+        // Find the spawned registry job and cancel it once it has produced
+        // output (sentinel exists).
+        let registry = global_registry();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        let id = 'find: loop {
+            if !sentinel.exists() {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "scheduled job never produced output"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                continue;
+            }
+            for j in registry.list().await {
+                if j.command == command && j.status == JobStatus::Running {
+                    break 'find j.id;
+                }
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "scheduled job never appeared in registry"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert!(registry.cancel(id).await, "job should still be running");
+
+        let run = run_handle.await.unwrap();
+        assert_eq!(run.status, RunStatus::Cancelled);
+        let stdout = std::fs::read_to_string(&run.stdout_path).unwrap();
+        assert!(
+            stdout.contains(marker),
+            "cancelled run lost drained output: {stdout:?}"
         );
     }
 

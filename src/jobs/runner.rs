@@ -584,11 +584,21 @@ mod tests {
 
         let run = run_handle.await.unwrap();
         assert_eq!(run.status, RunStatus::Cancelled);
-        let stdout = std::fs::read_to_string(&run.stdout_path).unwrap();
-        assert!(
-            stdout.contains(marker),
-            "cancelled run lost drained output: {stdout:?}"
-        );
+        // The drain task may flush after run_job's settle window on slow
+        // platforms (observed on Windows CI): poll for the marker with a
+        // bounded deadline instead of asserting on the first read.
+        let read_deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let stdout = loop {
+            let stdout = std::fs::read_to_string(&run.stdout_path).unwrap();
+            if stdout.contains(marker) {
+                break stdout;
+            }
+            assert!(
+                std::time::Instant::now() < read_deadline,
+                "cancelled run lost drained output: {stdout:?}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        };
     }
 
     // WO 19.5: workflow job with nonexistent template is rejected.

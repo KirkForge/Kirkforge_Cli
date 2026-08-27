@@ -245,6 +245,24 @@ async fn apply_text_fix(
     if !content.contains(&fix.original) {
         return false;
     }
+    // WO 47.19: same symlink-swap TOCTOU walk the file tools get
+    // (dispatch.rs `symlink_swap_denied`). The verifier's write happens
+    // after the probe/read, so a same-batch bash call (or a fix.file that
+    // was already a symlink) would make `std::fs::write` follow the link
+    // and O_TRUNC the target.
+    // ponytail: the walk is not atomic with the write — a swap inside
+    // that micro-window still slips through; upgrade path is
+    // openat2(RESOLVE_NO_SYMLINKS) at the write site (same ceiling as
+    // the dispatch.rs walk).
+    if let Some(msg) = crate::session::executor::dispatch::symlink_swap_denied(path) {
+        tracing::warn!(
+            description = %fix.description,
+            file = %path.display(),
+            reason = %msg,
+            "auto-fix refused: symlink swap detected"
+        );
+        return false;
+    }
     let new_content = content.replacen(&fix.original, &fix.replacement, 1);
     std::fs::write(path, new_content).is_ok()
 }
@@ -290,6 +308,18 @@ async fn apply_command_fix(
     }
 
     if !path.exists() {
+        return false;
+    }
+
+    // WO 47.19: the formatter receives the raw path — a swapped symlink
+    // makes it rewrite the target (same class as the apply_text_fix write).
+    if let Some(msg) = crate::session::executor::dispatch::symlink_swap_denied(path) {
+        tracing::warn!(
+            command = %command,
+            file = %path.display(),
+            reason = %msg,
+            "formatter refused: symlink swap detected"
+        );
         return false;
     }
 
@@ -472,6 +502,55 @@ mod tests {
             line: None,
         };
         assert!(!apply_text_fix(&fix, &crate::session::access::PathGuard::default(),).await);
+    }
+
+    // WO 47.19: a fix.file that is (or was swapped for) a symlink must be
+    // refused — std::fs::write follows the link and O_TRUNCs the target.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_apply_text_fix_symlink_target_refused() {
+        let dir = std::env::temp_dir();
+        let target = dir.join(format!("kf_code_fix_target_{}.txt", std::process::id()));
+        let link = dir.join(format!("kf_code_fix_link_{}.txt", std::process::id()));
+        std::fs::write(&target, "let x = 1;").unwrap();
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let fix = FixSuggestion {
+            description: "unused variable".into(),
+            file: link.clone(),
+            original: "let x = 1;".into(),
+            replacement: "let _x = 1;".into(),
+            severity: "warning".into(),
+            command: None,
+            line: None,
+        };
+        assert!(!apply_text_fix(&fix, &crate::session::access::PathGuard::default()).await);
+        // The symlink target must be untouched.
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "let x = 1;");
+        remove_test_file(&link);
+        remove_test_file(&target);
+    }
+
+    // WO 47.19: the formatter must not run through a (swapped) symlink —
+    // denied before spawn, so even a no-op command reports failure.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_apply_command_fix_symlink_target_refused() {
+        let dir = std::env::temp_dir();
+        let target = dir.join(format!("kf_code_fmt_target_{}.txt", std::process::id()));
+        let link = dir.join(format!("kf_code_fmt_link_{}.txt", std::process::id()));
+        std::fs::write(&target, "hello world").unwrap();
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        assert!(
+            !apply_command_fix("true", &link, &crate::session::access::PathGuard::default()).await,
+            "symlinked fix.file must be refused before the formatter spawns"
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello world");
+        remove_test_file(&link);
+        remove_test_file(&target);
     }
 
     #[tokio::test]

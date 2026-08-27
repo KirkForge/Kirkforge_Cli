@@ -166,6 +166,13 @@ impl VerifierBus {
     pub fn run(&mut self, ctx: &VerifyContext) {
         self.verdicts.clear();
         for verifier in &self.verifiers {
+            // WO 47.19: capture name() BEFORE the catch_unwind — the
+            // panic handler below must not call arbitrary verifier code.
+            // A panic in name() there would escape the catch while a
+            // panic is already being handled, unwind through the
+            // executor's held `Mutex<VerifierBus>` guard (poison), and
+            // permanently kill the bus verification gate.
+            let name = verifier.name().to_string();
             let entries = match catch_unwind(AssertUnwindSafe(|| verifier.verify(ctx))) {
                 Ok(entries) => entries,
                 Err(panic_payload) => {
@@ -174,9 +181,9 @@ impl VerifierBus {
                         .map(|s| s.to_string())
                         .or_else(|| panic_payload.downcast_ref::<String>().cloned())
                         .unwrap_or_else(|| "unknown panic".to_string());
-                    tracing::warn!("verifier {} panicked: {msg}", verifier.name());
+                    tracing::warn!("verifier {name} panicked: {msg}");
                     vec![VerdictEntry {
-                        source: VerifierSource::Custom(verifier.name().to_string()),
+                        source: VerifierSource::Custom(name),
                         severity: Severity::Warning,
                         message: format!("verifier panicked: {msg}"),
                         file: None,

@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::classifier::DelegationMode;
+use crate::routing::classifier::DelegationMode;
 
 const STOP_WORDS: &[&str] = &[
     "the", "and", "for", "with", "that", "this", "from", "into", "using", "task", "file", "files",

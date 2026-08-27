@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use kf_memory_store::{
+use kf_orchestrator::memory::{
     FileAdapter, InMemoryAdapter, MemoryAdapter, MemoryObject, MemoryQuery, MemoryStore,
     MemoryStoreOptions, SqliteAdapter, TaskObservationInput,
 };
@@ -512,7 +512,7 @@ fn store_write_run_record_with_sqlite_writes_specialized_row() {
 fn store_write_run_and_emissions_transactional_on_sqlite() {
     let store = store_with(SqliteAdapter::open_in_memory().unwrap());
     let mut run = sample_run("R1", "T1");
-    let emissions = vec![kf_memory_store::EmittedFileRecord {
+    let emissions = vec![kf_orchestrator::memory::EmittedFileRecord {
         id: None,
         path: "src/foo.rs".into(),
         sha256: "abcdef0123456789".into(),
@@ -542,7 +542,7 @@ fn store_write_run_and_emissions_fallback_on_in_memory_no_deadlock() {
     // at all, the deadlock is gone.
     let store = store_with(InMemoryAdapter::new());
     let mut run = sample_run("R1", "T1");
-    let emissions = vec![kf_memory_store::EmittedFileRecord {
+    let emissions = vec![kf_orchestrator::memory::EmittedFileRecord {
         id: None,
         path: "src/foo.rs".into(),
         sha256: "abcdef0123456789".into(),
@@ -584,7 +584,7 @@ fn store_write_run_and_emissions_fallback_on_file_adapter_no_deadlock() {
     let tmp = tempfile::tempdir().unwrap();
     let store = store_with(FileAdapter::new(tmp.path().join("mem.json")));
     let mut run = sample_run("R1", "T1");
-    let emissions = vec![kf_memory_store::EmittedFileRecord {
+    let emissions = vec![kf_orchestrator::memory::EmittedFileRecord {
         id: None,
         path: "src/foo.rs".into(),
         sha256: "abcdef0123456789".into(),
@@ -617,7 +617,7 @@ fn store_write_run_and_emissions_fallback_on_file_adapter_no_deadlock() {
 #[test]
 fn store_write_emission_records_sequential_on_in_memory() {
     let store = store_with(InMemoryAdapter::new());
-    let emissions = vec![kf_memory_store::EmittedFileRecord {
+    let emissions = vec![kf_orchestrator::memory::EmittedFileRecord {
         id: None,
         path: "src/foo.rs".into(),
         sha256: "abcdef0123456789".into(),
@@ -640,7 +640,7 @@ fn store_write_emission_records_sequential_on_in_memory() {
 #[test]
 fn store_query_emissions_filters_by_task_id() {
     let store = store_with(InMemoryAdapter::new());
-    let emissions = vec![kf_memory_store::EmittedFileRecord {
+    let emissions = vec![kf_orchestrator::memory::EmittedFileRecord {
         id: None,
         path: "a".into(),
         sha256: "abcdef0123456789".into(),
@@ -785,8 +785,8 @@ fn store_is_send_sync_via_arc() {
     let _arc: Arc<MemoryStore> = Arc::new(store);
 }
 
-fn sample_run(run_id: &str, task_id: &str) -> kf_memory_store::RunRecord {
-    kf_memory_store::RunRecord {
+fn sample_run(run_id: &str, task_id: &str) -> kf_orchestrator::memory::RunRecord {
+    kf_orchestrator::memory::RunRecord {
         run_id: run_id.into(),
         task_id: task_id.into(),
         description: "do the thing".into(),

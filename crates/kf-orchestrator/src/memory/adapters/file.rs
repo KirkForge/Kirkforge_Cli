@@ -17,8 +17,8 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 use tempfile::NamedTempFile;
 
-use crate::adapters::MemoryAdapter;
-use crate::types::{MemoryObject, MemoryQuery, MemoryStats};
+use crate::memory::adapters::MemoryAdapter;
+use crate::memory::types::{MemoryObject, MemoryQuery, MemoryStats};
 
 pub struct FileAdapter {
     file_path: PathBuf,

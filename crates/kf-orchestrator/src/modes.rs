@@ -8,13 +8,13 @@
 
 use std::path::Path;
 
-use anyhow::Result;
-use kf_routing::path_safety::{
+use crate::routing::path_safety::{
     disallowed_artifact, extract_extension, final_file_is_symlink, is_binary_like_content,
     is_inside_cwd, segments_have_escaping_symlink, sha256_of, write_artifacts, ArtifactRecord,
     TaskProfileLike, WritePolicyLike, WriteResult,
 };
-use kf_routing::profile::{extension_for_language, TaskProfile};
+use crate::routing::profile::{extension_for_language, TaskProfile};
+use anyhow::Result;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -404,12 +404,12 @@ pub fn persist_code_blocks(
             );
             continue;
         }
-        if code.len() + 1 > kf_routing::path_safety::MAX_ARTIFACT_BYTES {
+        if code.len() + 1 > crate::routing::path_safety::MAX_ARTIFACT_BYTES {
             push_blocked(
                 &name,
                 format!(
                     "artifact exceeds {} byte limit: {name}",
-                    kf_routing::path_safety::MAX_ARTIFACT_BYTES
+                    crate::routing::path_safety::MAX_ARTIFACT_BYTES
                 ),
             );
             continue;
@@ -830,7 +830,7 @@ pub fn finalize_schema_contract(emission: Emission, task_id: &str) -> Delegation
 }
 
 /// Artifact mode: model emits JSONL artifacts; we parse + write them via
-/// `kf_routing::path_safety::write_artifacts`. Port of
+/// `crate::routing::path_safety::write_artifacts`. Port of
 /// `artifact-mode.ts::executeArtifact`.
 pub async fn execute_artifact(
     client: &dyn ModelClient,
@@ -1116,7 +1116,7 @@ fn _keep_extract_extension() {
 mod tests {
     use super::*;
     use crate::model::RecordingClient;
-    use kf_routing::profile::profile_for_language;
+    use crate::routing::profile::profile_for_language;
     use tempfile::tempdir;
 
     fn emission(content: &str) -> Emission {
@@ -1239,7 +1239,7 @@ mod tests {
     fn persist_writes_single_fenced_block() {
         let dir = tempdir().unwrap();
         let cwd = dir.path().to_string_lossy().to_string();
-        let p = profile_for_language(kf_routing::TaskLanguage::Python);
+        let p = profile_for_language(crate::routing::TaskLanguage::Python);
         let out = persist_code_blocks(
             "```python\nprint('hello')\n```\n",
             &cwd,
@@ -1305,7 +1305,7 @@ mod tests {
         let cwd = dir.path().to_string_lossy().to_string();
         let content = "```python\nprint('hi')\n```\n";
         let client = RecordingClient::constant(emission(content));
-        let p = profile_for_language(kf_routing::TaskLanguage::Python);
+        let p = profile_for_language(crate::routing::TaskLanguage::Python);
         let result = execute_hard_prompt(
             &client,
             TaskBrief::default(),
@@ -1338,7 +1338,7 @@ mod tests {
             hash
         );
         let client = RecordingClient::constant(emission(&body));
-        let p = profile_for_language(kf_routing::TaskLanguage::Python);
+        let p = profile_for_language(crate::routing::TaskLanguage::Python);
         let result = execute_artifact(&client, TaskBrief::default(), "t1", &cwd, Some(&p), false)
             .await
             .unwrap();
@@ -1361,7 +1361,7 @@ mod tests {
         let mut e = emission(&body);
         e.finish_reason = Some("length".into());
         let client = RecordingClient::constant(e);
-        let p = profile_for_language(kf_routing::TaskLanguage::Python);
+        let p = profile_for_language(crate::routing::TaskLanguage::Python);
         let result = execute_artifact(&client, TaskBrief::default(), "t1", &cwd, Some(&p), false)
             .await
             .unwrap();

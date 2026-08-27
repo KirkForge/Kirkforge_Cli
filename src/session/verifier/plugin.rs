@@ -124,7 +124,7 @@ impl Verifier for PluginVerifierAdapter {
 pub fn verifiers_from_registry(
     registry: &kf_plugin_host::PluginRegistry,
 ) -> Vec<Arc<dyn Verifier>> {
-    use kf_plugin_sdk::Plugin;
+    use kf_plugin_host::Plugin;
     let mut out: Vec<Arc<dyn Verifier>> = Vec::new();
     for hosted in registry.active_plugins() {
         let plugin = &hosted.plugin;
@@ -142,9 +142,9 @@ pub fn verifiers_from_registry(
     out
 }
 
-fn as_verifier_parts(cap: &kf_plugin_sdk::Capability) -> Option<(String, u8, std::path::PathBuf)> {
+fn as_verifier_parts(cap: &kf_plugin_host::Capability) -> Option<(String, u8, std::path::PathBuf)> {
     match cap {
-        kf_plugin_sdk::Capability::Verifier {
+        kf_plugin_host::Capability::Verifier {
             name,
             priority,
             command: Some(command),
@@ -165,7 +165,7 @@ pub fn register_plugin_verifiers_into_bus(
     registry: &kf_plugin_host::PluginRegistry,
     bus: &mut crate::session::verifier::bus::VerifierBus,
 ) -> usize {
-    use kf_plugin_sdk::Plugin;
+    use kf_plugin_host::Plugin;
     let mut count = 0;
     for hosted in registry.active_plugins() {
         let plugin = &hosted.plugin;
@@ -381,7 +381,7 @@ command = "bin/check.sh"
         let warnings = registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
             )
             .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
@@ -431,7 +431,7 @@ command = "bin/check.sh"
         let warnings = registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
             )
             .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
@@ -454,7 +454,7 @@ command = "bin/check.sh"
 
     #[test]
     fn as_verifier_parts_returns_none_for_non_verifier_capability() {
-        let cap = kf_plugin_sdk::Capability::Skill {
+        let cap = kf_plugin_host::Capability::Skill {
             trigger: "/x".into(),
             prompt: "do x".into(),
             skill_file: None,
@@ -465,7 +465,7 @@ command = "bin/check.sh"
 
     #[test]
     fn as_verifier_parts_returns_none_for_verifier_without_command() {
-        let cap = kf_plugin_sdk::Capability::Verifier {
+        let cap = kf_plugin_host::Capability::Verifier {
             name: "no-cmd".into(),
             priority: 1,
             command: None,
@@ -475,7 +475,7 @@ command = "bin/check.sh"
 
     #[test]
     fn as_verifier_parts_extracts_fields_when_command_present() {
-        let cap = kf_plugin_sdk::Capability::Verifier {
+        let cap = kf_plugin_host::Capability::Verifier {
             name: "fmt".into(),
             priority: 3,
             command: Some(PathBuf::from("bin/fmt.sh")),

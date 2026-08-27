@@ -20,8 +20,8 @@
 
 use crate::shared::{Config, SharedConfig};
 use crate::tools::Tool;
+use kf_plugin_host::{Capability, Plugin};
 use kf_plugin_host::{PluginRegistry, TrustPolicy};
-use kf_plugin_sdk::{Capability, Plugin};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -428,12 +428,12 @@ mod loader_tests {
     #[test]
     fn trust_policy_from_config_maps_all_fields() {
         let mut cfg = Config::default();
-        cfg.tools.max_plugin_trust = kf_plugin_sdk::TrustTier::Network;
+        cfg.tools.max_plugin_trust = kf_plugin_host::TrustTier::Network;
         cfg.tools.reject_on_excess_plugin_trust = true;
         cfg.tools.plugin_signature_validation = true;
         cfg.tools.plugin_public_key_path = Some("/keys/pub.key".into());
         let policy = trust_policy_from_config(&cfg);
-        assert_eq!(policy.max, kf_plugin_sdk::TrustTier::Network);
+        assert_eq!(policy.max, kf_plugin_host::TrustTier::Network);
         assert!(policy.reject_on_excess);
         assert!(policy.verify_signatures);
         assert_eq!(
@@ -592,7 +592,7 @@ mod loader_tests {
         // the base policy, so unsigned plugins are rejected unless the
         // operator opts in via plugin_trust_workspace = true.
         let base = TrustPolicy {
-            max: kf_plugin_sdk::TrustTier::Shell,
+            max: kf_plugin_host::TrustTier::Shell,
             reject_on_excess: true,
             verify_signatures: false,
             signature_key_path: None,
@@ -610,7 +610,7 @@ mod loader_tests {
     #[test]
     fn local_trust_policy_opt_in_bypasses_signature_verification() {
         let base = TrustPolicy {
-            max: kf_plugin_sdk::TrustTier::Shell,
+            max: kf_plugin_host::TrustTier::Shell,
             reject_on_excess: true,
             verify_signatures: true,
             signature_key_path: Some(PathBuf::from("/keys/pub.key")),

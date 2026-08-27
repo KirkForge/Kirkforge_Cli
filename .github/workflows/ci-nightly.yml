@@ -244,9 +244,9 @@ jobs:
       # each other. cargo-mutants creates `<dir>/mutants.out/` (containing
       # outcomes.json, missed.txt, etc.) — the prior workflow referenced
       # flat mutants.out.json/.txt files that cargo-mutants never emits.
-      - name: Mutants — path_safety (kf-routing)
+      - name: Mutants — path_safety (kf-orchestrator/routing)
         continue-on-error: true
-        run: cargo mutants --file crates/kf-routing/src/path_safety.rs -j 2 -o mutants-out/path_safety
+        run: cargo mutants --file crates/kf-orchestrator/src/routing/path_safety.rs -j 2 -o mutants-out/path_safety
 
       - name: Mutants — secret scrubbing (bash_runner)
         continue-on-error: true

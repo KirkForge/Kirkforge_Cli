@@ -1,8 +1,9 @@
-//! `kf-routing` — pure Rust port of the kf-plugin orchestrator's pure
-//! modules. Foundation for the orchestrator port (WO 29.7).
+//! `routing` — pure Rust port of the kf-plugin orchestrator's pure
+//! modules (folded from the former `kf-routing` crate, WO 47.4).
+//! Foundation for the orchestrator port (WO 29.7).
 //!
 //! Modules:
-//! - [`routing`]: FNV-1a vectorizer + cosine similarity + task-family
+//! - [`engine`]: FNV-1a vectorizer + cosine similarity + task-family
 //!   classifier (port of `memory-palace/src/routing-engine.ts`).
 //! - [`classifier`]: regex + TF-IDF task classifier (`classifier.ts` +
 //!   `classifier-nlp.ts`).
@@ -19,9 +20,9 @@
 pub mod classifier;
 pub mod correction;
 pub mod cost;
+pub mod engine;
 pub mod path_safety;
 pub mod profile;
-pub mod routing;
 
 pub use classifier::{
     classify_hybrid, classify_nlp, classify_task, DelegationDecision, DelegationMode, NlpResult,
@@ -33,6 +34,10 @@ pub use correction::{
     TruthOutput, ValidationStatus,
 };
 pub use cost::{estimate_simple_cost, resolve_cost_provider_key};
+pub use engine::{
+    build_empirical_recommendation, cosine, detect_family, fingerprint_task, normalize_outcome,
+    tokenize, vectorize, Fingerprint, Observation, Recommendation, RoutingBias, RoutingCase,
+};
 pub use path_safety::{
     disallowed_artifact, extract_extension, final_file_is_symlink, has_hidden_segment,
     is_absolute_path, is_binary_like_content, is_inside_cwd, safe_relative_path,
@@ -42,8 +47,4 @@ pub use path_safety::{
 pub use profile::{
     detect_task_profile, extension_for_language, profile_for_language, EmissionSchema,
     StructuredCheckCommand, TaskLanguage, TaskProfile, WritePolicy,
-};
-pub use routing::{
-    build_empirical_recommendation, cosine, detect_family, fingerprint_task, normalize_outcome,
-    tokenize, vectorize, Fingerprint, Observation, Recommendation, RoutingBias, RoutingCase,
 };

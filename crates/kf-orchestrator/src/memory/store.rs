@@ -1,20 +1,20 @@
 //! `MemoryStore` facade. Port of `memory-palace/src/store.ts`.
 //!
 //! Wraps a `MemoryAdapter` and exposes the orchestrator-friendly
-//! write/recall surface. Uses `kf-routing` for `tokenize`/`vectorize`/
+//! write/recall surface. Uses `crate::routing` for `tokenize`/`vectorize`/
 //! `detect_family`/`build_empirical_recommendation` (ported in WO 29.3).
 
 use std::sync::Mutex;
 
-use anyhow::Result;
-use kf_routing::{
+use crate::routing::{
     build_empirical_recommendation, detect_family, tokenize, vectorize, Observation, Recommendation,
 };
+use anyhow::Result;
 use serde_json::{json, Value};
 
-use crate::adapters::{file::FileAdapter, sqlite::SqliteAdapter, MemoryAdapter};
-use crate::time::{cheap_random_u32, iso_now, iso_now_minus_ms, now_millis};
-use crate::types::{
+use crate::memory::adapters::{file::FileAdapter, sqlite::SqliteAdapter, MemoryAdapter};
+use crate::memory::time::{cheap_random_u32, iso_now, iso_now_minus_ms, now_millis};
+use crate::memory::types::{
     EmissionRow, EmittedFileRecord, MemoryObject, MemoryQuery, RunRecord, RunRow,
     TaskObservationInput,
 };

@@ -34,8 +34,8 @@ use crate::session::bash_runner::{
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use crate::shared::audit::AuditLog;
 use crate::shared::Config;
+use kf_plugin_host::Plugin;
 use kf_plugin_host::PluginRegistry;
-use kf_plugin_sdk::Plugin;
 use std::sync::Arc;
 
 /// Context passed to an in-process hook handler.
@@ -205,7 +205,7 @@ impl HookRunner {
             }
             let root = plugin.root();
             for cap in plugin.hooks() {
-                if let kf_plugin_sdk::Capability::Hook { event, command } = cap {
+                if let kf_plugin_host::Capability::Hook { event, command } = cap {
                     let script_path = root.join(&command);
                     self.plugin_hooks
                         .push((event, script_path, Some(plugin_name.clone())));
@@ -1101,7 +1101,7 @@ command = "hooks/post-turn.sh"
         let warnings = registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
             )
             .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
@@ -1149,7 +1149,7 @@ command = "hooks/post-turn.sh"
         registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
             )
             .unwrap();
 
@@ -1302,7 +1302,7 @@ command = "hooks/pre-tool-bash.sh"
         registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
             )
             .unwrap();
 

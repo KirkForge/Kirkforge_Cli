@@ -708,3 +708,25 @@
 - **Commit-per-defect with entangled edits**: stage an honest intermediate
   state (defect-1-only), verify, commit, then layer defect 2. Cheaper
   than git add -p surgery through a CLI.
+
+## WO 47.4 session (crate folds)
+
+- Cargo REJECTS `pkg = { package = "other", path = ... }` alongside a direct
+  dep on `other` in the same [dependencies]: "depends on crate X multiple
+  times with different names". The dependency-rename trick for keeping an
+  old crate name alive only works when the target is NOT also a direct dep.
+  When it is, the honest mechanical rename of refs is the only path.
+- `clippy::module_inception` (-D warnings) fires on a fold that puts
+  `routing/routing.rs` inside `pub mod routing` — rename the inner file
+  (engine.rs) rather than #[allow]; same cost, no lint debt.
+- The `adr_xref_drift` test walks ADR PROSE for `crates/X` literals AND
+  `affects-crates:` predicate lists — any crate removal must sweep
+  docs/adr/*.md in the same commit, not just TECHNICAL.md.
+- Chained sed hazard confirmed the hard way: running
+  `s/kf_routing::/crate::routing::/g` then `s/\bcrate::/crate::memory::/g`
+  on the SAME file double-transforms the first sed's output into
+  `crate::memory::routing`. Verify chained seds with a negative grep
+  (`memory::routing|routing::routing`) immediately after.
+- kf-budget-core tests are the cheap always-runnable gate (~30s warm) while
+  workspace checks take minutes — run the drift test FIRST after any
+  doc/status/crate-structure change to catch reference rot early.

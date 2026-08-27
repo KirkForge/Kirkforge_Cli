@@ -3,7 +3,8 @@
 //! Brings together the delegation + decompose + correction pipeline that
 //! the TS orchestrator (7955 LOC, 36 files) implemented. The pure decision
 //! logic (classifier, routing, correction, truth model, profiles, cost,
-//! path safety) lives in `kf-routing`; this crate owns the stateful
+//! path safety) lives in the [`routing`] module (folded from the former
+//! `kf-routing` crate, WO 47.4); this crate owns the stateful
 //! orchestration that ties those decisions to model calls + memory writes.
 //!
 //! ## Wiring status (WO 37.2)
@@ -13,7 +14,7 @@
 //! message + summed usage). Tests use [`model::RecordingClient`].
 //! The reducer ([`reducer`], ADR-076) folds each delegation's verification
 //! state into the `packet` on its `DelegationResult`; the correction loop
-//! feeds that packet into `kf_routing::correction::decide_correction`.
+//! feeds that packet into `crate::routing::correction::decide_correction`.
 //! The deterministic verifier bus (lint/types/graph emitters) is still
 //! NOT ported — those packet categories stay at default until it ships.
 
@@ -21,9 +22,11 @@ pub mod correction;
 pub mod correction_loop_helpers;
 pub mod decompose;
 pub mod delegate;
+pub mod memory;
 pub mod model;
 pub mod modes;
 pub mod reducer;
+pub mod routing;
 pub mod sink;
 pub mod types;
 pub mod verifier;
@@ -53,8 +56,8 @@ pub use types::{
 pub use verifier::{apply_security_findings, scan_files, SecurityFinding};
 pub use workspace::{IsolatedWorkspace, OverlaySpec, WorkspaceManager};
 
-// Re-export the upstream kf-routing pieces the orchestrator surface
+// Re-export the routing-module pieces the orchestrator surface
 // implies so consumers can `use kf_orchestrator::DelegationMode`.
-pub use kf_routing::classifier::DelegationMode;
-pub use kf_routing::correction::OverallVerdict;
-pub use kf_routing::profile::TaskProfile;
+pub use crate::routing::classifier::DelegationMode;
+pub use crate::routing::correction::OverallVerdict;
+pub use crate::routing::profile::TaskProfile;

@@ -4,8 +4,8 @@ use std::sync::Mutex;
 
 use anyhow::Result;
 
-use crate::adapters::MemoryAdapter;
-use crate::types::{MemoryObject, MemoryQuery, MemoryStats};
+use crate::memory::adapters::MemoryAdapter;
+use crate::memory::types::{MemoryObject, MemoryQuery, MemoryStats};
 
 pub struct InMemoryAdapter {
     objects: Mutex<Vec<MemoryObject>>,

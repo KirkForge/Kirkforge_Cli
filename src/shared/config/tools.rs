@@ -147,7 +147,7 @@ pub struct ToolConfig {
     #[serde(default = "default_task_concurrency_mode")]
     pub task_concurrency_mode: String,
     #[serde(default = "default_max_plugin_trust")]
-    pub max_plugin_trust: kf_plugin_sdk::TrustTier,
+    pub max_plugin_trust: kf_plugin_host::TrustTier,
     #[serde(default = "default_reject_on_excess_plugin_trust")]
     pub reject_on_excess_plugin_trust: bool,
     #[serde(default = "default_plugin_signature_validation")]
@@ -210,8 +210,8 @@ fn default_plugin_trust_workspace() -> bool {
     false
 }
 
-fn default_max_plugin_trust() -> kf_plugin_sdk::TrustTier {
-    kf_plugin_sdk::TrustTier::Shell
+fn default_max_plugin_trust() -> kf_plugin_host::TrustTier {
+    kf_plugin_host::TrustTier::Shell
 }
 
 impl Default for ToolConfig {

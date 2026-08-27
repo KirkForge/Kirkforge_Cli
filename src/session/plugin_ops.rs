@@ -11,7 +11,7 @@
 //! ADR-056 pins the shared-layer decision (WO 11.0).
 
 use crate::shared::Config;
-use kf_plugin_sdk::{Plugin, PluginManifest};
+use kf_plugin_host::{Plugin, PluginManifest};
 use std::path::{Path, PathBuf};
 
 /// `list` — format the active/blocked/available plugin summary from a
@@ -317,7 +317,7 @@ pub fn doctor(cfg: &Config) -> String {
         let root = hosted.plugin.root();
         let mut missing: Vec<String> = Vec::new();
         for cap in hosted.plugin.tools() {
-            if let kf_plugin_sdk::Capability::Tool {
+            if let kf_plugin_host::Capability::Tool {
                 name: cap_name,
                 command: Some(cmd),
                 ..
@@ -329,7 +329,7 @@ pub fn doctor(cfg: &Config) -> String {
             }
         }
         for cap in hosted.plugin.hooks() {
-            if let kf_plugin_sdk::Capability::Hook { event, command } = cap {
+            if let kf_plugin_host::Capability::Hook { event, command } = cap {
                 if !root.join(&command).exists() {
                     missing.push(format!("hook '{event}' -> {}", command.display()));
                 }

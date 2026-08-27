@@ -15,12 +15,9 @@ members = [
     "crates/kf-compress-core",
     "crates/kf-context-index",
     "crates/kf-lsp",
-    "crates/kf-memory-store",
     "crates/kf-plugin-host",
-    "crates/kf-plugin-sdk",
     "crates/kf-rbac",
     "crates/kf-orchestrator",
-    "crates/kf-routing",
     "crates/kf-testdoctor",
     "crates/kf-workflow",
 ]
@@ -30,12 +27,9 @@ default-members = [
     "crates/kf-compress-core",
     "crates/kf-context-index",
     "crates/kf-lsp",
-    "crates/kf-memory-store",
     "crates/kf-orchestrator",
     "crates/kf-plugin-host",
-    "crates/kf-plugin-sdk",
     "crates/kf-rbac",
-    "crates/kf-routing",
     "crates/kf-testdoctor",
     "crates/kf-workflow",
     ".",
@@ -58,7 +52,6 @@ name = "first_token_latency"
 harness = false
 
 [workspace.dependencies]
-kf-plugin-sdk = { path = "crates/kf-plugin-sdk" }
 kf-plugin-host = { path = "crates/kf-plugin-host" }
 kf-lsp = { path = "crates/kf-lsp" }
 kf-workflow = { path = "crates/kf-workflow" }
@@ -67,9 +60,7 @@ kf-bench = { path = "crates/kf-bench" }
 kf-compress-core = { path = "crates/kf-compress-core" }
 kf-testdoctor = { path = "crates/kf-testdoctor" }
 kf-budget-core = { path = "crates/kf-budget-core" }
-kf-routing = { path = "crates/kf-routing" }
 kf-rbac = { path = "crates/kf-rbac" }
-kf-memory-store = { path = "crates/kf-memory-store" }
 kf-orchestrator = { path = "crates/kf-orchestrator" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -95,8 +86,9 @@ thiserror.workspace = true
 # Test doctor (WO 12.4) — workspace member, called from `kf-code doctor`.
 kf-testdoctor = { path = "crates/kf-testdoctor" }
 # Orchestrator pipeline (WO 35.6) — ModelClient production impl lives in
-# src/session/executor_adapter.rs. Drags kf-routing + kf-memory-store
-# (and rusqlite) into the binary; accepted because the WO 35 line
+# src/session/executor_adapter.rs. kf-routing + kf-memory-store were folded
+# into kf-orchestrator as the `routing`/`memory` modules (WO 47.4), so the
+# dep still drags rusqlite into the binary; accepted because the WO 35 line
 # converges the binary on this crate (ParallelOrchestrator follow-up
 # needs delegate + memory regardless).
 kf-orchestrator = { workspace = true }
@@ -203,8 +195,8 @@ subtle = "2"
 # `set_text` (src/tui/clipboard.rs), which needs text-only.
 arboard = { version = "3", default-features = false }
 
-# Rust-native plugin SDK (vendored workspace members)
-kf-plugin-sdk = { workspace = true }
+# Rust-native plugin SDK — folded into kf-plugin-host as src/sdk.rs (WO
+# 47.4); the host re-exports the SDK surface at its crate root.
 kf-plugin-host = { workspace = true }
 # LSP client pool (vendored workspace member) — symbol-aware code nav.
 kf-lsp = { workspace = true }
@@ -375,7 +367,8 @@ opt-level = 0
 debug = true
 
 # WO 44.44: Windows Job Objects for process-tree kill on timeout. Already in
-# the lock graph via kf-memory-store's Windows PID probe; target-gated so
+# the lock graph via the memory-store Windows PID probe (kf-orchestrator
+# `memory` module, ex kf-memory-store); target-gated so
 # Linux/macOS builds pay zero size cost.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading"] }

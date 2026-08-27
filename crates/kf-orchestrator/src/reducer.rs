@@ -3,13 +3,13 @@
 //! `DelegationResult`. Design-from-contract — no TS source exists; the
 //! fold rules are pinned by ADR-076.
 //!
-//! The fold covers the full `kf_routing::correction` state vocabulary,
+//! The fold covers the full `crate::routing::correction` state vocabulary,
 //! but only `changes` and `verification.security` have producers today;
 //! lint/types/graph stay at default until deterministic emitters ship.
 
 use std::path::PathBuf;
 
-use kf_routing::correction::{
+use crate::routing::correction::{
     Changes, LintState, OverallVerdict, ReducedStatePacket, SecurityState, TypesState,
 };
 
@@ -93,7 +93,7 @@ pub fn reduce_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kf_routing::correction::CorrectionAction;
+    use crate::routing::correction::CorrectionAction;
     use serde_json::json;
 
     fn result_with_written(paths: &[String]) -> DelegationResult {
@@ -260,7 +260,8 @@ mod tests {
             &result_with_written(&[dir.path().join("clean.py").to_string_lossy().to_string()]),
         );
         assert_eq!(
-            kf_routing::correction::decide_correction(&clean, 0, 3, 0, 0, 0.0, None, None).action,
+            crate::routing::correction::decide_correction(&clean, 0, 3, 0, 0, 0.0, None, None)
+                .action,
             CorrectionAction::Accept
         );
 
@@ -272,7 +273,8 @@ mod tests {
             &result_with_written(&[dir.path().join("evil.py").to_string_lossy().to_string()]),
         );
         assert_eq!(
-            kf_routing::correction::decide_correction(&evil, 0, 3, 0, 0, 0.0, None, None).action,
+            crate::routing::correction::decide_correction(&evil, 0, 3, 0, 0, 0.0, None, None)
+                .action,
             CorrectionAction::Escalate
         );
     }

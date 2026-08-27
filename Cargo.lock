@@ -2056,7 +2056,6 @@ dependencies = [
  "kf-lsp",
  "kf-orchestrator",
  "kf-plugin-host",
- "kf-plugin-sdk",
  "kf-rbac",
  "kf-testdoctor",
  "kf-workflow",
@@ -2148,22 +2147,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kf-memory-store"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "hex",
- "kf-routing",
- "libc",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "kf-orchestrator"
 version = "0.1.0"
 dependencies = [
@@ -2171,9 +2154,10 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "hex",
- "kf-memory-store",
- "kf-routing",
+ "libc",
+ "proptest",
  "regex",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
@@ -2181,6 +2165,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2188,25 +2173,13 @@ name = "kf-plugin-host"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "kf-plugin-sdk",
  "libc",
  "minisign",
  "minisign-verify",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tracing",
-]
-
-[[package]]
-name = "kf-plugin-sdk"
-version = "0.2.0"
-dependencies = [
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
- "tokio",
  "toml",
  "tracing",
 ]
@@ -2227,18 +2200,6 @@ dependencies = [
  "subtle",
  "thiserror 2.0.20",
  "tokio",
-]
-
-[[package]]
-name = "kf-routing"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
 ]
 
 [[package]]

@@ -7,7 +7,7 @@
 //! This lets existing skill directories continue to work after the move to
 //! the plugin registry.
 
-use kf_plugin_sdk::{ApiVersion, Capability, LoadedPlugin, PluginManifest, TrustTier};
+use crate::sdk::{ApiVersion, Capability, LoadedPlugin, PluginManifest, TrustTier};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -93,7 +93,7 @@ pub fn load_skills_dir(skills_dir: &Path) -> anyhow::Result<Vec<LoadedPlugin>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kf_plugin_sdk::Plugin;
+    use crate::sdk::Plugin;
 
     #[test]
     fn load_legacy_skill() {

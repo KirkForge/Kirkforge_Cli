@@ -4,7 +4,7 @@
 status: accepted
 implemented: true
 supersedes: []
-affects-crates: [kf-budget-core, kf-plugin-sdk, kf-plugin-host]
+affects-crates: [kf-budget-core, kf-plugin-host]
 -->
 
 ## Status
@@ -116,8 +116,9 @@ The TUI provides slash commands for runtime management:
 ## Implementation Notes
 
 - Plugin system crates (vendored in-repo):
-  - `crates/kf-plugin-sdk` — SDK types (manifest, trust tiers, capabilities).
-  - `crates/kf-plugin-host` — runtime (registry, sandbox policy, signature verification).
+  - `crates/kf-plugin-host` — runtime (registry, sandbox policy, signature
+    verification) + SDK types (manifest, trust tiers, capabilities; folded
+    from the former `kf-plugin-sdk` crate into its `sdk` module, WO 47.4).
   - Plugin management via `kf-code plugin` subcommand.
 - `src/session/skills.rs` wraps `PluginRegistry` and surfaces plugin trust
   tiers in the TUI status bar.

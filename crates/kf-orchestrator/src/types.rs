@@ -1,13 +1,13 @@
 //! Shared type surface for the orchestrator. Port of
 //! `orchestrator/src/types.ts` (the parts the delegation/decompose/correction
-//! pipeline needs). Verifier-shape types live in `kf_routing::correction`;
+//! pipeline needs). Verifier-shape types live in `crate::routing::correction`;
 //! the fold that populates them is [`crate::reducer`] (ADR-076).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use kf_routing::classifier::DelegationMode;
-use kf_routing::correction::ReducedStatePacket;
+use crate::routing::classifier::DelegationMode;
+use crate::routing::correction::ReducedStatePacket;
 
 /// Input to `Orchestrator::delegate`. Mirrors TS `TaskInput` (selected fields).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

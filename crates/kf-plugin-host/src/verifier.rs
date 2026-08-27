@@ -10,7 +10,7 @@
 //! and an unbounded wait would hold that lock forever.
 
 use crate::env::curated_env;
-use kf_plugin_sdk::Capability;
+use crate::sdk::Capability;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

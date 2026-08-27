@@ -63,7 +63,7 @@ pub mod undo;
 pub mod shell;
 // WO 32.8: prompt-injection memory store port. Re-exports session::memory
 // so tools/ depends on shared, not session. Impl stays in session
-// (data_dir/prompt deps). Not the routing store (crates/kf-memory-store).
+// (data_dir/prompt deps). Not the routing store (kf-orchestrator `memory` module, ex crates/kf-memory-store).
 pub mod memory;
 
 pub use config::{
@@ -406,7 +406,7 @@ impl SandboxConfig {
     /// fields fall back to the global. The `harden` flag is inherited
     /// from the global (a per-plugin manifest cannot disable
     /// hardening — only raise limits).
-    pub fn merge_with(&self, limits: Option<&kf_plugin_sdk::ResourceLimits>) -> Self {
+    pub fn merge_with(&self, limits: Option<&kf_plugin_host::ResourceLimits>) -> Self {
         let Some(limits) = limits else {
             return self.clone();
         };

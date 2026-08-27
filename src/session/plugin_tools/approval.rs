@@ -13,7 +13,7 @@
 //! the command scripts the manifest points to; the bundle_hash does.
 //! A signed plugin must ALSO be ledger-approved with a matching hash.
 
-use kf_plugin_sdk::{Capability, PluginManifest};
+use kf_plugin_host::{Capability, PluginManifest};
 use std::path::{Path, PathBuf};
 
 /// Path of the persisted plugin approval ledger inside the data dir.

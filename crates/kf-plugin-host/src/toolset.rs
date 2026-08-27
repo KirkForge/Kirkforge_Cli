@@ -5,9 +5,9 @@
 //! plugin, MCP) into a single view. This crate provides the trait and a
 //! plugin-backed implementation.
 
+use crate::sdk::{Capability, Plugin};
 use crate::tool::PluginTool;
 use crate::PluginRegistry;
-use kf_plugin_sdk::{Capability, Plugin};
 
 /// Tool metadata independent of source.
 #[derive(Debug, Clone)]
@@ -147,8 +147,8 @@ impl Toolset for CompositeToolset {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::sdk::TrustTier;
     use crate::{PluginRegistry, TrustPolicy};
-    use kf_plugin_sdk::TrustTier;
 
     #[cfg(unix)]
     #[test]

@@ -457,7 +457,7 @@ impl DaemonState {
     /// so a slow instance never blocks the broadcaster. A full channel
     /// (slow consumer) logs a warning rather than silently dropping.
     pub fn broadcast(&self, ev: InstanceEvent) {
-        let mut instances = self.instances.lock().unwrap();
+        let mut instances = self.instances.lock().unwrap_or_else(|e| e.into_inner());
         instances.retain(|tx| match tx.try_send(ev.clone()) {
             Ok(()) => true,
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {

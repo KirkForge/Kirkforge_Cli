@@ -255,11 +255,11 @@ fn fallback_c_like(code: &str) -> String {
         // Block comment protection
         if ch == '/' && chars.peek() == Some(&'*') {
             out.push(ch);
-            out.push(chars.next().unwrap());
+            out.push(chars.next().expect("peeked Some above"));
             while let Some(c) = chars.next() {
                 out.push(c);
                 if c == '*' && chars.peek() == Some(&'/') {
-                    out.push(chars.next().unwrap());
+                    out.push(chars.next().expect("peeked Some above"));
                     break;
                 }
             }
@@ -269,7 +269,7 @@ fn fallback_c_like(code: &str) -> String {
         // Line comment protection
         if ch == '/' && chars.peek() == Some(&'/') {
             out.push(ch);
-            out.push(chars.next().unwrap());
+            out.push(chars.next().expect("peeked Some above"));
             for c in chars.by_ref() {
                 out.push(c);
                 if c == '\n' {

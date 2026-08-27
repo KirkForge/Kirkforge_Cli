@@ -422,7 +422,10 @@ impl McpClient {
             return None;
         }
 
-        warn_unsupported_capabilities(&config.name, resp.get("result").unwrap());
+        warn_unsupported_capabilities(
+            &config.name,
+            resp.get("result").expect("result presence checked above"),
+        );
 
         // Send initialized notification (no response expected)
         let init_done = serde_json::json!({

@@ -197,7 +197,7 @@ impl SqliteAdapter {
     }
 
     pub fn backup<P: Into<PathBuf>>(&self, dest_path: Option<P>) -> Result<BackupMetadata> {
-        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
         let timestamp_file = iso_now_ms().replace([':', '.'], "-");
         let backup_path = match dest_path {
@@ -246,7 +246,7 @@ impl SqliteAdapter {
             hasher.update(&file_contents);
             hex::encode(hasher.finalize())
         };
-        let mut conn = self.conn.lock().expect("sqlite lock poisoned");
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute_batch("COMMIT;").ok();
         // Replace the on-disk file then reopen.
         fs::copy(source_path, &self.file_path)?;
@@ -333,7 +333,7 @@ fn iso_now_ms() -> String {
 
 impl MemoryAdapter for SqliteAdapter {
     fn write(&self, obj: &MemoryObject) -> Result<()> {
-        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR REPLACE INTO observations
              (id, kind, task_id, timestamp, description, properties, tags)
@@ -352,7 +352,7 @@ impl MemoryAdapter for SqliteAdapter {
     }
 
     fn read(&self, id: &str) -> Result<Option<MemoryObject>> {
-        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, kind, task_id, timestamp, description, properties, tags
              FROM observations WHERE id = ?1",
@@ -366,13 +366,13 @@ impl MemoryAdapter for SqliteAdapter {
     }
 
     fn delete(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM observations WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     fn query(&self, q: &MemoryQuery) -> Result<Vec<MemoryObject>> {
-        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut conditions: Vec<String> = Vec::new();
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(kind) = &q.kind {
@@ -422,7 +422,7 @@ impl MemoryAdapter for SqliteAdapter {
     }
 
     fn stats(&self) -> Result<MemoryStats> {
-        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM observations", [], |r| r.get(0))?;
         let last: Option<String> = match conn.query_row(
             "SELECT timestamp FROM observations ORDER BY timestamp DESC LIMIT 1",
@@ -440,7 +440,7 @@ impl MemoryAdapter for SqliteAdapter {
     }
 
     fn write_run_row(&self, run: &RunRow) -> Result<()> {
-        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR REPLACE INTO runs
              (run_id, task_id, description, language, task_family, mode, model,
@@ -482,7 +482,7 @@ impl MemoryAdapter for SqliteAdapter {
     }
 
     fn write_emission_row(&self, emission: &EmissionRow) -> Result<()> {
-        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "INSERT OR REPLACE INTO emissions
              (id, run_id, task_id, turn, path, sha256, bytes, before_hash, existed, timestamp)
@@ -504,7 +504,7 @@ impl MemoryAdapter for SqliteAdapter {
     }
 
     fn write_run_and_emissions_tx(&self, run: &RunRow, emissions: &[EmissionRow]) -> Result<bool> {
-        let mut conn = self.conn.lock().expect("sqlite lock poisoned");
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
         tx.execute(
             "INSERT OR REPLACE INTO runs
@@ -571,7 +571,7 @@ impl MemoryAdapter for SqliteAdapter {
     }
 
     fn query_run_rows(&self, limit: usize) -> Result<Option<Vec<RunRow>>> {
-        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT run_id, task_id, description, language, task_family, mode, model,
                     provider_key, provider_type, base_url, outcome, outcome_class,
@@ -618,7 +618,7 @@ impl MemoryAdapter for SqliteAdapter {
     }
 
     fn query_emission_rows_for_run(&self, run_id: &str) -> Result<Option<Vec<EmissionRow>>> {
-        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT id, run_id, task_id, turn, path, sha256, bytes, before_hash, existed, timestamp
              FROM emissions WHERE run_id = ?1 ORDER BY path",
@@ -646,12 +646,12 @@ impl MemoryAdapter for SqliteAdapter {
     }
 
     fn schema_version(&self) -> Option<i64> {
-        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         Some(Self::schema_version_locked(&conn))
     }
 
     fn persist(&self) -> Result<()> {
-        let conn = self.conn.lock().expect("sqlite lock poisoned");
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
         Ok(())
     }

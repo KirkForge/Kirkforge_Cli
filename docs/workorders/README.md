@@ -1048,5 +1048,5 @@ tree, ~11 stale claims corrected in-line. See
 | 47.33 | [Web/read hardening bundle: IPv6 unspecified, DNS-pin fail-open, body-cap config, read_file streaming, computer_use SSRF gate, scan_files cap](47.33-web-and-read-hardening-bundle.md) | Done |
 | 47.34 | [write_file parent-dir TOCTOU + permission glob matcher catastrophic backtracking](47.34-write-file-tocou-and-glob-matcher.md) | Done |
 | 47.35 | [Untrusted-content delimiters for tool output (prompt-injection defense) + template push_value hardening](47.35-untrusted-content-delimiters.md) | Done |
-| 47.36 | [Mutex-poison + expect hygiene batch + lib unwrap gate + test EnvGuard fixes](47.36-mutex-poison-and-expect-hygiene.md) | Planned |
+| 47.36 | [Mutex-poison + expect hygiene batch + lib unwrap gate + test EnvGuard fixes](47.36-mutex-poison-and-expect-hygiene.md) | Done |
 | 47.37 | [Test-theater batch: e2e scenarios accept any outcome + bench TOMLs missing requires_model + tarpaulin nightly verify](47.37-test-theater-batch.md) | Done |

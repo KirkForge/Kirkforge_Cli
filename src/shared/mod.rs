@@ -981,6 +981,16 @@ pub const PRICING_TABLE: &[Pricing] = &[
     },
 ];
 
+/// $0 fallback if the table's sentinel row is ever removed — the
+/// once-per-model WARN above already flags the unmapped model (WO 47.36).
+const UNMAPPED_PRICING: &Pricing = &Pricing {
+    model_prefix: "",
+    input_per_mtok: 0.0,
+    output_per_mtok: 0.0,
+    cache_write_per_mtok: 0.0,
+    cache_read_per_mtok: 0.0,
+};
+
 /// Config-driven price override for one model-name prefix (WO 38.5).
 /// `[price_overrides."my-model-"]` → per-Mtok USD rates; the
 /// longest matching prefix wins over the built-in table.
@@ -1071,11 +1081,7 @@ fn resolve_rates(model: &str, overrides: Option<&HashMap<String, ModelPrice>>) -
     }
 
     warn_unmapped_model(model);
-    ResolvedRates::from(
-        PRICING_TABLE
-            .last()
-            .expect("PRICING_TABLE must not be empty"),
-    )
+    ResolvedRates::from(PRICING_TABLE.last().unwrap_or(UNMAPPED_PRICING))
 }
 
 /// True iff `model` resolves to a real (non-sentinel) pricing row,

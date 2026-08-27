@@ -1,10 +1,10 @@
+use crate::session::bash_runner::{cap_to_string, drain_capped, MAX_BASH_OUTPUT_BYTES};
 use crate::shared::access::{DenyList, PathGuard};
 use crate::shared::bash_safety::check_bash_command_str;
 use crate::shared::shell::{
     global_registry, is_timeout_marker, run_shell_with_token, JobStatus, ShellError, ShellOutput,
 };
 use crate::shared::{DockerConfig, SandboxConfig, ToolDef, ToolError, ToolOutcome};
-use crate::session::bash_runner::{cap_to_string, drain_capped, MAX_BASH_OUTPUT_BYTES};
 use crate::tools::bash_minify;
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
@@ -218,16 +218,23 @@ impl Bash {
             status = child.wait() => status.map_err(|e| ShellError::Spawn(format!("docker wait: {e}")))?,
             _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
                 let _ = child.kill().await;
-                // Drain orphaned reader tasks with a short timeout so they
-                // don't linger as zombie tasks after the timeout path returns.
-                let _: Result<_, _> = tokio::time::timeout(
+                // mm-H18 (WO 47.32): report a timeout-shaped result, not
+                // Cancelled — a timeout-killed container must surface as
+                // ToolError::Timeout like the non-docker path. Drain join
+                // keeps the 1s ceiling so orphaned reader tasks don't
+                // linger as zombies after this branch returns.
+                let (out, err) = tokio::time::timeout(
                     std::time::Duration::from_secs(1),
                     async {
-                        let _ = out_handle.await;
-                        let _ = err_handle.await;
+                        (
+                            join_capped_drain(out_handle).await,
+                            join_capped_drain(err_handle).await,
+                        )
                     },
-                ).await;
-                return Err(ShellError::Cancelled);
+                )
+                .await
+                .unwrap_or_else(|_| ((Vec::new(), 0), (Vec::new(), 0)));
+                return Ok(docker_timeout_result(timeout_secs, out, err));
             }
             _ = token.cancelled() => {
                 let _ = child.kill().await;
@@ -262,6 +269,27 @@ async fn join_capped_drain(
         Ok(Ok(pair)) => pair,
         _ => (Vec::new(), 0),
     }
+}
+
+// mm-H18 (WO 47.32): the docker timeout result, shaped exactly like
+// run_shell_with_token's timeout path — a killed exit code (9 = SIGKILL
+// on Unix; just a failing code on Windows) plus the stdout marker prefix
+// is_timeout_marker recognizes, so Bash::run maps a timeout-killed
+// container to ToolError::Timeout instead of a generic failure or
+// Cancelled.
+fn docker_timeout_result(
+    timeout_secs: u64,
+    out: (Vec<u8>, u64),
+    err: (Vec<u8>, u64),
+) -> (i32, String, String) {
+    (
+        9,
+        format!(
+            "[timed out after {timeout_secs} seconds]\n{}",
+            cap_to_string(out.0, out.1)
+        ),
+        cap_to_string(err.0, err.1),
+    )
 }
 
 #[async_trait::async_trait]
@@ -1220,6 +1248,46 @@ mod tests {
             ),
             other => panic!("expected Err(ShellError::Spawn), got {other:?}"),
         }
+    }
+
+    // mm-H18 (WO 47.32): the docker timeout branch must emit a
+    // timeout-shaped result — killed exit code + the exact stdout marker
+    // prefix — so Bash::run maps it to ToolError::Timeout via
+    // is_timeout_marker, not a generic failure or Cancelled. Pure-fn test:
+    // post-spawn docker wiring has no daemon-free seam (the real-Docker
+    // smoke test above is #[ignore]d).
+    #[cfg(unix)]
+    #[test]
+    fn docker_timeout_result_is_timeout_marker_shaped() {
+        let (code, stdout, stderr) = docker_timeout_result(
+            5,
+            (b"partial out".to_vec(), 4096),
+            (b"partial err".to_vec(), 0),
+        );
+        assert_eq!(code, 9, "killed exit code expected, got {code}");
+        assert!(
+            stdout.starts_with("[timed out after 5 seconds]\n"),
+            "marker prefix expected, got {stdout:?}"
+        );
+        assert!(
+            stdout.contains("partial out"),
+            "capped partial stdout expected, got {stdout:?}"
+        );
+        assert!(
+            stdout.contains("[...truncated: 4096 bytes omitted"),
+            "truncation marker expected, got {stdout:?}"
+        );
+        assert_eq!(stderr, "partial err");
+        // End-to-end shape: the ShellOutput Bash::run synthesizes from
+        // this tuple must be recognized by the same timeout detector the
+        // non-docker path uses.
+        use std::os::unix::process::ExitStatusExt;
+        let output = ShellOutput {
+            status: std::process::ExitStatus::from_raw(code),
+            stdout,
+            stderr: String::new(),
+        };
+        assert!(is_timeout_marker(&output, 5));
     }
 
     #[tokio::test]

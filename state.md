@@ -4,6 +4,25 @@
 
 ## Shipped (closed this session)
 
+- **WO 47.4**: Done. Lean-KirkForge crate fold, one commit series on
+  `wo/wo47.4` (not merged/pushed — parallel-wave worktree). Workspace
+  13 → 10 members: kf-routing folded into kf-orchestrator as the
+  `routing` module (inner routing.rs renamed engine.rs — clippy
+  module_inception, matches the routing-engine.ts port), kf-memory-store
+  folded in as the `memory` module (its integration tests now live at
+  crates/kf-orchestrator/tests/memory_store.rs; rusqlite/libc/windows-sys
+  deps moved with identical target gating), kf-plugin-sdk folded into
+  kf-plugin-host as the `sdk` module with the SDK surface re-exported at
+  the host root. WO premise correction: kf-plugin-sdk DID have external
+  consumers (~60 `kf_plugin_sdk::` refs in 14 src/ files); a cargo dep-
+  rename alias was rejected by cargo (same package under two names), so
+  the refs were mechanically renamed to `kf_plugin_host::` in the same
+  commit. Public orchestrator surface unchanged (lib.rs re-exports
+  repointed internally). Cross-layer: changed-packages.sh reverse-dep
+  table now empty, run-mutants.sh + ci-nightly.yml mutants paths,
+  TECHNICAL.md diagram/tables. Gate: workspace check clean, clippy -D
+  warnings on the 3 touched crates clean, 330/330 orchestrator+host
+  tests, adr_xref_drift green, fmt clean.
 - **WO 47.27**: Done. Memory subsystem, three defects, one gated commit
   each on `wo/wo47.27` (not merged/pushed — parallel-wave worktree).
   (1) `make_slug` slugified raw user text, so 'I prefer
@@ -281,6 +300,12 @@
   strong, Claude compat partially ships but undocumented (45.31).
 
 ## Pending / Deferred (open)
+
+- **WO 47.4 cosmetic tail**: src/ imports SDK types via the
+  `kf_plugin_host` root re-exports; an optional future sweep could import
+  from `kf_plugin_host::sdk` explicitly for provenance. Zero behavior
+  difference. Tracked in
+  [47.4](docs/workorders/47.4-fold-routing-memory-crates.md).
 
 - **WO 47.21 residual (follow-up needed)**: `same_ms_double_spawn_gets_distinct_temp_dirs`
   and `same_ms_double_spawn_gets_distinct_worktrees` do NOT route through

@@ -11,7 +11,7 @@
 //! Single impl today (`session::memory::MemoryStore`), no second
 //! consumer. Introduce when a second impl appears.
 //!
-//! Note: this is the prompt-injection fact store, NOT `crates/kf-memory-store`
+//! Note: this is the prompt-injection fact store, NOT the kf-orchestrator `memory` module
 //! (routing-oriented, WO 29.6). The `remember` tool uses this store.
 
 pub use crate::session::memory::{parse_frontmatter, slugify_description, MemoryFact, MemoryStore};

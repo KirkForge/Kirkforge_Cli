@@ -14,8 +14,8 @@ use crate::shared::{
     ToolOutcome,
 };
 use crate::tools::{Tool, ToolContext};
+use kf_plugin_host::TrustTier;
 use kf_plugin_host::KF_CODE_TOOL_ARGS;
-use kf_plugin_sdk::TrustTier;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -214,7 +214,7 @@ impl Tool for PluginToolWrapper {
         // M11: enforce trust tier at dispatch time. A plugin's trust tier
         // must meet the minimum required for tool execution (Shell).
         let required =
-            kf_plugin_host::SandboxPolicy::required_tier(&kf_plugin_sdk::Capability::Tool {
+            kf_plugin_host::SandboxPolicy::required_tier(&kf_plugin_host::Capability::Tool {
                 name: self.def.name.into(),
                 description: self.def.description.into(),
                 schema: self.def.parameters.clone(),

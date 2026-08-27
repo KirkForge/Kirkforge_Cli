@@ -35,19 +35,28 @@ standalone binaries.
 ```
 kf-code (root bin)          ← the CLI the user runs
 ├── src/                       ← agent core (session, tools, TUI, adapters, verifiers)
-├── crates/                    ← 13 satellite crates
-│   ├── kf-plugin-sdk     ← plugin SDK: manifest types, trust tiers
-│   ├── kf-plugin-host  ← plugin runtime: registry, dispatch, signatures
+├── crates/                    ← 10 satellite crates
+│   ├── kf-plugin-host  ← plugin runtime + SDK (manifest types, trust tiers folded in, WO 47.4): registry, dispatch, signatures
 │   ├── kf-context-index← tree-sitter symbol/import/call-graph index
 │   ├── kf-workflow     ← programmable JSON workflow engine
 │   ├── kf-lsp          ← LSP client pool for symbol-aware navigation
 │   ├── kf-bench        ← task-benchmark harness (types + verifier + reports)
 │   ├── kf-compress-core       ← context-compression pipeline library + ruleset filtering
 │   ├── kf-budget-core           ← budget/orchestrator/slicing data model
+<<<<<<< HEAD
 │   ├── kf-routing              ← pure Rust port of orchestrator pure modules (classifier, routing, correction, path safety) — foundation for WO 29.7
 │   ├── kf-rbac                 ← RBAC (4 roles × 16 perms), timing-safe API-key auth — port of @kirkforge/core-rbac (WO 29.5; dead JWT/JWKS half deleted WO 47.3)
 │   ├── kf-memory-store ← routing-oriented memory store (MemoryStore facade + InMemory/File/SQLite adapters) — port of @kirkforge/memory-palace (WO 29.6)
 │   ├── kf-orchestrator ← orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of @kirkforge/orchestrator (WO 29.7)
+||||||| 15ad6877
+│   ├── kf-routing              ← pure Rust port of orchestrator pure modules (classifier, routing, correction, path safety) — foundation for WO 29.7
+│   ├── kf-rbac                 ← RBAC (4 roles × 16 perms), timing-safe API-key auth, OIDC JWT/JWKS verification — port of @kirkforge/core-rbac (WO 29.5)
+│   ├── kf-memory-store ← routing-oriented memory store (MemoryStore facade + InMemory/File/SQLite adapters) — port of @kirkforge/memory-palace (WO 29.6)
+│   ├── kf-orchestrator ← orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of @kirkforge/orchestrator (WO 29.7)
+=======
+│   ├── kf-rbac                 ← RBAC (4 roles × 16 perms), timing-safe API-key auth, OIDC JWT/JWKS verification — port of @kirkforge/core-rbac (WO 29.5)
+│   ├── kf-orchestrator ← orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of @kirkforge/orchestrator (WO 29.7); absorbed kf-routing (`routing` module) + kf-memory-store (`memory` module) in WO 47.4
+>>>>>>> wo/wo47.4
 │   └── kf-testdoctor   ← test-performance doctor (workspace member; profile, profile-per-test, classify, partition, suggest, suggest-detailed, apply, gaps, diagnose, flaky)
 ├── benches/tasks/             ← 30 benchmark task definitions (TOML)
 └── docs/adr/                  ← 94 Architecture Decision Records
@@ -59,12 +68,11 @@ kf-code (root bin)          ← the CLI the user runs
 
 ### Compiled-in vs satellite
 
-The root `kf-code` binary directly depends on eight crates:
+The root `kf-code` binary directly depends on seven crates:
 
 | Crate | Role |
 |---|---|
-| `kf-plugin-sdk` | Plugin manifest types and trust-tier logic |
-| `kf-plugin-host` | Plugin registry, dispatch, in-process signature verification (ADR-057) |
+| `kf-plugin-host` | Plugin SDK (manifest types, trust tiers — folded in, WO 47.4), registry, dispatch, in-process signature verification (ADR-057) |
 | `kf-context-index` | Tree-sitter indexing and graph retrieval |
 | `kf-workflow` | JSON workflow engine (reuses the `task` tool's spawner) |
 | `kf-lsp` | LSP client pool |
@@ -72,34 +80,37 @@ The root `kf-code` binary directly depends on eight crates:
 | `kf-testdoctor` | Test-coverage diagnostics behind `kf-code doctor` (WO 12.4) |
 | `kf-orchestrator` | Delegation/decompose/correction pipeline; `ModelClient` impl + security verifier (WO 35.6) |
 
- The remaining five crates are **satellites**: they build as support
+ The remaining crates are **satellites**: they build as support
  libraries. `kf-compress-core` and `kf-budget-core` compile in behind the
  `stratum` / `budget` features (ADR-046/047); the feature-off path
  registers no Stratum/Budget tools or hooks (no shell fallback exists —
- the former shell-plugin trees were deleted in WO 29.9). `kf-routing`,
- `kf-rbac`, and `kf-memory-store` are foundation libraries (WO 29.3–29.7
- ports) with no shell fallback — they exist only as Rust.
+ the former shell-plugin trees were deleted in WO 29.9). `kf-rbac` is a
+ foundation library (WO 29.5 port) with no shell fallback — it exists
+ only as Rust. (WO 47.4 folded `kf-routing` + `kf-memory-store into
+ `kf-orchestrator` as the `routing`/`memory` modules, and
+ `kf-plugin-sdk` into `kf-plugin-host` as the `sdk` module, removing
+ three workspace members with single consumers.)
 
 **Release-binary cost of the orchestrator chain (WO 36.1, 2026-08-19).**
 Measured in one worktree (`cargo build --release -p kf-code`, packaged
 like `release.yml`'s tar.gz): with the WO 35.6 `kf-orchestrator` dep
 20,619,832 bytes raw / 7,322,987 bytes tar.gz; with the dep removed
 20,603,448 / 7,317,485 — a 16,384-byte (0.08%) cost, far under the ~5%
-gate, so the dep stays ungated. The chain is
-`kf-orchestrator → kf-memory-store → rusqlite` (bundled SQLite C), but
+ gate, so the dep stays ungated. The chain is
+ `kf-orchestrator → rusqlite` (bundled SQLite C, via the folded `memory`
+ module), but
 nothing in the binary constructs `SqliteAdapter` (kf-code's `remember`
 tool uses its own JSON-file `shared::memory::MemoryStore`, a different
 type), so fat LTO + `opt-level = "z"` drops the unreachable SQLite code
 and the linker never pulls the bundled C objects. Re-measure if a
-binary code path starts calling kf-memory-store's
+binary code path starts calling the memory module's
 `MemoryStore::open`/`SqliteAdapter`.
 
 ### Crate map
 
 | Crate | Owner | Purpose | Status |
 |-------|-------|---------|--------|
-| `kf-plugin-sdk` | session | Plugin manifest types, trust tiers | Active |
-| `kf-plugin-host` | session | Plugin registry, dispatch, signatures | Active |
+| `kf-plugin-host` | session | Plugin registry, dispatch, signatures + SDK manifest types/trust tiers (folded from `kf-plugin-sdk`, WO 47.4) | Active |
 | `kf-context-index` | session | Tree-sitter symbol/import/call-graph index | Active |
 | `kf-workflow` | session | JSON workflow engine (DAG of persona steps) | Active |
 | `kf-lsp` | tools | LSP client pool for symbol-aware navigation | Active |
@@ -107,10 +118,20 @@ binary code path starts calling kf-memory-store's
 | `kf-compress-core` | session | Context-compression pipeline library + rules | Active |
 | `kf-testdoctor` | quality | Test-performance diagnostics | Active |
 | `kf-budget-core` | session | Budget/orchestrator/slicing data model | Active |
+<<<<<<< HEAD
 | `kf-routing` | session | Pure orchestrator modules: classifier, routing, correction, truth model, profiles, cost, path safety (WO 29.3) | Active |
 | `kf-rbac` | security | RBAC (roles/permissions/actor), timing-safe API-key auth — port of `@kirkforge/core-rbac` (WO 29.5). Dead JWT/JWKS half deleted in WO 47.3 (zero production consumers; daemon uses token + role via `actor_from_api_key`). | Active |
 | `kf-memory-store` | session | Routing-oriented memory store: MemoryStore facade + InMemory/File/SQLite adapters (port of `@kirkforge/memory-palace`, WO 29.6) | Active |
 | `kf-orchestrator` | session | Orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of `@kirkforge/orchestrator` (WO 29.7). `ModelClient` production impl: `src/session/executor_adapter.rs` (WO 35.6, ADR-075). Reducer folds verification state into `DelegationResult.packet` (WO 37.2, ADR-076); deterministic lint/types/graph verifiers still deferred. | Active |
+||||||| 15ad6877
+| `kf-routing` | session | Pure orchestrator modules: classifier, routing, correction, truth model, profiles, cost, path safety (WO 29.3) | Active |
+| `kf-rbac` | security | RBAC (roles/permissions/actor), timing-safe API-key auth, OIDC JWT/JWKS verification — port of `@kirkforge/core-rbac` (WO 29.5). ES512 verify deferred (jsonwebtoken has no ES512 variant). | Active |
+| `kf-memory-store` | session | Routing-oriented memory store: MemoryStore facade + InMemory/File/SQLite adapters (port of `@kirkforge/memory-palace`, WO 29.6) | Active |
+| `kf-orchestrator` | session | Orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of `@kirkforge/orchestrator` (WO 29.7). `ModelClient` production impl: `src/session/executor_adapter.rs` (WO 35.6, ADR-075). Reducer folds verification state into `DelegationResult.packet` (WO 37.2, ADR-076); deterministic lint/types/graph verifiers still deferred. | Active |
+=======
+| `kf-rbac` | security | RBAC (roles/permissions/actor), timing-safe API-key auth, OIDC JWT/JWKS verification — port of `@kirkforge/core-rbac` (WO 29.5). ES512 verify deferred (jsonwebtoken has no ES512 variant). | Active |
+| `kf-orchestrator` | session | Orchestrator delegation + decompose + correction pipeline + mode executors (trait-based ModelClient seam) — port of `@kirkforge/orchestrator` (WO 29.7). `ModelClient` production impl: `src/session/executor_adapter.rs` (WO 35.6, ADR-075). Reducer folds verification state into `DelegationResult.packet` (WO 37.2, ADR-076); deterministic lint/types/graph verifiers still deferred. Absorbed `kf-routing` (pure modules, WO 29.3) + `kf-memory-store` (memory facade, WO 29.6) as the `routing`/`memory` modules in WO 47.4. | Active |
+>>>>>>> wo/wo47.4
 
 "Excluded" crates exist on disk but are not built by default.
 
@@ -1059,7 +1080,8 @@ tool-result cycle uses more aggressive compression.
 ## Plugin system
 
 Plugins are manifest-based and dynamically loaded at runtime from the
-filesystem. The plugin SDK (`kf-plugin-sdk`) and host (`kf-plugin-host`)
+filesystem. The plugin SDK (`kf-plugin-host::sdk`, folded from
+`kf-plugin-sdk` in WO 47.4) and host (`kf-plugin-host`)
 are compiled into the binary; plugin *functionality* arrives via one of two
 dispatch paths (ADR-050):
 
@@ -2017,18 +2039,27 @@ document known limitations. Removing these is a regression.
 
 | Crate | Status | Purpose | Public API | Consumers |
 |---|---|---|---|---|
-| `kf-plugin-sdk` | Active | Plugin manifest types, trust tiers | `PluginManifest`, `TrustTier` | `kf-plugin-host`, root binary |
-| `kf-plugin-host` | Active | Plugin registry, dispatch, signatures | `PluginHost`, `PluginToolWrapper` | root binary |
+| `kf-plugin-host` | Active | Plugin registry, dispatch, signatures + SDK manifest types/trust tiers (WO 47.4 fold) | `PluginHost`, `PluginToolWrapper`, `PluginManifest`, `TrustTier` | root binary |
 | `kf-context-index` | Active | Tree-sitter symbol/import/call-graph index | `ContextIndex`, `CachedIndex` | root binary |
 | `kf-workflow` | Active | JSON workflow engine (DAG of persona steps) | `WorkflowExecutor`, `WorkflowTemplate` | root binary |
 | `kf-lsp` | Active | LSP client pool for symbol-aware navigation | `LspPool` | root binary |
 | `kf-bench` | Active | Benchmark task types, loader, verifier, reports | `BenchTask`, `TaskResult` | root binary, bench CI |
 | `kf-compress-core` | Active | Context-compression pipeline library | `CompressionPipeline`, `Mode`, `rules::build_rules` | root binary (via `stratum` feature) |
 | `kf-budget-core` | Active | Budget/orchestrator/slicing data model | `TokenBudget`, `SlicingOrchestrator` | root binary (via `budget` feature) |
+<<<<<<< HEAD
 | `kf-routing` | Active | Pure orchestrator modules (classifier, routing, correction, path safety) | `build_empirical_recommendation`, `tokenize`, `vectorize`, `cosine` | `kf-memory-store`, `kf-orchestrator` |
 | `kf-rbac` | Active | RBAC + timing-safe API-key auth (port of `@kirkforge/core-rbac`; JWT half deleted WO 47.3) | `Actor`, `Role`, `Permission`, `actor_from_api_key`, `has_permission` | root binary (daemon authz) |
 | `kf-memory-store` | Active | Routing-oriented memory store (port of `@kirkforge/memory-palace`) | `MemoryStore`, `MemoryAdapter`, `FileAdapter`, `SqliteAdapter`, `InMemoryAdapter` | `kf-orchestrator` |
 | `kf-orchestrator` | Active | Orchestrator delegation + decompose + correction pipeline (port of `@kirkforge/orchestrator`) | `Orchestrator`, `delegate`, `run_correction_loop`, `ModelClient`, `WorkspaceManager`, `verifier::scan_files` | standalone (foundation for full executor wiring) |
+||||||| 15ad6877
+| `kf-routing` | Active | Pure orchestrator modules (classifier, routing, correction, path safety) | `build_empirical_recommendation`, `tokenize`, `vectorize`, `cosine` | `kf-memory-store`, `kf-orchestrator` |
+| `kf-rbac` | Active | RBAC + JWT/JWKS verification (port of `@kirkforge/core-rbac`) | `Rbac`, `Actor`, `ApiKeys`, `OidcVerifier` | standalone (security surface) |
+| `kf-memory-store` | Active | Routing-oriented memory store (port of `@kirkforge/memory-palace`) | `MemoryStore`, `MemoryAdapter`, `FileAdapter`, `SqliteAdapter`, `InMemoryAdapter` | `kf-orchestrator` |
+| `kf-orchestrator` | Active | Orchestrator delegation + decompose + correction pipeline (port of `@kirkforge/orchestrator`) | `Orchestrator`, `delegate`, `run_correction_loop`, `ModelClient`, `WorkspaceManager`, `verifier::scan_files` | standalone (foundation for full executor wiring) |
+=======
+| `kf-rbac` | Active | RBAC + JWT/JWKS verification (port of `@kirkforge/core-rbac`) | `Rbac`, `Actor`, `ApiKeys`, `OidcVerifier` | standalone (security surface) |
+| `kf-orchestrator` | Active | Orchestrator delegation + decompose + correction pipeline (port of `@kirkforge/orchestrator`) + folded routing/memory modules (WO 47.4) | `Orchestrator`, `delegate`, `run_correction_loop`, `ModelClient`, `WorkspaceManager`, `verifier::scan_files`, `routing::tokenize`, `memory::MemoryStore` | standalone (foundation for full executor wiring) |
+>>>>>>> wo/wo47.4
 | `kf-testdoctor` | Active | Test-performance diagnostics | `doctor` CLI | root binary (`kf-code doctor`) |
 
 "Excluded" crates exist on disk but are not built by default (`cargo build

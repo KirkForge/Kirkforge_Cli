@@ -8,8 +8,6 @@ repository = "https://github.com/KirkForge/KirkForge-Cli"
 description = "Orchestrator delegation + decompose + correction pipeline + mode executors (port of @kirkforge/orchestrator)"
 
 [dependencies]
-kf-routing = { workspace = true }
-kf-memory-store = { workspace = true }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -25,7 +23,17 @@ regex = { workspace = true }
 base64 = "0.23"
 sha2 = "0.10"
 hex = "0.4"
+# Memory-store adapters (folded from kf-memory-store, WO 47.4): bundled
+# SQLite backend + platform PID probes for stale-lock detection.
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+proptest = "1.6"
 tokio = { workspace = true, features = ["rt", "macros", "time"] }

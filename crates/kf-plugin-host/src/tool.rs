@@ -7,7 +7,7 @@
 //! message.
 
 use crate::env::curated_env;
-use kf_plugin_sdk::{Capability, ResourceLimits};
+use crate::sdk::{Capability, ResourceLimits};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 #[cfg(unix)]

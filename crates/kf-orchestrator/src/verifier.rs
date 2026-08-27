@@ -18,7 +18,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use kf_routing::correction::{OverallVerdict, ReducedStatePacket, SecurityState};
+use crate::routing::correction::{OverallVerdict, ReducedStatePacket, SecurityState};
 use regex::Regex;
 
 /// Cap on bytes read per scanned file (1 MiB). Delegate-written artifacts
@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn apply_no_findings_leaves_packet_clean() {
         let mut packet = ReducedStatePacket {
-            verification: kf_routing::correction::Verification {
+            verification: crate::routing::correction::Verification {
                 overall: OverallVerdict::Pass,
                 ..Default::default()
             },

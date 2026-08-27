@@ -22,7 +22,7 @@ use kf_plugin_host::PluginRegistry;
 ///
 /// The body after the frontmatter is the system prompt that's injected
 /// when the skill is invoked.
-use kf_plugin_sdk::{Capability, TrustTier};
+use kf_plugin_host::{Capability, TrustTier};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -208,8 +208,8 @@ impl SkillRegistry {
         let disabled = &cfg.tools.disabled_plugins;
         let mut count = 0;
         let plugin_entries: Vec<(
-            kf_plugin_sdk::PluginManifest,
-            std::sync::Arc<kf_plugin_sdk::LoadedPlugin>,
+            kf_plugin_host::PluginManifest,
+            std::sync::Arc<kf_plugin_host::LoadedPlugin>,
         )> = self
             .plugin_registry
             .active_plugins()
@@ -229,7 +229,7 @@ impl SkillRegistry {
                 );
                 continue;
             }
-            let plugin = plugin_arc.as_ref() as &dyn kf_plugin_sdk::Plugin;
+            let plugin = plugin_arc.as_ref() as &dyn kf_plugin_host::Plugin;
             count += self.add_plugin(&manifest, plugin);
         }
         Ok(count)
@@ -239,8 +239,8 @@ impl SkillRegistry {
     /// Returns the number of skills added.
     pub fn add_plugin(
         &mut self,
-        manifest: &kf_plugin_sdk::PluginManifest,
-        plugin: &dyn kf_plugin_sdk::Plugin,
+        manifest: &kf_plugin_host::PluginManifest,
+        plugin: &dyn kf_plugin_host::Plugin,
     ) -> usize {
         let plugins_dir = crate::session::data_dir()
             .map(|d| d.join("plugins"))
@@ -302,7 +302,7 @@ impl SkillRegistry {
     }
 
     /// Active plugin manifests, useful for status/logging.
-    pub fn active_plugins(&self) -> Vec<&kf_plugin_sdk::PluginManifest> {
+    pub fn active_plugins(&self) -> Vec<&kf_plugin_host::PluginManifest> {
         self.plugin_registry
             .active_plugins()
             .iter()

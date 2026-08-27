@@ -1,6 +1,6 @@
 //! Correction loop (R4). Port of `orchestrator/src/orchestrator-correction.ts`.
 //!
-//! The impure counterpart to `kf_routing::correction::decide_correction`:
+//! The impure counterpart to `crate::routing::correction::decide_correction`:
 //! runs delegate → validator → decide across `0..=max_corrections` turns,
 //! accumulates cost, and writes a memory observation via the orchestrator's
 //! `MemoryStore`. The delegate produces each turn's packet via the reducer
@@ -14,12 +14,12 @@
 use anyhow::Result;
 use tracing::warn;
 
-use kf_memory_store::MemoryStore;
-use kf_routing::correction::{
+use crate::memory::MemoryStore;
+use crate::routing::correction::{
     compute_final_verdict, decide_correction, CorrectionAction, FinalAction, FinalVerdict,
     SourceOfTruth, TruthInput, TruthProfile, ValidationStatus,
 };
-use kf_routing::cost::{estimate_simple_cost, resolve_cost_provider_key};
+use crate::routing::cost::{estimate_simple_cost, resolve_cost_provider_key};
 
 use crate::correction_loop_helpers::task_outcome_from_validation;
 use crate::model::ModelClient;
@@ -62,12 +62,12 @@ pub async fn run_correction_loop(
         .clone()
         .unwrap_or_else(|| format!("task-{}", now_millis()));
     let mut task_id = base_id.clone();
-    let original_profile = kf_routing::detect_task_profile(&original_description);
+    let original_profile = crate::routing::detect_task_profile(&original_description);
 
     let mut session_tokens: i64 = 0;
     let mut session_cost: f64 = 0.0;
     let mut last_provider: Option<String> = None;
-    let mut last_packet: Option<kf_routing::correction::ReducedStatePacket> = None;
+    let mut last_packet: Option<crate::routing::correction::ReducedStatePacket> = None;
     let mut last_emission_format: String = "unknown".into();
     let mut last_emission_model: String = "unknown".into();
     let loop_started = now_millis();
@@ -200,7 +200,7 @@ pub async fn run_correction_loop(
 
     // Persist the observation (best-effort).
     if let Some(store) = memory {
-        let _ = store.write_task_observation(&kf_memory_store::types::TaskObservationInput {
+        let _ = store.write_task_observation(&crate::memory::types::TaskObservationInput {
             task_id: task_id.clone(),
             description: original_description.clone(),
             language: original_profile.language.as_str().into(),
@@ -249,7 +249,9 @@ fn source_of_truth_str(s: SourceOfTruth) -> &'static str {
     }
 }
 
-fn kf_routing_validation(v: &TaskValidationResult) -> kf_routing::correction::TaskValidationResult {
+fn kf_routing_validation(
+    v: &TaskValidationResult,
+) -> crate::routing::correction::TaskValidationResult {
     let status = match v.status.as_str() {
         "pass" => ValidationStatus::Pass,
         "fail" => ValidationStatus::Fail,
@@ -257,7 +259,7 @@ fn kf_routing_validation(v: &TaskValidationResult) -> kf_routing::correction::Ta
         "skipped" => ValidationStatus::Skipped,
         _ => ValidationStatus::Other,
     };
-    kf_routing::correction::TaskValidationResult { status }
+    crate::routing::correction::TaskValidationResult { status }
 }
 
 fn now_millis() -> i64 {
@@ -271,7 +273,7 @@ trait FinalVerdictExt {
     fn final_verdict_str(&self) -> &'static str;
 }
 
-impl FinalVerdictExt for kf_routing::correction::TruthOutput {
+impl FinalVerdictExt for crate::routing::correction::TruthOutput {
     fn final_verdict_str(&self) -> &'static str {
         match self.final_verdict {
             FinalVerdict::Pass => "pass",
@@ -290,11 +292,11 @@ mod tests {
     use std::sync::Mutex;
 
     fn make_result(pass: bool, total_tokens: i64) -> DelegationResult {
-        let mut packet = kf_routing::correction::ReducedStatePacket::default();
+        let mut packet = crate::routing::correction::ReducedStatePacket::default();
         packet.verification.overall = if pass {
-            kf_routing::correction::OverallVerdict::Pass
+            crate::routing::correction::OverallVerdict::Pass
         } else {
-            kf_routing::correction::OverallVerdict::Fail
+            crate::routing::correction::OverallVerdict::Fail
         };
         DelegationResult {
             decision: crate::types::DelegationDecisionInfo {
@@ -478,11 +480,11 @@ mod tests {
     // security → Escalate per `decide_correction`).
 
     fn make_result_with_written_file(pass: bool, file: &std::path::Path) -> DelegationResult {
-        let mut packet = kf_routing::correction::ReducedStatePacket::default();
+        let mut packet = crate::routing::correction::ReducedStatePacket::default();
         packet.verification.overall = if pass {
-            kf_routing::correction::OverallVerdict::Pass
+            crate::routing::correction::OverallVerdict::Pass
         } else {
-            kf_routing::correction::OverallVerdict::Fail
+            crate::routing::correction::OverallVerdict::Fail
         };
         let mut result = make_result(pass, 100);
         result.packet = Some(packet);
@@ -537,7 +539,7 @@ mod tests {
         .await
         .unwrap();
         // critical security finding → escalate (no policy → backward-compat
-        // escalate, see kf-routing::correction::decide_correction).
+        // escalate, see routing::correction::decide_correction).
         assert_eq!(
             out.final_action, "escalate",
             "security finding in written file must cause escalate, not accept"

@@ -11,7 +11,7 @@
 //! no-op (job objects are a separate API surface, out of scope per
 //! ADR-054).
 
-use kf_plugin_sdk::ResourceLimits;
+use crate::sdk::ResourceLimits;
 use std::process::Command;
 
 /// Apply rlimits to a plugin tool child before exec (Unix only, ADR-060).

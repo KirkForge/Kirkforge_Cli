@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
-use kf_memory_store::MemoryStore;
+use crate::memory::MemoryStore;
 
 use crate::model::{ModelClient, TaskBrief};
 use crate::types::{
@@ -246,7 +246,7 @@ pub async fn decompose_task(
         .task_id
         .clone()
         .unwrap_or_else(|| format!("decomp-{}", now_millis()));
-    let profile = kf_routing::detect_task_profile(&task.description);
+    let profile = crate::routing::detect_task_profile(&task.description);
     let brief = TaskBrief {
         template: "task-decompose".into(),
         description: task.description.clone(),

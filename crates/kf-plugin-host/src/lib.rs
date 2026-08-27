@@ -12,6 +12,7 @@ mod hook;
 mod paths;
 mod rlimits;
 mod sandbox;
+pub mod sdk;
 mod tool;
 mod toolset;
 mod verifier;
@@ -23,7 +24,13 @@ pub use tool::{PluginTool, ToolError, KF_CODE_TOOL_ARGS, KF_CODE_TOOL_ARGS_JSON}
 pub use toolset::{CompositeToolset, PluginToolset, ToolInfo, Toolset};
 pub use verifier::{PluginVerifier, VerifierError, VerifierVerdict};
 
-use kf_plugin_sdk::{Capability, LoadedPlugin, Plugin, PluginManifest, TrustTier, ValidationError};
+// The SDK surface (folded from the former `kf-plugin-sdk` crate, WO 47.4)
+// re-exported at the host root so consumers can migrate from the
+// `kf_plugin_sdk::` alias to `kf_plugin_host::` mechanically.
+pub use sdk::{
+    ApiVersion, Capability, CapabilityKind, LoadedPlugin, ManifestError, Plugin, PluginManifest,
+    ResourceLimits, TrustTier, ValidationError, KNOWN_EVENTS,
+};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -712,7 +719,7 @@ fn validation_warnings(plugin: &LoadedPlugin, errors: &[ValidationError]) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kf_plugin_sdk::TrustTier;
+    use crate::sdk::TrustTier;
 
     fn make_test_plugin_dir(root: &Path, trust: TrustTier) {
         std::fs::create_dir_all(root.join("hooks")).unwrap();
@@ -1181,7 +1188,7 @@ trust = "read-only"
 
     mod signature_tests {
         use super::*;
-        use kf_plugin_sdk::TrustTier;
+        use crate::sdk::TrustTier;
         use minisign::KeyPair;
         use std::io::Write;
 
@@ -1345,7 +1352,7 @@ prompt = "hi"
 #[cfg(test)]
 mod load_order_tests {
     use super::*;
-    use kf_plugin_sdk::TrustTier;
+    use crate::sdk::TrustTier;
 
     fn make_plugin(root: &Path, name: &str, deps: &[&str]) {
         std::fs::create_dir_all(root).unwrap();

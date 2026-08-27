@@ -21,11 +21,13 @@
 #   untested PR.
 #
 # ponytail: the reverse-dep table is hardcoded. The workspace is small and
-#   stable (13 crates, 4 inter-crate edges); a `cargo metadata` subprocess
-#   would be 10x the code for a graph that changes once a quarter. Ceiling:
-#   if a crate gains a new internal dep, bump the table below or the script
-#   will under-report the affected set (the nextest run would still pass —
-#   just run fewer packages than ideal). Upgrade path: parse `cargo metadata`
+#   stable (10 crates, 0 inter-crate edges since the WO 47.4 folds collapsed
+#   kf-routing/kf-memory-store into kf-orchestrator and kf-plugin-sdk into
+#   kf-plugin-host); a `cargo metadata` subprocess would be 10x the code
+#   for a graph that changes once a quarter. Ceiling: if a crate gains a
+#   new internal dep, bump the table below or the script will under-report
+#   the affected set (the nextest run would still pass — just run fewer
+#   packages than ideal). Upgrade path: parse `cargo metadata`
 #   --format-version 1` if the workspace grows past ~30 crates or gains
 #   optional/feature-gated internal deps that change per-feature.
 
@@ -42,16 +44,13 @@ cd "$(dirname "$0")/.."
 # listed here.
 #
 # Known edges (verified against crates/*/Cargo.toml + root Cargo.toml):
-#   kf-memory-store  -> kf-routing
-#   kf-orchestrator  -> kf-routing, kf-memory-store
-#   kf-plugin-host   -> kf-plugin-sdk
+#   none — the WO 47.4 folds removed the last inter-crate edges
+#   (kf-orchestrator absorbed kf-routing + kf-memory-store;
+#   kf-plugin-host absorbed kf-plugin-sdk).
 #
 # Reverse-deps (dep changed  =>  also affected):
 reverse_deps_of() {
     case "$1" in
-        kf-routing)        echo "kf-memory-store kf-orchestrator" ;;
-        kf-memory-store)   echo "kf-orchestrator" ;;
-        kf-plugin-sdk)     echo "kf-plugin-host" ;;
         *)                 echo "" ;;
     esac
 }

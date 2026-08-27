@@ -13,9 +13,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use tracing::info;
 
-use kf_memory_store::MemoryStore;
-use kf_routing::classifier::{classify_task, DelegationMode, TaskInput as RoutingTaskInput};
-use kf_routing::profile::{detect_task_profile, profile_for_language, TaskProfile};
+use crate::memory::MemoryStore;
+use crate::routing::classifier::{classify_task, DelegationMode, TaskInput as RoutingTaskInput};
+use crate::routing::profile::{detect_task_profile, profile_for_language, TaskProfile};
 
 use crate::model::{ModelClient, PanickingClient, TaskBrief};
 use crate::modes::{
@@ -97,16 +97,16 @@ impl Orchestrator {
             // Map the string to TaskLanguage via lower-case compare; unknown
             // → detect from description (matches TS fallthrough).
             for lang in [
-                kf_routing::profile::TaskLanguage::Typescript,
-                kf_routing::profile::TaskLanguage::Javascript,
-                kf_routing::profile::TaskLanguage::Python,
-                kf_routing::profile::TaskLanguage::Shell,
-                kf_routing::profile::TaskLanguage::Cpp,
-                kf_routing::profile::TaskLanguage::C,
-                kf_routing::profile::TaskLanguage::Rust,
-                kf_routing::profile::TaskLanguage::Go,
-                kf_routing::profile::TaskLanguage::Sql,
-                kf_routing::profile::TaskLanguage::Text,
+                crate::routing::profile::TaskLanguage::Typescript,
+                crate::routing::profile::TaskLanguage::Javascript,
+                crate::routing::profile::TaskLanguage::Python,
+                crate::routing::profile::TaskLanguage::Shell,
+                crate::routing::profile::TaskLanguage::Cpp,
+                crate::routing::profile::TaskLanguage::C,
+                crate::routing::profile::TaskLanguage::Rust,
+                crate::routing::profile::TaskLanguage::Go,
+                crate::routing::profile::TaskLanguage::Sql,
+                crate::routing::profile::TaskLanguage::Text,
             ] {
                 if lang.as_str() == lang_str {
                     return profile_for_language(lang);
@@ -116,7 +116,7 @@ impl Orchestrator {
         detect_task_profile(&task.description)
     }
 
-    fn resolve_mode(&self, task: &TaskInput) -> kf_routing::classifier::DelegationDecision {
+    fn resolve_mode(&self, task: &TaskInput) -> crate::routing::classifier::DelegationDecision {
         let routing_input = RoutingTaskInput {
             description: &task.description,
             mode_override: task.mode_override,
@@ -126,7 +126,7 @@ impl Orchestrator {
 
     /// Recall a routing recommendation from memory (if configured). Returns
     /// None when memory is absent or nothing similar is stored.
-    fn recall(&self, task: &TaskInput) -> Option<kf_routing::Recommendation> {
+    fn recall(&self, task: &TaskInput) -> Option<crate::routing::Recommendation> {
         let store = self.memory.as_ref()?;
         store
             .recall(&task.description, None)
@@ -171,7 +171,7 @@ impl Orchestrator {
         if task.mode_override.is_none() {
             if let Some(rec) = self.recall(&task) {
                 if let Some(mode) = parse_delegation_mode(&rec.mode) {
-                    decision = kf_routing::classifier::DelegationDecision {
+                    decision = crate::routing::classifier::DelegationDecision {
                         mode,
                         reason: format!(
                             "{}; memory bias {} ({} similar)",
@@ -298,25 +298,24 @@ impl Orchestrator {
                     .packet
                     .as_ref()
                     .map(|p| match p.verification.overall {
-                        kf_routing::correction::OverallVerdict::Pass => "pass",
-                        kf_routing::correction::OverallVerdict::Fail => "fail",
-                        kf_routing::correction::OverallVerdict::Warn => "error",
-                        kf_routing::correction::OverallVerdict::Unknown => "error",
+                        crate::routing::correction::OverallVerdict::Pass => "pass",
+                        crate::routing::correction::OverallVerdict::Fail => "fail",
+                        crate::routing::correction::OverallVerdict::Warn => "error",
+                        crate::routing::correction::OverallVerdict::Unknown => "error",
                     })
                     .unwrap_or("error");
-                let _ =
-                    store.write_task_observation(&kf_memory_store::types::TaskObservationInput {
-                        task_id: task_id.clone(),
-                        description: task.description.clone(),
-                        language: profile.language.as_str().into(),
-                        mode: decision.mode.as_str().into(),
-                        model: result.emission.model.clone(),
-                        provider_key: Some(self.provider_key.clone()),
-                        outcome: Some(outcome.into()),
-                        tokens: result.emission.total_tokens,
-                        duration_ms: now_millis() - started,
-                        ..Default::default()
-                    });
+                let _ = store.write_task_observation(&crate::memory::types::TaskObservationInput {
+                    task_id: task_id.clone(),
+                    description: task.description.clone(),
+                    language: profile.language.as_str().into(),
+                    mode: decision.mode.as_str().into(),
+                    model: result.emission.model.clone(),
+                    provider_key: Some(self.provider_key.clone()),
+                    outcome: Some(outcome.into()),
+                    tokens: result.emission.total_tokens,
+                    duration_ms: now_millis() - started,
+                    ..Default::default()
+                });
             }
         }
 
@@ -350,10 +349,10 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::{InMemoryAdapter, MemoryStore, MemoryStoreOptions};
     use crate::model::RecordingClient;
     use crate::sink::RecordingSink;
     use crate::types::Emission;
-    use kf_memory_store::{InMemoryAdapter, MemoryStore, MemoryStoreOptions};
     use serde_json::json;
 
     fn emission(content: &str, format: &str) -> Emission {
@@ -418,7 +417,7 @@ mod tests {
     async fn delegate_artifact_writes_files() {
         let dir = tempfile::tempdir().unwrap();
         let content = "print('hi')\n";
-        let hash = kf_routing::sha256_of(content);
+        let hash = crate::routing::sha256_of(content);
         let body = format!(
             r#"{{"type":"file_write","path":"solution.py","content_b64":"{}","sha256":"{}"}}"#,
             base64_b64(content),
@@ -457,7 +456,7 @@ mod tests {
             .await
             .unwrap();
         // The observation should be present in the store.
-        let q = kf_memory_store::types::MemoryQuery {
+        let q = crate::memory::types::MemoryQuery {
             kind: Some("task-observation".into()),
             limit: Some(10),
             ..Default::default()
@@ -505,7 +504,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let q = kf_memory_store::types::MemoryQuery {
+        let q = crate::memory::types::MemoryQuery {
             kind: Some("task-observation".into()),
             limit: Some(10),
             ..Default::default()
@@ -519,7 +518,7 @@ mod tests {
         let sink = Arc::new(RecordingSink::new());
         let dir = tempfile::tempdir().unwrap();
         let content = "print('hi')\n";
-        let hash = kf_routing::sha256_of(content);
+        let hash = crate::routing::sha256_of(content);
         let body = format!(
             r#"{{"type":"file_write","path":"solution.py","content_b64":"{}","sha256":"{}"}}"#,
             base64_b64(content),
@@ -602,7 +601,7 @@ mod tests {
         assert_eq!(packet.verification.security.findings, 0);
         assert_eq!(
             packet.verification.overall,
-            kf_routing::correction::OverallVerdict::Pass
+            crate::routing::correction::OverallVerdict::Pass
         );
     }
 

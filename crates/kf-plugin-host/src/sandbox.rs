@@ -5,7 +5,7 @@
 //! hook). The host's effective trust tier caps which capabilities are exposed
 //! to the rest of the system.
 
-use kf_plugin_sdk::{Capability, TrustTier};
+use crate::sdk::{Capability, TrustTier};
 
 /// Policy that maps each capability kind to the minimum trust tier required
 /// to run it.
@@ -49,7 +49,7 @@ impl SandboxPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kf_plugin_sdk::Capability;
+    use crate::sdk::Capability;
 
     #[test]
     fn skill_requires_readonly() {

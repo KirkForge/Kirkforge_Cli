@@ -37,14 +37,14 @@ impl From<anyhow::Error> for KirkForgeError {
         // removed when every producer of those categories returns a typed
         // error; tracked in WO 43.1 (ollama migrated, rest deferred).
         // Downcasted so far:
-        //   - kf_plugin_sdk::ManifestError  -> ConfigParse
+        //   - kf_plugin_host::ManifestError  -> ConfigParse
         //   - kf_plugin_host::ToolError -> AccessDenied (NotFound = the
         //     tool command isn't present at the sandboxed plugin root, i.e. a
         //     path-availability outcome after the root-gating policy).
         //   - kf_code::adapters::AdapterError (WO 43.1) -> ModelUnreachable
         //     (Unreachable/ModelNotFound) or AccessDenied (Denied). Currently
         //     only the ollama adapter wraps its stream() errors this way.
-        if e.downcast_ref::<kf_plugin_sdk::ManifestError>().is_some() {
+        if e.downcast_ref::<kf_plugin_host::ManifestError>().is_some() {
             return KirkForgeError::ConfigParse(e);
         }
         if e.downcast_ref::<kf_plugin_host::ToolError>().is_some() {
@@ -171,8 +171,8 @@ mod tests {
 
     #[test]
     fn downcast_manifest_error_classifies_as_config_parse() {
-        let typed: kf_plugin_sdk::ManifestError =
-            kf_plugin_sdk::ManifestError::UnsupportedApiVersion {
+        let typed: kf_plugin_host::ManifestError =
+            kf_plugin_host::ManifestError::UnsupportedApiVersion {
                 version: "v99".into(),
             };
         let anyhow_err: anyhow::Error = typed.into();

@@ -16,9 +16,9 @@ use rusqlite::{params, Connection};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::adapters::MemoryAdapter;
-use crate::time::{iso_now, now_millis};
-use crate::types::{
+use crate::memory::adapters::MemoryAdapter;
+use crate::memory::time::{iso_now, now_millis};
+use crate::memory::types::{
     BackupMetadata, BackupRowCount, EmissionRow, MemoryObject, MemoryQuery, MemoryStats, RunRow,
 };
 
@@ -327,7 +327,7 @@ fn iso_now_ms() -> String {
     let ms = now_millis();
     let secs = ms / 1000;
     let millis = ms % 1000;
-    let (y, mo, d, h, mi, s) = crate::time::unix_to_ymdhms(secs);
+    let (y, mo, d, h, mi, s) = crate::memory::time::unix_to_ymdhms(secs);
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{millis:03}Z")
 }
 
@@ -660,7 +660,7 @@ impl MemoryAdapter for SqliteAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::MemoryObject;
+    use crate::memory::types::MemoryObject;
     use serde_json::json;
 
     fn tagged_obj(id: &str, tags: &[&str]) -> MemoryObject {

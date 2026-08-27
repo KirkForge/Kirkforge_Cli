@@ -9,6 +9,14 @@ why, and the gate evidence.
 
 ## [Unreleased]
 
+### Changed
+
+- WO 47.4 — workspace folded 13 → 10 crates: kf-routing + kf-memory-store
+  folded into kf-orchestrator (`routing`/`memory` modules; public
+  orchestrator API unchanged), kf-plugin-sdk folded into kf-plugin-host
+  (`sdk` module, surface re-exported at host root; src/ refs renamed
+  `kf_plugin_sdk::` → `kf_plugin_host::`). No behavior change.
+
 ### Fixed
 
 - WO 47.35 — prompt-injection defense: web_fetch/web_search/read_file now wrap

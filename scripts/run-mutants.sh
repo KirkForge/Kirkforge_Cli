@@ -20,7 +20,7 @@ if [ "$#" -gt 0 ]; then
     TARGETS=("$@")
 else
     TARGETS=(
-        crates/kf-routing/src/path_safety.rs
+        crates/kf-orchestrator/src/routing/path_safety.rs
         src/session/bash_runner/mod.rs
         src/shared/audit.rs
         src/session/executor/sandbox.rs

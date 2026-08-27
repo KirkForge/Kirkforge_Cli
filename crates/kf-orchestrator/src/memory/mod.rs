@@ -1,4 +1,5 @@
-//! `kf-memory-store` — routing-oriented memory system. Port of
+//! `memory` — routing-oriented memory system (folded from the former
+//! `kf-memory-store` crate, WO 47.4). Port of
 //! `@kirkforge/memory-palace` (WO 29.6).
 //!
 //! Two pieces: a [`MemoryStore`] facade (orchestrator-friendly write/recall
@@ -8,7 +9,7 @@
 //! **Not** to be confused with `src/session/memory/` (prompt-injection
 //! facts, different purpose). This crate stores routing observations,
 //! run records, and emission records for the empirical recommendation
-//! engine in `kf-routing`.
+//! engine in the `routing` module.
 
 pub mod adapters;
 pub mod store;

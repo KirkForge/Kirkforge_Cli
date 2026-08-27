@@ -11,7 +11,7 @@
 
 use anyhow::Result;
 
-use crate::types::{EmissionRow, MemoryObject, MemoryQuery, MemoryStats, RunRow};
+use crate::memory::types::{EmissionRow, MemoryObject, MemoryQuery, MemoryStats, RunRow};
 
 pub mod file;
 pub mod in_memory;

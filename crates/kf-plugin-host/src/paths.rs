@@ -44,8 +44,8 @@ pub fn is_command_within_root(root: &Path, command: &Path) -> bool {
 }
 
 /// Extract the command path declared by a capability, if it has one.
-pub fn capability_command(cap: &kf_plugin_sdk::Capability) -> Option<&Path> {
-    use kf_plugin_sdk::Capability;
+pub fn capability_command(cap: &crate::sdk::Capability) -> Option<&Path> {
+    use crate::sdk::Capability;
     match cap {
         Capability::Tool { command, .. } => command.as_deref(),
         Capability::Hook { command, .. } => Some(command.as_path()),

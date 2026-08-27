@@ -624,3 +624,25 @@
   drifted from its name (already used DataDirGuard-style paths? no — it
   used EnvGuard). When migrating a test to a different override mechanism,
   rename it in the same commit or the next reader trusts a lie.
+
+## WO 47.20 session (2026-08-27)
+
+- `maybe_wrap_cached` wraps BEFORE the executor pushes `set_*` config
+  (executor/mod.rs:244-266) — a caching/config wrapper must capture
+  request-shaping knobs in its own set_* overrides; the inner adapter
+  keeping them is not enough for the wrapper to key on them.
+- Existing skip-assertions in caching.rs checked `cache.get(model_name)`;
+  after re-keying to a fingerprint they'd pass vacuously (different key).
+  When the key derivation changes, re-key every test that peeks at the
+  cache directly — `request_fingerprint()` is visible to the in-file
+  test module even though private.
+- An edit tool oldString I typed from memory dropped an `.await` from an
+  untouched line (`rx.recv()`); rustc caught it, and `git show HEAD:<file>`
+  vs `git diff` distinguished my damage from pre-existing residue. Always
+  diff-hunk-review after edits near copied patterns; don't trust recall.
+- Load flakes on this box remain exactly the documented set: WO 46.28
+  `attached_cancel_token_kills_inflight_bash_promptly` + the two edit_file
+  30s-edge timeouts. Isolation-green proof + no-fail-fast full run is the
+  accepted evidence pattern (matches WO 47.16/46.30/46.34 sessions).
+- Cold clippy --all-targets took 19m at load 39; test-fast full
+  no-fail-fast pass 473s. Budget gate time accordingly.

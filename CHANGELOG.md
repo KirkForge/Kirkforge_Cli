@@ -11,6 +11,18 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 47.20 — response cache key + async disk tier: `CacheKey` hashed
+  only (model, messages, tools, response_format), so a request with
+  different generation config (seed, max_tokens, extended_thinking,
+  budget_tokens) replayed another request's cached response, and two
+  providers serving the same model name shared entries. The
+  `CachingAdapter` wrapper now captures the knobs at `set_*` call time
+  and folds them plus a provider/endpoint scope (from Config) into the
+  key. Separately, `cache.get()`'s sync `fs::metadata` + read +
+  deserialize (up to 64 MiB) ran on the tokio worker inside async
+  `stream()` (as did `put`'s `fs::write`); the disk tier now runs via
+  `spawn_blocking`, memory tier stays sync.
+
 - WO 47.16 — jobd auth and socket hardening (the disclosed WO 46.32
   deferral): the jobs daemon's private `check_auth` did a raw
   constant-time compare on token bytes (length-leaking timing oracle)

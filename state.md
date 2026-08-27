@@ -4,6 +4,31 @@
 
 ## Shipped (closed this session)
 
+- **WO 47.20**: Done. Response cache two-defect fix
+  (src/adapters/caching.rs only). (1) CacheKey hashed only (model,
+  messages, tools, response_format) — seed/max_tokens/
+  extended_thinking/budget_tokens/computer_use dims reached the inner
+  adapter via set_* through the wrapper (which forwarded without
+  capturing) and provider/endpoint routing was nowhere in the key, so
+  different generation config replayed another request's cached
+  response and two providers sharing a model name shared entries.
+  CachingAdapter now captures the knobs at set_* time +
+  set_request_scope() pinned by maybe_wrap_cached from Config;
+  request_fingerprint() (scope+model+knobs, \0-separated) is the
+  hashed key material. Wrap-vs-set ordering verified at all 4
+  maybe_wrap_cached call sites (wrap first, executor pushes set_* on
+  the wrapper). (2) cache.get() did fs::metadata+read+from_slice sync
+  inside async stream() (64MiB cap) — disk tier extracted to
+  read_disk/write_disk; new get_async/put_async run it via
+  spawn_blocking (put's fs::write on the forwarder task was the same
+  class — fixed too); memory tier stays sync. 4 new tests (knobs
+  change fingerprint; different seed/scope don't replay; async disk
+  round-trip); 4 existing skip-asserts re-keyed to the wrapper
+  fingerprint (bare model name would have made them vacuous). Gate
+  (head 31ad3188): clippy/fmt/check green; test-fast no-fail-fast
+  4789/4792 — 3 documented load flakes (WO 46.28 bash-cancel + 2
+  edit_file 30s-edge, load 20-39), all isolation-green; 38/38 caching
+  tests green. Branch wo/wo47.20 NOT merged/pushed (per WO rules).
 - **WO 47.16**: Done. jobd auth timing oracle + world-connectable socket
   (the disclosed WO 46.32 deferral). Extracted the session daemon's
   SHA-256-then-ct_eq logic into `pub fn check_auth_ct(supplied, expected)`

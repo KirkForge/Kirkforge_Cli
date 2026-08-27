@@ -30,6 +30,11 @@ why, and the gate evidence.
   the map (mirroring the kf-compress-core store's WO 42.7 fix); re-put of
   a live key does not grow the order. Pinned by
   `evict_if_over_cap_is_fifo` and `duplicate_put_does_not_grow_order`.
+- WO 46.37 — `web_fetch` and `web_search` now race every network await
+  (DNS guards, HTTP execute, body streaming, Brave request) against the
+  tool cancel token via `tokio::select!`, returning `ToolError::Cancelled`
+  promptly on a cancelled turn instead of waiting out the 30s fetch
+  timeout. Mirrors the WO 46.8 grep/glob cancel pattern.
 - WO 46.28 — `prune_oldest_in_dir` now deletes the OLDEST `delete_count`
   sessions (the tail of the newest-first list) instead of the `delete_count`
   sessions immediately after the keep window. The prior slice

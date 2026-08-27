@@ -11,7 +11,6 @@ use crate::session::config::config_diff_summary;
 use crate::session::conversation::ConversationLog;
 use crate::session::hooks::HookRunner;
 use crate::session::prompt::PromptBuilder;
-use crate::session::verifier::types::BusEvent;
 use crate::session::verifier::{
     CorrectionLoop, CorrectionResult, VerifierBus, VerifierHandler, VerifierSlots,
 };
@@ -618,312 +617,89 @@ impl Executor {
         &mut self,
         plugin_registry: Option<&kf_plugin_host::PluginRegistry>,
     ) -> usize {
-        use crate::session::verifier::{Verdict, Verifier};
+        use crate::session::verifier::{BusEvent, SystemCommandRunner, Verdict, Verifier};
+        use std::future::Future;
+        use std::pin::Pin;
+
+        // Table-driven registration (WO 47.1): one row per built-in verifier
+        // replaces a per-verifier struct + Verifier impl + register block.
+        // Rows must keep their order and names/priorities — pinned by
+        // executor::tests::verifier_cross and BUILTIN_VERIFIERS below.
+        type VerifyFn =
+            for<'a> fn(&'a BusEvent) -> Pin<Box<dyn Future<Output = Verdict> + Send + 'a>>;
+
+        // Box an async verify fn's future into the type-erased shape the
+        // table stores (the unsize coercion needs this named boundary).
+        fn boxed_verdict<'a, F: Future<Output = Verdict> + Send + 'a>(
+            fut: F,
+        ) -> Pin<Box<dyn Future<Output = Verdict> + Send + 'a>> {
+            Box::pin(fut)
+        }
+
+        struct FnVerifier {
+            name: &'static str,
+            priority: u8,
+            verify_fn: VerifyFn,
+        }
+
+        #[async_trait::async_trait]
+        impl Verifier for FnVerifier {
+            fn name(&self) -> &str {
+                self.name
+            }
+            fn priority(&self) -> u8 {
+                self.priority
+            }
+            async fn verify(&self, event: &BusEvent) -> Verdict {
+                (self.verify_fn)(event).await
+            }
+        }
+
+        // The build/lint/test verifiers take a CommandRunner; their rows pass
+        // the production runner via a static so the boxed future borrows a
+        // 'static reference instead of capturing (captures would block the
+        // closure-to-fn-pointer coercion).
+        static SYS_RUNNER: SystemCommandRunner = SystemCommandRunner;
+
+        #[rustfmt::skip]
+        let table: &[(&str, u8, VerifyFn)] = &[
+            ("security", 1, |e| boxed_verdict(crate::session::verifier::security::verify_security(e))),
+            ("lint", 2, |e| boxed_verdict(crate::session::verifier::lint::verify_lint(e, &SYS_RUNNER))),
+            ("build", 3, |e| boxed_verdict(crate::session::verifier::build::verify_build(e, &SYS_RUNNER))),
+            ("git", 3, |e| boxed_verdict(crate::session::verifier::git::verify_git(e))),
+            ("rustfmt", 4, |e| boxed_verdict(crate::session::verifier::rustfmt::verify_rustfmt(e))),
+            ("test", 5, |e| boxed_verdict(crate::session::verifier::test::verify_test(e, &SYS_RUNNER))),
+            // Python verifiers (WO 31.1). Each self-gates on language detection
+            // inside its verify fn — they return Skipped unless a Python marker
+            // is found at the edited file's project root, so registering them
+            // alongside the Rust verifiers is safe for pure-Rust workspaces.
+            ("python_test", 6, |e| boxed_verdict(crate::session::verifier::python_test::verify_python_test(e))),
+            ("python_lint", 7, |e| boxed_verdict(crate::session::verifier::python_lint::verify_python_lint(e))),
+            ("python_typecheck", 8, |e| boxed_verdict(crate::session::verifier::python_typecheck::verify_python_typecheck(e))),
+            // Node/Go/generic verifiers (WO 32.20) — same marker self-gating.
+            ("node_test", 9, |e| boxed_verdict(crate::session::verifier::node_test::verify_node_test(e))),
+            ("node_lint", 10, |e| boxed_verdict(crate::session::verifier::node_lint::verify_node_lint(e))),
+            ("go_test", 11, |e| boxed_verdict(crate::session::verifier::go_test::verify_go_test(e))),
+            ("go_vet", 12, |e| boxed_verdict(crate::session::verifier::go_vet::verify_go_vet(e))),
+            ("generic_test", 13, |e| boxed_verdict(crate::session::verifier::generic_test::verify_generic_test(e))),
+        ];
 
         // Default slots need room for security, lint, build, git, rustfmt,
         // test, plus any plugin verifiers registered below. Use a generous cap
         // so live plugin reload can add many plugin verifiers without running out.
         let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::with_max_slots(64)));
         let mut count = 0;
-
-        struct SecV;
-        #[async_trait::async_trait]
-        impl Verifier for SecV {
-            fn name(&self) -> &str {
-                "security"
-            }
-            fn priority(&self) -> u8 {
-                1
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::security::verify_security(event).await
-            }
-        }
         {
             let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(SecV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        struct LintV;
-        #[async_trait::async_trait]
-        impl Verifier for LintV {
-            fn name(&self) -> &str {
-                "lint"
-            }
-            fn priority(&self) -> u8 {
-                2
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::lint::verify_lint(
-                    event,
-                    &crate::session::verifier::SystemCommandRunner,
-                )
-                .await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(LintV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        struct BuildV;
-        #[async_trait::async_trait]
-        impl Verifier for BuildV {
-            fn name(&self) -> &str {
-                "build"
-            }
-            fn priority(&self) -> u8 {
-                3
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::build::verify_build(
-                    event,
-                    &crate::session::verifier::SystemCommandRunner,
-                )
-                .await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(BuildV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        struct GitV;
-        #[async_trait::async_trait]
-        impl Verifier for GitV {
-            fn name(&self) -> &str {
-                "git"
-            }
-            fn priority(&self) -> u8 {
-                3
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::git::verify_git(event).await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(GitV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        struct RustfmtV;
-        #[async_trait::async_trait]
-        impl Verifier for RustfmtV {
-            fn name(&self) -> &str {
-                "rustfmt"
-            }
-            fn priority(&self) -> u8 {
-                4
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::rustfmt::verify_rustfmt(event).await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(RustfmtV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        struct TestV;
-        #[async_trait::async_trait]
-        impl Verifier for TestV {
-            fn name(&self) -> &str {
-                "test"
-            }
-            fn priority(&self) -> u8 {
-                5
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::test::verify_test(
-                    event,
-                    &crate::session::verifier::SystemCommandRunner,
-                )
-                .await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(TestV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        // Python verifiers (WO 31.1). Each self-gates on language detection
-        // inside its verify fn — they return Skipped unless a Python marker is
-        // found at the edited file's project root, so registering them
-        // alongside the Rust verifiers is safe for pure-Rust workspaces.
-        struct PyTestV;
-        #[async_trait::async_trait]
-        impl Verifier for PyTestV {
-            fn name(&self) -> &str {
-                "python_test"
-            }
-            fn priority(&self) -> u8 {
-                6
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::python_test::verify_python_test(event).await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(PyTestV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        struct PyLintV;
-        #[async_trait::async_trait]
-        impl Verifier for PyLintV {
-            fn name(&self) -> &str {
-                "python_lint"
-            }
-            fn priority(&self) -> u8 {
-                7
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::python_lint::verify_python_lint(event).await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(PyLintV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        struct PyTypeV;
-        #[async_trait::async_trait]
-        impl Verifier for PyTypeV {
-            fn name(&self) -> &str {
-                "python_typecheck"
-            }
-            fn priority(&self) -> u8 {
-                8
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::python_typecheck::verify_python_typecheck(event).await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(PyTypeV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        // Node/Go/generic verifiers (WO 32.20). Each self-gates on language
-        // detection + toolchain presence inside its verify fn — they return
-        // Skipped unless the relevant marker is found at the edited file's
-        // project root, so registering them alongside the Rust/Python
-        // verifiers is safe for pure-Rust workspaces.
-        struct NodeTestV;
-        #[async_trait::async_trait]
-        impl Verifier for NodeTestV {
-            fn name(&self) -> &str {
-                "node_test"
-            }
-            fn priority(&self) -> u8 {
-                9
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::node_test::verify_node_test(event).await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(NodeTestV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        struct NodeLintV;
-        #[async_trait::async_trait]
-        impl Verifier for NodeLintV {
-            fn name(&self) -> &str {
-                "node_lint"
-            }
-            fn priority(&self) -> u8 {
-                10
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::node_lint::verify_node_lint(event).await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(NodeLintV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        struct GoTestV;
-        #[async_trait::async_trait]
-        impl Verifier for GoTestV {
-            fn name(&self) -> &str {
-                "go_test"
-            }
-            fn priority(&self) -> u8 {
-                11
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::go_test::verify_go_test(event).await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(GoTestV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        struct GoVetV;
-        #[async_trait::async_trait]
-        impl Verifier for GoVetV {
-            fn name(&self) -> &str {
-                "go_vet"
-            }
-            fn priority(&self) -> u8 {
-                12
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::go_vet::verify_go_vet(event).await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(GoVetV)).is_ok() {
-                count += 1;
-            }
-        }
-
-        struct GenericTestV;
-        #[async_trait::async_trait]
-        impl Verifier for GenericTestV {
-            fn name(&self) -> &str {
-                "generic_test"
-            }
-            fn priority(&self) -> u8 {
-                13
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                crate::session::verifier::generic_test::verify_generic_test(event).await
-            }
-        }
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            if s.register(Arc::new(GenericTestV)).is_ok() {
-                count += 1;
+            for &(name, priority, verify_fn) in table {
+                let v = FnVerifier {
+                    name,
+                    priority,
+                    verify_fn,
+                };
+                if s.register(Arc::new(v)).is_ok() {
+                    count += 1;
+                }
             }
         }
 

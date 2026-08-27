@@ -9,9 +9,12 @@
 //! isn't on PATH, skips gracefully (per WO 31 failure criteria: never block
 //! when a tool is absent).
 
-use crate::session::verifier::detect::{detect_project_languages, find_node_root, ProjectLanguage};
-use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
-use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
+use crate::session::verifier::detect::{find_node_root, ProjectLanguage};
+use crate::session::verifier::helpers::{
+    command_finding, language_gate, modified_path, tail_body, tool_on_path, Gate,
+};
+use crate::session::verifier::types::BusEvent;
+use crate::session::verifier::{Verdict, VerificationError};
 
 /// JS/TS extensions this verifier handles.
 const NODE_EXTS: &[&str] = &["js", "jsx", "ts", "tsx", "mjs", "cjs"];
@@ -32,13 +35,7 @@ fn vitest_configured(root: &std::path::Path) -> bool {
 /// Resolve the first available Node toolchain by probing `--version`.
 /// Returns `Some(("npm", "npx"))` or `None`.
 async fn pick_node() -> Option<(&'static str, &'static str)> {
-    let npm_ok = tokio::process::Command::new("npm")
-        .arg("--version")
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if npm_ok {
+    if tool_on_path("npm", &["--version"]).await {
         Some(("npm", "npx"))
     } else {
         None
@@ -47,26 +44,20 @@ async fn pick_node() -> Option<(&'static str, &'static str)> {
 
 /// Run the Node test verifier against an event.
 pub async fn verify_node_test(event: &BusEvent) -> Verdict {
-    let path = match event {
-        BusEvent::Edit(EditEvent { path, .. }) => path.clone(),
-        BusEvent::FileWrite(FileWriteEvent { path, .. }) => path.clone(),
-        _ => return Verdict::Skipped("not a file modification event".into()),
+    let Some(path) = modified_path(event) else {
+        return Verdict::Skipped("not a file modification event".into());
     };
 
-    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return Verdict::Skipped(format!("unsupported file type: {}", path.display()));
+    let root = match language_gate(
+        &path,
+        NODE_EXTS,
+        "Node",
+        find_node_root,
+        ProjectLanguage::Node,
+    ) {
+        Gate::Root(root) => root,
+        Gate::Skip(verdict) => return verdict,
     };
-    if !NODE_EXTS.contains(&ext) {
-        return Verdict::Skipped(format!("unsupported file type: {}", path.display()));
-    }
-
-    let Some(root) = find_node_root(&path) else {
-        return Verdict::Skipped(format!("no Node marker for {}", path.display()));
-    };
-
-    if !detect_project_languages(&root).contains(&ProjectLanguage::Node) {
-        return Verdict::Skipped("Node not detected".into());
-    }
 
     let Some((npm, npx)) = pick_node().await else {
         return Verdict::Skipped("npm not found on PATH".into());
@@ -104,33 +95,26 @@ pub async fn verify_node_test(event: &BusEvent) -> Verdict {
         return Verdict::Clean;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
     // ponytail: tail-N truncation matches the Python/Rust test verifiers;
     // full vitest/jest output can be hundreds of lines, the model only needs
     // the failure summary.
-    const TAIL_LINES: usize = 20;
-    let mut combined: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
-    if combined.len() > TAIL_LINES {
-        let start = combined.len() - TAIL_LINES;
-        combined = combined.split_off(start);
-    }
-    let body = combined.join("\n");
+    let body = tail_body(
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+        20,
+    );
 
-    Verdict::Fixable(FixSuggestion {
-        description: format!("node test failure near {}\n{body}", path.display()),
-        file: path,
-        original: String::new(),
-        replacement: String::new(),
-        severity: "error".to_string(),
-        command: None,
-        line: None,
-    })
+    command_finding(
+        format!("node test failure near {}\n{body}", path.display()),
+        path,
+        "error",
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::verifier::{EditEvent, FileWriteEvent};
 
     #[tokio::test]
     async fn skips_non_edit_events() {

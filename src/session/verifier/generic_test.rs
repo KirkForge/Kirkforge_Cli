@@ -18,28 +18,9 @@
 use std::path::Path;
 
 use crate::session::verifier::detect::detect_project_languages;
-use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
-use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
-
-/// True if `make` is on PATH.
-async fn make_available() -> bool {
-    tokio::process::Command::new("make")
-        .arg("--version")
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-/// True if `ctest` is on PATH.
-async fn ctest_available() -> bool {
-    tokio::process::Command::new("ctest")
-        .arg("--version")
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
+use crate::session::verifier::helpers::{command_finding, modified_path, tail_body, tool_on_path};
+use crate::session::verifier::types::BusEvent;
+use crate::session::verifier::{Verdict, VerificationError};
 
 /// True if `./test.sh` exists in `root` and is executable (file present).
 fn test_script_present(root: &Path) -> bool {
@@ -54,12 +35,12 @@ async fn pick_runner(root: &Path) -> Option<(&'static str, Vec<String>)> {
     // `make test` failing with "No rule to make target 'test'" surfaces as a
     // non-zero exit which the verifier reports as Fixable — slightly noisy but
     // honest. Upgrade path: grep Makefile for `^test:` before invoking.
-    if make_available().await && root.join("Makefile").is_file() {
+    if tool_on_path("make", &["--version"]).await && root.join("Makefile").is_file() {
         return Some(("make", vec!["test".into()]));
     }
     // `ctest` — needs ctest on PATH AND a CMakeTestCache or CTestTestfile.cmake
     // (the conventional ctest markers).
-    if ctest_available().await
+    if tool_on_path("ctest", &["--version"]).await
         && (root.join("CTestTestfile.cmake").is_file() || root.join("CMakeCache.txt").is_file())
     {
         return Some(("ctest", vec![]));
@@ -74,10 +55,8 @@ async fn pick_runner(root: &Path) -> Option<(&'static str, Vec<String>)> {
 
 /// Run the generic fallback test verifier against an event.
 pub async fn verify_generic_test(event: &BusEvent) -> Verdict {
-    let path = match event {
-        BusEvent::Edit(EditEvent { path, .. }) => path.clone(),
-        BusEvent::FileWrite(FileWriteEvent { path, .. }) => path.clone(),
-        _ => return Verdict::Skipped("not a file modification event".into()),
+    let Some(path) = modified_path(event) else {
+        return Verdict::Skipped("not a file modification event".into());
     };
 
     // The generic verifier is the FALLBACK — it must NOT fire when a
@@ -117,30 +96,23 @@ pub async fn verify_generic_test(event: &BusEvent) -> Verdict {
         return Verdict::Clean;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    const TAIL_LINES: usize = 20;
-    let mut combined: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
-    if combined.len() > TAIL_LINES {
-        let start = combined.len() - TAIL_LINES;
-        combined = combined.split_off(start);
-    }
-    let body = combined.join("\n");
+    let body = tail_body(
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+        20,
+    );
 
-    Verdict::Fixable(FixSuggestion {
-        description: format!("{runner} failure near {}\n{body}", path.display()),
-        file: path,
-        original: String::new(),
-        replacement: String::new(),
-        severity: "error".to_string(),
-        command: None,
-        line: None,
-    })
+    command_finding(
+        format!("{runner} failure near {}\n{body}", path.display()),
+        path,
+        "error",
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::verifier::EditEvent;
 
     #[tokio::test]
     async fn skips_non_edit_events() {

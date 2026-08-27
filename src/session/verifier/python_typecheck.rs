@@ -6,11 +6,12 @@
 //! gracefully. Type errors are returned as `Verdict::Fixable` with the tool
 //! output.
 
-use crate::session::verifier::detect::{
-    detect_project_languages, find_python_root, ProjectLanguage,
+use crate::session::verifier::detect::{find_python_root, ProjectLanguage};
+use crate::session::verifier::helpers::{
+    command_finding, head_body, language_gate, modified_path, Gate,
 };
-use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
-use crate::session::verifier::{FixSuggestion, Verdict};
+use crate::session::verifier::types::BusEvent;
+use crate::session::verifier::Verdict;
 
 /// True if mypy is configured for `root` (mypy.ini file, or a
 /// `[tool.mypy]` section in pyproject.toml).
@@ -31,23 +32,20 @@ fn mypy_configured(root: &std::path::Path) -> bool {
 
 /// Run the Python type-check verifier against an event.
 pub async fn verify_python_typecheck(event: &BusEvent) -> Verdict {
-    let path = match event {
-        BusEvent::Edit(EditEvent { path, .. }) => path.clone(),
-        BusEvent::FileWrite(FileWriteEvent { path, .. }) => path.clone(),
-        _ => return Verdict::Skipped("not a file modification event".into()),
+    let Some(path) = modified_path(event) else {
+        return Verdict::Skipped("not a file modification event".into());
     };
 
-    if path.extension().and_then(|e| e.to_str()) != Some("py") {
-        return Verdict::Skipped(format!("unsupported file type: {}", path.display()));
-    }
-
-    let Some(root) = find_python_root(&path) else {
-        return Verdict::Skipped(format!("no Python marker for {}", path.display()));
+    let root = match language_gate(
+        &path,
+        &["py"],
+        "Python",
+        find_python_root,
+        ProjectLanguage::Python,
+    ) {
+        Gate::Root(root) => root,
+        Gate::Skip(verdict) => return verdict,
     };
-
-    if !detect_project_languages(&root).contains(&ProjectLanguage::Python) {
-        return Verdict::Skipped("Python not detected".into());
-    }
 
     if !mypy_configured(&root) {
         return Verdict::Skipped("mypy not configured (no mypy.ini or [tool.mypy])".into());
@@ -68,28 +66,23 @@ pub async fn verify_python_typecheck(event: &BusEvent) -> Verdict {
         return Verdict::Clean;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let body: String = if !stdout.trim().is_empty() {
-        stdout.lines().take(20).collect::<Vec<_>>().join("\n")
-    } else {
-        stderr.lines().take(20).collect::<Vec<_>>().join("\n")
-    };
+    let body = head_body(
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+        20,
+    );
 
-    Verdict::Fixable(FixSuggestion {
-        description: format!("mypy errors near {}\n{body}", path.display()),
-        file: path,
-        original: String::new(),
-        replacement: String::new(),
-        severity: "error".to_string(),
-        command: None,
-        line: None,
-    })
+    command_finding(
+        format!("mypy errors near {}\n{body}", path.display()),
+        path,
+        "error",
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::verifier::{EditEvent, FileWriteEvent};
 
     #[tokio::test]
     async fn skips_non_edit_events() {

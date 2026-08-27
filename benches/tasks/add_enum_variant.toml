@@ -1,5 +1,6 @@
 name = "add_enum_variant"
 difficulty = "easy"
+requires_model = true
 
 prompt = "Add a new variant `Pending` to the `Status` enum in src/lib.rs and update the `label` function's match so it returns `\"pending\"` for the new variant. Update the test to cover the new variant. `cargo test` must pass."
 

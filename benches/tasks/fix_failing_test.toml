@@ -1,5 +1,6 @@
 name = "fix_failing_test"
 difficulty = "medium"
+requires_model = true
 
 prompt = "Fix the failing test in src/lib.rs. The assertion `assert_eq!(add(2, 2), 5)` is incorrect — `add(2, 2)` returns 4, not 5. Change the assertion to `assert_eq!(add(2, 2), 4)` so the test passes."
 

@@ -1,5 +1,6 @@
 name = "fix_clippy_warning"
 difficulty = "easy"
+requires_model = true
 
 prompt = "Fix the clippy warning `new_without_default` on `Holder` in src/lib.rs by adding a `Default` impl that delegates to `Holder::new()`."
 

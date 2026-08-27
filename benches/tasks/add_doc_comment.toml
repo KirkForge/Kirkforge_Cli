@@ -1,5 +1,6 @@
 name = "add_doc_comment"
 difficulty = "easy"
+requires_model = true
 
 prompt = "Add a `///` doc comment to the public function `greet` in src/lib.rs. The doc comment should describe what the function does."
 

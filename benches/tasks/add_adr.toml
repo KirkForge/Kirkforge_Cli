@@ -1,5 +1,6 @@
 name = "add_adr"
 difficulty = "hard"
+requires_model = true
 
 prompt = "Write an Architecture Decision Record (ADR) numbered 062 for a benchmark-delta-comparison feature. Create the file at docs/adr/062-benchmark-delta-comparison.md following the existing ADR format. The ADR should document: Context (need to compare benchmark runs across commits), Decision (add delta comparison to bench reports with pairwise success-rate diff, token diff, and cost diff), Status (Accepted), and Consequences. Also update docs/adr/README.md to include the new ADR."
 

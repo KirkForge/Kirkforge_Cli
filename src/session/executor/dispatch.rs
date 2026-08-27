@@ -775,7 +775,10 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
 /// `resolved` is the Phase-1 canonical path — its components were real
 /// directories when canonicalized, so any symlink found now was swapped
 /// in after validation (WO 38.1 symlink TOCTOU).
-fn symlink_swap_denied(resolved: &std::path::Path) -> Option<String> {
+///
+/// `pub(crate)` for the verifier correction loop (WO 47.19): its
+/// auto-fix write path runs outside dispatch and needs the same walk.
+pub(crate) fn symlink_swap_denied(resolved: &std::path::Path) -> Option<String> {
     let mut acc = std::path::PathBuf::new();
     for comp in resolved.components() {
         acc.push(comp.as_os_str());

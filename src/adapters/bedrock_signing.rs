@@ -287,7 +287,10 @@ pub(crate) mod tests {
         let body = br#"{"a":1}"#;
         let signed = sign_request(url, body, "us-east-1").unwrap();
         assert_eq!(
-            signed.headers.get("content-length").and_then(|v| v.to_str().ok()),
+            signed
+                .headers
+                .get("content-length")
+                .and_then(|v| v.to_str().ok()),
             Some("7"),
             "content-length header must equal the body length"
         );

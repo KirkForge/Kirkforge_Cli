@@ -273,7 +273,10 @@ mod tests {
         let url = a.endpoint();
         assert!(url.contains("projects/my-project/"));
         assert!(url.contains("models/claude-3-5-sonnet-v2@20241022:streamRawPredict"));
-        assert!(!url.contains('%'), "no percent-encoding expected, got: {url}");
+        assert!(
+            !url.contains('%'),
+            "no percent-encoding expected, got: {url}"
+        );
     }
 
     #[test]

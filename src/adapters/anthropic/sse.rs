@@ -331,8 +331,14 @@ mod tests {
     fn find_data_frame_start_is_line_anchored() {
         // Buffer start and post-newline positions qualify.
         assert_eq!(find_data_frame_start(b"data: x\n\n"), Some(0));
-        assert_eq!(find_data_frame_start(b"event: ping\n\ndata: x\n\n"), Some(13));
-        assert_eq!(find_data_frame_start(b"event: ping\r\rdata: x\r\r"), Some(13));
+        assert_eq!(
+            find_data_frame_start(b"event: ping\n\ndata: x\n\n"),
+            Some(13)
+        );
+        assert_eq!(
+            find_data_frame_start(b"event: ping\r\rdata: x\r\r"),
+            Some(13)
+        );
         // A `data: ` substring inside a line is not a frame start.
         assert_eq!(find_data_frame_start(b"event: ping data: x\n\n"), None);
         assert_eq!(find_data_frame_start(b"note: see data: below"), None);

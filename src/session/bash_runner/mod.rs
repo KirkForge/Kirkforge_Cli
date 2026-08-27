@@ -719,13 +719,26 @@ pub async fn run_shell_with_token(
             // Normal exit. The drain tasks should be done or very close
             // to it (EOF arrives as the child closes its pipes just
             // before exiting). Join with a generous timeout so a stuck
-            // drainer can't wedge us.
-            let (raw_stdout, stdout_dropped) = join_drain(drain_stdout, "stdout").await?;
-            let (raw_stderr, stderr_dropped) = join_drain(drain_stderr, "stderr").await?;
+            // drainer can't wedge us. A timeout here usually means a
+            // backgrounded grandchild inherited the pipes — the shell
+            // itself exited, so that is not a tool failure: return what
+            // we have with a note instead of erroring.
+            let ((raw_stdout, stdout_dropped), stdout_note) =
+                join_drain_or_note(drain_stdout, "stdout").await;
+            let ((raw_stderr, stderr_dropped), stderr_note) =
+                join_drain_or_note(drain_stderr, "stderr").await;
+            let mut stdout = cap_to_string(raw_stdout, stdout_dropped);
+            let mut stderr = cap_to_string(raw_stderr, stderr_dropped);
+            if let Some(note) = stdout_note {
+                stdout.push_str(&note);
+            }
+            if let Some(note) = stderr_note {
+                stderr.push_str(&note);
+            }
             Ok(ShellOutput {
                 status,
-                stdout: cap_to_string(raw_stdout, stdout_dropped),
-                stderr: cap_to_string(raw_stderr, stderr_dropped),
+                stdout,
+                stderr,
             })
         }
         Ok(Err(e)) => Err(ShellError::Spawn(format!(
@@ -790,6 +803,30 @@ async fn join_drain(
             label: label.to_string(),
             message: format!("task did not finish within {DRAIN_JOIN_TIMEOUT:?}"),
         }),
+    }
+}
+
+/// Normal-exit variant of `join_drain`: a Drain failure here means a
+/// backgrounded grandchild is still holding the pipe (or the drainer
+/// misbehaved). The shell itself exited — the command succeeded or failed
+/// on its own merits — so surface the uncaptured stream as a note instead
+/// of failing the whole invocation.
+async fn join_drain_or_note(
+    handle: tokio::task::JoinHandle<std::io::Result<(Vec<u8>, u64)>>,
+    label: &str,
+) -> ((Vec<u8>, u64), Option<String>) {
+    match join_drain(handle, label).await {
+        Ok(pair) => (pair, None),
+        Err(ShellError::Drain { message, .. }) => (
+            (Vec::new(), 0),
+            Some(format!(
+                "[{label} not captured: a background process still holds the pipe ({message})]"
+            )),
+        ),
+        Err(e) => (
+            (Vec::new(), 0),
+            Some(format!("[{label} not captured: {e}]")),
+        ),
     }
 }
 
@@ -1804,6 +1841,53 @@ mod tests {
             .unwrap();
         assert_eq!(kept.len(), 0);
         assert_eq!(dropped, 0);
+    }
+
+    // WO 46.36: a failed drain must surface as a note, not an error.
+    // (The drain-timeout arm is covered by the ignored e2e test below.)
+    #[tokio::test]
+    async fn test_join_drain_or_note_failed_drain_returns_note() {
+        let failed = tokio::spawn(async {
+            Err::<(Vec<u8>, u64), std::io::Error>(std::io::Error::other("read failed"))
+        });
+        let ((kept, dropped), note) = join_drain_or_note(failed, "stdout").await;
+        assert!(kept.is_empty());
+        assert_eq!(dropped, 0);
+        let note = note.expect("failed drain should produce a note");
+        assert!(note.contains("stdout not captured"), "got: {note}");
+        assert!(
+            note.contains("background process still holds the pipe"),
+            "got: {note}"
+        );
+    }
+
+    // WO 46.36: a well-behaved drain passes through untouched.
+    #[tokio::test]
+    async fn test_join_drain_or_note_completed_drain_passes_through() {
+        let done = tokio::spawn(async { Ok::<_, std::io::Error>((vec![b'x'], 1u64)) });
+        let ((kept, dropped), note) = join_drain_or_note(done, "stdout").await;
+        assert_eq!(kept, vec![b'x']);
+        assert_eq!(dropped, 1);
+        assert!(note.is_none());
+    }
+
+    /// A shell that exits 0 while a backgrounded grandchild still holds
+    /// the pipes must NOT fail the invocation — the command succeeded.
+    /// WO 46.36 regression guard.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "waits out the 5s DRAIN_JOIN_TIMEOUT; run with --ignored"]
+    async fn run_shell_normal_exit_with_grandchild_holding_pipe_succeeds() {
+        let tmp = std::env::temp_dir();
+        let out = run_shell("echo KF_BG_MARKER; sleep 10 &", &tmp, 30)
+            .await
+            .expect("exit-0 command must not fail despite stuck drain");
+        assert!(out.status.success(), "got: {:?}", out.status);
+        assert!(
+            out.stdout.contains("[stdout not captured"),
+            "expected pipe-held note, got: {:?}",
+            out.stdout
+        );
     }
 
     #[cfg(unix)]

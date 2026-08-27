@@ -28,8 +28,10 @@ mod helpers;
 /// # Truth model
 ///
 /// When multiple verifiers disagree, precedence rules determine which
-/// result is authoritative. The system runs verifiers in priority order
-/// and stops at the first definitive result.
+/// result is authoritative. The system runs verifiers concurrently
+/// (bounded) and every verifier runs; the aggregate picks the most
+/// severe finding — `Unfixable` over `Fixable`, first in priority order
+/// among equals.
 pub mod lint;
 pub mod node_lint;
 pub mod node_test;

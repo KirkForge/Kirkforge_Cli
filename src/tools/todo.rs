@@ -268,7 +268,8 @@ fn validate_todo_list(items: &[TodoItem]) -> Result<(), String> {
             .depends_on
             .iter()
             .filter(|dep| {
-                let dep_item = &items[*ids.get(dep.as_str()).unwrap()];
+                let dep_item =
+                    &items[*ids.get(dep.as_str()).expect("dangling deps rejected above")];
                 dep_item.status != TodoStatus::Completed
             })
             .map(String::as_str)
@@ -317,8 +318,8 @@ fn find_cycle(items: &[TodoItem], idx: &std::collections::HashMap<&str, usize>) 
             if edge_i < deps.len() {
                 let dep = &deps[edge_i];
                 // Advance the frame's edge cursor.
-                stack.last_mut().unwrap().1 = edge_i + 1;
-                let v = *idx.get(dep.as_str()).unwrap();
+                stack.last_mut().expect("frame pushed above").1 = edge_i + 1;
+                let v = *idx.get(dep.as_str()).expect("dangling deps rejected above");
                 let c = color[v];
                 if c == WHITE {
                     parent[v] = u as isize;

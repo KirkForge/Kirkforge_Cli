@@ -547,18 +547,23 @@ fn html_to_text(html: &str) -> String {
     static TAG_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static WS_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
 
-    let head = HEAD_RE.get_or_init(|| regex::Regex::new(r"(?is)<head[^>]*>.*?</head>").unwrap());
-    let script =
-        SCRIPT_RE.get_or_init(|| regex::Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap());
-    let style =
-        STYLE_RE.get_or_init(|| regex::Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap());
+    let head = HEAD_RE.get_or_init(|| {
+        regex::Regex::new(r"(?is)<head[^>]*>.*?</head>").expect("static regex literal")
+    });
+    let script = SCRIPT_RE.get_or_init(|| {
+        regex::Regex::new(r"(?is)<script[^>]*>.*?</script>").expect("static regex literal")
+    });
+    let style = STYLE_RE.get_or_init(|| {
+        regex::Regex::new(r"(?is)<style[^>]*>.*?</style>").expect("static regex literal")
+    });
 
     let s = head.replace_all(html, "");
     let s = script.replace_all(&s, " ");
     let s = style.replace_all(&s, " ");
 
     let cb = CB_RE.get_or_init(|| {
-        regex::Regex::new(r"(?is)<pre[^>]*>\s*<code[^>]*>(.*?)</code>\s*</pre>").unwrap()
+        regex::Regex::new(r"(?is)<pre[^>]*>\s*<code[^>]*>(.*?)</code>\s*</pre>")
+            .expect("static regex literal")
     });
     let s = cb.replace_all(&s, |c: &regex::Captures| {
         format!(
@@ -567,7 +572,9 @@ fn html_to_text(html: &str) -> String {
         )
     });
 
-    let pre = PRE_RE.get_or_init(|| regex::Regex::new(r"(?is)<pre[^>]*>(.*?)</pre>").unwrap());
+    let pre = PRE_RE.get_or_init(|| {
+        regex::Regex::new(r"(?is)<pre[^>]*>(.*?)</pre>").expect("static regex literal")
+    });
     let s = pre.replace_all(&s, |c: &regex::Captures| {
         format!(
             "\n```\n{}\n```\n",
@@ -575,12 +582,16 @@ fn html_to_text(html: &str) -> String {
         )
     });
 
-    let ic = IC_RE.get_or_init(|| regex::Regex::new(r"(?i)<code\b[^>]*>(.*?)</code>").unwrap());
+    let ic = IC_RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)<code\b[^>]*>(.*?)</code>").expect("static regex literal")
+    });
     let s = ic.replace_all(&s, |c: &regex::Captures| {
         format!("`{}`", c.get(1).map(|m| m.as_str()).unwrap_or(""))
     });
 
-    let h = H_RE.get_or_init(|| regex::Regex::new(r"(?i)<h([1-6])[^>]*>(.*?)</h[1-6]>").unwrap());
+    let h = H_RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)<h([1-6])[^>]*>(.*?)</h[1-6]>").expect("static regex literal")
+    });
     let s = h.replace_all(&s, |c: &regex::Captures| {
         let n = c
             .get(1)
@@ -594,31 +605,44 @@ fn html_to_text(html: &str) -> String {
     });
 
     let link = LINK_RE.get_or_init(|| {
-        regex::Regex::new(r#"(?i)<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>"#).unwrap()
+        regex::Regex::new(r#"(?i)<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>"#)
+            .expect("static regex literal")
     });
     let s = link.replace_all(&s, "[$2]($1)");
 
-    let strong =
-        STRONG_RE.get_or_init(|| regex::Regex::new(r"(?i)</?(?:strong|b)\b[^>]*>").unwrap());
+    let strong = STRONG_RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)</?(?:strong|b)\b[^>]*>").expect("static regex literal")
+    });
     let s = strong.replace_all(&s, "**");
 
-    let em = EM_RE.get_or_init(|| regex::Regex::new(r"(?i)</?(?:em|i)\b[^>]*>").unwrap());
+    let em = EM_RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)</?(?:em|i)\b[^>]*>").expect("static regex literal")
+    });
     let s = em.replace_all(&s, "*");
 
-    let hr = HR_RE.get_or_init(|| regex::Regex::new(r"(?i)<hr\b\s*/?>").unwrap());
+    let hr =
+        HR_RE.get_or_init(|| regex::Regex::new(r"(?i)<hr\b\s*/?>").expect("static regex literal"));
     let s = hr.replace_all(&s, "\n---\n");
 
-    let br = BR_RE.get_or_init(|| regex::Regex::new(r"(?i)<br\b\s*/?>").unwrap());
+    let br =
+        BR_RE.get_or_init(|| regex::Regex::new(r"(?i)<br\b\s*/?>").expect("static regex literal"));
     let s = br.replace_all(&s, "\n");
 
-    let p = P_RE.get_or_init(|| regex::Regex::new(r"(?i)</?p\b[^>]*>").unwrap());
+    let p =
+        P_RE.get_or_init(|| regex::Regex::new(r"(?i)</?p\b[^>]*>").expect("static regex literal"));
     let s = p.replace_all(&s, "\n\n");
 
-    let list = LIST_RE
-        .get_or_init(|| regex::Regex::new(r"(?i)<(?:ul|ol|li)\b[^>]*>|</(?:ul|ol)\b>").unwrap());
+    let list = LIST_RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)<(?:ul|ol|li)\b[^>]*>|</(?:ul|ol)\b>")
+            .expect("static regex literal")
+    });
     let mut stack: Vec<bool> = Vec::new();
     let s = list.replace_all(&s, |c: &regex::Captures| {
-        let t = c.get(0).unwrap().as_str().to_ascii_lowercase();
+        let t = c
+            .get(0)
+            .expect("group 0 always present on match")
+            .as_str()
+            .to_ascii_lowercase();
         if t.starts_with("<ol") {
             stack.push(true);
             "\n".into()
@@ -639,12 +663,12 @@ fn html_to_text(html: &str) -> String {
         }
     });
 
-    let tag = TAG_RE.get_or_init(|| regex::Regex::new(r"<[^>]+>").unwrap());
+    let tag = TAG_RE.get_or_init(|| regex::Regex::new(r"<[^>]+>").expect("static regex literal"));
     let s = tag.replace_all(&s, " ");
 
     let s = html_entities::decode(&s);
 
-    let ws = WS_RE.get_or_init(|| regex::Regex::new(r"[ \t]+").unwrap());
+    let ws = WS_RE.get_or_init(|| regex::Regex::new(r"[ \t]+").expect("static regex literal"));
     s.lines()
         .map(|line| {
             let leading = line.len() - line.trim_start().len();

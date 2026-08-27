@@ -892,7 +892,7 @@ fn handle_auto_approve_command(args: &str, state: &mut AppState) -> String {
         );
     }
 
-    let new_val = want.unwrap();
+    let new_val = want.expect("None handled above");
     {
         let mut cfg = state
             .services

@@ -161,7 +161,12 @@ async fn handle_run(
     if state.generation.workflow_in_progress.is_some() {
         return format!(
             "A workflow ('{}') is already running. /workflow status or /workflow cancel first.",
-            state.generation.workflow_in_progress.as_ref().unwrap().name
+            state
+                .generation
+                .workflow_in_progress
+                .as_ref()
+                .expect("is_some checked above")
+                .name
         );
     }
 

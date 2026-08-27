@@ -180,7 +180,10 @@ impl McpHttpTransport {
             return None;
         }
 
-        super::warn_unsupported_capabilities(&config.name, resp.get("result").unwrap());
+        super::warn_unsupported_capabilities(
+            &config.name,
+            resp.get("result").expect("result presence checked above"),
+        );
 
         transport
             .send_notification(&serde_json::json!({

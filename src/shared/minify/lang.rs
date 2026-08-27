@@ -223,7 +223,7 @@ fn collect_leaves<'a>(
         let child_count = node.child_count();
         let mut i = 0usize;
         while i < child_count {
-            let child = node.child(i).unwrap();
+            let child = node.child(i).expect("i < child_count");
             let (skip_self, skip_next) = should_skip_node(&child, lang, source);
             if skip_self && skip_next {
                 // Skip this child and its next sibling

@@ -1048,7 +1048,7 @@ pub(crate) async fn handle_input_key(
         // F1–F6 switch between Chat, Models, Plugins, Jobs, Settings, Sessions.
         // Esc returns to Chat from any non-Chat tab.
         k if ActiveTab::from_key_code(k).is_some() => {
-            let new_tab = ActiveTab::from_key_code(k).unwrap();
+            let new_tab = ActiveTab::from_key_code(k).expect("is_some in arm guard");
             // Reset list state when switching overlays so the highlight
             // doesn't carry over from a previous overlay.
             if new_tab != state.ui.active_tab {
@@ -1824,7 +1824,10 @@ fn apply_completion(state: &mut AppState, trigger: &str, matches: Vec<String>) -
             true
         }
         1 => {
-            let completed = format!("{trigger}{}", matches.into_iter().next().unwrap());
+            let completed = format!(
+                "{trigger}{}",
+                matches.into_iter().next().expect("len checked == 1")
+            );
             state.conversation.input = completed;
             state.conversation.cursor_position = state.conversation.input.chars().count();
             state.mark_dirty();

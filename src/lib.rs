@@ -4,6 +4,8 @@
 //! Exposing the internal modules as a library lets `benches/` and `tests/`
 //! targets exercise real parser/executor code without duplication.
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 pub mod adapters;
 pub mod cli;
 pub mod daemon;

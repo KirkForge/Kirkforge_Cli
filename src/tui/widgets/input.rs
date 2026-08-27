@@ -140,7 +140,7 @@ fn render_cursor_line(line: &str, col: usize) -> Line<'static> {
         // Cursor on a char: render that char in green (it replaces
         // the char visually, like a real terminal cursor), then the
         // rest of the line normally. No trailing block.
-        let first = after.chars().next().unwrap();
+        let first = after.chars().next().expect("after is non-empty");
         let rest: String = after.chars().skip(1).collect();
         spans.push(Span::styled(first.to_string(), cursor));
         if !rest.is_empty() {

@@ -5,6 +5,8 @@ __pycache__/
 node_modules/
 dist/
 *.tsbuildinfo
+# Workspace members share the root Cargo.lock; stray per-crate locks are stale.
+crates/*/Cargo.lock
 
 # Editor / OS cruft
 *.swp

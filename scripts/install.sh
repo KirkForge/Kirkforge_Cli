@@ -108,43 +108,6 @@ if [ "$(id -u)" -ne 0 ]; then
     mkdir -p "$CONFIG_DIR"
 fi
 
-DATA_DIR="${DATA_DIR:-$PREFIX/share/kf-code}"
-PLUGIN_DIR="$DATA_DIR/plugins"
-mkdir -p "$PLUGIN_DIR"
-if [ -d "$tmpdir/plugins" ]; then
-    for plugin in "$tmpdir"/plugins/*/; do
-        [ -d "$plugin" ] || continue
-        name="$(basename "$plugin")"
-        rm -rf "$PLUGIN_DIR/$name"
-        cp -R "$plugin" "$PLUGIN_DIR/$name"
-    done
-    echo "Installed bundled plugins to $PLUGIN_DIR"
-fi
-
-if [ -d "$tmpdir/npm" ]; then
-    NPM_DIR="$DATA_DIR/npm"
-    rm -rf "$NPM_DIR"
-    cp -R -P "$tmpdir/npm" "$NPM_DIR"
-    echo "Installed bundled Node SDK to $NPM_DIR"
-
-    if ! command -v node >/dev/null 2>&1; then
-        echo "Warning: node was not found on PATH. The kf-plugin Node SDK tools require Node.js (>=20)." >&2
-        echo "Install Node.js and ensure 'node' is on PATH before using those tools." >&2
-    else
-        node_version=$(node --version 2>/dev/null | sed 's/^v//')
-        case "$node_version" in
-            [0-9]*.[0-9]*.[0-9]*) ;;
-            *) node_version="" ;;
-        esac
-        if [ -n "$node_version" ]; then
-            major=$(echo "$node_version" | cut -d. -f1)
-            if [ "$major" -lt 20 ] 2>/dev/null; then
-                echo "Warning: Node.js $node_version is installed, but the bundled Node SDK requires Node >=20." >&2
-            fi
-        fi
-    fi
-fi
-
 echo "Installed kf-code to $BIN_DIR"
 
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then

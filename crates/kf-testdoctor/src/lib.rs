@@ -1,7 +1,7 @@
 //! kf-testdoctor — test-performance doctor for Rust workspaces.
 //!
 //! Library API: profile, classify, partition, suggest, gaps, diagnose.
-//! See `docs/ideas/test-doctor.md` for the design.
+//! See `docs/archive/ideas/test-doctor.md` for the design.
 
 pub mod apply;
 pub mod classify;

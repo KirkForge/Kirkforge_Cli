@@ -69,6 +69,15 @@ impl McpHttpTransport {
         let sse_url = format!("{base_url}/sse");
         let post_url = format!("{base_url}/messages");
 
+        // WO 47.28: attach the configured bearer token to every request
+        // (SSE GET + POST) so authenticated MCP servers accept the session.
+        // Omitted entirely when unset — some servers reject unknown headers.
+        let auth_header: Option<String> = if config.bearer_token.is_empty() {
+            None
+        } else {
+            Some(format!("Bearer {}", config.bearer_token))
+        };
+
         let (request_tx, mut request_rx) = mpsc::unbounded_channel::<HttpRequestEnvelope>();
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
@@ -83,6 +92,7 @@ impl McpHttpTransport {
         let client_for_reader = client.clone();
         let session_id_for_reader = session_id.clone();
         let last_event_id_for_reader = last_event_id.clone();
+        let auth_for_reader = auth_header.clone();
         let reader_task = tokio::spawn(async move {
             let _ = run_sse_reader(
                 client_for_reader,
@@ -92,6 +102,7 @@ impl McpHttpTransport {
                 &mut shutdown_rx,
                 session_id_for_reader,
                 last_event_id_for_reader,
+                auth_for_reader,
             )
             .await;
         });
@@ -108,6 +119,7 @@ impl McpHttpTransport {
                     &envelope.body,
                     &envelope.id,
                     session_id_val.as_deref(),
+                    auth_header.as_deref(),
                 )
                 .await;
                 // The SSE reader will route the real response; the POST
@@ -527,6 +539,7 @@ async fn post_request(
     body: &str,
     id: &str,
     session_id: Option<&str>,
+    auth: Option<&str>,
 ) -> Result<(), McpError> {
     let mut request = client
         .post(url)
@@ -540,6 +553,10 @@ async fn post_request(
     // headers).
     if let Some(sid) = session_id {
         request = request.header("mcp-session-id", sid);
+    }
+    // WO 47.28: send Authorization when a bearer token is configured.
+    if let Some(auth) = auth {
+        request = request.header("authorization", auth);
     }
     let resp = match tokio::time::timeout(REQUEST_TIMEOUT, request.send()).await {
         Ok(Ok(r)) => r,
@@ -562,6 +579,7 @@ async fn post_request(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_sse_reader(
     client: reqwest::Client,
     url: String,
@@ -570,6 +588,7 @@ async fn run_sse_reader(
     shutdown: &mut oneshot::Receiver<()>,
     session_id: Arc<tokio::sync::Mutex<Option<String>>>,
     last_event_id: Arc<tokio::sync::Mutex<Option<String>>>,
+    auth: Option<String>,
 ) {
     // Reconnect-with-backoff loop (WO 10.7). When the SSE stream drops,
     // reconnect with the session id + Last-Event-ID header so the server
@@ -579,8 +598,13 @@ async fn run_sse_reader(
     let mut attempt: usize = 0;
     loop {
         let last_eid = last_event_id.lock().await.clone();
-        let (stream, header_session_id) = match open_sse_stream(&client, &url, last_eid.as_deref())
-            .await
+        let (stream, header_session_id) = match open_sse_stream(
+            &client,
+            &url,
+            last_eid.as_deref(),
+            auth.as_deref(),
+        )
+        .await
         {
             Ok(s) => s,
             Err(e) => {
@@ -792,6 +816,7 @@ async fn open_sse_stream(
     client: &reqwest::Client,
     url: &str,
     last_event_id: Option<&str>,
+    auth: Option<&str>,
 ) -> Result<(SseStream, Option<String>), McpError> {
     let mut req = client.get(url).header("accept", "text/event-stream");
     // WO 10.7: send Last-Event-ID on reconnect so the server can replay
@@ -799,6 +824,10 @@ async fn open_sse_stream(
     // 2025-06-18 §Resumability and Redelivery).
     if let Some(eid) = last_event_id {
         req = req.header("last-event-id", eid);
+    }
+    // WO 47.28: send Authorization when a bearer token is configured.
+    if let Some(auth) = auth {
+        req = req.header("authorization", auth);
     }
     let resp = req.send().await.map_err(reqwest_to_io)?;
     let status = resp.status();
@@ -934,25 +963,110 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_request_sends_session_id_header_when_provided() {
-        let (url, rx) = mock_post_server().await;
-        let client = reqwest::Client::new();
-        post_request(&client, &url, "{}", "1", Some("test-session-42"))
-            .await
-            .unwrap();
-        let captured = rx.await.unwrap();
-        assert_eq!(captured, Some("test-session-42".to_string()));
-    }
-
-    #[tokio::test]
     async fn post_request_omits_session_id_header_when_none() {
         let (url, rx) = mock_post_server().await;
         let client = reqwest::Client::new();
-        post_request(&client, &url, "{}", "1", None).await.unwrap();
+        post_request(&client, &url, "{}", "1", None, None)
+            .await
+            .unwrap();
         let captured = rx.await.unwrap();
         assert_eq!(
             captured, None,
             "header must be omitted when session id is None"
+        );
+    }
+
+    // ── WO 47.28: Authorization header from configured bearer token ──
+
+    /// Minimal one-shot server that captures one request header by
+    /// (lowercased) name and replies with a fixed raw response.
+    async fn mock_capture_header(
+        header: &str,
+        response: &str,
+    ) -> (String, tokio::sync::oneshot::Receiver<Option<String>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}/messages");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let prefix = format!("{header}:");
+        let response = response.to_string();
+
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let n = sock.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]);
+            let value = request.lines().find_map(|line| {
+                let lower = line.to_ascii_lowercase();
+                if lower.starts_with(&prefix) {
+                    Some(line[prefix.len()..].trim().to_string())
+                } else {
+                    None
+                }
+            });
+            let _ = tx.send(value);
+            sock.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        (url, rx)
+    }
+
+    #[tokio::test]
+    async fn post_request_sends_authorization_when_token_configured() {
+        let (url, rx) = mock_capture_header(
+            "authorization",
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+        )
+        .await;
+        let client = reqwest::Client::new();
+        post_request(&client, &url, "{}", "1", None, Some("Bearer tok-123"))
+            .await
+            .unwrap();
+        let captured = rx.await.unwrap();
+        assert_eq!(
+            captured,
+            Some("Bearer tok-123".to_string()),
+            "Authorization must carry the configured bearer token on POST"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_request_omits_authorization_when_no_token() {
+        let (url, rx) = mock_capture_header(
+            "authorization",
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+        )
+        .await;
+        let client = reqwest::Client::new();
+        post_request(&client, &url, "{}", "1", None, None)
+            .await
+            .unwrap();
+        let captured = rx.await.unwrap();
+        assert_eq!(
+            captured, None,
+            "Authorization must be omitted when no bearer token is configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_sse_stream_sends_authorization_when_token_configured() {
+        let (url, rx) = mock_capture_header(
+            "authorization",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n",
+        )
+        .await;
+        let client = reqwest::Client::new();
+        let (_stream, _sid) = open_sse_stream(&client, &url, None, Some("Bearer tok-123"))
+            .await
+            .unwrap();
+        let captured = rx.await.unwrap();
+        assert_eq!(
+            captured,
+            Some("Bearer tok-123".to_string()),
+            "Authorization must carry the configured bearer token on the SSE GET"
         );
     }
 
@@ -1003,7 +1117,7 @@ mod tests {
         let (url, rx) = mock_sse_server_last_event_id().await;
         let client = reqwest::Client::new();
         // Simulate a reconnect: pass a last_event_id.
-        let (_stream, _sid) = open_sse_stream(&client, &url, Some("event-99"))
+        let (_stream, _sid) = open_sse_stream(&client, &url, Some("event-99"), None)
             .await
             .unwrap();
         let captured = rx.await.unwrap();
@@ -1018,7 +1132,7 @@ mod tests {
     async fn open_sse_stream_omits_last_event_id_header_on_first_connect() {
         let (url, rx) = mock_sse_server_last_event_id().await;
         let client = reqwest::Client::new();
-        let (_stream, _sid) = open_sse_stream(&client, &url, None).await.unwrap();
+        let (_stream, _sid) = open_sse_stream(&client, &url, None, None).await.unwrap();
         let captured = rx.await.unwrap();
         assert_eq!(
             captured, None,
@@ -1066,7 +1180,7 @@ mod tests {
     async fn open_sse_stream_captures_session_id_from_response_header() {
         let url = mock_sse_server_with_session_id("header-session-7").await;
         let client = reqwest::Client::new();
-        let (_stream, session_id) = open_sse_stream(&client, &url, None).await.unwrap();
+        let (_stream, session_id) = open_sse_stream(&client, &url, None, None).await.unwrap();
         assert_eq!(
             session_id,
             Some("header-session-7".to_string()),
@@ -1078,7 +1192,7 @@ mod tests {
     async fn open_sse_stream_returns_none_session_id_when_absent() {
         let (url, _rx) = mock_sse_server_last_event_id().await;
         let client = reqwest::Client::new();
-        let (_stream, session_id) = open_sse_stream(&client, &url, None).await.unwrap();
+        let (_stream, session_id) = open_sse_stream(&client, &url, None, None).await.unwrap();
         assert_eq!(session_id, None, "no session id when header is absent");
     }
 

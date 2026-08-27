@@ -9,6 +9,16 @@ why, and the gate evidence.
 
 ## [Unreleased]
 
+### Fixed
+
+- WO 47.28 — MCP HTTP transport sent `McpServerConfig.bearer_token` nowhere:
+  it is now attached as `Authorization: Bearer <token>` on both the SSE GET
+  and every POST (omitted when empty). `EventBus::emit` removed the in-flight
+  buffer entry by `(sequence, kind)` — two streams sharing sequence+kind
+  could remove each other's entry; removal now matches the full identity
+  hash used for idempotency.
+  [47.28](docs/workorders/47.28-mcp-bearer-token-and-event-identity.md)
+
 ### Changed
 
 - WO 47.27 — memory subsystem security/dupe fixes: memory-fact slugs strip

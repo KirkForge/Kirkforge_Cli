@@ -42,6 +42,33 @@ pub fn read_auth_token() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Constant-time token check shared by the session daemon and jobd.
+/// Returns `Ok(())` if no token is configured (auth disabled) or the
+/// supplied token matches. Both sides are hashed to a fixed-size digest
+/// before the constant-time compare so timing cannot leak token length
+/// (WO 46.32; extracted and reused by jobd in WO 47.16).
+pub fn check_auth_ct(supplied: Option<&str>, expected: Option<&str>) -> Result<(), String> {
+    let expected = match expected {
+        None => return Ok(()),
+        Some(t) => t,
+    };
+    match supplied {
+        None => Err("authentication required".to_string()),
+        Some(given) => {
+            use sha2::{Digest, Sha256};
+            let expected_digest = Sha256::digest(expected.as_bytes());
+            let given_digest = Sha256::digest(given.as_bytes());
+            if subtle::ConstantTimeEq::ct_eq(expected_digest.as_slice(), given_digest.as_slice())
+                .into()
+            {
+                Ok(())
+            } else {
+                Err("authentication failed".to_string())
+            }
+        }
+    }
+}
+
 /// Read the daemon role from `KF_CODE_DAEMON_ROLE` (WO 43.6). Falls back
 /// to `admin` when unset or unparseable, so single-token deployments keep
 /// today's all-access behavior. Unknown values are denied by
@@ -444,30 +471,9 @@ impl DaemonState {
     /// Check the supplied token against `expected_token`. Returns `Ok(())`
     /// if auth is disabled (no token configured) or the token matches.
     /// Returns `Err(response)` if the token is wrong or missing when
-    /// required. Both sides are hashed to a fixed-size digest before the
-    /// constant-time compare so timing cannot leak token length (WO 46.32).
+    /// required. Timing-safe comparison lives in `check_auth_ct`.
     pub fn check_auth(&self, supplied: Option<&str>) -> Result<(), Response> {
-        match &self.expected_token {
-            None => Ok(()),
-            Some(expected) => match supplied {
-                None => Err(Response::error("authentication required")),
-                Some(given) => {
-                    use sha2::{Digest, Sha256};
-                    let expected_digest = Sha256::digest(expected.as_bytes());
-                    let given_digest = Sha256::digest(given.as_bytes());
-                    if subtle::ConstantTimeEq::ct_eq(
-                        expected_digest.as_slice(),
-                        given_digest.as_slice(),
-                    )
-                    .into()
-                    {
-                        Ok(())
-                    } else {
-                        Err(Response::error("authentication failed"))
-                    }
-                }
-            },
-        }
+        check_auth_ct(supplied, self.expected_token.as_deref()).map_err(Response::error)
     }
 
     /// Build the `Actor` for a request, for the RBAC permission check

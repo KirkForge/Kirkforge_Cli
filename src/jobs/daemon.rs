@@ -79,6 +79,22 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
     let listener = UnixListener::bind(&socket_path)
         .with_context(|| format!("bind jobd socket at {}", socket_path.display()))?;
 
+    // WO 47.16: bind() creates the socket with umask-derived perms
+    // (typically 0o755 — world-connectable, and any local user could
+    // then call Shutdown). Tighten to owner-only, mirroring the session
+    // daemon (src/daemon/server.rs). Fail closed: if the socket cannot
+    // be restricted, do not serve on it.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| {
+                format!(
+                    "restrict jobd socket {} to owner-only",
+                    socket_path.display()
+                )
+            })?;
+    }
+
     // Write PID file only after the socket is bound. If bind fails, no
     // stale PID is left behind for a daemon that never started (mirrors
     // src/daemon/server.rs:63-71).
@@ -258,22 +274,10 @@ pub async fn run_job_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> Resul
 }
 
 /// Check auth for the jobs daemon. Returns `Ok(())` if no token is configured
-/// (allowing all requests) or if the supplied token matches.
+/// (allowing all requests) or if the supplied token matches. Delegates to
+/// the shared timing-safe check (WO 47.16).
 fn check_auth(supplied: Option<&str>) -> Result<(), String> {
-    let expected = match crate::daemon::read_auth_token() {
-        Some(t) => t,
-        None => return Ok(()),
-    };
-    match supplied {
-        None => Err("authentication required".to_string()),
-        Some(given) => {
-            if subtle::ConstantTimeEq::ct_eq(expected.as_bytes(), given.as_bytes()).into() {
-                Ok(())
-            } else {
-                Err("authentication failed".to_string())
-            }
-        }
-    }
+    crate::daemon::check_auth_ct(supplied, crate::daemon::read_auth_token().as_deref())
 }
 
 /// Handle one socket client.
@@ -383,4 +387,45 @@ fn jobd_socket_path() -> Result<PathBuf> {
 
 fn jobd_pid_path() -> Result<PathBuf> {
     Ok(crate::session::jobs_dir()?.join("jobd.pid"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // WO 47.16: the jobd socket must be owner-only (0600) after bind,
+    // regardless of the process umask (mirrors `daemon_socket_is_owner_only`
+    // in src/daemon/server.rs).
+    #[tokio::test]
+    async fn jobd_socket_is_owner_only() {
+        let _guard = crate::session::test_data_dir_lock().lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let _env_data = crate::shared::test_util::EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+        let _env_token = crate::shared::test_util::EnvGuard::remove("KF_CODE_DAEMON_TOKEN_FILE");
+
+        let socket = dir.path().join("perms.sock");
+        let pid = dir.path().join("perms.pid");
+        let daemon_handle = tokio::spawn(run_job_daemon_at(socket.clone(), pid.clone()));
+
+        // Wait for the daemon to bind its socket. 5s budget — jobd startup
+        // (JobStore ensure_root + config load) is heavier than the session
+        // daemon's.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if socket.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(socket.exists(), "jobd did not bind socket in time");
+
+        use std::os::unix::fs::MetadataExt;
+        let mode = std::fs::metadata(&socket).unwrap().mode() & 0o777;
+        assert_eq!(mode, 0o600, "jobd socket must be 0600, got {mode:o}");
+
+        crate::jobs::client::send_shutdown(&socket).await.unwrap();
+        daemon_handle.await.unwrap().unwrap();
+        assert!(!socket.exists(), "jobd left stale socket");
+        assert!(!pid.exists(), "jobd left stale pid file");
+    }
 }

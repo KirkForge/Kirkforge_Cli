@@ -189,6 +189,18 @@
 
 ## Pending / Deferred (open)
 
+- **WO 47.21 residual (follow-up needed)**: `same_ms_double_spawn_gets_distinct_temp_dirs`
+  and `same_ms_double_spawn_gets_distinct_worktrees` do NOT route through
+  `ensure_private_data_dir` (their temp dirs/worktrees come from
+  `std::env::temp_dir()` directly, and nextest isolates each test in its own
+  process). The OnceLock fix does not cover their residual flake: a 10s
+  inner readiness deadline starved when ~50 parallel test processes
+  oversubscribe the 8 cores (load avg 43 with sibling worktree agents'
+  cargos). Observed passing solo + full-suite run 1 (4781/4781); failing
+  under peak load. Remaining work: bump the readiness deadline or add a
+  nextest per-test slow-timeout override (like
+  `run_bash_stuck_step_times_out`). Tracked here; no WO filed yet.
+
 - **WO 46.24 (deferred tail)**: the two append-mode sites use
   `OpenOptions::new().append(true).create(true).open()` without
   `O_NOFOLLOW`, so an attacker who pre-creates the target as a symlink

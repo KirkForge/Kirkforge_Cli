@@ -47,8 +47,9 @@ pub mod budget;
 pub mod stratum;
 
 use crate::shared::SessionId;
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 /// Per-session stores for budget and Stratum offload (WO 22.6-R2).
 /// Each session gets its own stores with LRU caps, replacing the old
@@ -68,26 +69,42 @@ pub(crate) fn test_data_dir_lock() -> &'static tokio::sync::Mutex<()> {
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
-/// Ensures the canonical data directory exists and is not world-readable.
-/// Runs at most once per process to avoid repeated filesystem calls.
+/// Ensures the data directory exists and is not world-readable.
+/// Each DISTINCT path is created+secured at most once per process
+/// (WO 47.21). The old `OnceLock<()>` ran the closure only for the
+/// first dir ever seen, so a later `KF_CODE_DATA_DIR` change silently
+/// skipped creation — `tasks_dir()`/`jobs_dir()` then returned
+/// nonexistent paths (NotFound).
 fn ensure_private_data_dir(dir: &std::path::Path) {
-    static INIT: OnceLock<()> = OnceLock::new();
-    INIT.get_or_init(|| {
-        if let Err(e) = std::fs::create_dir_all(dir) {
+    static CREATED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    let created = CREATED.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut seen = created.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.contains(dir) {
+        return;
+    }
+    // Only remember the path once it exists, so a dir deleted out from
+    // under us (tempdir cleanup in tests) is re-created on next call.
+    match std::fs::create_dir_all(dir) {
+        Ok(()) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Err(e) =
+                    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                {
+                    tracing::warn!(
+                        error = %e,
+                        path = %dir.display(),
+                        "failed to set data directory permissions"
+                    );
+                }
+            }
+            seen.insert(dir.to_path_buf());
+        }
+        Err(e) => {
             tracing::warn!(error = %e, path = %dir.display(), "failed to create data directory");
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Err(e) = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)) {
-                tracing::warn!(
-                    error = %e,
-                    path = %dir.display(),
-                    "failed to set data directory permissions"
-                );
-            }
-        }
-    });
+    }
 }
 
 pub fn data_dir() -> anyhow::Result<PathBuf> {

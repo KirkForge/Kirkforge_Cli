@@ -19,6 +19,18 @@ why, and the gate evidence.
   is now a shared `check_auth_ct` free fn used by both the session
   daemon and jobd, and jobd tightens its socket to 0o600 after bind
   (fail-closed), with a `jobd_socket_is_owner_only` regression test.
+- WO 47.21 — `ensure_private_data_dir` no longer caches the FIRST data dir
+  process-globally: the `OnceLock<()>` became a
+  `OnceLock<Mutex<HashSet<PathBuf>>>`, so each distinct path is created +
+  chmod 0o700 exactly once and a new `KF_CODE_DATA_DIR` (or test
+  `DataDirGuard` override) actually gets its `tasks/`/`jobs/` subdirs
+  instead of NotFound. A path is remembered only after successful creation,
+  so a deleted tempdir is re-created on next call. The racing tests named
+  in the WO migrated off process-global env mutation:
+  `tools/task/persist.rs` + `tui/commands/tasks.rs` tests now use the
+  thread-local `DataDirGuard`; `adapters/auth.rs` tests serialize their
+  `*_API_KEY` env mutations on a module-local mutex.
+  [47.21](docs/workorders/47.21-ensure-private-data-dir-oncelock.md)
 - WO 46.30 — `bench run_task` no longer leaks `KF_CODE_BUDGET_CEILING`
   when it exits early: a private RAII `BudgetEnvGuard` replaces the
   success-path-only `remove_var`, so an error between env export and

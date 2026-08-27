@@ -2,8 +2,10 @@
 //!
 //! Caching is opt-in via `Config::cache_enabled`. When enabled, every
 //! successful stream is serialized to disk under `cache_dir` keyed by a
-//! hash of `(model, system_prompt_hash, messages_hash, tools_hash,
-//! json_mode)`. On a subsequent identical request the cached
+//! hash of the request fingerprint (provider/endpoint scope + model +
+//! generation config: seed, max_tokens, extended_thinking, budget_tokens,
+//! computer_use dims — WO 47.20) plus `messages_hash, tools_hash,
+//! json_mode`. On a subsequent identical request the cached
 //! [`StreamEvent`]s are replayed through a fresh channel, avoiding a
 //! network round-trip.
 //!
@@ -44,10 +46,13 @@ impl ResponseCache {
         }
     }
 
-    /// Look up a cached stream.
+    /// Look up a cached stream. `model_scope` is the caller's canonical
+    /// request fingerprint (model identity + generation config + provider
+    /// routing — see `CachingAdapter::request_fingerprint`); it is hashed
+    /// together with the messages/tools/response_format.
     pub fn get(
         &self,
-        model: &str,
+        model_scope: &str,
         messages: &[Message],
         tools: &[ToolDef],
         response_format: Option<&crate::shared::ResponseFormat>,
@@ -55,7 +60,7 @@ impl ResponseCache {
         if !self.enabled {
             return None;
         }
-        let key = CacheKey::new(model, messages, tools, response_format);
+        let key = CacheKey::new(model_scope, messages, tools, response_format);
 
         // 1. In-memory
         {
@@ -92,10 +97,10 @@ impl ResponseCache {
         Some(events)
     }
 
-    /// Store a stream in the cache.
+    /// Store a stream in the cache. `model_scope` as in [`get`](Self::get).
     pub fn put(
         &self,
-        model: &str,
+        model_scope: &str,
         messages: &[Message],
         tools: &[ToolDef],
         response_format: Option<&crate::shared::ResponseFormat>,
@@ -104,7 +109,7 @@ impl ResponseCache {
         if !self.enabled {
             return;
         }
-        let key = CacheKey::new(model, messages, tools, response_format);
+        let key = CacheKey::new(model_scope, messages, tools, response_format);
 
         // Never cache error-carrying or empty streams (WO 38.5). A
         // single Error event anywhere means the stream is replayable
@@ -180,13 +185,13 @@ struct CacheKey {
 
 impl CacheKey {
     fn new(
-        model: &str,
+        model_scope: &str,
         messages: &[Message],
         tools: &[ToolDef],
         response_format: Option<&crate::shared::ResponseFormat>,
     ) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(model.as_bytes());
+        hasher.update(model_scope.as_bytes());
 
         if let Ok(bytes) = serde_json::to_vec(messages) {
             hasher.update(&bytes);
@@ -216,7 +221,23 @@ impl CacheKey {
 pub fn maybe_wrap_cached(adapter: Box<dyn ModelAdapter>, config: &Config) -> Box<dyn ModelAdapter> {
     if config.model.cache_enabled {
         let cache = ResponseCache::new(true, config.model.cache_dir.clone());
-        Box::new(CachingAdapter::new(adapter, cache, config.model.json_mode))
+        // The provider/endpoint routing scope: everything in Config that
+        // decides WHICH endpoint serves the model. Part of the cache key
+        // so two providers serving the same model name don't share
+        // entries (WO 47.20).
+        let scope = format!(
+            "provider={}\0ollama={}\0zen={}\0anthropic_base={}\0aws_region={}\0gcp_project={}\0gcp_region={}",
+            config.model.anthropic_provider,
+            config.model.ollama_host,
+            config.model.opencode_zen_endpoint,
+            config.model.anthropic_api_base,
+            config.model.aws_region,
+            config.model.gcp_project_id,
+            config.model.gcp_region,
+        );
+        let mut wrapped = CachingAdapter::new(adapter, cache, config.model.json_mode);
+        wrapped.set_request_scope(scope);
+        Box::new(wrapped)
     } else {
         adapter
     }
@@ -228,6 +249,17 @@ pub struct CachingAdapter {
     cache: ResponseCache,
     json_mode: bool,
     response_format: Option<crate::shared::ResponseFormat>,
+    // WO 47.20: request-shaping knobs the executor pushes via set_* after
+    // wrapping, plus the provider/endpoint scope pinned at wrap time. All
+    // are folded into the cache key — a request with different generation
+    // config must never replay another request's cached stream, and two
+    // providers serving the same model name must not share entries.
+    scope: String,
+    seed: Option<u64>,
+    max_tokens: u32,
+    extended_thinking: bool,
+    budget_tokens: usize,
+    computer_use_dims: Option<(u32, u32)>,
 }
 
 impl CachingAdapter {
@@ -242,7 +274,36 @@ impl CachingAdapter {
             } else {
                 None
             },
+            scope: String::new(),
+            seed: None,
+            max_tokens: 0,
+            extended_thinking: false,
+            budget_tokens: 0,
+            computer_use_dims: None,
         }
+    }
+
+    /// Pin the provider/endpoint routing scope folded into the cache key.
+    /// Set by [`maybe_wrap_cached`] from `Config`; empty for hand-built
+    /// wrappers (tests) where all wrappers share one scope anyway.
+    pub fn set_request_scope(&mut self, scope: String) {
+        self.scope = scope;
+    }
+
+    // Canonical fingerprint of everything request-shaping that is NOT
+    // messages/tools/response_format. \0-separated so adjacent values
+    // can't collide by concatenation. WO 47.20.
+    fn request_fingerprint(&self) -> String {
+        format!(
+            "{}\0{}\0seed={:?}\0max_tokens={}\0thinking={}\0budget={}\0computer_use={:?}",
+            self.scope,
+            self.inner.model_info().name,
+            self.seed,
+            self.max_tokens,
+            self.extended_thinking,
+            self.budget_tokens,
+            self.computer_use_dims,
+        )
     }
 }
 
@@ -264,11 +325,23 @@ impl ModelAdapter for CachingAdapter {
         self.response_format = Some(format);
     }
     fn set_extended_thinking(&mut self, enabled: bool) {
+        self.extended_thinking = enabled;
         self.inner.set_extended_thinking(enabled);
     }
 
     fn set_budget_tokens(&mut self, budget: usize) {
+        self.budget_tokens = budget;
         self.inner.set_budget_tokens(budget);
+    }
+
+    fn set_seed(&mut self, seed: Option<u64>) {
+        self.seed = seed;
+        self.inner.set_seed(seed);
+    }
+
+    fn set_max_tokens(&mut self, max_tokens: u32) {
+        self.max_tokens = max_tokens;
+        self.inner.set_max_tokens(max_tokens);
     }
 
     fn set_streaming_timeout(&mut self, secs: u64) {
@@ -276,6 +349,7 @@ impl ModelAdapter for CachingAdapter {
     }
 
     fn set_computer_use_dims(&mut self, dims: Option<(u32, u32)>) {
+        self.computer_use_dims = dims;
         self.inner.set_computer_use_dims(dims);
     }
 
@@ -285,13 +359,12 @@ impl ModelAdapter for CachingAdapter {
         tools: &[ToolDef],
     ) -> anyhow::Result<tokio::sync::mpsc::Receiver<StreamEvent>> {
         let model_info = self.inner.model_info();
+        let fingerprint = self.request_fingerprint();
 
-        if let Some(events) = self.cache.get(
-            &model_info.name,
-            messages,
-            tools,
-            self.response_format.as_ref(),
-        ) {
+        if let Some(events) =
+            self.cache
+                .get(&fingerprint, messages, tools, self.response_format.as_ref())
+        {
             tracing::info!(
                 model = %model_info.name,
                 events = events.len(),
@@ -324,6 +397,7 @@ impl ModelAdapter for CachingAdapter {
 
         let rx = self.inner.stream(messages, tools).await?;
         let cache = self.cache.clone();
+        let fingerprint = fingerprint.clone();
         let model_name = model_info.name.clone();
         let messages_owned = messages.to_vec();
         let tools_owned = tools.to_vec();
@@ -359,7 +433,7 @@ impl ModelAdapter for CachingAdapter {
             ) && !events.iter().any(|e| matches!(e, StreamEvent::Error(_)));
             if complete {
                 cache.put(
-                    &model_name,
+                    &fingerprint,
                     &messages_owned,
                     &tools_owned,
                     response_format.as_ref(),
@@ -820,6 +894,110 @@ mod tests {
         );
     }
 
+    /// WO 47.20: every generation knob pushed via set_* must reach the
+    /// cache key — a fingerprint that ignores any of them lets a request
+    /// with different config replay another request's cached stream.
+    #[test]
+    fn caching_adapter_generation_knobs_change_the_fingerprint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(tmp.path().into()));
+        let mut wrapped = CachingAdapter::new(adapter(vec![]), cache, false);
+        let base = wrapped.request_fingerprint();
+        wrapped.set_seed(Some(1));
+        let seeded = wrapped.request_fingerprint();
+        assert_ne!(base, seeded, "seed must be in the key");
+        wrapped.set_max_tokens(64000);
+        assert_ne!(
+            seeded,
+            wrapped.request_fingerprint(),
+            "max_tokens must be in the key"
+        );
+        wrapped.set_extended_thinking(true);
+        assert_ne!(
+            base,
+            wrapped.request_fingerprint(),
+            "extended_thinking must be in the key"
+        );
+        wrapped.set_budget_tokens(10000);
+        assert_ne!(
+            base,
+            wrapped.request_fingerprint(),
+            "budget_tokens must be in the key"
+        );
+        wrapped.set_computer_use_dims(Some((1024, 768)));
+        assert_ne!(
+            base,
+            wrapped.request_fingerprint(),
+            "computer_use dims must be in the key"
+        );
+    }
+
+    fn done_event() -> StreamEvent {
+        StreamEvent::Done {
+            finish_reason: FinishReason::Stop,
+            usage: None,
+        }
+    }
+
+    /// WO 47.20: request B with a different seed must not replay request
+    /// A's cached response even though messages/tools/model are identical.
+    #[tokio::test]
+    async fn caching_adapter_different_seed_does_not_replay_cached_stream() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(tmp.path().into()));
+        let events_a = vec![StreamEvent::Text("from-plain".into()), done_event()];
+        let events_b = vec![StreamEvent::Text("from-seeded".into()), done_event()];
+        let messages: Vec<Message> = vec![];
+        let tools: Vec<ToolDef> = vec![];
+
+        // Request A: no seed — populates the cache.
+        let wrapped_a = CachingAdapter::new(adapter(events_a), cache.clone(), false);
+        let mut rx = wrapped_a.stream(&messages, &tools).await.unwrap();
+        while (rx.recv().await).is_some() {}
+
+        // Request B: same model/messages/tools, different generation config.
+        let mut wrapped_b = CachingAdapter::new(adapter(events_b.clone()), cache.clone(), false);
+        wrapped_b.set_seed(Some(7));
+        let mut rx = wrapped_b.stream(&messages, &tools).await.unwrap();
+        let mut got = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            got.push(ev);
+        }
+        assert_eq!(
+            got, events_b,
+            "different seed must miss the cache and hit the inner adapter"
+        );
+    }
+
+    /// WO 47.20: two providers serving the same model name (different
+    /// request scope) must not share cache entries.
+    #[tokio::test]
+    async fn caching_adapter_different_scope_does_not_replay_cached_stream() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(tmp.path().into()));
+        let events_a = vec![StreamEvent::Text("from-provider-a".into()), done_event()];
+        let events_b = vec![StreamEvent::Text("from-provider-b".into()), done_event()];
+        let messages: Vec<Message> = vec![];
+        let tools: Vec<ToolDef> = vec![];
+
+        let mut wrapped_a = CachingAdapter::new(adapter(events_a), cache.clone(), false);
+        wrapped_a.set_request_scope("provider=a".into());
+        let mut rx = wrapped_a.stream(&messages, &tools).await.unwrap();
+        while (rx.recv().await).is_some() {}
+
+        let mut wrapped_b = CachingAdapter::new(adapter(events_b.clone()), cache.clone(), false);
+        wrapped_b.set_request_scope("provider=b".into());
+        let mut rx = wrapped_b.stream(&messages, &tools).await.unwrap();
+        let mut got = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            got.push(ev);
+        }
+        assert_eq!(
+            got, events_b,
+            "different provider scope must miss the cache and hit the inner adapter"
+        );
+    }
+
     struct DummyAdapter {
         events: Vec<StreamEvent>,
         info: ModelInfo,
@@ -939,7 +1117,7 @@ mod tests {
         }
         assert!(
             cache
-                .get(&wrapped.model_info().name, &messages, &tools, None)
+                .get(&wrapped.request_fingerprint(), &messages, &tools, None)
                 .is_none(),
             "error-carrying stream must not be cached"
         );
@@ -969,7 +1147,7 @@ mod tests {
         }
         assert!(
             cache
-                .get(&wrapped.model_info().name, &messages, &tools, None)
+                .get(&wrapped.request_fingerprint(), &messages, &tools, None)
                 .is_none(),
             "Done{{Error}} stream must not be cached"
         );
@@ -1028,7 +1206,7 @@ mod tests {
         // must not be replayed on a later identical request.
         assert!(
             cache
-                .get(&wrapped.model_info().name, &messages, &tools, None)
+                .get(&wrapped.request_fingerprint(), &messages, &tools, None)
                 .is_none(),
             "partial stream should not be cached"
         );
@@ -1138,7 +1316,7 @@ mod tests {
         }
         assert!(
             cache
-                .get(&wrapped.model_info().name, &messages, &tools, None)
+                .get(&wrapped.request_fingerprint(), &messages, &tools, None)
                 .is_none(),
             "stream without Done event should not be cached"
         );

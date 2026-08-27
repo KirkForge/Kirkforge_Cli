@@ -53,9 +53,9 @@ kf-code (root bin)          ← the CLI the user runs
 └── docs/adr/                  ← 94 Architecture Decision Records
 ```
 
- The workspace has ~4,550 test functions (~3,600 under `src/`,
- ~960 under `crates/`). The `crates/` count is pinned by the
- `readme_drift` test (`crates/kf-budget-core/README.md` State table).
+ The workspace has ~5,000 test functions (~3,950 under `src/`,
+ ~1,010 under `crates/`). The `crates/` `#[test]` count is pinned by
+ the `readme_drift` test (`crates/kf-budget-core/README.md` State table).
 
 ### Compiled-in vs satellite
 

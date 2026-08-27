@@ -3,7 +3,7 @@
 //! Profiles the `cargo test` suite, classifies tests as fast/medium/slow,
 //! partitions the suite into fast/full/coverage manifests, suggests
 //! fixes for slow tests, analyzes coverage gaps, and self-diagnoses
-//! untested code. See `docs/ideas/test-doctor.md` for the design.
+//! untested code. See `docs/archive/ideas/test-doctor.md` for the design.
 
 mod apply;
 mod classify;

@@ -1,6 +1,6 @@
 //! Library crate for the `kf-code` CLI.
 //!
-//! The binary in `src/main.rs` is a thin wrapper that consumes this library.
+//! The binary in `src/main/mod.rs` is a thin wrapper that consumes this library.
 //! Exposing the internal modules as a library lets `benches/` and `tests/`
 //! targets exercise real parser/executor code without duplication.
 

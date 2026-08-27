@@ -5,11 +5,15 @@ use crate::shared::metrics::{record, MetricEvent};
 
 use futures_util::future::FutureExt;
 use futures_util::stream::{self, StreamExt};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+
+// Cap on cached verdicts (WO 47.26). FIFO eviction — only Clean/Skipped
+// verdicts are cached, so an evicted entry just costs one re-verify.
+pub(crate) const VERDICT_CACHE_CAP: usize = 256;
 
 // Verifiers are independent — run this many concurrently so a slow cargo
 // build doesn't serialize the whole panel behind it. 4 keeps subprocess
@@ -41,10 +45,47 @@ pub struct VerifierHandler {
     /// correction loop re-runs verifiers after applying a fix (disk content
     /// changed, so the cached verdict would be stale). Entries are dropped via
     /// [`invalidate_cache`] after a correction loop applies any fix.
-    /// ponytail: unbounded HashMap — per-session, bounded by distinct files written;
-    /// add LRU if a session writes thousands of distinct files.
-    #[allow(clippy::type_complexity)]
-    pub(crate) verdict_cache: Arc<std::sync::Mutex<HashMap<(PathBuf, u64), (Verdict, String)>>>,
+    /// Bounded: FIFO eviction past [`VERDICT_CACHE_CAP`] entries.
+    verdict_cache: Arc<std::sync::Mutex<VerdictCache>>,
+}
+
+/// HashMap + insertion order, so eviction is FIFO instead of arbitrary
+/// (mirrors the kf-budget-core WO 46.34 pattern).
+struct VerdictCache {
+    map: HashMap<(PathBuf, u64), (Verdict, String)>,
+    order: VecDeque<(PathBuf, u64)>,
+}
+
+impl VerdictCache {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn get(&self, key: &(PathBuf, u64)) -> Option<&(Verdict, String)> {
+        self.map.get(key)
+    }
+
+    fn insert(&mut self, key: (PathBuf, u64), value: (Verdict, String)) {
+        if self.map.insert(key.clone(), value).is_none() {
+            self.order.push_back(key);
+        }
+        while self.map.len() > VERDICT_CACHE_CAP {
+            match self.order.pop_front() {
+                Some(oldest) => {
+                    self.map.remove(&oldest);
+                }
+                None => break,
+            }
+        }
+    }
+
+    fn invalidate_path(&mut self, path: &PathBuf) {
+        self.map.retain(|key, _| key.0 != *path);
+        self.order.retain(|key| key.0 != *path);
+    }
 }
 
 impl VerifierHandler {
@@ -55,7 +96,7 @@ impl VerifierHandler {
         Self {
             slots,
             path_guard,
-            verdict_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            verdict_cache: Arc::new(std::sync::Mutex::new(VerdictCache::new())),
         }
     }
 
@@ -69,7 +110,7 @@ impl VerifierHandler {
     /// path is stale regardless of which content_hash produced it.
     pub fn invalidate_cache(&self, path: &PathBuf) {
         let mut cache = self.verdict_cache.lock().unwrap_or_else(|e| e.into_inner());
-        cache.retain(|key, _| key.0 != *path);
+        cache.invalidate_path(path);
     }
 
     /// Run verification and return the verdict plus the decisive

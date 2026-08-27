@@ -871,7 +871,9 @@ is out of scope for R7 (wiring, not restructuring).
 ### Correction loop
 
 After a tool execution event, the correction loop (up to 3 iterations):
-1. Runs verifiers → gets a `Verdict`.
+1. Runs verifiers → gets a `Verdict`. Verifiers run concurrently (bounded,
+   4 at a time, WO 47.26); the aggregate picks the most severe finding —
+   `Unfixable` over `Fixable`, first in priority order among equals.
 2. `Clean`/`Skipped` → done.
 3. `Fixable` with a `command` → run the formatter command in-place (e.g.
    rustfmt). `Fixable` with `original`/`replacement` → return the suggestion to
@@ -886,6 +888,7 @@ WO 42.11 adds a verdict cache to `VerifierHandler::verify_event`: verdicts for
 applying a fix (disk content changed). After a fix is applied, the loop calls
 `invalidate_cache(path)` to drop the stale entry. This skips redundant
 `cargo build`/`clippy`/`test` runs for unchanged file content across turns.
+Bounded at 256 entries with FIFO eviction (WO 47.26).
 
 WO 38.3 bounds every subprocess wait in this path. The formatter
 (`apply_command_fix`) gets the hooks treatment — `kill_on_drop`, null stdin,

@@ -46,7 +46,13 @@ pub fn sign_request(url: &str, body: &[u8], region: &str) -> anyhow::Result<Sign
         .uri(url)
         .header("host", host_header(url)?)
         .header("content-type", "application/json")
-        .header("x-amz-content-sha256", sha256_hex(body));
+        .header("x-amz-content-sha256", sha256_hex(body))
+        // Signed per the SigV4 spec (mm-H13, WO 47.29): content-length is
+        // part of the request, so it must be in the signed header set —
+        // real AWS rejects a signature that omits a header the client
+        // actually sends. reqwest would add this header itself; adding it
+        // here first makes the signed value and the sent value identical.
+        .header("content-length", body.len().to_string());
 
     if let Some(token) = session_token {
         request_builder = request_builder.header("x-amz-security-token", token);
@@ -266,5 +272,39 @@ pub(crate) mod tests {
         let _g1 = crate::shared::test_util::EnvGuard::set("AWS_ACCESS_KEY_ID", "AKIATEST");
         let _g2 = crate::shared::test_util::EnvGuard::set("AWS_SECRET_ACCESS_KEY", "secretkey");
         assert!(sign_request("not a url", b"{}", "us-east-1").is_err());
+    }
+
+    // mm-H13 (WO 47.29): content-length must be sent AND signed — the
+    // SignedHeaders list in the Authorization header has to include it.
+    #[test]
+    fn sign_request_signs_content_length() {
+        let _guard = env_lock().lock().unwrap();
+        let _g1 = crate::shared::test_util::EnvGuard::set("AWS_ACCESS_KEY_ID", "AKIATEST");
+        let _g2 = crate::shared::test_util::EnvGuard::set("AWS_SECRET_ACCESS_KEY", "secretkey");
+        let _g3 = crate::shared::test_util::EnvGuard::remove("AWS_SESSION_TOKEN");
+        let url =
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/x/invoke-with-response-stream";
+        let body = br#"{"a":1}"#;
+        let signed = sign_request(url, body, "us-east-1").unwrap();
+        assert_eq!(
+            signed.headers.get("content-length").and_then(|v| v.to_str().ok()),
+            Some("7"),
+            "content-length header must equal the body length"
+        );
+        let auth_val = signed
+            .headers
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let signed_headers = auth_val
+            .split("SignedHeaders=")
+            .nth(1)
+            .and_then(|rest| rest.split(',').next())
+            .unwrap_or("");
+        assert!(
+            signed_headers.split(';').any(|h| h == "content-length"),
+            "content-length must appear in SignedHeaders, got: {auth_val}"
+        );
     }
 }

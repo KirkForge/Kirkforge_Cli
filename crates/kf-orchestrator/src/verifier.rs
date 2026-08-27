@@ -14,11 +14,22 @@
 //! restructuring). Ceiling: two copies of 14 regexes drift risk; upgrade
 //! path: extract `kf-security` crate when a third consumer appears.
 
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use kf_routing::correction::{OverallVerdict, ReducedStatePacket, SecurityState};
 use regex::Regex;
+
+/// Cap on bytes read per scanned file (1 MiB). Delegate-written artifacts
+/// are far under this; the cap bounds memory on pathological inputs
+/// (mm-H32 / WO 47.33).
+/// ponytail: files larger than the cap are scanned as a truncated prefix —
+/// a pattern straddling the cap boundary is missed, and a multi-byte char
+/// cut at the boundary makes the whole file unscannable (read_to_string
+/// InvalidData → skipped). Upgrade path: chunked streaming scan if
+/// artifacts ever legitimately exceed the cap.
+const MAX_SCAN_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct SecurityFinding {
@@ -166,8 +177,20 @@ pub fn scan_files(files: &[PathBuf]) -> Vec<SecurityFinding> {
         } else {
             continue;
         };
-        let src = match std::fs::read_to_string(file) {
-            Ok(s) => s,
+        // WO 47.33 (mm-H32): read at most MAX_SCAN_BYTES — never buffer an
+        // unbounded file. Read errors (unreadable, non-UTF-8, or a char cut
+        // at the cap boundary) skip the file, as before.
+        let src = match std::fs::File::open(file) {
+            Ok(f) => {
+                let mut s = String::new();
+                match std::io::BufReader::new(f)
+                    .take(MAX_SCAN_BYTES)
+                    .read_to_string(&mut s)
+                {
+                    Ok(_) => s,
+                    Err(_) => continue,
+                }
+            }
             Err(_) => continue,
         };
         let clean = strip_comments(&src, lang);
@@ -248,6 +271,37 @@ mod tests {
     #[test]
     fn rule_table_has_fourteen_rules() {
         assert_eq!(RULE_SPEC.len(), 14);
+    }
+
+    // WO 47.33 (mm-H32): files over the scan cap are scanned as a
+    // truncated prefix — the pattern before the cap is still found.
+    #[test]
+    fn oversized_file_scans_prefix() {
+        let mut body = String::from("eval('early')\n# ");
+        body.push_str(&"x".repeat(MAX_SCAN_BYTES as usize + 512));
+        body.push('\n');
+        let path = write_tmp("big.py", &body);
+        let findings = scan_files(&[path]);
+        assert!(
+            findings.iter().any(|f| f.rule_id == "py-eval"),
+            "pattern before the cap must still be found"
+        );
+    }
+
+    // Pins the documented ceiling: a pattern that only appears past the
+    // cap is NOT reported. If this test fails after an intentional
+    // upgrade to a streaming scan, delete it with the ceiling comment.
+    #[test]
+    fn pattern_beyond_scan_cap_is_not_reported() {
+        let mut body = String::from("# ");
+        body.push_str(&"x".repeat(MAX_SCAN_BYTES as usize + 256));
+        body.push_str("\neval('late')\n");
+        let path = write_tmp("late.py", &body);
+        let findings = scan_files(&[path]);
+        assert!(
+            findings.iter().all(|f| f.rule_id != "py-eval"),
+            "pattern past the cap is outside the scanned prefix (documented ceiling)"
+        );
     }
 
     #[test]

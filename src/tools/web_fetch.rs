@@ -7,13 +7,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Maximum response body we will accept (1 MiB). This caps both memory usage
-/// and the size of the string we later feed into the model context.
+/// and the size of the string we later feed into the model context. This is a
+/// transport/memory guard only — the model-context cap is the executor's
+/// config-driven `truncate_tool_output` (Config.tools.max_tool_result_chars),
+/// applied centrally to every tool result (WO 47.33 removed the tool-local
+/// hardcoded 4_000-char truncation that ignored that config).
 const MAX_BODY_BYTES: usize = 1024 * 1024;
-
-/// Default cap on how much of a fetched body is returned to the model. Matches
-/// Config::max_tool_result_chars default; the tool does not need runtime
-/// config access for this MVP.
-const DEFAULT_MAX_TOOL_RESULT_CHARS: usize = 4_000;
 
 /// Network fetch timeout. 30s matches the vix reference implementation.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -297,26 +296,12 @@ impl Tool for WebFetch {
             raw
         };
 
-        let content = if output.len() > DEFAULT_MAX_TOOL_RESULT_CHARS {
-            // ponytail: floor_char_boundary is unstable on this toolchain; find the
-            // last char boundary at or before the cap manually. Upgrade path: use
-            // `output.floor_char_boundary(cap)` once it stabilizes.
-            let cut = output
-                .char_indices()
-                .take_while(|(i, _)| *i < DEFAULT_MAX_TOOL_RESULT_CHARS)
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            format!(
-                "{}\n\n[truncated {} characters]",
-                &output[..cut],
-                output.len().saturating_sub(DEFAULT_MAX_TOOL_RESULT_CHARS)
-            )
-        } else {
-            output
-        };
+        // WO 47.33: no tool-local char cap here — the executor truncates
+        // every tool result with Config.tools.max_tool_result_chars
+        // (`truncate_tool_output`), which the old hardcoded 4_000-char cut
+        // silently overrode whenever the user configured a different value.
 
-        ToolOutcome::Success { content }
+        ToolOutcome::Success { content: output }
     }
 }
 
@@ -390,8 +375,11 @@ fn is_internal_addr(addr: &std::net::IpAddr) -> bool {
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return is_internal_addr(&std::net::IpAddr::V4(v4));
             }
-            // loopback ::1; unique local fc00::/7; link-local fe80::/10
+            // loopback ::1; unspecified :: (WO 47.33: matches the V4
+            // is_unspecified check — http://[::]/ binds-all is internal);
+            // unique local fc00::/7; link-local fe80::/10
             *v6 == std::net::Ipv6Addr::LOCALHOST
+                || v6.is_unspecified()
                 || (v6.segments()[0] & 0xfe00) == 0xfc00
                 || (v6.segments()[0] & 0xffc0) == 0xfe80
         }
@@ -462,8 +450,10 @@ fn extract_port_from_url(url: &str) -> u16 {
 /// Returns:
 /// - `Ok(Some(client))` for hostnames that resolve to public IPs (pinned client)
 /// - `Ok(None)` for literal-IP URLs (no rebinding risk) or empty resolutions
-/// - `Err(())` if the host resolves to an internal IP (deny the request) or
-///   resolution FAILS (WO 38.3: fail closed for non-literal hosts)
+/// - `Err(())` if the host resolves to an internal IP (deny the request),
+///   resolution FAILS (WO 38.3: fail closed for non-literal hosts), or the
+///   pinned client fails to build (WO 47.33: fail closed — no unpinned
+///   fallback)
 fn resolve_and_pin_dns(
     url: &str,
     resolver: &dyn DnsResolver,
@@ -495,17 +485,22 @@ fn resolve_and_pin_dns(
         .timeout(FETCH_TIMEOUT)
         .user_agent(USER_AGENT)
         .resolve(&host, pin_addr)
+        // WO 47.33: fail CLOSED — a pinned-client construction error must
+        // deny the fetch, not fall back to an unpinned client (which would
+        // reopen the DNS-rebinding TOCTOU this guard exists to close).
         .build()
-        .unwrap_or_else(|_| fallback_client());
+        .map_err(|_| ())?;
     Ok(Some(client))
 }
 
-/// Fallback client when the pinned-client builder fails: keeps the
-/// fetch timeout instead of reverting to reqwest's unbounded default
-/// (WO 38.3 — fallback clients get a plain timeout too).
+/// Fallback client when a builder fails on a NON-pinned path (`WebFetch::new`
+/// and test clients): keeps the fetch timeout AND the no-redirect policy, so
+/// a fallback never silently re-enables redirect-following (WO 38.3 timeout;
+/// WO 47.33 redirect lockdown).
 fn fallback_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(FETCH_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
@@ -1217,6 +1212,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_ipv6_unspecified_literal() {
+        // WO 47.33: "::" (IPv6 binds-all) was not classified internal.
+        let tool = WebFetch::new(DenyList::default());
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"url": "http://[::]/"}))
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn rejects_ipv6_unique_local_literal() {
         let tool = WebFetch::new(DenyList::default());
         let outcome = tool
@@ -1329,6 +1340,12 @@ mod tests {
         assert!(host_is_literal_internal_ip("http://[::1]/x"));
         assert!(host_is_literal_internal_ip("http://[fe80::1]/x"));
         assert!(host_is_literal_internal_ip("http://[fd00::1]/x"));
+        // WO 47.33: IPv6 unspecified "::" is internal (binds-all), matching
+        // the V4 0.0.0.0 classification.
+        assert!(host_is_literal_internal_ip("http://[::]/x"));
+        assert!(is_internal_addr(&std::net::IpAddr::V6(
+            "::".parse::<std::net::Ipv6Addr>().unwrap()
+        )));
     }
 
     #[test]

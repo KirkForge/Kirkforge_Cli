@@ -1,6 +1,7 @@
 use crate::shared::access::PathGuard;
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
+use std::io::BufRead;
 use std::path::PathBuf;
 
 pub struct ReadFile {
@@ -71,17 +72,73 @@ impl Tool for ReadFile {
         let offset = args.get("offset").and_then(|o| o.as_u64()).unwrap_or(0) as usize;
         let limit = args.get("limit").and_then(|l| l.as_u64()).unwrap_or(200) as usize;
 
-        let raw_content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
+        // Stream the file instead of buffering it whole (mm-H30 / WO 47.33):
+        // a multi-GB file read with a small offset/limit window must not sit
+        // in memory in full. Only the [offset, offset+limit) window is
+        // retained as lines; raw bytes are kept only while a whole-file
+        // display is still possible (offset == 0 and fewer than `limit`
+        // lines seen), so the whole-file path stays byte-exact (CRLF and
+        // trailing newline preserved) while partial reads stay O(limit).
+        let file = match std::fs::File::open(&path) {
+            Ok(f) => f,
             Err(e) => {
                 return ToolOutcome::Failure(ToolError::Internal {
                     message: format!("Cannot read {}: {}", path.display(), e),
                 });
             }
         };
-
-        let raw_lines: Vec<&str> = raw_content.lines().collect();
-        let raw_total = raw_lines.len();
+        let mut reader = std::io::BufReader::new(file);
+        let mut buf: Vec<u8> = Vec::new();
+        let mut raw_total = 0usize;
+        let mut total_bytes = 0usize;
+        let mut selected_lines: Vec<String> = Vec::new();
+        let mut whole = String::new();
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    total_bytes += n;
+                    // Per-chunk UTF-8 validation matches the old
+                    // read_to_string behavior (any invalid byte fails the
+                    // read). \n never appears inside a multi-byte UTF-8
+                    // sequence, so a chunk boundary is a char boundary.
+                    let line = match std::str::from_utf8(&buf) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return ToolOutcome::Failure(ToolError::Internal {
+                                message: format!("Cannot read {}: {}", path.display(), e),
+                            });
+                        }
+                    };
+                    // Line body without its terminator (str::lines
+                    // semantics: strip \n, then one optional preceding \r).
+                    let body = line
+                        .strip_suffix('\n')
+                        .map(|l| l.strip_suffix('\r').unwrap_or(l))
+                        .unwrap_or(line);
+                    if offset == 0 {
+                        if raw_total >= limit {
+                            // File outgrew `limit` lines — whole-file
+                            // display is impossible; drop the retained
+                            // raw text.
+                            whole.clear();
+                        } else {
+                            whole.push_str(line);
+                        }
+                    }
+                    if raw_total >= offset && selected_lines.len() < limit {
+                        selected_lines.push(body.to_string());
+                    }
+                    raw_total += 1;
+                }
+                Err(e) => {
+                    return ToolOutcome::Failure(ToolError::Internal {
+                        message: format!("Cannot read {}: {}", path.display(), e),
+                    });
+                }
+            }
+        }
 
         if offset >= raw_total && raw_total > 0 {
             return ToolOutcome::Failure(ToolError::Internal {
@@ -96,7 +153,7 @@ impl Tool for ReadFile {
         }
 
         let end = std::cmp::min(offset.saturating_add(limit), raw_total);
-        let selected_raw = raw_lines[offset..end].join("\n");
+        let selected_raw = selected_lines.join("\n");
         let truncated = end < raw_total;
 
         // Apply minification to the selected slice only, so offset/limit
@@ -123,9 +180,8 @@ impl Tool for ReadFile {
         // Auto-minify only fires when `minify_write_side` is true: with it
         // off, an auto-minified read returns PLAIN minified text that can't
         // match `edit_file`'s raw-string compare, stalling edits (WO 30.0.8).
-        let auto_minified = self.minify_write_side
-            && minify_arg.is_none()
-            && raw_content.len() > self.minify_above_bytes;
+        let auto_minified =
+            self.minify_write_side && minify_arg.is_none() && total_bytes > self.minify_above_bytes;
         let minify = minify_arg.unwrap_or(auto_minified);
         let selected = if minify {
             crate::shared::minify::minify_source(&path, &selected_raw)
@@ -146,7 +202,7 @@ impl Tool for ReadFile {
                 let header = format!(
                     "{} (minified, was {} bytes → now {} bytes)\n{}",
                     path.display(),
-                    raw_content.len(),
+                    total_bytes,
                     selected.len(),
                     body,
                 );
@@ -161,7 +217,10 @@ impl Tool for ReadFile {
                     header
                 }
             } else {
-                raw_content
+                // Whole-file raw display: `whole` holds the exact file
+                // bytes (only accumulated while every line fit under
+                // `limit`), so CRLF and the trailing newline survive.
+                whole
             }
         } else {
             let header = format!(
@@ -641,6 +700,76 @@ mod tests {
             content.contains("showing lines"),
             "header should be present: {content}"
         );
+    }
+
+    /// WO 47.33 (mm-H30): a deep offset/limit window on a large file must
+    /// return the correct slice without buffering the whole file — the
+    /// streaming reader must skip correctly and still report the true total.
+    #[tokio::test]
+    async fn deep_offset_window_returns_correct_lines() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kf_code_read_file_deep_offset_{}.txt",
+            std::process::id()
+        ));
+        let mut source = String::new();
+        for i in 0..5000 {
+            source.push_str(&format!("line {i}\n"));
+        }
+        std::fs::write(&tmp, &source).unwrap();
+        let tool = ReadFile::new(PathGuard::default(), false, 4096);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({ "path": tmp.to_string_lossy(), "offset": 4990, "limit": 5 }),
+            )
+            .await;
+        std::fs::remove_file(&tmp).ok();
+        match outcome {
+            ToolOutcome::FileContent {
+                content, truncated, ..
+            } => {
+                assert!(truncated, "window at 4990..4995 of 5000 is truncated");
+                assert!(
+                    content.contains("showing lines 4991-4995 of 5000"),
+                    "got: {content}"
+                );
+                assert!(content.contains("line 4990"));
+                assert!(content.contains("line 4994"));
+                assert!(!content.contains("line 4989"));
+                assert!(!content.contains("line 4995"));
+            }
+            other => panic!("expected FileContent, got {other:?}"),
+        }
+    }
+
+    /// WO 47.33: the whole-file raw display must stay byte-exact after the
+    /// streaming rewrite — CRLF terminators and the trailing newline are
+    /// preserved verbatim (partial reads already normalized them before).
+    #[tokio::test]
+    async fn whole_file_read_preserves_crlf_and_trailing_newline() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kf_code_read_file_exact_{}.txt",
+            std::process::id()
+        ));
+        let source = "hello\r\nworld\r\n";
+        std::fs::write(&tmp, source).unwrap();
+        let tool = ReadFile::new(PathGuard::default(), false, 4096);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({ "path": tmp.to_string_lossy() }),
+            )
+            .await;
+        std::fs::remove_file(&tmp).ok();
+        match outcome {
+            ToolOutcome::FileContent {
+                content, truncated, ..
+            } => {
+                assert_eq!(content, source, "whole-file display must be byte-exact");
+                assert!(!truncated);
+            }
+            other => panic!("expected FileContent, got {other:?}"),
+        }
     }
 
     #[test]

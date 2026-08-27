@@ -61,17 +61,45 @@ impl ResponseCache {
             return None;
         }
         let key = CacheKey::new(model_scope, messages, tools, response_format);
-
-        // 1. In-memory
-        {
-            let mem = self.memory.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(events) = mem.get(&key) {
-                return Some(events.clone());
-            }
+        if let Some(events) = self.lookup_memory(&key) {
+            return Some(events);
         }
+        self.read_disk(&key)
+    }
 
-        // 2. On-disk
-        let path = self.path_for(&key);
+    /// Async variant for the streaming path (WO 47.20): the memory tier
+    /// stays sync (HashMap lookup), but the disk tier — metadata + read +
+    /// deserialize on an entry that may be up to 64 MiB — runs on the
+    /// blocking pool so it can't stall a tokio worker.
+    pub async fn get_async(
+        &self,
+        model_scope: &str,
+        messages: &[Message],
+        tools: &[ToolDef],
+        response_format: Option<&crate::shared::ResponseFormat>,
+    ) -> Option<Vec<StreamEvent>> {
+        if !self.enabled {
+            return None;
+        }
+        let key = CacheKey::new(model_scope, messages, tools, response_format);
+        if let Some(events) = self.lookup_memory(&key) {
+            return Some(events);
+        }
+        let cache = self.clone();
+        tokio::task::spawn_blocking(move || cache.read_disk(&key))
+            .await
+            .ok()
+            .flatten()
+    }
+
+    fn lookup_memory(&self, key: &CacheKey) -> Option<Vec<StreamEvent>> {
+        let mem = self.memory.lock().unwrap_or_else(|e| e.into_inner());
+        mem.get(key).cloned()
+    }
+
+    // Disk tier: size-cap check, read, deserialize, promote to memory.
+    fn read_disk(&self, key: &CacheKey) -> Option<Vec<StreamEvent>> {
+        let path = self.path_for(key);
         // Cap the read at 64 MiB so a corrupted or crafted multi-GB cache
         // file can't OOM the process (WO 15.11). A size over the cap is
         // treated as a cache miss with a warning.
@@ -93,7 +121,7 @@ impl ResponseCache {
         let events: Vec<StreamEvent> = serde_json::from_slice(&bytes).ok()?;
 
         // Promote to memory for future hits.
-        self.insert_memory(key, events.clone());
+        self.insert_memory(key.clone(), events.clone());
         Some(events)
     }
 
@@ -110,13 +138,7 @@ impl ResponseCache {
             return;
         }
         let key = CacheKey::new(model_scope, messages, tools, response_format);
-
-        // Never cache error-carrying or empty streams (WO 38.5). A
-        // single Error event anywhere means the stream is replayable
-        // poison — previously only all-Error streams were skipped while
-        // mixed streams (error + a synthesized Done) were cached and
-        // replayed forever.
-        if events.is_empty() || events.iter().any(|e| matches!(e, StreamEvent::Error(_))) {
+        if !Self::cacheable(events) {
             return;
         }
 
@@ -126,8 +148,47 @@ impl ResponseCache {
         // full disk) block every subsequent stream call, and a panic in
         // to_vec would poison the mutex (WO 46.23).
         self.insert_memory(key.clone(), events.to_vec());
+        self.write_disk(&key, events);
+    }
 
-        let path = self.path_for(&key);
+    /// Async variant for the streaming path (WO 47.20): the memory insert
+    /// stays sync, but the disk write runs on the blocking pool — the
+    /// forwarder task lives on a tokio worker.
+    pub async fn put_async(
+        &self,
+        model_scope: &str,
+        messages: &[Message],
+        tools: &[ToolDef],
+        response_format: Option<&crate::shared::ResponseFormat>,
+        events: &[StreamEvent],
+    ) {
+        if !self.enabled {
+            return;
+        }
+        let key = CacheKey::new(model_scope, messages, tools, response_format);
+        if !Self::cacheable(events) {
+            return;
+        }
+        self.insert_memory(key.clone(), events.to_vec());
+        let cache = self.clone();
+        let events = events.to_vec();
+        // The JoinHandle error (runtime shutting down) is not a reason to
+        // fail the stream — a lost cache write is a miss next time.
+        let _ = tokio::task::spawn_blocking(move || cache.write_disk(&key, &events))
+            .await
+            .is_ok();
+    }
+
+    // Never cache error-carrying or empty streams (WO 38.5). A single
+    // Error event anywhere means the stream is replayable poison —
+    // previously only all-Error streams were skipped while mixed streams
+    // (error + a synthesized Done) were cached and replayed forever.
+    fn cacheable(events: &[StreamEvent]) -> bool {
+        !events.is_empty() && !events.iter().any(|e| matches!(e, StreamEvent::Error(_)))
+    }
+
+    fn write_disk(&self, key: &CacheKey, events: &[StreamEvent]) {
+        let path = self.path_for(key);
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 tracing::warn!(
@@ -361,9 +422,10 @@ impl ModelAdapter for CachingAdapter {
         let model_info = self.inner.model_info();
         let fingerprint = self.request_fingerprint();
 
-        if let Some(events) =
-            self.cache
-                .get(&fingerprint, messages, tools, self.response_format.as_ref())
+        if let Some(events) = self
+            .cache
+            .get_async(&fingerprint, messages, tools, self.response_format.as_ref())
+            .await
         {
             tracing::info!(
                 model = %model_info.name,
@@ -432,13 +494,15 @@ impl ModelAdapter for CachingAdapter {
                     if finish_reason != &crate::shared::FinishReason::Error
             ) && !events.iter().any(|e| matches!(e, StreamEvent::Error(_)));
             if complete {
-                cache.put(
-                    &fingerprint,
-                    &messages_owned,
-                    &tools_owned,
-                    response_format.as_ref(),
-                    &events,
-                );
+                cache
+                    .put_async(
+                        &fingerprint,
+                        &messages_owned,
+                        &tools_owned,
+                        response_format.as_ref(),
+                        &events,
+                    )
+                    .await;
             } else {
                 tracing::trace!(
                     model = %model_name,
@@ -765,6 +829,36 @@ mod tests {
                 None,
             )
             .expect("cache hit from disk");
+        assert_eq!(got, events);
+    }
+
+    /// WO 47.20: the async disk tier (spawn_blocking) must behave like
+    /// the sync one — put_async on one cache instance, get_async on a
+    /// cold one sharing only the directory, round-trips through disk.
+    #[tokio::test]
+    async fn cache_async_disk_tier_round_trips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = ResponseCache::new(true, Some(tmp.path().into()));
+        let events = vec![StreamEvent::Text("async-disk".into()), done_event()];
+        cache
+            .put_async(
+                "scope",
+                &[message(crate::shared::Role::User, "hi")],
+                &[],
+                None,
+                &events,
+            )
+            .await;
+        let cache2 = ResponseCache::new(true, Some(tmp.path().into()));
+        let got = cache2
+            .get_async(
+                "scope",
+                &[message(crate::shared::Role::User, "hi")],
+                &[],
+                None,
+            )
+            .await
+            .expect("cache hit from disk via blocking pool");
         assert_eq!(got, events);
     }
 

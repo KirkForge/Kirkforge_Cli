@@ -160,7 +160,10 @@ impl Event {
 
 struct State {
     handlers: HashMap<BusEventKind, Vec<(u64, Handler)>>,
-    buffer: VecDeque<Event>,
+    // (identity key, event) — the key is the same hash the idempotency
+    // cache uses, so the post-handler removal in `emit` matches full
+    // event identity (WO 47.28).
+    buffer: VecDeque<(String, Event)>,
     buffer_capacity: usize,
     idempotency: HashMap<String, Instant>,
     idempotency_size: usize,
@@ -312,9 +315,9 @@ impl EventBus {
             if s.idempotency.contains_key(&id) {
                 return Err(EmitError::Duplicate(id));
             }
-            s.idempotency.insert(id, Instant::now());
+            s.idempotency.insert(id.clone(), Instant::now());
             s.trim_idempotency();
-            s.buffer.push_back(event.clone());
+            s.buffer.push_back((id, event.clone()));
             s.inflight += 1;
             let handlers = s
                 .handlers
@@ -348,12 +351,12 @@ impl EventBus {
         // at 333), so it reacquires the lock cleanly — no deadlock. On
         // cancellation mid-await, the future's locals tear down and `_guard`
         // drops the same way, so the decrement + drain-waker always run.
-        // Remove the first buffer entry equal to this event by sequence+kind.
-        if let Some(idx) = s
-            .buffer
-            .iter()
-            .position(|e| e.sequence == event.sequence && e.kind == event.kind)
-        {
+        // Remove this event's buffer entry by its identity key — the
+        // same hash the idempotency cache uses. Matching (sequence, kind)
+        // alone let two streams sharing sequence+kind remove each other's
+        // in-flight entries (WO 47.28, GPT #6).
+        let key = event.id_key();
+        if let Some(idx) = s.buffer.iter().position(|(k, _)| *k == key) {
             s.buffer.remove(idx);
         }
         Ok(first_err)
@@ -614,6 +617,79 @@ mod tests {
             "graceful_shutdown timed out — inflight leaked on cancelled emit"
         );
         assert!(!bus.running());
+    }
+
+    // WO 47.28: end-of-emit buffer removal must match the event's full
+    // identity key (kind, stream_id, sequence, timestamp, value) — the
+    // same hash the idempotency cache uses. Matching (sequence, kind)
+    // alone let two streams sharing sequence+kind steal each other's
+    // in-flight buffer entries.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn emit_removal_matches_full_identity_not_sequence_kind() {
+        let bus = EventBus::default();
+        let kind = BusEventKind::Other("verify.lint".into());
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let (unpark_tx, unpark_rx) = tokio::sync::oneshot::channel::<()>();
+        let unpark_rx = Arc::new(tokio::sync::Mutex::new(Some(unpark_rx)));
+        let _unsub = bus.on(&kind, move |e| {
+            let started = started_tx.clone();
+            let unpark = Arc::clone(&unpark_rx);
+            Box::pin(async move {
+                // Park only the s1 event so its emit stays in flight.
+                if e.stream_id == "s1" {
+                    let _ = started.try_send(());
+                    if let Some(rx) = unpark.lock().await.take() {
+                        let _ = rx.await;
+                    }
+                }
+                Ok(())
+            })
+        });
+
+        // A (stream s1, seq 1) parks inside its handler — its buffer
+        // entry must stay put while it is in flight.
+        let bus_a = bus.clone();
+        let a_task = tokio::spawn(async move {
+            bus_a
+                .emit(Event {
+                    kind: BusEventKind::Other("verify.lint".into()),
+                    schema_version: "v3".into(),
+                    sequence: 1,
+                    stream_id: "s1".into(),
+                    timestamp: "t1".into(),
+                    value: None,
+                })
+                .await
+        });
+        started_rx.recv().await;
+
+        // B (stream s2, same sequence + kind, distinct identity) completes
+        // immediately. With the old (sequence, kind) removal it removed
+        // A's entry and left its own behind.
+        bus.emit(Event {
+            kind: BusEventKind::Other("verify.lint".into()),
+            schema_version: "v3".into(),
+            sequence: 1,
+            stream_id: "s2".into(),
+            timestamp: "t2".into(),
+            value: None,
+        })
+        .await
+        .unwrap();
+
+        {
+            let s = bus.inner.lock().unwrap();
+            let buffered: Vec<&str> = s.buffer.iter().map(|(_, e)| e.stream_id.as_str()).collect();
+            assert_eq!(
+                buffered,
+                vec!["s1"],
+                "B must remove its own entry; A's in-flight entry must remain"
+            );
+        }
+
+        unpark_tx.send(()).unwrap();
+        let _ = a_task.await;
+        assert_eq!(bus.buffer_size(), 0);
     }
 
     // WO 45.46: saturation invariant — under load (emit rate exceeds the

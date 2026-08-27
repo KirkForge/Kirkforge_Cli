@@ -7,9 +7,12 @@
 //! → `Verdict::Fixable` with the tool output. If neither tool/config is
 //! available, skips gracefully.
 
-use crate::session::verifier::detect::{detect_project_languages, find_node_root, ProjectLanguage};
-use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
-use crate::session::verifier::{FixSuggestion, Verdict};
+use crate::session::verifier::detect::{find_node_root, ProjectLanguage};
+use crate::session::verifier::helpers::{
+    command_finding, head_body, language_gate, modified_path, tool_on_path, Gate,
+};
+use crate::session::verifier::types::BusEvent;
+use crate::session::verifier::Verdict;
 
 const NODE_EXTS: &[&str] = &["js", "jsx", "ts", "tsx", "mjs", "cjs"];
 
@@ -43,39 +46,32 @@ fn tsc_configured(root: &std::path::Path) -> bool {
 /// Probe `npx <tool> --version` to confirm the tool is invocable. Returns true
 /// if the probe succeeded (the tool exists and npx can resolve it).
 async fn npx_tool_available(tool: &str) -> bool {
-    tokio::process::Command::new("npx")
-        .args([tool, "--version"])
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    tool_on_path("npx", &[tool, "--version"]).await
 }
 
 /// Run the Node lint verifier against an event.
 pub async fn verify_node_lint(event: &BusEvent) -> Verdict {
-    let path = match event {
-        BusEvent::Edit(EditEvent { path, .. }) => path.clone(),
-        BusEvent::FileWrite(FileWriteEvent { path, .. }) => path.clone(),
-        _ => return Verdict::Skipped("not a file modification event".into()),
+    let Some(path) = modified_path(event) else {
+        return Verdict::Skipped("not a file modification event".into());
     };
 
-    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return Verdict::Skipped(format!("unsupported file type: {}", path.display()));
+    let root = match language_gate(
+        &path,
+        NODE_EXTS,
+        "Node",
+        find_node_root,
+        ProjectLanguage::Node,
+    ) {
+        Gate::Root(root) => root,
+        Gate::Skip(verdict) => return verdict,
     };
-    if !NODE_EXTS.contains(&ext) {
-        return Verdict::Skipped(format!("unsupported file type: {}", path.display()));
-    }
-
-    let Some(root) = find_node_root(&path) else {
-        return Verdict::Skipped(format!("no Node marker for {}", path.display()));
-    };
-
-    if !detect_project_languages(&root).contains(&ProjectLanguage::Node) {
-        return Verdict::Skipped("Node not detected".into());
-    }
 
     let want_eslint = eslint_configured(&root);
-    let want_tsc = tsc_configured(&root) && matches!(ext, "ts" | "tsx");
+    let want_tsc = tsc_configured(&root)
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e, "ts" | "tsx"));
     if !want_eslint && !want_tsc {
         return Verdict::Skipped("neither eslint nor tsc configured".into());
     }
@@ -93,13 +89,11 @@ pub async fn verify_node_lint(event: &BusEvent) -> Verdict {
             if !o.status.success() {
                 had_failure = true;
             }
-            let s = String::from_utf8_lossy(&o.stdout);
-            let e = String::from_utf8_lossy(&o.stderr);
-            let body: String = if !s.trim().is_empty() { s } else { e }
-                .lines()
-                .take(20)
-                .collect::<Vec<_>>()
-                .join("\n");
+            let body = head_body(
+                &String::from_utf8_lossy(&o.stdout),
+                &String::from_utf8_lossy(&o.stderr),
+                20,
+            );
             if !body.trim().is_empty() {
                 bodies.push(format!("eslint:\n{body}"));
             }
@@ -116,13 +110,11 @@ pub async fn verify_node_lint(event: &BusEvent) -> Verdict {
             if !o.status.success() {
                 had_failure = true;
             }
-            let s = String::from_utf8_lossy(&o.stdout);
-            let e = String::from_utf8_lossy(&o.stderr);
-            let body: String = if !s.trim().is_empty() { s } else { e }
-                .lines()
-                .take(20)
-                .collect::<Vec<_>>()
-                .join("\n");
+            let body = head_body(
+                &String::from_utf8_lossy(&o.stdout),
+                &String::from_utf8_lossy(&o.stderr),
+                20,
+            );
             if !body.trim().is_empty() {
                 bodies.push(format!("tsc:\n{body}"));
             }
@@ -139,24 +131,21 @@ pub async fn verify_node_lint(event: &BusEvent) -> Verdict {
         return Verdict::Clean;
     }
 
-    Verdict::Fixable(FixSuggestion {
-        description: format!(
+    command_finding(
+        format!(
             "node lint findings near {}\n{}",
             path.display(),
             bodies.join("\n")
         ),
-        file: path,
-        original: String::new(),
-        replacement: String::new(),
-        severity: "warning".to_string(),
-        command: None,
-        line: None,
-    })
+        path,
+        "warning",
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::verifier::{EditEvent, FileWriteEvent};
 
     #[tokio::test]
     async fn skips_non_edit_events() {

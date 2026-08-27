@@ -994,7 +994,7 @@ tree, ~11 stale claims corrected in-line. See
 
 14 workorders from the post-WO-46 size audit. Target: ~110K prod lines → ~85-88K without losing the verification/context/budget thesis.
 
-| 47.1 | [Table-driven verifier registration (11 of 16 verifiers share the same 90-160-line shape)](47.1-table-driven-verifiers.md) | Planned |
+| 47.1 | [Table-driven verifier registration (11 of 16 verifiers share the same 90-160-line shape)](47.1-table-driven-verifiers.md) | Done |
 | 47.10 | [send_or_warn! ceremony → single emit! macro (47 sites × 4-6 lines)](47.10-send-or-warn-ceremony.md) | Planned |
 | 47.11 | [Freeze/delete computer_use (513 lines, default-off mini browser framework)](47.11-computer-use-freeze.md) | Planned |
 | 47.12 | [Daemon becomes opt-in (~5.6K lines out of the default path)](47.12-daemon-opt-in.md) | Planned |

@@ -13,11 +13,12 @@
 //! (the canonical name on most Linux distros — many ship NO `python` symlink)
 //! and falls back to `python`.
 
-use crate::session::verifier::detect::{
-    detect_project_languages, find_python_root, ProjectLanguage,
+use crate::session::verifier::detect::{find_python_root, ProjectLanguage};
+use crate::session::verifier::helpers::{
+    command_finding, language_gate, modified_path, tail_body, tool_on_path, Gate,
 };
-use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
-use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
+use crate::session::verifier::types::BusEvent;
+use crate::session::verifier::{Verdict, VerificationError};
 
 /// Resolve the first available Python interpreter by probing `--version`.
 /// Prefers `python3` (the canonical name on most Linux distros — many ship
@@ -28,13 +29,7 @@ use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
 /// Mirrors [`super::python_lint::pick_linter`]'s probe-then-fallback shape.
 async fn pick_python() -> Option<&'static str> {
     for bin in ["python3", "python"] {
-        let ok = tokio::process::Command::new(bin)
-            .arg("--version")
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if ok {
+        if tool_on_path(bin, &["--version"]).await {
             return Some(bin);
         }
     }
@@ -43,23 +38,20 @@ async fn pick_python() -> Option<&'static str> {
 
 /// Run the Python test verifier against an event.
 pub async fn verify_python_test(event: &BusEvent) -> Verdict {
-    let path = match event {
-        BusEvent::Edit(EditEvent { path, .. }) => path.clone(),
-        BusEvent::FileWrite(FileWriteEvent { path, .. }) => path.clone(),
-        _ => return Verdict::Skipped("not a file modification event".into()),
+    let Some(path) = modified_path(event) else {
+        return Verdict::Skipped("not a file modification event".into());
     };
 
-    if path.extension().and_then(|e| e.to_str()) != Some("py") {
-        return Verdict::Skipped(format!("unsupported file type: {}", path.display()));
-    }
-
-    let Some(root) = find_python_root(&path) else {
-        return Verdict::Skipped(format!("no Python marker for {}", path.display()));
+    let root = match language_gate(
+        &path,
+        &["py"],
+        "Python",
+        find_python_root,
+        ProjectLanguage::Python,
+    ) {
+        Gate::Root(root) => root,
+        Gate::Skip(verdict) => return verdict,
     };
-
-    if !detect_project_languages(&root).contains(&ProjectLanguage::Python) {
-        return Verdict::Skipped("Python not detected".into());
-    }
 
     // python3-only hosts (most Linux distros) have no `python` symlink; without
     // resolution the spawn fails with NotFound and the verifier can never run.
@@ -97,30 +89,21 @@ pub async fn verify_python_test(event: &BusEvent) -> Verdict {
         return Verdict::Skipped("pytest not installed".into());
     }
 
-    let mut combined: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
     // ponytail: tail-N truncation matches the Rust test verifier; full pytest
     // output can be hundreds of lines, the model only needs the failure.
-    const TAIL_LINES: usize = 20;
-    if combined.len() > TAIL_LINES {
-        let start = combined.len() - TAIL_LINES;
-        combined = combined.split_off(start);
-    }
-    let body = combined.join("\n");
+    let body = tail_body(&stdout, &stderr, 20);
 
-    Verdict::Fixable(FixSuggestion {
-        description: format!("pytest failure near {}\n{body}", path.display()),
-        file: path,
-        original: String::new(),
-        replacement: String::new(),
-        severity: "error".to_string(),
-        command: None,
-        line: None,
-    })
+    command_finding(
+        format!("pytest failure near {}\n{body}", path.display()),
+        path,
+        "error",
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::verifier::{EditEvent, FileWriteEvent};
 
     #[tokio::test]
     async fn skips_non_edit_events() {

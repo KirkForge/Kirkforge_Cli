@@ -5,39 +5,28 @@
 //! Non-zero exit → `Verdict::Fixable` with the tail of the output. If `go`
 //! isn't on PATH, skips gracefully.
 
-use crate::session::verifier::detect::{detect_project_languages, find_go_root, ProjectLanguage};
-use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
-use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
+use crate::session::verifier::detect::{find_go_root, ProjectLanguage};
+use crate::session::verifier::helpers::{
+    command_finding, language_gate, modified_path, tail_body, tool_on_path, Gate,
+};
+use crate::session::verifier::types::BusEvent;
+use crate::session::verifier::{Verdict, VerificationError};
 
 /// Probe `go version` to confirm the Go toolchain is on PATH.
 async fn pick_go() -> bool {
-    tokio::process::Command::new("go")
-        .arg("version")
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    tool_on_path("go", &["version"]).await
 }
 
 /// Run the Go test verifier against an event.
 pub async fn verify_go_test(event: &BusEvent) -> Verdict {
-    let path = match event {
-        BusEvent::Edit(EditEvent { path, .. }) => path.clone(),
-        BusEvent::FileWrite(FileWriteEvent { path, .. }) => path.clone(),
-        _ => return Verdict::Skipped("not a file modification event".into()),
+    let Some(path) = modified_path(event) else {
+        return Verdict::Skipped("not a file modification event".into());
     };
 
-    if path.extension().and_then(|e| e.to_str()) != Some("go") {
-        return Verdict::Skipped(format!("unsupported file type: {}", path.display()));
-    }
-
-    let Some(root) = find_go_root(&path) else {
-        return Verdict::Skipped(format!("no Go marker for {}", path.display()));
+    let root = match language_gate(&path, &["go"], "Go", find_go_root, ProjectLanguage::Go) {
+        Gate::Root(root) => root,
+        Gate::Skip(verdict) => return verdict,
     };
-
-    if !detect_project_languages(&root).contains(&ProjectLanguage::Go) {
-        return Verdict::Skipped("Go not detected".into());
-    }
 
     if !pick_go().await {
         return Verdict::Skipped("go toolchain not found on PATH".into());
@@ -65,31 +54,24 @@ pub async fn verify_go_test(event: &BusEvent) -> Verdict {
         return Verdict::Clean;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
     // ponytail: tail-N truncation matches the Python/Rust test verifiers.
-    const TAIL_LINES: usize = 20;
-    let mut combined: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
-    if combined.len() > TAIL_LINES {
-        let start = combined.len() - TAIL_LINES;
-        combined = combined.split_off(start);
-    }
-    let body = combined.join("\n");
+    let body = tail_body(
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+        20,
+    );
 
-    Verdict::Fixable(FixSuggestion {
-        description: format!("go test failure near {}\n{body}", path.display()),
-        file: path,
-        original: String::new(),
-        replacement: String::new(),
-        severity: "error".to_string(),
-        command: None,
-        line: None,
-    })
+    command_finding(
+        format!("go test failure near {}\n{body}", path.display()),
+        path,
+        "error",
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::verifier::{EditEvent, FileWriteEvent};
 
     #[tokio::test]
     async fn skips_non_edit_events() {

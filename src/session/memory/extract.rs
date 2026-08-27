@@ -3,6 +3,7 @@
 // ponytail: heuristic keyword extraction, not LLM; MAX_FACTS_PER_TURN caps noise
 
 use super::{slugify_description, MemoryFact};
+use crate::shared::audit::scrub_free_text;
 use std::collections::HashMap;
 
 const MIN_FACT_LEN: usize = 20;
@@ -109,10 +110,42 @@ fn sentence_bounds(text: &str) -> Vec<&str> {
     out
 }
 
+// Drop URL-, path-, and KEY=VALUE-shaped tokens so they never become
+// filename material (WO 47.27: 'I prefer ANTHROPIC_API_KEY=sk-abc123'
+// used to leak the key into a memory/ filename).
+fn strip_slug_hazards(text: &str) -> String {
+    text.split_whitespace()
+        .filter(|tok| {
+            let bare = tok.trim_matches(|c: char| !c.is_alphanumeric());
+            !(bare.starts_with("http://")
+                || bare.starts_with("https://")
+                || bare.starts_with("www.")
+                || bare.contains('/')
+                || bare.contains('='))
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn make_slug(prefix: &str, text: &str) -> String {
-    let slug_part = slugify_description(&text[..text.len().min(120)]);
+    let safe = strip_slug_hazards(text);
+    let slug_part = slugify_description(&safe[..safe.len().min(120)]);
     let hash = fnv1a_16(text);
     format!("{prefix}{slug_part}-{hash:04x}")
+}
+
+// Build a fact with secret-looking spans replaced by [REDACTED] in
+// body/description. Same shapes as the audit-log scrubber so "what a
+// secret looks like" stays single-sourced; the slug additionally strips
+// URLs/paths (make_slug).
+fn new_fact(prefix: &str, fact_text: &str, kind: &str) -> MemoryFact {
+    let clean = scrub_free_text(fact_text);
+    MemoryFact {
+        name: make_slug(prefix, fact_text),
+        description: clean[..clean.len().min(80)].to_string(),
+        body: clean,
+        metadata: HashMap::from([("type".into(), kind.into())]),
+    }
 }
 
 fn fnv1a_16(data: &str) -> u16 {
@@ -128,19 +161,15 @@ fn extract_user_preferences(user_msg: &str) -> Vec<MemoryFact> {
     let lower = user_msg.to_lowercase();
     let mut facts = Vec::new();
 
-    for pat in USER_PREFS {
-        if let Some(idx) = lower.find(pat) {
-            let fact_text = user_msg[idx..].trim();
-            if fact_text.len() < MIN_FACT_LEN || is_chaff(fact_text) {
-                continue;
-            }
-            let name = make_slug("user-pref-", fact_text);
-            facts.push(MemoryFact {
-                name,
-                description: fact_text[..fact_text.len().min(80)].to_string(),
-                body: fact_text.to_string(),
-                metadata: HashMap::from([("type".into(), "user".into())]),
-            });
+    // mm-H21: every pattern match contributes the message tail from its
+    // match index, so nested matches ("make sure to always use X" hits
+    // both "make sure to" and "always use") inserted the same fact once
+    // per pattern. All tails overlap; keep only the earliest (most
+    // complete) match.
+    if let Some(idx) = USER_PREFS.iter().filter_map(|p| lower.find(p)).min() {
+        let fact_text = user_msg[idx..].trim();
+        if fact_text.len() >= MIN_FACT_LEN && !is_chaff(fact_text) {
+            facts.push(new_fact("user-pref-", fact_text, "user"));
         }
     }
 
@@ -151,19 +180,11 @@ fn extract_corrections(user_msg: &str) -> Vec<MemoryFact> {
     let lower = user_msg.to_lowercase();
     let mut facts = Vec::new();
 
-    for pat in CORRECTIONS {
-        if let Some(idx) = lower.find(pat) {
-            let fact_text = user_msg[idx..].trim();
-            if fact_text.len() < MIN_FACT_LEN || is_chaff(fact_text) {
-                continue;
-            }
-            let name = make_slug("feedback-", fact_text);
-            facts.push(MemoryFact {
-                name,
-                description: fact_text[..fact_text.len().min(80)].to_string(),
-                body: fact_text.to_string(),
-                metadata: HashMap::from([("type".into(), "feedback".into())]),
-            });
+    // Same earliest-match rule as extract_user_preferences (mm-H21).
+    if let Some(idx) = CORRECTIONS.iter().filter_map(|p| lower.find(p)).min() {
+        let fact_text = user_msg[idx..].trim();
+        if fact_text.len() >= MIN_FACT_LEN && !is_chaff(fact_text) {
+            facts.push(new_fact("feedback-", fact_text, "feedback"));
         }
     }
 
@@ -199,13 +220,7 @@ fn extract_project_facts(assistant_msg: &str) -> Vec<MemoryFact> {
         }
         let lower = sent.to_lowercase();
         if project_signals.iter().any(|sig| lower.contains(sig)) {
-            let name = make_slug("project-", sent);
-            facts.push(MemoryFact {
-                name,
-                description: sent[..sent.len().min(80)].to_string(),
-                body: sent.to_string(),
-                metadata: HashMap::from([("type".into(), "project".into())]),
-            });
+            facts.push(new_fact("project-", sent, "project"));
         }
     }
 
@@ -389,5 +404,135 @@ mod tests {
     fn is_preference_like_detects_correction() {
         assert!(is_preference_like("actually, we should use tokio"));
         assert!(is_preference_like("that's wrong, the fix is X"));
+    }
+
+    // ── WO 47.27: secrets must not reach filenames or fact bodies ──────
+
+    #[test]
+    fn slug_strips_key_value_url_and_path_spans() {
+        let slug = make_slug(
+            "user-pref-",
+            "I prefer ANTHROPIC_API_KEY=sk-abc123 when coding",
+        );
+        assert!(
+            !slug.contains("anthropic"),
+            "KEY=VALUE leaked into slug: {slug}"
+        );
+        assert!(
+            !slug.contains("abc123"),
+            "secret value leaked into slug: {slug}"
+        );
+
+        let slug = make_slug(
+            "user-pref-",
+            "always use https://internal.example.com/v2 for the builds",
+        );
+        assert!(
+            !slug.contains("internal"),
+            "URL host leaked into slug: {slug}"
+        );
+        assert!(!slug.contains("example"), "URL leaked into slug: {slug}");
+
+        let slug = make_slug("project-", "the config file is src/main.rs okay");
+        assert!(!slug.contains("main"), "path leaked into slug: {slug}");
+        assert!(!slug.contains("src"), "path leaked into slug: {slug}");
+    }
+
+    #[test]
+    fn secret_redacted_from_fact_body_and_description() {
+        let facts = extract_facts("I prefer ANTHROPIC_API_KEY=sk-abc123def for the client", "");
+        assert!(!facts.is_empty());
+        for f in &facts {
+            assert!(
+                !f.body.contains("sk-abc123def"),
+                "body carries literal secret: {}",
+                f.body
+            );
+            assert!(
+                !f.description.contains("sk-abc123def"),
+                "description carries literal secret: {}",
+                f.description
+            );
+            assert!(
+                f.body.contains("[REDACTED]"),
+                "body not scrubbed: {}",
+                f.body
+            );
+        }
+        // The name is a FILENAME under memory/ — it must not carry the key.
+        assert!(
+            !facts[0].name.contains("anthropic"),
+            "secret name reached filename slug: {}",
+            facts[0].name
+        );
+    }
+
+    #[test]
+    fn non_secret_key_value_still_redacted_consistently() {
+        // Non-credential env vars survive the scrubber untouched in the
+        // body (only slug input drops ALL KEY=VALUE shapes).
+        let facts = extract_facts("I prefer PATH=/usr/local/bin on this machine", "");
+        assert!(!facts.is_empty());
+        assert!(
+            facts[0].body.contains("PATH=/usr/local/bin"),
+            "non-secret env var should survive in body: {}",
+            facts[0].body
+        );
+        assert!(
+            !facts[0].name.contains("usr"),
+            "path-shaped token should be stripped from slug: {}",
+            facts[0].name
+        );
+    }
+
+    // ── WO 47.27 mm-H21: nested pattern matches dedup to one insert ────
+
+    #[test]
+    fn nested_preference_patterns_dedup_to_single_fact() {
+        // Matches both "make sure to" and "always use" — same statement.
+        let facts = extract_user_preferences("make sure to always use anyhow for errors");
+        assert_eq!(facts.len(), 1, "nested matches must dedup: {facts:?}");
+        assert!(
+            facts[0].body.starts_with("make sure to"),
+            "earliest (most complete) match should win: {}",
+            facts[0].body
+        );
+    }
+
+    #[test]
+    fn nested_correction_patterns_dedup_to_single_fact() {
+        // Matches both "that's wrong" and "wrong, it should".
+        let facts = extract_corrections("that's wrong, it should be anyhow instead");
+        assert_eq!(facts.len(), 1, "nested matches must dedup: {facts:?}");
+        assert!(
+            facts[0].body.starts_with("that's wrong"),
+            "earliest (most complete) match should win: {}",
+            facts[0].body
+        );
+    }
+
+    #[test]
+    fn preferences_and_corrections_extract_independently() {
+        // One fact per extractor; the two never collapse into each other.
+        let facts = extract_facts(
+            "Actually that's wrong, the right way is anyhow. I prefer anyhow strongly.",
+            "",
+        );
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|f| f.metadata.get("type").unwrap() == "feedback")
+                .count(),
+            1,
+            "{facts:?}"
+        );
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|f| f.metadata.get("type").unwrap() == "user")
+                .count(),
+            1,
+            "{facts:?}"
+        );
     }
 }

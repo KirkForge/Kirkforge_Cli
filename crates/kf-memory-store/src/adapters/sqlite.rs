@@ -385,8 +385,19 @@ impl MemoryAdapter for SqliteAdapter {
         }
         if let Some(tags) = &q.tags {
             for tag in tags {
-                conditions.push("tags LIKE ?".to_string());
-                params_vec.push(Box::new(format!("%\"{tag}\"%")));
+                // Escape LIKE wildcards in the tag so 'prod%' cannot match
+                // 'prod-build' (WO 47.27.3). The column stores the tags as
+                // JSON, so match against the JSON-escaped form of the tag
+                // (a backslash is stored as `\\`); backslash is then escaped
+                // first so the escapes we add are not themselves escaped.
+                let json_tag = serde_json::to_string(tag).unwrap_or_default();
+                let escaped = json_tag
+                    .trim_matches('"')
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_");
+                conditions.push("tags LIKE ? ESCAPE '\\'".to_string());
+                params_vec.push(Box::new(format!("%\"{escaped}\"%")));
             }
         }
         let where_clause = if conditions.is_empty() {
@@ -643,5 +654,54 @@ impl MemoryAdapter for SqliteAdapter {
         let conn = self.conn.lock().expect("sqlite lock poisoned");
         conn.pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::MemoryObject;
+    use serde_json::json;
+
+    fn tagged_obj(id: &str, tags: &[&str]) -> MemoryObject {
+        MemoryObject {
+            id: id.to_string(),
+            kind: "obs".to_string(),
+            task_id: "T1".to_string(),
+            run_id: None,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            description: format!("desc {id}"),
+            properties: json!({}),
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+        }
+    }
+
+    // WO 47.27.3: % and _ in a query tag are literals, not wildcards.
+    #[test]
+    fn tag_query_escapes_like_wildcards() {
+        let a = SqliteAdapter::open_in_memory().unwrap();
+        a.write(&tagged_obj("b1", &["prod-build"])).unwrap();
+        a.write(&tagged_obj("b2", &["prodXbuild"])).unwrap();
+        a.write(&tagged_obj("pct", &["prod%"])).unwrap();
+        a.write(&tagged_obj("und", &["prod_build"])).unwrap();
+
+        let q = |tag: &str| {
+            a.query(&MemoryQuery {
+                tags: Some(vec![tag.to_string()]),
+                ..Default::default()
+            })
+            .unwrap()
+            .len()
+        };
+
+        // 'prod%' must match ONLY the literal 'prod%' tag, not 'prod-build'.
+        assert_eq!(q("prod%"), 1, "% must not act as a wildcard");
+        // '_' must match only the literal 'prod_build', not 'prodXbuild'.
+        assert_eq!(q("prod_build"), 1, "_ must not act as a wildcard");
+        // Plain tags still match.
+        assert_eq!(q("prod-build"), 1);
+        // A backslash in the tag is a literal too (not consumed as an escape).
+        a.write(&tagged_obj("bs", &["a\\b"])).unwrap();
+        assert_eq!(q("a\\b"), 1, "backslash in tag must be literal");
     }
 }

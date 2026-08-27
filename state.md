@@ -4,6 +4,32 @@
 
 ## Shipped (closed this session)
 
+- **WO 47.27**: Done. Memory subsystem, three defects, one gated commit
+  each on `wo/wo47.27` (not merged/pushed — parallel-wave worktree).
+  (1) `make_slug` slugified raw user text, so 'I prefer
+  ANTHROPIC_API_KEY=sk-abc123' put the key in a memory/ FILENAME and the
+  literal secret in the persisted body. Slug input now strips URL-/
+  path-/KEY=VALUE-shaped tokens (`strip_slug_hazards`); body/description
+  run through the EXISTING `shared::audit::scrub_free_text` (pub, same
+  lib crate — secret shapes single-sourced, zero shared-file edits) via
+  a `new_fact` helper used by all three extractors. (2) mm-H21:
+  extract_user_preferences/extract_corrections inserted one fact per
+  matching keyword pattern; every match is a tail of the same message,
+  so nested matches ("make sure to always use X") duplicated the same
+  fact — now only the earliest (most complete) match is kept. Note: one
+  fact per extractor per message is the resulting semantic; a message
+  with two distinct prefs keeps the earliest tail, whose body still
+  contains both statements. (3) kf-memory-store sqlite tag query
+  interpolated % and _ as LIKE wildcards ('prod%' matched 'prod-build')
+  — now `ESCAPE '\'` + escaping `\`/`%`/`_`, matched against the
+  JSON-escaped form because the column stores the tags array as JSON.
+  7 new tests across the three sites. Phase-B impact: extract_facts
+  nominal HIGH (15 direct callers, 14 in-file tests; sole production
+  caller `Executor::run_turn` memory hook; signature unchanged);
+  sqlite query trait-internal LOW. detect_changes vs branch point:
+  6 symbols / 2 files, risk low, 0 processes. Gate (head ba5c7ef7):
+  test-fast 4814/4814 (16 skipped), clippy -D warnings clean, fmt
+  clean, kf-memory-store 45/45, workspace check clean.
 - **WO 47.20**: Done. Response cache two-defect fix
   (src/adapters/caching.rs only). (1) CacheKey hashed only (model,
   messages, tools, response_format) — seed/max_tokens/

@@ -11,6 +11,12 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 47.27 — memory subsystem security/dupe fixes: memory-fact slugs strip
+  URL/path/KEY=VALUE spans (secrets no longer reach filenames under
+  `memory/`), fact bodies/descriptions are scrubbed via the audit-log
+  secret shapes, nested keyword matches dedup to one fact per extractor,
+  and sqlite tag queries escape LIKE wildcards.
+  [47.27](docs/workorders/47.27-memory-slug-secrets-and-dupes.md)
 - WO 47.26 — verifier panel perf: `VerifierHandler::verify_event` runs
   its independent verifiers concurrently (bounded, 4 at a time) instead
   of sequentially, with deterministic aggregate verdict preserved;

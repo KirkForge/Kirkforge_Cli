@@ -979,7 +979,7 @@ tree, ~11 stale claims corrected in-line. See
 | 46.27 | [mtime_rebuild/incremental_rebuild silently drop cached embeddings](46.27-context-index-rebuild-drops-cached-embeddings.md) | Done |
 | 46.28 | [prune_oldest_in_dir ignores keep semantics — silent leak of oldest sessions](46.28-prune-oldest-ignores-keep-semantics.md) | Done |
 | 46.29 | [start_daemon leaks a zombie child on every invocation](46.29-start-daemon-zombie-child.md) | Planned |
-| 46.30 | [bench run_task env-var leak on error paths](46.30-bench-run-task-env-var-leak.md) | Planned |
+| 46.30 | [bench run_task env-var leak on error paths](46.30-bench-run-task-env-var-leak.md) | Done |
 | 46.31 | [apply_budget_slice TOCTOU — state read then re-lock](46.31-apply-budget-slice-toctou.md) | Planned |
 | 46.32 | [Daemon Unix socket has no explicit perms + auth token length leaks via timing](46.32-daemon-socket-no-perms-token-leak.md) | Planned |
 | 46.33 | [openai_compat spurious Error on DONE-before-finish_reason ordering](46.33-openai-compat-spurious-error-done-ordering.md) | Planned |

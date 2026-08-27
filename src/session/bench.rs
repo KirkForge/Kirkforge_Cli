@@ -190,6 +190,31 @@ fn build_bench_toolset(sandbox_path: &Path) -> super::toolset::CompositeToolset 
     toolset
 }
 
+/// RAII: set an env var on construction, restore the prior value (or
+/// unset) on Drop. WO 46.30: the shared `test_util::EnvGuard` is
+/// `#[cfg(test)]`-only, so bench production code needs its own.
+struct BudgetEnvGuard {
+    name: &'static str,
+    old: Option<String>,
+}
+
+impl BudgetEnvGuard {
+    fn set(name: &'static str, value: &str) -> Self {
+        let old = std::env::var(name).ok();
+        std::env::set_var(name, value);
+        Self { name, old }
+    }
+}
+
+impl Drop for BudgetEnvGuard {
+    fn drop(&mut self) {
+        match &self.old {
+            Some(v) => std::env::set_var(self.name, v),
+            None => std::env::remove_var(self.name),
+        }
+    }
+}
+
 /// Run a single benchmark task.
 ///
 /// Creates a temp sandbox dir, applies setup files, starts a headless
@@ -225,9 +250,13 @@ pub async fn run_task(
     // KF_CODE_BUDGET_CEILING so the budget guard (init_from_config
     // → apply_env_overrides) enforces it for this run. The Token
     // Budget Challenge sets this per run; other tasks leave it None.
-    if let Some((env_name, ceiling)) = task.budget_env() {
-        std::env::set_var(env_name, ceiling.to_string());
-    }
+    // WO 46.30: RAII guard — run_task has `?` exits between here and
+    // the old manual cleanup (conversation open, executor build), and
+    // a leaked ceiling poisoned every later task in the same bench
+    // run. Drop restores the pre-task value on every exit path.
+    let _budget_guard = task
+        .budget_env()
+        .map(|(env_name, ceiling)| BudgetEnvGuard::set(env_name, &ceiling.to_string()));
     super::config::freeze_launch_sandbox(&mut task_config);
 
     let shared_config: SharedConfig = std::sync::Arc::new(std::sync::RwLock::new(task_config));
@@ -315,13 +344,9 @@ pub async fn run_task(
     )
     .await;
 
-    // WO 14.7: clear the budget-ceiling env var so it does not leak
-    // into subsequent tasks in the same `bench run` invocation. Only
-    // the task that set it clears it; tasks without a ceiling leave
-    // the env untouched.
-    if task.budget_ceiling.is_some() {
-        std::env::remove_var(kf_bench::BUDGET_CEILING_ENV);
-    }
+    // WO 46.30: ceiling env cleanup is now `_budget_guard`'s Drop (set
+    // at the top of run_task) — it fires on success, error, and timeout
+    // alike, restoring whatever was there before the task ran.
 
     let duration = start.elapsed().as_secs_f64();
 
@@ -938,6 +963,34 @@ mod tests {
         }
         // Base task unchanged.
         assert!(base.budget_ceiling.is_none());
+    }
+
+    #[test]
+    fn budget_env_guard_unsets_on_drop_and_restores_prior_value() {
+        // WO 46.30: run_task must not leak KF_CODE_BUDGET_CEILING on
+        // early-exit paths. Throwaway name: the config tests mutate the
+        // real BUDGET_CEILING_ENV under a module-local ENV_LOCK this
+        // test cannot share — a private key avoids the parallel race.
+        const KEY: &str = "KF_TEST_BENCH_BUDGET_GUARD";
+        std::env::remove_var(KEY);
+        {
+            let _g = BudgetEnvGuard::set(KEY, "4096");
+            assert_eq!(std::env::var(KEY).unwrap(), "4096");
+        }
+        // No prior value → drop unsets (the leak WO 46.30 fixes).
+        assert!(
+            std::env::var(KEY).is_err(),
+            "guard drop must unset the ceiling env var"
+        );
+        {
+            let _prior = crate::shared::test_util::EnvGuard::set(KEY, "111");
+            {
+                let _g = BudgetEnvGuard::set(KEY, "4096");
+                assert_eq!(std::env::var(KEY).unwrap(), "4096");
+            }
+            // Prior value → drop restores it, not blanket removal.
+            assert_eq!(std::env::var(KEY).unwrap(), "111");
+        }
     }
 
     #[test]

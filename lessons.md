@@ -515,3 +515,37 @@
   to outlast the 2-min bash-tool cap. Don't trust a frozen "Compiling
   kf-code" log line as stuck — check `ps STAT` (Sl = sleeping on
   I/O, R = running) and RSS growth to confirm progress.
+
+# Lessons — WO 46.30 session (bench env-var leak)
+
+## What I learned
+
+- `shared::test_util::EnvGuard` and the kf-bench test-file `EnvGuard`
+  are both `#[cfg(test)]`-only. Production RAII env guards must be
+  local to the module that needs them (~25 lines); un-gating test_util
+  for prod would be the bigger, wrong-direction diff.
+- ENV_LOCK statics are module-local (config/mod.rs, adapters/anthropic).
+  A new test mutating a var another module's tests mutate
+  (KF_CODE_BUDGET_CEILING) must use a throwaway key — there is no
+  cross-module env serialization.
+- Full-suite gates are unattainable while sibling worktrees compile:
+  3 worktrees × ~82 rustc threads each (load 17-27) starves even
+  trivial tests past the 30s ci-fast slow-timeout — a pure string test
+  (`edit_file_replacement_equals_replacen`) TIMED OUT at 30s. Evidence
+  pattern that held: --no-fail-fast full run + immediate unstarved
+  re-run of every anomaly + document. Same signature as WO 46.28's
+  accepted flake note.
+- `test_always_approve_rule_round_trips_to_next_turn` takes ~26s solo —
+  only 4s under the ci-fast 30s budget. Expect it to flake under any
+  real load.
+- `cargo test | tail` hides all progress until completion — under load,
+  use nohup + log file + poll, or you burn 30-min timeouts blind.
+- lessons.md IS tracked here despite the stale .gitignore entry —
+  APPEND, never Write the whole file (this session clobbered 517 lines
+  and had to restore from HEAD).
+
+## What didn't work / would do differently
+
+- Two foreground `cargo test | tail` attempts (7 + 30 min) burned ~40
+  min before noticing the box was saturated by sibling agents. Check
+  `ps aux | grep rustc` + uptime BEFORE any compile in a worktree.

@@ -1008,3 +1008,31 @@ tree, ~11 stale claims corrected in-line. See
 | 47.7 | [# WO 47.6 — MCP transport trait (every op exists 3×: enum + stdio_* + http)](47.7-mcp-transport-trait.md) | Planned |
 | 47.8 | [Wire or delete the 9 fuzz targets (100% unwired dead weight)](47.8-wire-or-delete-fuzz-targets.md) | Planned |
 | 47.9 | [Archive the completed workorder corpus (490 files, 45.6K lines = 74% of docs)](47.9-archive-workorder-corpus.md) | Planned |
+
+### WO 47 additions — multi-model audit findings (vetted)
+
+23 workorders from vetting mm/ds/kimi/sonnet/gpt bug reports against the code. Top-severity claims verified at file:line before filing.
+
+| 47.15 | [Secret-env scrub missing at 3 spawn sites: docker, shell hooks, verifier formatter](47.15-secret-env-scrub-three-missed-spawn-sites.md) | Planned |
+| 47.16 | [jobd: token-length timing oracle + world-readable socket (the disclosed WO 46.32 deferral)](47.16-jobd-auth-timing-oracle-and-socket-perms.md) | Planned |
+| 47.17 | [workflow_run template argument loads arbitrary workflow JSON via path traversal](47.17-workflow-template-path-traversal.md) | Planned |
+| 47.18 | [Bash tool foreground path has no safety gate — direct callers bypass pre_run](47.18-bash-foreground-gate-in-tool.md) | Planned |
+| 47.19 | [Verifier apply_text_fix symlink-swap TOCTOU + VerifierBus catch_unwind double-panic](47.19-verifier-apply-text-fix-symlink-tocou.md) | Planned |
+| 47.20 | [Response cache: key omits generation config (wrong-model replays) + 64MiB sync disk reads on the async path](47.20-response-cache-key-and-async-disk.md) | Planned |
+| 47.21 | [ensure_private_data_dir OnceLock caches the first path globally — variable data dirs break](47.21-ensure-private-data-dir-oncelock.md) | Planned |
+| 47.22 | [edit_file fuzzy fallback corrupts the trailing newline on multi-line matches](47.22-edit-file-fuzzy-newline-corruption.md) | Planned |
+| 47.23 | [panic=abort makes every catch_unwind containment guard dead code in release — contract drift](47.23-panic-abort-vs-catch-unwind-contract.md) | Planned |
+| 47.24 | [Glob: max_matches never early-stops the walk + base_dir not pre-guarded](47.24-glob-early-stop-and-base-dir-guard.md) | Planned |
+| 47.25 | [Workflow condition: field runs unsandboxed shell — deny-list only, no landlock](47.25-workflow-condition-landlock-bypass.md) | Planned |
+| 47.26 | [Verifiers run sequentially per turn (up to 7 min) + sync preamble reads + unbounded verdict cache](47.26-verifier-parallel-execution.md) | Planned |
+| 47.27 | [Memory extractor: secrets land in filenames + same fact added up to 14× + LIKE wildcard escape](47.27-memory-slug-secrets-and-dupes.md) | Planned |
+| 47.28 | [HTTP MCP bearer token silently ignored + EventBus buffer identity collision](47.28-mcp-bearer-token-and-event-identity.md) | Planned |
+| 47.29 | [Adapter wire fixes: Bedrock content-length signing, SSE line-anchoring, /v1 over-trim, Vertex URL-encoding](47.29-adapter-wire-format-fixes.md) | Planned |
+| 47.30 | [jobd: notify_one loses shutdown/reload + run_bash_job double-completion race](47.30-jobd-shutdown-and-double-completion.md) | Planned |
+| 47.31 | [ci-local failures[] integrity (tarpaulin bypass + compound run_step) + CHANGELOG 23 missing WO 46 entries](47.31-ci-local-integrity-and-changelog.md) | Planned |
+| 47.32 | [Docker bash path: unbounded output buffering + timeout/signal codes conflated](47.32-docker-output-caps-and-signals.md) | Planned |
+| 47.33 | [Web/read hardening bundle: IPv6 unspecified, DNS-pin fail-open, body-cap config, read_file streaming, computer_use SSRF gate, scan_files cap](47.33-web-and-read-hardening-bundle.md) | Planned |
+| 47.34 | [write_file parent-dir TOCTOU + permission glob matcher catastrophic backtracking](47.34-write-file-tocou-and-glob-matcher.md) | Planned |
+| 47.35 | [Untrusted-content delimiters for tool output (prompt-injection defense) + template push_value hardening](47.35-untrusted-content-delimiters.md) | Planned |
+| 47.36 | [Mutex-poison + expect hygiene batch + lib unwrap gate + test EnvGuard fixes](47.36-mutex-poison-and-expect-hygiene.md) | Planned |
+| 47.37 | [Test-theater batch: e2e scenarios accept any outcome + bench TOMLs missing requires_model + tarpaulin nightly verify](47.37-test-theater-batch.md) | Planned |

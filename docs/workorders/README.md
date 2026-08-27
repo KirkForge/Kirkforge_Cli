@@ -989,3 +989,22 @@ tree, ~11 stale claims corrected in-line. See
 | 46.37 | [web_fetch/web_search ignore tool cancel token — cancelled turn waits full 30s](46.37-web-fetch-web-search-ignore-cancel-token.md) | Done |
 | 46.38 | [verify_task cmd.env() doesn't env_remove() first — leaked parent env affects gate](46.38-verify-task-env-not-stripped.md) | Done |
 | 46.39 | [Doc drift batch: CLI about, lib.rs path, test-doctor refs, test count, stale Cargo.lock, install.sh dead paths](46.39-doc-drift-batch-fixes.md) | Done |
+
+### Series 47 — Lean KirkForge convergence (size audit findings)
+
+14 workorders from the post-WO-46 size audit. Target: ~110K prod lines → ~85-88K without losing the verification/context/budget thesis.
+
+| 47.1 | [Table-driven verifier registration (11 of 16 verifiers share the same 90-160-line shape)](47.1-table-driven-verifiers.md) | Planned |
+| 47.10 | [send_or_warn! ceremony → single emit! macro (47 sites × 4-6 lines)](47.10-send-or-warn-ceremony.md) | Planned |
+| 47.11 | [Freeze/delete computer_use (513 lines, default-off mini browser framework)](47.11-computer-use-freeze.md) | Planned |
+| 47.12 | [Daemon becomes opt-in (~5.6K lines out of the default path)](47.12-daemon-opt-in.md) | Planned |
+| 47.13 | [TUI command diet (trim set ≈ 3-4K shipped lines)](47.13-tui-command-diet.md) | Planned |
+| 47.14 | [Unify the two verifier trait systems (LAST + riskiest)](47.14-unify-verifier-traits.md) | Planned |
+| 47.2 | [Generic env-override loader (91 hand-parsed KF_* vars in 4 layers)](47.2-generic-env-loader.md) | Planned |
+| 47.3 | [Delete kf-rbac (JWT/JWKS half has zero production consumers)](47.3-delete-kf-rbac.md) | Planned |
+| 47.4 | [Fold kf-routing + kf-memory-store into kf-orchestrator (0 direct src/ refs)](47.4-fold-routing-memory-crates.md) | Planned |
+| 47.5 | [Feature-gate bench + testdoctor out of the default binary (~5K lines)](47.5-devtools-out-of-binary.md) | Planned |
+| 47.6 | [Six live compression layers → two (stratum modes should map to 2 pipelines)](47.6-compression-layers-6-to-2.md) | Planned |
+| 47.7 | [# WO 47.6 — MCP transport trait (every op exists 3×: enum + stdio_* + http)](47.7-mcp-transport-trait.md) | Planned |
+| 47.8 | [Wire or delete the 9 fuzz targets (100% unwired dead weight)](47.8-wire-or-delete-fuzz-targets.md) | Planned |
+| 47.9 | [Archive the completed workorder corpus (490 files, 45.6K lines = 74% of docs)](47.9-archive-workorder-corpus.md) | Planned |

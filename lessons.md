@@ -682,3 +682,29 @@
 - The anthropic SSE stream tests all live in `anthropic/mod.rs`, not
   `sse.rs` — but `sse.rs` accepts its own `#[cfg(test)] mod tests` fine,
   which is the scope-clean place for them when `mod.rs` is out of scope.
+
+## Session WO 47.27 (memory slug secrets + dupes + LIKE escape)
+
+- **Parallel worktrees starve builds**: sibling WO agents (wo47.28/30/32)
+  pushed load to ~18 and a nohup'd rustc died silently (log ended at
+  "Compiling", no error — likely OOM). On this box, budget 10-30 min for
+  the first `cargo test --lib` in a fresh worktree and retry once the
+  load average drops; don't conclude the build is broken while siblings
+  are compiling.
+- **sqlite LIKE over JSON columns needs two escape layers**: the tags
+  column stores the JSON array, so a tag containing `\` lives in the
+  column as `\\`. Escaping only the LIKE metachars (\\, %, _) makes the
+  query-side `\` literal but still mismatches the stored JSON form —
+  build the match pattern from `serde_json::to_string(tag)` first, then
+  LIKE-escape. Pre-existing: backslash tags never matched at all.
+- **extract.rs byte-slicing at 120/80 is a pre-existing multibyte panic
+  risk** (both before and after this WO — not touched, out of scope).
+  If a panic report ever mentions extract.rs + char boundary, that's it.
+- **The mm-H21 "same fact 14×" is the nested-tail shape**: with pattern
+  lists where every match yields `msg[idx..]`, all matches overlap and
+  the later ones are suffixes of the earliest. `filter_map(|p|
+  lower.find(p)).min()` — keep the earliest match — is the whole fix;
+  no normalize/suffix machinery needed.
+- **Commit-per-defect with entangled edits**: stage an honest intermediate
+  state (defect-1-only), verify, commit, then layer defect 2. Cheaper
+  than git add -p surgery through a CLI.

@@ -41,32 +41,41 @@ async fn adapter_retries_on_5xx() {
         )
         .expect("e2e: spawn kf-code run");
 
-    // The binary may succeed (if it retries) or may fail (if it gives
-    // up after exhausting retries).  We accept either outcome but
-    // check the request log to see that at least two requests were
-    // made (one 500, one success).
-    let log = mock.request_log();
-
     if !output.status.success() {
         let artifact_dir = env.data_dir().join("artifacts");
         let _ = artifact::dump_artifacts_headless(&artifact_dir, &mock, &env.log_path());
-        // Even on failure, we should see that the binary retried.
-        assert!(
-            log.len() >= 2,
-            "adapter_retries_on_5xx: expected ≥2 requests (1 fail + 1 retry), got {}.\n\
+        panic!(
+            "adapter_retries_on_5xx: kf-code exited {:?} — the mock succeeds on \
+             attempt 2, so a non-zero exit means the adapter did not retry.\n\
              stdout: {}\nstderr: {}",
-            log.len(),
+            output.status.code(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
     }
 
-    // Success path: binary retried and got the response.
-    if output.status.success() {
-        assert!(
-            log.len() >= 2,
-            "adapter_retries_on_5xx: expected ≥2 requests on success path, got {}",
-            log.len(),
-        );
-    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // The retried attempt's reply must be relayed — proof the run
+    // surfaced the post-retry response, not just an error.
+    assert!(
+        stdout.contains("retry-success") || stderr.contains("retry-success"),
+        "adapter_retries_on_5xx: expected 'retry-success' in output.\n\
+         stdout: {stdout}\nstderr: {stderr}"
+    );
+
+    // Attempt evidence: exactly two requests — the 500 and the retry —
+    // both to the Ollama chat endpoint. One means no retry happened;
+    // more means unscripted exchanges.
+    let log = mock.request_log();
+    assert_eq!(
+        log.len(),
+        2,
+        "adapter_retries_on_5xx: expected exactly 2 requests (1 × HTTP 500 + 1 × retry), got {}.\n\
+         stdout: {stdout}\nstderr: {stderr}",
+        log.len(),
+    );
+    assert_eq!(log[0].path, "/api/chat");
+    assert_eq!(log[1].path, "/api/chat");
 }

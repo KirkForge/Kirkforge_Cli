@@ -284,6 +284,15 @@ async fn run_workflow_job(
         deny_list,
         path_guard,
         bash_sandbox_workdir: config.security.bash_sandbox_workdir,
+        // WO 47.25: sandbox workflow bash steps + condition evals in
+        // unattended jobs too (same config the foreground bash tool uses).
+        sandbox_config: config.security.sandbox.clone(),
+        landlock_extra_paths: config
+            .security
+            .landlock_extra_paths
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect(),
         cancel_token: tokio_util::sync::CancellationToken::new(),
         dry_run: false,
     };

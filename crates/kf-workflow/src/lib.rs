@@ -395,9 +395,11 @@ pub trait StepRunner: Send + Sync {
     /// condition is absent or exits 0, `false` otherwise (including timeout
     /// and spawn failure — a hung condition skips the step, not the workflow).
     /// Override to route the condition through the same deny gate the runner
-    /// applies to bash steps. The default is `eval_condition_bounded`.
+    /// applies to bash steps. The default is `eval_condition_bounded`
+    /// (bare spawn — the sandbox pre_exec lives in the bin crate and is
+    /// injected via the `prepare` hook by runners that have one).
     async fn eval_condition(&self, condition: &str) -> bool {
-        eval_condition_bounded(condition).await
+        eval_condition_bounded(condition, None).await
     }
 
     /// Run a batch of independent steps and return their summaries in input order.
@@ -1621,7 +1623,7 @@ mod tests {
     async fn eval_condition_bounded_hung_condition_resolves_false() {
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            eval_condition_bounded("sleep infinity"),
+            eval_condition_bounded("sleep infinity", None),
         )
         .await;
         match result {
@@ -1634,13 +1636,25 @@ mod tests {
     // WO 44.45 defect 1: a passing condition exits 0 and returns true.
     #[tokio::test]
     async fn eval_condition_bounded_passing_condition_is_true() {
-        assert!(eval_condition_bounded("true").await);
+        assert!(eval_condition_bounded("true", None).await);
     }
 
     // WO 44.45 defect 1: a failing condition (exit non-zero) returns false.
     #[tokio::test]
     async fn eval_condition_bounded_failing_condition_is_false() {
-        assert!(!eval_condition_bounded("false").await);
+        assert!(!eval_condition_bounded("false", None).await);
+    }
+
+    // WO 47.25: the prepare hook must reach the spawned sh — an env var the
+    // hook injects is observable from inside the condition.
+    #[tokio::test]
+    async fn eval_condition_bounded_applies_prepare_hook() {
+        let prep = |cmd: &mut tokio::process::Command| {
+            cmd.env("KF_WO4725_HOOK", "1");
+        };
+        assert!(eval_condition_bounded(r#"test "$KF_WO4725_HOOK" = "1""#, Some(&prep)).await);
+        // Without the hook the marker is absent from the child env.
+        assert!(!eval_condition_bounded(r#"test "$KF_WO4725_HOOK" = "1""#, None).await);
     }
 
     // WO 44.45 defect 2: a budget.on_exceeded handler must surface in the

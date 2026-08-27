@@ -269,11 +269,17 @@ pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
         ctx.task_concurrency_mode.clone(),
     )));
     registry.register(Arc::new(TaskOutput::new(task_manager)));
-    registry.register(Arc::new(WorkflowTool::new(
+    let mut workflow = WorkflowTool::new(
         ctx.deny_list.clone(),
         ctx.path_guard.clone(),
         ctx.bash_sandbox_workdir,
-    )));
+    );
+    // WO 47.25: same spawn hardening the Bash tool gets, so workflow bash
+    // steps + condition evals run under rlimits+landlock like foreground
+    // bash (populated post-construction, WO 27.1 pattern).
+    workflow.sandbox_config = ctx.sandbox_config.clone();
+    workflow.landlock_extra_paths = ctx.landlock_extra_paths.clone();
+    registry.register(Arc::new(workflow));
     registry.register(Arc::new(TodoWrite::new(todo_state.clone())));
     registry.register(Arc::new(TodoRead::new(todo_state)));
     registry.register(Arc::new(Remember::new()));

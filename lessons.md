@@ -646,3 +646,20 @@
   accepted evidence pattern (matches WO 47.16/46.30/46.34 sessions).
 - Cold clippy --all-targets took 19m at load 39; test-fast full
   no-fail-fast pass 473s. Budget gate time accordingly.
+## WO 47.26 session (verifier parallel execution)
+
+- rustc Send-inference landmine: an async block OR a closure inside a
+  stream combinator's `.map`, living in an async fn's future, made 5
+  DOWNSTREAM spawn sites fail with "implementation of `Send` is not
+  general enough" (tui/mod.rs, executor_adapter.rs, task_spawner.rs,
+  persona.rs) — errors point at callers, not at the offending closure.
+  Fix: build the futures in a plain loop into a Vec, then
+  `stream::iter(vec).buffer_unordered(n)`. Named-helper async fn alone
+  was NOT enough; removing the closure from the future's type was.
+- The WO problem statement said verifiers are sync (`BusVerifier`) —
+  actually `verify_event` drives the async `Verifier` trait
+  (async_trait). Always re-check which of the two coexisting traits a
+  site uses before picking a concurrency shape (AGENTS.md §7).
+- Machine at load 30-40 from sibling worktree agents: cold `cargo check
+  --lib` in a fresh worktree took ~18 min wall; budget gate time
+  accordingly and run targeted test filters between items.

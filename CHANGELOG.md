@@ -9,6 +9,16 @@ why, and the gate evidence.
 
 ## [Unreleased]
 
+### Changed
+
+- WO 47.26 — verifier panel perf: `VerifierHandler::verify_event` runs
+  its independent verifiers concurrently (bounded, 4 at a time) instead
+  of sequentially, with deterministic aggregate verdict preserved;
+  `build_stream_preamble` reads its top-N stem files in one
+  `spawn_blocking` batch instead of on the tokio worker; the verdict
+  cache is bounded (256 entries, FIFO eviction) instead of unbounded.
+  [47.26](docs/workorders/47.26-verifier-parallel-execution.md)
+
 ### Fixed
 
 - WO 47.20 — response cache key + async disk tier: `CacheKey` hashed

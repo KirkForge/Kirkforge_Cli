@@ -926,3 +926,44 @@ async fn verdict_cache_fixable_verdict_not_cached() {
         "Fixable must not be cached — the correction loop needs to re-verify after a fix"
     );
 }
+
+#[tokio::test]
+async fn verdict_cache_is_bounded_with_fifo_eviction() {
+    // WO 47.26: past VERDICT_CACHE_CAP entries the oldest is FIFO-evicted
+    // (re-verify runs again); the newest stays cached (no re-run).
+    let mut s = VerifierSlots::new();
+    let counter = Arc::new(CountingVerifier {
+        name: "build".into(),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    s.register(counter.clone()).unwrap();
+    let slots = Arc::new(std::sync::RwLock::new(s));
+    let guard = PathGuard::default();
+    let handler = VerifierHandler::new(slots, guard);
+
+    // Fill one past the cap with distinct content hashes (same path).
+    for hash in 1..=(handler::VERDICT_CACHE_CAP as u64 + 1) {
+        let _ = handler.verify_event(&make_file_write_event(hash)).await;
+    }
+    assert_eq!(counter.calls(), handler::VERDICT_CACHE_CAP + 1);
+
+    // Hash 1 (oldest) was evicted → cache miss → verifier re-runs.
+    let _ = handler.verify_event(&make_file_write_event(1)).await;
+    assert_eq!(
+        counter.calls(),
+        handler::VERDICT_CACHE_CAP + 2,
+        "oldest entry must have been FIFO-evicted"
+    );
+
+    // The newest entry is still cached → no re-run.
+    let _ = handler
+        .verify_event(&make_file_write_event(
+            handler::VERDICT_CACHE_CAP as u64 + 1,
+        ))
+        .await;
+    assert_eq!(
+        counter.calls(),
+        handler::VERDICT_CACHE_CAP + 2,
+        "newest entry must still be cached"
+    );
+}

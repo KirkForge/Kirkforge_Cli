@@ -1018,7 +1018,7 @@ impl Executor {
             messages,
             tool_defs,
             stem_tokens,
-        } = self.build_stream_preamble(user_input);
+        } = self.build_stream_preamble(user_input).await;
 
         let mut rx = self.adapter.stream(&messages, &tool_defs).await?;
 

@@ -984,7 +984,7 @@ tree, ~11 stale claims corrected in-line. See
 | 46.32 | [Daemon Unix socket has no explicit perms + auth token length leaks via timing](46.32-daemon-socket-no-perms-token-leak.md) | Planned |
 | 46.33 | [openai_compat spurious Error on DONE-before-finish_reason ordering](46.33-openai-compat-spurious-error-done-ordering.md) | Done |
 | 46.34 | [kf-budget-core InMemoryOffloadStore evicts arbitrary entries, not oldest](46.34-budget-core-offload-store-arbitrary-eviction.md) | Planned |
-| 46.35 | [Parallel tool batches leave a ghost streaming card and mis-pair result entries](46.35-parallel-tool-batches-ghost-streaming-card.md) | Planned |
+| 46.35 | [Parallel tool batches leave a ghost streaming card and mis-pair result entries](46.35-parallel-tool-batches-ghost-streaming-card.md) | Done |
 | 46.36 | [bash_runner normal-exit path can spuriously fail + leak grandchild holding the pipe](46.36-bash-runner-normal-exit-drain-failure.md) | Planned |
 | 46.37 | [web_fetch/web_search ignore tool cancel token — cancelled turn waits full 30s](46.37-web-fetch-web-search-ignore-cancel-token.md) | Planned |
 | 46.38 | [verify_task cmd.env() doesn't env_remove() first — leaked parent env affects gate](46.38-verify-task-env-not-stripped.md) | Planned |

@@ -25,14 +25,23 @@ run_step() {
     shift
     echo
     echo "==> $name"
-    if "$@"; then
+    # Disable errexit around the command (WO 47.31, residual from the
+    # WO 46.25 fix): the `if "$@"` form already exempts the condition
+    # from set -e, but a compound command shape (`run_step "x" a && b`,
+    # which parses as `(run_step "x" a) && b`) leaves the trailing
+    # segment running outside the function under set -e. Capturing rc
+    # explicitly with errexit off ensures the failure lands in
+    # failures[] regardless of command shape; the summary exits
+    # non-zero if failures[] is non-empty.
+    set +e
+    "$@"
+    local rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
         echo -e "${GREEN}OK${NC}: $name"
     else
         echo -e "${RED}FAILED${NC}: $name"
         failures+=("$name")
-        # Failure is recorded; fall through so set -e doesn't kill the
-        # script and the remaining gates still run. Final summary exits
-        # non-zero if failures[] is non-empty.
     fi
 }
 

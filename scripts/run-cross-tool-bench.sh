@@ -10,6 +10,9 @@
 #
 # Usage: scripts/run-cross-tool-bench.sh [--tasks-dir <dir>] [--out-dir <dir>] [--model <model>]
 # Defaults: --tasks-dir benches/tasks  --out-dir docs/benchmarks/out
+# NOTE (WO 47.5): the `bench` subcommand is devtools-gated — build the
+# binary with `cargo build --features devtools` (or point KF_CODE_BIN at a
+# devtools build) before running this script.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -269,6 +269,9 @@ pub enum Command {
         interactive: bool,
     },
     /// Run benchmark tasks and collect metrics.
+    // devtools-gated (WO 47.5): the bench subcommand only exists when the
+    // binary is built with --features devtools.
+    #[cfg(feature = "devtools")]
     Bench {
         #[command(subcommand)]
         command: BenchCommand,
@@ -284,6 +287,9 @@ pub enum Command {
     },
     /// Test doctor: profile, classify, partition, suggest, and diagnose
     /// test coverage gaps (WO 12.4, ADR-0029).
+    // devtools-gated (WO 47.5): the doctor subcommand only exists when the
+    // binary is built with --features devtools.
+    #[cfg(feature = "devtools")]
     Doctor {
         #[command(subcommand)]
         command: DoctorCommand,
@@ -299,6 +305,8 @@ pub enum Command {
 }
 
 /// Subcommands for the `doctor` command (WO 12.4, ADR-0029).
+// devtools-gated (WO 47.5).
+#[cfg(feature = "devtools")]
 #[derive(Subcommand, Debug)]
 pub enum DoctorCommand {
     /// Run `cargo test --workspace --no-fail-fast` and capture per-binary timings.
@@ -392,6 +400,8 @@ pub enum PluginCommand {
 }
 
 /// Subcommands for the `bench` command.
+// devtools-gated (WO 47.5).
+#[cfg(feature = "devtools")]
 #[derive(Subcommand, Debug)]
 pub enum BenchCommand {
     /// Run all benchmark tasks.
@@ -674,6 +684,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn bench_run_models_comma_split() {
         let cli = Cli::try_parse_from(["kf-code", "bench", "run-models", "--models", "a,b,c"])
@@ -688,6 +699,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn bench_run_subcommand_parses() {
         let cli = Cli::try_parse_from(["kf-code", "bench", "run"]).expect("parse");
@@ -699,6 +711,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn bench_compare_subcommand_parses() {
         let cli = Cli::try_parse_from([
@@ -719,6 +732,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn bench_list_subcommand_parses() {
         let cli = Cli::try_parse_from(["kf-code", "bench", "list"]).expect("parse");
@@ -730,6 +744,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn bench_verify_only_parses() {
         let cli = Cli::try_parse_from(["kf-code", "bench", "verify-only"]).expect("parse");
@@ -741,6 +756,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn bench_export_tasks_parses() {
         let cli =
@@ -969,6 +985,7 @@ mod tests {
         assert!(err.kind() == clap::error::ErrorKind::ArgumentConflict);
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn doctor_profile_per_test_parses() {
         let cli = Cli::try_parse_from(["kf-code", "doctor", "profile-per-test"]).expect("parse");
@@ -980,6 +997,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn doctor_flaky_parses_with_default_runs() {
         let cli = Cli::try_parse_from(["kf-code", "doctor", "flaky", "foo::bar"]).expect("parse");
@@ -994,6 +1012,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn doctor_flaky_parses_with_custom_runs() {
         let cli = Cli::try_parse_from(["kf-code", "doctor", "flaky", "foo::bar", "--runs", "3"])
@@ -1009,6 +1028,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn doctor_suggest_detailed_parses() {
         let cli = Cli::try_parse_from(["kf-code", "doctor", "suggest-detailed"]).expect("parse");
@@ -1020,6 +1040,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn doctor_suggest_detailed_with_filter_parses() {
         let cli =
@@ -1035,6 +1056,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn doctor_apply_parses_dry_run() {
         let cli = Cli::try_parse_from([
@@ -1062,6 +1084,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "devtools")]
     #[test]
     fn doctor_apply_parses_with_yes() {
         let cli = Cli::try_parse_from([

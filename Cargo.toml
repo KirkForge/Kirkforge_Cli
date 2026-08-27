@@ -92,8 +92,10 @@ regex = "1"
 
 [dependencies]
 thiserror.workspace = true
-# Test doctor (WO 12.4) — workspace member, called from `kf-code doctor`.
-kf-testdoctor = { path = "crates/kf-testdoctor" }
+# Test doctor (WO 12.4) — workspace member. Optional: only linked into the
+# binary via the `devtools` feature (`kf-code doctor`); the crate's own
+# `kf-testdoctor` bin builds unconditionally (WO 47.5).
+kf-testdoctor = { path = "crates/kf-testdoctor", optional = true }
 # Orchestrator pipeline (WO 35.6) — ModelClient production impl lives in
 # src/session/executor_adapter.rs. Drags kf-routing + kf-memory-store
 # (and rusqlite) into the binary; accepted because the WO 35 line
@@ -213,7 +215,8 @@ kf-workflow = { workspace = true }
 # Repo-graph context index (tree-sitter-backed symbol extraction).
 kf-context-index = { workspace = true }
 # Task-benchmark harness (TOML tasks, headless runs, metrics collection).
-kf-bench = { workspace = true }
+# Optional: linked into the binary only via the `devtools` feature (WO 47.5).
+kf-bench = { workspace = true, optional = true }
 # Stratum context compression (optional; default on).
 kf-compress-core = { workspace = true, optional = true }
 # Headless Chrome CDP driver for the computer_use tool. Optional — the
@@ -321,6 +324,15 @@ computer_use = ["dep:headless_chrome"]
 # ponytail: opt-in until exercised against real workloads; ceiling noted in
 # src/session/bash_runner/seccomp.rs.
 seccomp = ["dep:seccompiler"]
+# devtools: compiles the developer tooling into the binary — the `bench`
+# subcommand (kf-bench + the session bench harness) and the `doctor`
+# subcommand (kf-testdoctor). Default OFF (WO 47.5): the release binary
+# ships without ~5K dev-tool lines; build with --features devtools to get
+# them back. kf-testdoctor also has its own standalone bin
+# (`cargo run -p kf-testdoctor`) that works without this feature.
+# ponytail: subcommands vanish rather than degrade when off — devtools are
+# not runtime features; upgrade path (none planned): a separate dev bin.
+devtools = ["dep:kf-bench", "dep:kf-testdoctor"]
 # landlock: no longer a Cargo feature — the module is always compiled on
 # Linux via cfg(target_os = "linux") and applies by default (WO 27.1).
 # Operators escape via --i-accept-unsandboxed on kernels where restrict_self

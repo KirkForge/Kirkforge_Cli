@@ -68,8 +68,8 @@ The root `kf-code` binary directly depends on eight crates:
 | `kf-context-index` | Tree-sitter indexing and graph retrieval |
 | `kf-workflow` | JSON workflow engine (reuses the `task` tool's spawner) |
 | `kf-lsp` | LSP client pool |
-| `kf-bench` | Benchmark task types, loader, verifier, report writers |
-| `kf-testdoctor` | Test-coverage diagnostics behind `kf-code doctor` (WO 12.4) |
+| `kf-bench` | Benchmark task types, loader, verifier, report writers (devtools-gated, WO 47.5) |
+| `kf-testdoctor` | Test-coverage diagnostics behind `kf-code doctor` (devtools-gated, WO 47.5; own `kf-testdoctor` bin builds always) |
 | `kf-orchestrator` | Delegation/decompose/correction pipeline; `ModelClient` impl + security verifier (WO 35.6) |
 
  The remaining five crates are **satellites**: they build as support
@@ -1984,8 +1984,15 @@ The root `Cargo.toml` exposes these features:
   in the same `pre_exec` hook as landlock + rlimits, after landlock. Default
   OFF: opt in via `--features seccomp`. The allowlist is a starting set
   (bash + grep/sed/awk/curl/cargo/node/python + the glibc startup syscalls);
-  real-workload tuning is deferred (see WO 30.4). Brings in the `seccompiler`
-  crate (pure-Rust BPF compiler, no C deps).
+  real-workload tuning is deferred (see WO 30.4). Brings in the
+  `seccompiler` crate (pure-Rust BPF compiler, no C deps).
+- `devtools` (non-default) — compiles the developer tooling into the
+  binary (WO 47.5): the `bench` subcommand (kf-bench + the session bench
+  harness in `src/session/bench.rs`) and the `doctor` subcommand
+  (kf-testdoctor). Default OFF: the release binary ships without ~5K
+  dev-tool lines and the subcommands do not exist. Opt in via
+  `--features devtools`. `kf-testdoctor` also has its own standalone bin
+  (`cargo run -p kf-testdoctor -- …`) that builds without this feature.
 - `otel` (non-default) — OpenTelemetry span/metric export.
 
  Three plugins are feature-gated compiled-in modules, served as direct Rust
@@ -2027,14 +2034,14 @@ document known limitations. Removing these is a regression.
 | `kf-context-index` | Active | Tree-sitter symbol/import/call-graph index | `ContextIndex`, `CachedIndex` | root binary |
 | `kf-workflow` | Active | JSON workflow engine (DAG of persona steps) | `WorkflowExecutor`, `WorkflowTemplate` | root binary |
 | `kf-lsp` | Active | LSP client pool for symbol-aware navigation | `LspPool` | root binary |
-| `kf-bench` | Active | Benchmark task types, loader, verifier, reports | `BenchTask`, `TaskResult` | root binary, bench CI |
+| `kf-bench` | Active | Benchmark task types, loader, verifier, reports | `BenchTask`, `TaskResult` | root binary (via `devtools` feature, WO 47.5), bench CI |
 | `kf-compress-core` | Active | Context-compression pipeline library | `CompressionPipeline`, `Mode`, `rules::build_rules` | root binary (via `stratum` feature) |
 | `kf-budget-core` | Active | Budget/orchestrator/slicing data model | `TokenBudget`, `SlicingOrchestrator` | root binary (via `budget` feature) |
 | `kf-routing` | Active | Pure orchestrator modules (classifier, routing, correction, path safety) | `build_empirical_recommendation`, `tokenize`, `vectorize`, `cosine` | `kf-memory-store`, `kf-orchestrator` |
 | `kf-rbac` | Active | RBAC + JWT/JWKS verification (port of `@kirkforge/core-rbac`) | `Rbac`, `Actor`, `ApiKeys`, `OidcVerifier` | standalone (security surface) |
 | `kf-memory-store` | Active | Routing-oriented memory store (port of `@kirkforge/memory-palace`) | `MemoryStore`, `MemoryAdapter`, `FileAdapter`, `SqliteAdapter`, `InMemoryAdapter` | `kf-orchestrator` |
 | `kf-orchestrator` | Active | Orchestrator delegation + decompose + correction pipeline (port of `@kirkforge/orchestrator`) | `Orchestrator`, `delegate`, `run_correction_loop`, `ModelClient`, `WorkspaceManager`, `verifier::scan_files` | standalone (foundation for full executor wiring) |
-| `kf-testdoctor` | Active | Test-performance diagnostics | `doctor` CLI | root binary (`kf-code doctor`) |
+| `kf-testdoctor` | Active | Test-performance diagnostics | `doctor` CLI | root binary (via `devtools` feature, WO 47.5) + own standalone bin |
 
 "Excluded" crates exist on disk but are not built by default (`cargo build
 --workspace`). They can be built explicitly with `-p <crate-name>`.

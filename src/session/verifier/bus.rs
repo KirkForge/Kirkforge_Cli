@@ -172,6 +172,11 @@ impl VerifierBus {
             // panic is already being handled, unwind through the
             // executor's held `Mutex<VerifierBus>` guard (poison), and
             // permanently kill the bus verification gate.
+            // (Containment contract, WO 47.23: this guard — and the
+            // poison scenario it defends against — only exist in unwind
+            // builds (dev/test). Release builds use panic=abort: the
+            // process aborts and the WO 38.2 panic hook restores the
+            // terminal.)
             let name = verifier.name().to_string();
             let entries = match catch_unwind(AssertUnwindSafe(|| verifier.verify(ctx))) {
                 Ok(entries) => entries,
@@ -982,7 +987,10 @@ mod tests {
     // ── R5.4 — bus resilience to a panicking verifier ─────────────────
     //
     // `VerifierBus::run` wraps each verifier in `catch_unwind` so a buggy
-    // or hostile plugin verifier cannot unwind the executor mid-turn. The
+    // or hostile plugin verifier cannot unwind the executor mid-turn —
+    // true in unwind builds (this test profile). Release builds use
+    // panic=abort: the process aborts and the WO 38.2 panic hook
+    // restores the terminal (WO 47.23 contract). The
     // panic must surface as a `Severity::Warning` verdict naming the
     // verifier, and sibling verifiers must still contribute their findings
     // (proving the bus keeps running after the panic).

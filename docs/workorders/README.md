@@ -1025,7 +1025,7 @@ tree, ~11 stale claims corrected in-line. See
 | 47.20 | [Response cache: key omits generation config (wrong-model replays) + 64MiB sync disk reads on the async path](47.20-response-cache-key-and-async-disk.md) | Done |
 | 47.21 | [ensure_private_data_dir OnceLock caches the first path globally — variable data dirs break](47.21-ensure-private-data-dir-oncelock.md) | Done |
 | 47.22 | [edit_file fuzzy fallback corrupts the trailing newline on multi-line matches](47.22-edit-file-fuzzy-newline-corruption.md) | Done |
-| 47.23 | [panic=abort makes every catch_unwind containment guard dead code in release — contract drift](47.23-panic-abort-vs-catch-unwind-contract.md) | Planned |
+| 47.23 | [panic=abort makes every catch_unwind containment guard dead code in release — contract drift](47.23-panic-abort-vs-catch-unwind-contract.md) | Done |
 | 47.24 | [Glob: max_matches never early-stops the walk + base_dir not pre-guarded](47.24-glob-early-stop-and-base-dir-guard.md) | Done |
 | 47.25 | [Workflow condition: field runs unsandboxed shell — deny-list only, no landlock](47.25-workflow-condition-landlock-bypass.md) | Done |
 | 47.24 | [Glob: max_matches never early-stops the walk + base_dir not pre-guarded](47.24-glob-early-stop-and-base-dir-guard.md) | Done |

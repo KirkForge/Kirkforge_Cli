@@ -246,7 +246,10 @@ impl VerifierHandler {
 }
 
 // Runs one verifier under the per-verifier timeout + panic guard, tagging
-// the result with its registration index. A free async fn (not an async
+// the result with its registration index. The panic guard contains a
+// panicking verifier only in unwind builds (dev/test); release uses
+// panic=abort — the process aborts and the WO 38.2 panic hook restores
+// the terminal (WO 47.23 contract). A free async fn (not an async
 // block inside the stream closure) so the future stays provably Send for
 // callers that spawn verify_event (rustc higher-ranked-closure limitation).
 async fn run_verifier(

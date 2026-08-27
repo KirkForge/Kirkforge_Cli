@@ -361,6 +361,13 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
+# ponytail: panic=abort is a binary-size pin (state.md). ceiling: it makes
+# every catch_unwind containment guard (executor/dispatch.rs tool guard,
+# verifier bus.rs/handler.rs guards) dead in release — a panic aborts the
+# process; the WO 38.2 panic hook restores the terminal first. The guards
+# stay: they are load-bearing in dev/test builds (unwind). Upgrade path:
+# switch to unwind + measure binary size if tool-panic containment is ever
+# needed in production (WO 47.23 contract).
 panic = "abort"
 
 [profile.dev]

@@ -740,7 +740,11 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
     };
     let start = Instant::now();
     // catch_unwind so a panicking tool returns a clean Failure outcome
-    // instead of unwinding through the executor loop. This matters for
+    // instead of unwinding through the executor loop — in unwind builds
+    // (dev/test). In release ([profile.release] panic = "abort",
+    // Cargo.toml) this guard never fires: the process aborts, and the
+    // WO 38.2 panic hook (install_panic_hook, tui/mod.rs) restores the
+    // terminal before the abort (WO 47.23 contract). This matters for
     // the direct-call paths (deterministic mode, Phase 2.5 deferred file
     // calls) which run run_prepared_call on the executor task rather than
     // in a spawned task. The spawned path also benefits: the panic message

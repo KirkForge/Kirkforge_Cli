@@ -306,6 +306,9 @@ mod tests {
     // the panic path by spawning a closure that panics inside
     // `catch_unwind`; the `EnvGuard` is dropped during unwind, and
     // the assertion runs after the catch.
+    // (Audit note, WO 47.23: this is `#[cfg(test)]` code and the test
+    // profile unwinds, so the release `panic = "abort"` pin does NOT
+    // dead-code this guard — it works as written here.)
     //
     // The use of `std::panic::catch_unwind` is the explicit "recover
     // from a panic" hook — a test author would only reach for it

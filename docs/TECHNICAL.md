@@ -132,7 +132,12 @@ The largest module (~30 submodules). It owns:
   `spawn_batch`, `collect_batch` all return `anyhow::Result`. Tool bodies are
   wrapped in `AssertUnwindSafe(...).catch_unwind()` under timeout, so a
   panicking tool becomes `ToolOutcome::Failure(ToolError::Internal { "tool
-  panicked: …" })` instead of unwinding through the executor loop. A
+  panicked: …" })` instead of unwinding through the executor loop — in unwind
+  builds (dev/test; the `test_panicking_tool_yields_failure_internal` pin
+  runs there). In release (`panic = "abort"`) the guard
+  never fires: the process aborts and the WO 38.2 panic hook restores the
+  terminal (WO 47.23 contract; see the "Panic containment + terminal
+  survival" note in the TUI section). A
   `JoinError` (spawned task panicked/cancelled) leaves the index unrecorded
   and Phase 3 appends a placeholder result. The three remaining reachable
   panic sites in dispatch-reachable code were converted to guarded branches:

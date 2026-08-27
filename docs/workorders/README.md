@@ -978,12 +978,12 @@ tree, ~11 stale claims corrected in-line. See
 | 46.26 | [handle_bench_run_models silently exits 0 on 0/N pass rate — CI blind](46.26-handle-bench-run-models-missing-zero-guard.md) | Done |
 | 46.27 | [mtime_rebuild/incremental_rebuild silently drop cached embeddings](46.27-context-index-rebuild-drops-cached-embeddings.md) | Done |
 | 46.28 | [prune_oldest_in_dir ignores keep semantics — silent leak of oldest sessions](46.28-prune-oldest-ignores-keep-semantics.md) | Done |
-| 46.29 | [start_daemon leaks a zombie child on every invocation](46.29-start-daemon-zombie-child.md) | Planned |
+| 46.29 | [start_daemon leaks a zombie child on every invocation](46.29-start-daemon-zombie-child.md) | Done |
 | 46.30 | [bench run_task env-var leak on error paths](46.30-bench-run-task-env-var-leak.md) | Done |
-| 46.31 | [apply_budget_slice TOCTOU — state read then re-lock](46.31-apply-budget-slice-toctou.md) | Planned |
-| 46.32 | [Daemon Unix socket has no explicit perms + auth token length leaks via timing](46.32-daemon-socket-no-perms-token-leak.md) | Planned |
+| 46.31 | [apply_budget_slice TOCTOU — state read then re-lock](46.31-apply-budget-slice-toctou.md) | Done |
+| 46.32 | [Daemon Unix socket has no explicit perms + auth token length leaks via timing](46.32-daemon-socket-no-perms-token-leak.md) | Done |
 | 46.33 | [openai_compat spurious Error on DONE-before-finish_reason ordering](46.33-openai-compat-spurious-error-done-ordering.md) | Done |
-| 46.34 | [kf-budget-core InMemoryOffloadStore evicts arbitrary entries, not oldest](46.34-budget-core-offload-store-arbitrary-eviction.md) | Planned |
+| 46.34 | [kf-budget-core InMemoryOffloadStore evicts arbitrary entries, not oldest](46.34-budget-core-offload-store-arbitrary-eviction.md) | Done |
 | 46.35 | [Parallel tool batches leave a ghost streaming card and mis-pair result entries](46.35-parallel-tool-batches-ghost-streaming-card.md) | Done |
 | 46.36 | [bash_runner normal-exit path can spuriously fail + leak grandchild holding the pipe](46.36-bash-runner-normal-exit-drain-failure.md) | Planned |
 | 46.37 | [web_fetch/web_search ignore tool cancel token — cancelled turn waits full 30s](46.37-web-fetch-web-search-ignore-cancel-token.md) | Planned |

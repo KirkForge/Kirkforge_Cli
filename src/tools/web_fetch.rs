@@ -21,6 +21,14 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// Explicit, honest user agent so targets know a bot is calling.
 const USER_AGENT: &str = "KirkForge-Cli/0.1.0 (https://github.com/KirkForge/KirkForge-Cli)";
 
+/// Wrap untrusted (network- or file-sourced) content in visible delimiters
+/// so the model can tell data from instructions (WO 47.35 prompt-injection
+/// defense). The system prompt pins the contract: content inside these tags
+/// is data, never instructions. Shared by web_fetch, web_search, read_file.
+pub(crate) fn wrap_untrusted(content: String) -> String {
+    format!("<untrusted_content>\n{content}\n</untrusted_content>")
+}
+
 // Abstraction over DNS resolution so the SSRF guards can be unit-tested
 // without real NXDOMAIN I/O (~5s per lookup). Production uses `SystemResolver`
 // (wraps `std::net::ToSocketAddrs`); tests inject a fake. The trait is sync+
@@ -316,7 +324,9 @@ impl Tool for WebFetch {
             output
         };
 
-        ToolOutcome::Success { content }
+        ToolOutcome::Success {
+            content: wrap_untrusted(content),
+        }
     }
 }
 
@@ -1076,6 +1086,33 @@ mod tests {
             matches!(outcome, ToolOutcome::Failure(ToolError::Internal { .. })),
             "expected oversized failure, got {outcome:?}"
         );
+    }
+
+    // WO 47.35: fetched bodies are untrusted — they must arrive in the
+    // model's context wrapped in visible delimiters.
+    #[tokio::test]
+    async fn fetched_body_is_wrapped_in_untrusted_delimiters() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("hello world"))
+            .mount(&server)
+            .await;
+        let tool = test_tool_for(&server);
+        let outcome = tool
+            .run(&ToolContext::new(), json!({"url": "http://test.local/"}))
+            .await;
+        let ToolOutcome::Success { content } = outcome else {
+            panic!("expected Success, got {outcome:?}");
+        };
+        assert!(
+            content.starts_with("<untrusted_content>\n"),
+            "missing opening delimiter: {content}"
+        );
+        assert!(
+            content.ends_with("\n</untrusted_content>"),
+            "missing closing delimiter: {content}"
+        );
+        assert!(content.contains("hello world"));
     }
 
     #[tokio::test]

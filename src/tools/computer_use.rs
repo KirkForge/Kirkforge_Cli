@@ -21,12 +21,39 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// JS preamble injected before `evaluate` expressions to block network requests.
-/// This prevents SSRF via `fetch` or `XMLHttpRequest` to internal/metadata IPs.
+/// This prevents SSRF via `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`,
+/// or `sendBeacon` to internal/metadata IPs — Chrome resolves localhost/loopback
+/// itself (host-resolver exclusion), so every JS-reachable network API is
+/// neutered (WO 47.33 extended this beyond fetch/XHR).
 /// ponytail: blocks all network in evaluate mode; open/navigate use different
-/// code paths and are unaffected. WebSocket/EventSource not blocked — add if needed.
+/// code paths and are unaffected. Residual ceiling: a same-origin iframe's
+/// contentWindow still carries native fetch/XHR, and location assignment can
+/// navigate the tab; upgrade path: CDP request interception (Network domain).
 const EVALUATE_SAFETY_PREAMBLE: &str = r#"
-(() => { window.fetch = async (url, opts) => { throw new Error('fetch blocked in evaluate mode'); }; XMLHttpRequest.prototype.open = function(method, url) { throw new Error('XHR blocked in evaluate mode'); }; })();
+(() => { window.fetch = async (url, opts) => { throw new Error('fetch blocked in evaluate mode'); }; XMLHttpRequest.prototype.open = function(method, url) { throw new Error('XHR blocked in evaluate mode'); }; window.WebSocket = class { constructor(url, protocols) { throw new Error('WebSocket blocked in evaluate mode'); } }; window.EventSource = class { constructor(url) { throw new Error('EventSource blocked in evaluate mode'); } }; if (navigator.sendBeacon) { navigator.sendBeacon = function(url, data) { throw new Error('sendBeacon blocked in evaluate mode'); }; } })();
 "#;
+
+/// High-signal internal-host literals for the evaluate() static gate.
+/// Heuristic substring match on the lowered expression — the JS preamble
+/// is the runtime enforcement; this Rust-side gate keeps loopback URLs out
+/// of the page context at all (WO 47.33 / DS-M4).
+/// ponytail: substring heuristic, not a JS string-literal parser; false
+/// negatives fall through to the preamble, rare false positives just ask
+/// the model to reword. Upgrade path: CDP request interception.
+const INTERNAL_HOST_LITERALS: &[&str] = &[
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "::1",
+    "169.254.",
+    "192.168.",
+    "metadata.google.internal",
+];
+
+fn expression_references_internal_host(expression: &str) -> bool {
+    let lower = expression.to_ascii_lowercase();
+    INTERNAL_HOST_LITERALS.iter().any(|lit| lower.contains(lit))
+}
 
 /// Pinned, boxed future returned by [`SessionLauncher`].
 pub type SessionFuture =
@@ -243,6 +270,22 @@ impl Tool for ComputerUse {
             if crate::tools::web_fetch::host_is_literal_internal_ip(url) {
                 return ToolOutcome::Failure(ToolError::AccessDenied {
                     message: "URL resolves to a private/internal IP by literal host".into(),
+                });
+            }
+        }
+
+        // WO 47.33 (DS-M4): evaluate() runs arbitrary page JS and Chrome
+        // resolves localhost/loopback itself — deny expressions that
+        // reference internal hosts outright (runtime APIs are additionally
+        // neutered by the JS preamble).
+        if action == "evaluate" {
+            let expression = args
+                .get("expression")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if expression_references_internal_host(expression) {
+                return ToolOutcome::Failure(ToolError::AccessDenied {
+                    message: "evaluate expression references an internal/loopback host".into(),
                 });
             }
         }
@@ -774,6 +817,66 @@ mod tests {
             panic!("expected Success, got {outcome:?}");
         };
         assert_eq!(content, "42");
+    }
+
+    #[tokio::test]
+    async fn evaluate_rejects_loopback_reference() {
+        // WO 47.33 (DS-M4): Chrome's host-resolver exclusion lets page JS
+        // reach localhost — deny evaluate expressions that reference
+        // internal hosts before the JS ever runs.
+        let tool = fake_tool();
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "evaluate", "expression": "fetch('http://localhost:8080/api')"}),
+            )
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_evaluate_rejects_loopback_reference() {
+        let tool = fake_tool_with_max_steps(20);
+        tool.run(
+            &ToolContext::new(),
+            json!({"action": "open", "url": "https://example.com"}),
+        )
+        .await;
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "evaluate", "expression": "new WebSocket('ws://127.0.0.1:9222')"}),
+            )
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                ToolOutcome::Failure(ToolError::AccessDenied { .. })
+            ),
+            "got {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluate_allows_benign_expression() {
+        // No false positives: ordinary expressions must still dispatch.
+        let tool = fake_tool();
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({"action": "evaluate", "expression": "document.title + ' v10.0.1'"}),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Success { .. }),
+            "got {outcome:?}"
+        );
     }
 
     #[tokio::test]

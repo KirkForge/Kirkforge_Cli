@@ -599,6 +599,7 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(50));
         };
+        assert!(stdout.contains(marker));
     }
 
     // WO 19.5: workflow job with nonexistent template is rejected.

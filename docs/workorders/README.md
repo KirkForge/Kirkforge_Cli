@@ -1040,7 +1040,7 @@ tree, ~11 stale claims corrected in-line. See
 | 47.29 | [Adapter wire fixes: Bedrock content-length signing, SSE line-anchoring, /v1 over-trim, Vertex URL-encoding](47.29-adapter-wire-format-fixes.md) | Done |
 | 47.30 | [jobd: notify_one loses shutdown/reload + run_bash_job double-completion race](47.30-jobd-shutdown-and-double-completion.md) | Planned |
 | 47.31 | [ci-local failures[] integrity (tarpaulin bypass + compound run_step) + CHANGELOG 23 missing WO 46 entries](47.31-ci-local-integrity-and-changelog.md) | Planned |
-| 47.32 | [Docker bash path: unbounded output buffering + timeout/signal codes conflated](47.32-docker-output-caps-and-signals.md) | Planned |
+| 47.32 | [Docker bash path: unbounded output buffering + timeout/signal codes conflated](47.32-docker-output-caps-and-signals.md) | Done |
 | 47.33 | [Web/read hardening bundle: IPv6 unspecified, DNS-pin fail-open, body-cap config, read_file streaming, computer_use SSRF gate, scan_files cap](47.33-web-and-read-hardening-bundle.md) | Planned |
 | 47.34 | [write_file parent-dir TOCTOU + permission glob matcher catastrophic backtracking](47.34-write-file-tocou-and-glob-matcher.md) | Planned |
 | 47.35 | [Untrusted-content delimiters for tool output (prompt-injection defense) + template push_value hardening](47.35-untrusted-content-delimiters.md) | Planned |

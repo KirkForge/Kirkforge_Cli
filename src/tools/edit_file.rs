@@ -295,11 +295,21 @@ impl Tool for EditFile {
                         }
                     };
 
-                    // byte offset just past the end of `line_idx` (i.e.,
-                    // after the `\n`)
+                    // byte offset at the end of `line_idx`'s content,
+                    // BEFORE its line terminator (`\n` or `\r\n`).
+                    // The old version returned `newline_positions[idx]+1`
+                    // (past the `\n`), so the replaced span swallowed the
+                    // last matched line's terminator and spliced the
+                    // following line onto the replacement's last line
+                    // (WO 47.22).
                     let line_byte_end = |line_idx: usize| -> usize {
                         if line_idx < newline_positions.len() {
-                            newline_positions[line_idx] + 1
+                            let nl = newline_positions[line_idx];
+                            if nl > 0 && content.as_bytes()[nl - 1] == b'\r' {
+                                nl - 1
+                            } else {
+                                nl
+                            }
                         } else {
                             content.len()
                         }
@@ -649,6 +659,136 @@ mod tests {
                     content.matches("\r\n").count(),
                     result_content.matches("\r\n").count(),
                     "CRLF count must be preserved"
+                );
+            }
+            other => panic!("Expected FileEdit, got {other:?}"),
+        }
+
+        remove_test_file(&path);
+    }
+
+    /// Multi-line fuzzy match (LF file): old_string only matches after
+    /// whitespace normalization and spans 2 lines. The fuzzy span must
+    /// NOT include the last matched line's `\n` — including it spliced
+    /// the following line onto the replacement's last line and dropped
+    /// the newline (WO 47.22).
+    #[tokio::test]
+    async fn test_fuzzy_fallback_multiline_preserves_following_line_lf() {
+        let content = "fn main() {\n    let x = 1;\n    let y = 2;\n    println!(\"hello\");\n}\n";
+        let dir = std::env::temp_dir();
+        let path = dir.join("kf_code_edit_fuzzy_multiline_lf.txt");
+        std::fs::write(&path, content).unwrap();
+
+        let tool = EditFile::new(
+            None,
+            crate::shared::access::PathGuard::default(),
+            false,
+            false,
+        );
+        let ctx = ToolContext::new();
+        // Trailing spaces on both lines => exact match fails => fuzzy path.
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "    let x = 1;   \n    let y = 2;   ",
+            "new_string": "    let a = 10;\n    let b = 20;",
+        });
+
+        let result = tool.run(&ctx, args).await;
+        match result {
+            ToolOutcome::FileEdit { path: _, diff: _ } => {
+                let result_content = std::fs::read_to_string(&path).unwrap();
+                assert_eq!(
+                    result_content,
+                    "fn main() {\n    let a = 10;\n    let b = 20;\n    println!(\"hello\");\n}\n",
+                    "following line must survive intact on its own line"
+                );
+            }
+            other => panic!("Expected FileEdit, got {other:?}"),
+        }
+
+        remove_test_file(&path);
+    }
+
+    /// Multi-line fuzzy match (CRLF file): old_string uses LF endings so it
+    /// only matches after normalization, and spans 2 lines. The replacement
+    /// must leave the following line on its own line with its `\r\n` intact.
+    #[tokio::test]
+    async fn test_fuzzy_fallback_multiline_preserves_following_line_crlf() {
+        let content =
+            "fn main() {\r\n    let x = 1;\r\n    let y = 2;\r\n    println!(\"hello\");\r\n}\r\n";
+        let dir = std::env::temp_dir();
+        let path = dir.join("kf_code_edit_fuzzy_multiline_crlf.txt");
+        std::fs::write(&path, content).unwrap();
+
+        let tool = EditFile::new(
+            None,
+            crate::shared::access::PathGuard::default(),
+            false,
+            false,
+        );
+        let ctx = ToolContext::new();
+        // LF endings in old_string => exact match fails on the CRLF file =>
+        // fuzzy path.
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "    let x = 1;\n    let y = 2;",
+            "new_string": "    let a = 10;\r\n    let b = 20;",
+        });
+
+        let result = tool.run(&ctx, args).await;
+        match result {
+            ToolOutcome::FileEdit { path: _, diff: _ } => {
+                let result_content = std::fs::read_to_string(&path).unwrap();
+                assert_eq!(
+                    result_content,
+                    "fn main() {\r\n    let a = 10;\r\n    let b = 20;\r\n    println!(\"hello\");\r\n}\r\n",
+                    "following line must survive intact on its own line with CRLF preserved"
+                );
+                assert_eq!(
+                    content.matches("\r\n").count(),
+                    result_content.matches("\r\n").count(),
+                    "CRLF count must be preserved"
+                );
+            }
+            other => panic!("Expected FileEdit, got {other:?}"),
+        }
+
+        remove_test_file(&path);
+    }
+
+    /// Single-line fuzzy match on a CRLF file (old_string supplied with an
+    /// LF ending): the same span bug spliced the next line onto the
+    /// replacement. The terminator must stay in the file.
+    #[tokio::test]
+    async fn test_fuzzy_fallback_single_line_crlf_preserves_following_line() {
+        let content = "fn main() {\r\n    let x = 1;\r\n    println!(\"hello\");\r\n}\r\n";
+        let dir = std::env::temp_dir();
+        let path = dir.join("kf_code_edit_fuzzy_single_crlf.txt");
+        std::fs::write(&path, content).unwrap();
+
+        let tool = EditFile::new(
+            None,
+            crate::shared::access::PathGuard::default(),
+            false,
+            false,
+        );
+        let ctx = ToolContext::new();
+        // old_string with LF ending => exact match fails on CRLF file =>
+        // fuzzy path.
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "    let x = 1;\n",
+            "new_string": "    let y = 2;",
+        });
+
+        let result = tool.run(&ctx, args).await;
+        match result {
+            ToolOutcome::FileEdit { path: _, diff: _ } => {
+                let result_content = std::fs::read_to_string(&path).unwrap();
+                assert_eq!(
+                    result_content,
+                    "fn main() {\r\n    let y = 2;\r\n    println!(\"hello\");\r\n}\r\n",
+                    "following line must survive intact on its own line with CRLF preserved"
                 );
             }
             other => panic!("Expected FileEdit, got {other:?}"),

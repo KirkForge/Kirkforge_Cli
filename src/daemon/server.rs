@@ -513,7 +513,7 @@ async fn handle_instance_register(
     // Register the sender in the instance registry.
     {
         let s = state.lock().await;
-        let mut instances = s.instances.lock().unwrap();
+        let mut instances = s.instances.lock().unwrap_or_else(|e| e.into_inner());
         instances.push(tx);
     }
 
@@ -550,7 +550,7 @@ async fn handle_instance_register(
     // we remove it eagerly here.
     {
         let s = state.lock().await;
-        let mut instances = s.instances.lock().unwrap();
+        let mut instances = s.instances.lock().unwrap_or_else(|e| e.into_inner());
         instances.retain(|sender| !sender.is_closed());
     }
 }

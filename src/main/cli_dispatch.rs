@@ -35,14 +35,15 @@ fn init_tracing(log_level: &str) -> anyhow::Result<()> {
     impl std::io::Write for LogWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             match self {
-                LogWriter::File(arc) => arc.lock().expect("log file mutex poisoned").write(buf),
+                // WO 47.36: recover from poison — logging must never abort.
+                LogWriter::File(arc) => arc.lock().unwrap_or_else(|e| e.into_inner()).write(buf),
                 LogWriter::Sink(s) => s.write(buf),
             }
         }
 
         fn flush(&mut self) -> std::io::Result<()> {
             match self {
-                LogWriter::File(arc) => arc.lock().expect("log file mutex poisoned").flush(),
+                LogWriter::File(arc) => arc.lock().unwrap_or_else(|e| e.into_inner()).flush(),
                 LogWriter::Sink(s) => s.flush(),
             }
         }

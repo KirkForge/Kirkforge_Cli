@@ -152,7 +152,7 @@ impl BashJobRegistry {
     /// this registry spawns (WO 45.1). Called once at session start;
     /// idempotent. Jobs spawned before this call carry an empty run_id.
     pub fn set_run_id(&self, run_id: impl Into<String>) {
-        *self.run_id.lock().unwrap() = run_id.into();
+        *self.run_id.lock().unwrap_or_else(|e| e.into_inner()) = run_id.into();
     }
 
     /// Spawn a bash command in the background and return a job ID.
@@ -283,7 +283,11 @@ impl BashJobRegistry {
         let mut child = proc.spawn()?;
 
         let pid = child.id();
-        let run_id = self.run_id.lock().unwrap().clone();
+        let run_id = self
+            .run_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let mut job = BashJob::new(id, command.to_string(), owner, &run_id);
         job.pid = pid;
         {

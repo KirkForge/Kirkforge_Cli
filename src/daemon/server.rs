@@ -63,6 +63,20 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
     let listener = UnixListener::bind(&socket_path)
         .with_context(|| format!("bind daemon socket at {}", socket_path.display()))?;
 
+    // WO 46.32: bind() creates the socket with umask-derived perms
+    // (typically 0o755 — world-connectable). Tighten to owner-only.
+    // Fail closed: if the socket cannot be restricted, do not serve on it.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| {
+                format!(
+                    "restrict daemon socket {} to owner-only",
+                    socket_path.display()
+                )
+            })?;
+    }
+
     // Write PID file only after the socket is bound. If bind fails, no
     // stale PID is left behind for a daemon that never started.
     let pid = std::process::id();
@@ -80,6 +94,14 @@ pub async fn run_daemon_at(socket_path: PathBuf, pid_path: PathBuf) -> anyhow::R
     // Initial refresh.
     {
         let mut s = state.lock().await;
+        // WO 46.32: surface the no-token configuration loudly. The socket
+        // is owner-only, but without a token every process of this user
+        // (including other local users' agents run via them) gets admin.
+        if s.expected_token.is_none() {
+            tracing::warn!(
+                "daemon auth token not configured (KF_CODE_DAEMON_TOKEN_FILE unset); running unauthenticated"
+            );
+        }
         s.refresh();
     }
 
@@ -960,6 +982,28 @@ mod tests {
         server_handle.await.unwrap().unwrap();
         assert!(!socket.exists(), "daemon left stale socket");
         assert!(!pid.exists(), "daemon left stale pid file");
+    }
+
+    // WO 46.32: the daemon socket must be owner-only (0600) after bind,
+    // regardless of the process umask.
+    #[tokio::test]
+    async fn daemon_socket_is_owner_only() {
+        let _guard = crate::session::test_data_dir_lock().lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let _env = EnvGuard::remove("KF_CODE_DAEMON_TOKEN_FILE");
+
+        let socket = dir.path().join("perms.sock");
+        let pid = dir.path().join("perms.pid");
+        let server_handle = tokio::spawn(run_daemon_at(socket.clone(), pid.clone()));
+        wait_for_socket(&socket).await;
+
+        use std::os::unix::fs::MetadataExt;
+        let mode = std::fs::metadata(&socket).unwrap().mode() & 0o777;
+        assert_eq!(mode, 0o600, "daemon socket must be 0600, got {mode:o}");
+
+        let mut client = DaemonClient::connect_at(socket.clone()).await.unwrap();
+        client.shutdown().await.unwrap();
+        server_handle.await.unwrap().unwrap();
     }
 
     // Helper: poll for the daemon socket to appear (1s budget).

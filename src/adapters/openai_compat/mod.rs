@@ -453,14 +453,15 @@ pub struct OpenAiCompatAdapter {
 
 impl OpenAiCompatAdapter {
     pub fn new(ollama_host: &str, model: &str, timeout_secs: u64) -> Self {
-        // Trim trailing slashes, then strip one trailing `/v1` so both
+        // Trim trailing slashes, then strip ONE trailing `/v1` so both
         // `http://host:11434` and `http://host:11434/v1` bases produce
         // `/v1/chat/completions` instead of `/v1/v1/chat/completions`
         // (WO 44.22 — Ollama's own docs use the `/v1` base form).
-        let api_base = ollama_host
-            .trim_end_matches('/')
-            .trim_end_matches("/v1")
-            .to_string();
+        // strip_suffix, not trim_end_matches: a legitimate base that
+        // genuinely ends in a repeated `/v1/v1` keeps its first `/v1`
+        // (mm-H15, WO 47.29). Both ctors de-dup identically (mm-H16).
+        let trimmed = ollama_host.trim_end_matches('/');
+        let api_base = trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string();
         Self {
             model: model.to_string(),
             api_base,
@@ -492,9 +493,13 @@ impl OpenAiCompatAdapter {
         api_key: &str,
         timeout_secs: u64,
     ) -> Self {
+        // Same de-dup as `new` (mm-H16, WO 47.29): a base configured as
+        // `https://host/v1` must not become `/v1/v1/chat/completions`,
+        // and only one trailing `/v1` is stripped.
+        let trimmed = base_url.trim_end_matches('/');
         Self {
             model: model.to_string(),
-            api_base: base_url.trim_end_matches('/').to_string(),
+            api_base: trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string(),
             api_key: if api_key.is_empty() {
                 None
             } else {
@@ -1583,6 +1588,42 @@ mod tests {
     fn openai_compat_new_preserves_non_v1_path() {
         let a = OpenAiCompatAdapter::new("http://host:11434/api", "model", 30);
         assert_eq!(a.api_base, "http://host:11434/api");
+    }
+
+    // mm-H15 (WO 47.29): only ONE trailing `/v1` is stripped — a base
+    // legitimately ending in `/v1/v1` keeps its first segment
+    // (`trim_end_matches` erased both).
+    #[test]
+    fn openai_compat_new_strips_only_one_v1() {
+        let a = OpenAiCompatAdapter::new("http://host:11434/v1/v1", "model", 30);
+        assert_eq!(a.api_base, "http://host:11434/v1");
+    }
+
+    // mm-H16 (WO 47.29): `with_base_url_and_key` de-dups a trailing
+    // `/v1` exactly like `new` (the 44.22 fix covered `new` only).
+    #[test]
+    fn openai_compat_with_base_url_and_key_strips_one_v1() {
+        let a = OpenAiCompatAdapter::with_base_url_and_key(
+            "https://api.example.com/v1",
+            "model",
+            "key",
+            30,
+        );
+        assert_eq!(a.api_base, "https://api.example.com");
+        let b = OpenAiCompatAdapter::with_base_url_and_key(
+            "https://api.example.com/v1/",
+            "model",
+            "key",
+            30,
+        );
+        assert_eq!(b.api_base, "https://api.example.com");
+        let c = OpenAiCompatAdapter::with_base_url_and_key(
+            "https://api.example.com/v1/v1",
+            "model",
+            "key",
+            30,
+        );
+        assert_eq!(c.api_base, "https://api.example.com/v1");
     }
 
     #[test]

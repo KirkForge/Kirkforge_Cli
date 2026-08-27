@@ -65,6 +65,14 @@ impl Tool for Glob {
             });
         }
 
+        // WO 47.24: guard the base dir BEFORE spawning the walker — otherwise
+        // base_dir="/" walks the filesystem broadly and filters per-entry
+        // afterward, leaving the traversal cost unguarded. The per-entry
+        // check below stays for symlink races during the walk.
+        if let GuardVerdict::Denied(msg) = self.path_guard.check_traversal(&base_path) {
+            return ToolOutcome::Failure(ToolError::AccessDenied { message: msg });
+        }
+
         // Build glob set
         let mut builder = GlobSetBuilder::new();
         match GlobPattern::new(&pattern) {
@@ -90,11 +98,14 @@ impl Tool for Glob {
         // blocking-pool thread keeps walking to completion (spawn_blocking
         // can't be killed), but the tool returns immediately and the leaked
         // thread is bounded by the walk finishing on its own (no subprocess to
-        // leak). Pattern: `plugin_tools/wrapper.rs:324` (`Finish::Cancelled`).
+        // leak). WO 47.24: the walk now stops at `max_matches`, so that
+        // residual run is bounded by the cap, not the tree size.
+        // Pattern: `plugin_tools/wrapper.rs:324` (`Finish::Cancelled`).
         let path_guard = self.path_guard.clone();
         let walk_base = base_path.clone();
         let walk = tokio::task::spawn_blocking(move || {
             let mut out = Vec::new();
+            let mut capped = false;
             let walker = ignore::WalkBuilder::new(&walk_base)
                 .git_ignore(true)
                 .git_global(true)
@@ -120,11 +131,19 @@ impl Tool for Glob {
                 let rel = entry_path.strip_prefix(&walk_base).unwrap_or(entry_path);
                 if glob_set.is_match(rel) {
                     out.push(rel.to_string_lossy().to_string());
+                    // WO 47.24: stop the walk once the cap is collected —
+                    // buffering every match and truncating afterward walks
+                    // (and buffers) the whole tree for {"max_matches":1}.
+                    // Dropping the walker here ends the traversal.
+                    if out.len() >= max_matches {
+                        capped = true;
+                        break;
+                    }
                 }
             }
-            out
+            (out, capped)
         });
-        let mut matches = tokio::select! {
+        let (mut matches, truncated) = tokio::select! {
             biased;
             _ = ctx.token.cancelled() => return ToolOutcome::Failure(ToolError::Cancelled),
             res = walk => res.unwrap_or_default(),
@@ -132,7 +151,6 @@ impl Tool for Glob {
 
         matches.sort();
         let total = matches.len();
-        let truncated = matches.len() > max_matches;
         matches.truncate(max_matches);
 
         if matches.is_empty() {
@@ -143,7 +161,8 @@ impl Tool for Glob {
 
         let output = matches.join("\n");
         let header = if truncated {
-            format!("Found {total} files matching '{pattern}'; showing first {max_matches}:")
+            // Early stop: the exact total is unknown past the cap.
+            format!("Found at least {max_matches} files matching '{pattern}'; showing first {max_matches}:")
         } else {
             format!("Found {total} files matching '{pattern}':")
         };
@@ -159,7 +178,7 @@ mod tests {
     use crate::tools::ToolContext;
 
     #[tokio::test]
-    async fn glob_respects_max_matches_and_reports_total() {
+    async fn glob_stops_at_max_matches_and_reports_at_least() {
         let dir = std::env::temp_dir().join("kf_code_glob_cap_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -176,9 +195,11 @@ mod tests {
         let outcome = glob.run(&ToolContext::default(), args).await;
         match outcome {
             ToolOutcome::Success { content } => {
+                // WO 47.24: the walk stops at the cap, so the total is
+                // reported as a lower bound, not an exact count.
                 assert!(
-                    content.contains("Found 5 files matching '*.txt'; showing first 2:"),
-                    "expected truncation header, got: {content}"
+                    content.contains("Found at least 2 files matching '*.txt'; showing first 2:"),
+                    "expected early-stop truncation header, got: {content}"
                 );
                 // Two filenames should appear, not all five.
                 let lines: Vec<_> = content.lines().skip(1).collect();
@@ -192,6 +213,37 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn glob_base_dir_denied_by_guard_is_access_denied() {
+        let sandbox = std::env::temp_dir().join("kf_code_glob_sandbox_test");
+        let outside = std::env::temp_dir().join("kf_code_glob_outside_test");
+        let _ = std::fs::remove_dir_all(&sandbox);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&sandbox).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("a.txt"), "x").unwrap();
+
+        // WO 47.24: the base dir is guarded BEFORE the walker spawns, so a
+        // base_dir outside the sandbox fails without any traversal.
+        let guard = PathGuard {
+            sandbox_dir: Some(sandbox.clone()),
+            ..PathGuard::default()
+        };
+        let glob = Glob::new(guard);
+        let args = serde_json::json!({
+            "pattern": "*.txt",
+            "base_dir": outside.to_string_lossy(),
+        });
+        let outcome = glob.run(&ToolContext::default(), args).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::AccessDenied { ref message }) if message.contains("outside sandbox")),
+            "expected AccessDenied for base_dir outside sandbox, got {outcome:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[tokio::test]

@@ -549,3 +549,26 @@
 - Two foreground `cargo test | tail` attempts (7 + 30 min) burned ~40
   min before noticing the box was saturated by sibling agents. Check
   `ps aux | grep rustc` + uptime BEFORE any compile in a worktree.
+## WO 46.34 session (in-memory offload store FIFO eviction)
+
+- The `readme_drift.rs` integration test (not just AGENTS.md prose)
+  enforces the kf-budget-core README `| Tests | N passing |` row and it
+  counts ONLY `#[test]` immediately followed by a `fn` line — my naive
+  `grep -rc '#[test]'` overcounted by 18 (comment mentions etc.). Run
+  `cargo test -p kf-budget-core --test readme_drift` to get the real
+  number; the README row was 2 stale at HEAD (933 actual vs 931 claimed)
+  — the wave-4 merge added tests without bumping.
+- Detect_changes (gitnexus) does NOT see `.worktrees/woXX` changes — the
+  index follows the main checkout. In a worktree, verify scope with
+  `git diff --stat` + pre-edit impact() instead.
+- Machine-load flakes dominate gate runs when parallel worktree agents
+  run cargo concurrently (load 25-32 sustained). The ci-fast 30s
+  slow-timeout is the edge: `test_always_approve_rule_round_trips_to_next_turn`
+  takes 35.7s SOLO — it is structurally on the timeout edge and will
+  flake whenever load pushes it past 30s. Candidate for a nextest
+  per-test slow-timeout override (like `run_bash_stuck_step_times_out`)
+  in a future WO.
+- Plain `cargo test` (libtest) and nextest builds are separate artifact
+  graphs: after touching kf-budget-core, the kf-code libtest binary
+  relinks (~20+ min under load) even though nextest artifacts are warm.
+  Budget accordingly; don't mistake it for a hang.

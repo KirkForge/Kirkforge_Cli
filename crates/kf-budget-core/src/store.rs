@@ -1,7 +1,7 @@
 //! `OffloadStore` — content-addressed key/value store for the middle of
 //! sliced tool outputs. Per ADR-0004. Two backends: in-memory and file.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -76,8 +76,33 @@ pub fn parse_slice_marker(s: &str) -> Option<&str> {
 // ---- InMemoryOffloadStore -----------------------------------------------
 
 pub struct InMemoryOffloadStore {
-    map: Mutex<HashMap<String, Vec<u8>>>,
+    data: Mutex<StoreData>,
     max_entries: Option<usize>,
+}
+
+/// Insertion-ordered map: O(1) lookup, FIFO eviction. Mirrors the
+/// kf-compress-core store (WO 42.7) — a bare `HashMap` evicts in
+/// arbitrary order and can drop a just-returned key.
+struct StoreData {
+    map: HashMap<String, Vec<u8>>,
+    order: VecDeque<String>,
+}
+
+impl StoreData {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    // Content-addressed: re-put of a live key refreshes the value
+    // without a second order slot.
+    fn insert(&mut self, key: String, bytes: &[u8]) {
+        if self.map.insert(key.clone(), bytes.to_vec()).is_none() {
+            self.order.push_back(key);
+        }
+    }
 }
 
 impl Default for InMemoryOffloadStore {
@@ -90,7 +115,7 @@ impl InMemoryOffloadStore {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            map: Mutex::new(HashMap::new()),
+            data: Mutex::new(StoreData::new()),
             max_entries: None,
         }
     }
@@ -102,7 +127,7 @@ impl InMemoryOffloadStore {
     #[must_use]
     pub fn new_with_cap(max_entries: usize) -> Self {
         Self {
-            map: Mutex::new(HashMap::new()),
+            data: Mutex::new(StoreData::new()),
             max_entries: Some(max_entries),
         }
     }
@@ -114,14 +139,13 @@ impl InMemoryOffloadStore {
             Some(m) => m,
             None => return,
         };
-        let mut guard = self.map.lock().unwrap_or_else(|e| e.into_inner());
-        let excess = guard.len().saturating_sub(max);
-        if excess == 0 {
-            return;
-        }
-        let keys_to_remove: Vec<String> = guard.keys().take(excess).cloned().collect();
-        for key in keys_to_remove {
-            guard.remove(&key);
+        let mut guard = self.data.lock().unwrap_or_else(|e| e.into_inner());
+        while guard.map.len() > max {
+            // FIFO: drop the oldest (front of insertion order).
+            let Some(key) = guard.order.pop_front() else {
+                break;
+            };
+            guard.map.remove(&key);
         }
     }
 }
@@ -129,24 +153,29 @@ impl InMemoryOffloadStore {
 impl OffloadStore for InMemoryOffloadStore {
     fn put(&self, bytes: &[u8]) -> Result<String, StoreError> {
         let key = make_key(bytes);
-        self.map
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(key.clone(), bytes.to_vec());
+        {
+            let mut guard = self.data.lock().unwrap_or_else(|e| e.into_inner());
+            guard.insert(key.clone(), bytes);
+        }
         self.evict_if_over_cap();
         Ok(key)
     }
     fn get(&self, key: &str) -> Result<Vec<u8>, StoreError> {
         validate_key(key)?;
-        self.map
+        self.data
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .map
             .get(key)
             .cloned()
             .ok_or_else(|| StoreError::NotFound(key.to_string()))
     }
     fn len(&self) -> usize {
-        self.map.lock().unwrap_or_else(|e| e.into_inner()).len()
+        self.data
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map
+            .len()
     }
     fn backend_name(&self) -> &'static str {
         "memory"
@@ -326,6 +355,40 @@ mod tests {
         assert_eq!(s.get(&k).unwrap(), b"payload");
         assert_eq!(s.len(), 1);
         assert_eq!(s.backend_name(), "memory");
+    }
+
+    // ponytail: pin FIFO eviction — the docstring on evict_if_over_cap
+    // promises "remove the oldest entries". Pre-WO 46.34 it did
+    // `guard.keys().take(excess)` on a HashMap, whose iteration order
+    // is arbitrary: a just-returned key could race to NotFound while
+    // an old entry survived. A contributor who reverts to a bare
+    // HashMap (or any unordered container) surfaces here.
+    #[test]
+    fn evict_if_over_cap_is_fifo() {
+        let s = InMemoryOffloadStore::new_with_cap(2);
+        let ka = s.put(b"alpha").unwrap();
+        let kb = s.put(b"beta").unwrap();
+        let kc = s.put(b"gamma").unwrap();
+        match s.get(&ka) {
+            Err(StoreError::NotFound(_)) => {}
+            other => panic!("oldest entry must be evicted first, got {other:?}"),
+        }
+        assert_eq!(s.get(&kb).unwrap(), b"beta", "newer entries survive");
+        assert_eq!(s.get(&kc).unwrap(), b"gamma", "newest entry survives");
+        assert_eq!(s.len(), 2);
+    }
+
+    // ponytail: pin that a content-addressed re-put does not grow the
+    // insertion order — a second order slot per live key would make
+    // eviction counts wrong (pop_front twice for one map entry, then
+    // evict a live key for free). Mirrors the kf-compress-core pin.
+    #[test]
+    fn duplicate_put_does_not_grow_order() {
+        let s = InMemoryOffloadStore::new_with_cap(2);
+        let k1 = s.put(b"dup").unwrap();
+        let k2 = s.put(b"dup").unwrap();
+        assert_eq!(k1, k2, "same bytes must collapse to same key");
+        assert_eq!(s.len(), 1, "duplicate key does not create a second slot");
     }
 
     #[test]

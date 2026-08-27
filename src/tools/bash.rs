@@ -374,6 +374,25 @@ impl Tool for Bash {
                 ))),
             }
         } else {
+            // WO 47.18: gate the foreground path in the tool itself.
+            // pre_run only guards executor-driven calls; direct tool.run()
+            // callers (workflow `tool:` steps, plugins, /replay) must not
+            // execute model-authored commands unchecked. Same gate the
+            // dry-run branch above and run_docker already apply; pre_run
+            // stays as fast-fail — double-gating is a cheap pure string
+            // check.
+            if let Some(denied) = check_bash_command_str(
+                &cmd,
+                Some(workdir),
+                &self.deny_list,
+                &self.path_guard,
+                self.bash_sandbox_workdir,
+            ) {
+                return ToolOutcome::Failure(crate::shared::ToolError::AccessDenied {
+                    message: denied,
+                });
+            }
+
             let interactive = args
                 .get("interactive")
                 .and_then(|i| i.as_bool())
@@ -977,14 +996,46 @@ mod tests {
             )
             .await;
         match outcome {
-            crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Execution {
+            // WO 47.18: the foreground-branch gate in Bash::run now fires
+            // before run_docker is ever reached, so the denial surfaces as
+            // AccessDenied instead of the Execution error run_docker's own
+            // gate used to return. Still denied before docker spawn — this
+            // test does NOT require Docker to be installed or running.
+            crate::shared::ToolOutcome::Failure(crate::shared::ToolError::AccessDenied {
                 message,
-                ..
             }) => assert!(
                 message.contains("Command blocked") || message.contains("rm -rf"),
                 "expected deny-list message, got {message}"
             ),
-            other => panic!("expected Execution failure from denied cmd, got {other:?}"),
+            other => panic!("expected AccessDenied from denied cmd, got {other:?}"),
+        }
+    }
+
+    // WO 47.18: the foreground (non-docker, non-background) path must deny
+    // dangerous commands inside the tool itself — direct tool.run() callers
+    // (workflow `tool:` steps, plugins, /replay) bypass pre_run, which is
+    // where this gate used to live exclusively.
+    #[tokio::test]
+    async fn bash_foreground_path_blocks_dangerous_command() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        let outcome = tool
+            .run(&ctx, serde_json::json!({"command": "rm -rf /"}))
+            .await;
+        match outcome {
+            crate::shared::ToolOutcome::Failure(crate::shared::ToolError::AccessDenied {
+                message,
+            }) => assert!(
+                message.contains("Command blocked") || message.contains("rm -rf"),
+                "expected deny-list message, got {message}"
+            ),
+            other => panic!("expected AccessDenied from denied cmd, got {other:?}"),
         }
     }
 

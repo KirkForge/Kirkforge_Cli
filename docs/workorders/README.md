@@ -1016,7 +1016,7 @@ tree, ~11 stale claims corrected in-line. See
 | 47.15 | [Secret-env scrub missing at 3 spawn sites: docker, shell hooks, verifier formatter](47.15-secret-env-scrub-three-missed-spawn-sites.md) | Planned |
 | 47.16 | [jobd: token-length timing oracle + world-readable socket (the disclosed WO 46.32 deferral)](47.16-jobd-auth-timing-oracle-and-socket-perms.md) | Planned |
 | 47.17 | [workflow_run template argument loads arbitrary workflow JSON via path traversal](47.17-workflow-template-path-traversal.md) | Planned |
-| 47.18 | [Bash tool foreground path has no safety gate — direct callers bypass pre_run](47.18-bash-foreground-gate-in-tool.md) | Planned |
+| 47.18 | [Bash tool foreground path has no safety gate — direct callers bypass pre_run](47.18-bash-foreground-gate-in-tool.md) | Done |
 | 47.19 | [Verifier apply_text_fix symlink-swap TOCTOU + VerifierBus catch_unwind double-panic](47.19-verifier-apply-text-fix-symlink-tocou.md) | Planned |
 | 47.20 | [Response cache: key omits generation config (wrong-model replays) + 64MiB sync disk reads on the async path](47.20-response-cache-key-and-async-disk.md) | Planned |
 | 47.21 | [ensure_private_data_dir OnceLock caches the first path globally — variable data dirs break](47.21-ensure-private-data-dir-oncelock.md) | Planned |

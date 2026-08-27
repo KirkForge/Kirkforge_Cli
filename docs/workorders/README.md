@@ -1037,7 +1037,7 @@ tree, ~11 stale claims corrected in-line. See
 | 47.26 | [Verifiers run sequentially per turn (up to 7 min) + sync preamble reads + unbounded verdict cache](47.26-verifier-parallel-execution.md) | Done |
 | 47.27 | [Memory extractor: secrets land in filenames + same fact added up to 14× + LIKE wildcard escape](47.27-memory-slug-secrets-and-dupes.md) | Planned |
 | 47.28 | [HTTP MCP bearer token silently ignored + EventBus buffer identity collision](47.28-mcp-bearer-token-and-event-identity.md) | Planned |
-| 47.29 | [Adapter wire fixes: Bedrock content-length signing, SSE line-anchoring, /v1 over-trim, Vertex URL-encoding](47.29-adapter-wire-format-fixes.md) | Planned |
+| 47.29 | [Adapter wire fixes: Bedrock content-length signing, SSE line-anchoring, /v1 over-trim, Vertex URL-encoding](47.29-adapter-wire-format-fixes.md) | Done |
 | 47.30 | [jobd: notify_one loses shutdown/reload + run_bash_job double-completion race](47.30-jobd-shutdown-and-double-completion.md) | Planned |
 | 47.31 | [ci-local failures[] integrity (tarpaulin bypass + compound run_step) + CHANGELOG 23 missing WO 46 entries](47.31-ci-local-integrity-and-changelog.md) | Planned |
 | 47.32 | [Docker bash path: unbounded output buffering + timeout/signal codes conflated](47.32-docker-output-caps-and-signals.md) | Planned |

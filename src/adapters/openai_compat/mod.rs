@@ -40,6 +40,22 @@ async fn send_done_once(
     }
 }
 
+// Line-anchored scan for the next `data: ` frame start (mm-H14, WO
+// 47.29): only buffer start or a byte right after `\n`/`\r` qualifies —
+// a `data: ` substring inside a non-data line or a JSON payload must
+// not be parsed as a frame boundary.
+fn find_data_frame_start(buffer: &[u8]) -> Option<usize> {
+    let mut from = 0;
+    while let Some(i) = find_subseq(&buffer[from..], b"data: ") {
+        let at = from + i;
+        if at == 0 || matches!(buffer[at - 1], b'\n' | b'\r') {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
+}
+
 /// Drive an OpenAI-compatible `/v1/chat/completions` SSE byte stream into
 /// `StreamEvent` events.
 ///
@@ -94,7 +110,7 @@ pub(crate) async fn parse_openai_compat_stream<B, E, S>(
                 // replacement characters and corrupt the JSON.
                 // This mirrors the NDJSON parser's byte-buffer
                 // approach in `ollama_ndjson.rs`.
-                while let Some(start) = find_subseq(&buffer, b"data: ") {
+                while let Some(start) = find_data_frame_start(&buffer) {
                     let after_start = start + 6;
                     let after = &buffer[after_start..];
                     let sep = [
@@ -437,14 +453,15 @@ pub struct OpenAiCompatAdapter {
 
 impl OpenAiCompatAdapter {
     pub fn new(ollama_host: &str, model: &str, timeout_secs: u64) -> Self {
-        // Trim trailing slashes, then strip one trailing `/v1` so both
+        // Trim trailing slashes, then strip ONE trailing `/v1` so both
         // `http://host:11434` and `http://host:11434/v1` bases produce
         // `/v1/chat/completions` instead of `/v1/v1/chat/completions`
         // (WO 44.22 — Ollama's own docs use the `/v1` base form).
-        let api_base = ollama_host
-            .trim_end_matches('/')
-            .trim_end_matches("/v1")
-            .to_string();
+        // strip_suffix, not trim_end_matches: a legitimate base that
+        // genuinely ends in a repeated `/v1/v1` keeps its first `/v1`
+        // (mm-H15, WO 47.29). Both ctors de-dup identically (mm-H16).
+        let trimmed = ollama_host.trim_end_matches('/');
+        let api_base = trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string();
         Self {
             model: model.to_string(),
             api_base,
@@ -476,9 +493,13 @@ impl OpenAiCompatAdapter {
         api_key: &str,
         timeout_secs: u64,
     ) -> Self {
+        // Same de-dup as `new` (mm-H16, WO 47.29): a base configured as
+        // `https://host/v1` must not become `/v1/v1/chat/completions`,
+        // and only one trailing `/v1` is stripped.
+        let trimmed = base_url.trim_end_matches('/');
         Self {
             model: model.to_string(),
-            api_base: base_url.trim_end_matches('/').to_string(),
+            api_base: trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string(),
             api_key: if api_key.is_empty() {
                 None
             } else {
@@ -834,6 +855,35 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, StreamEvent::Text(s) if s == "ok")),
             "expected valid frame after invalid one, got {events:?}"
+        );
+    }
+
+    // mm-H14 (WO 47.29): a `data: ` substring inside a non-data line
+    // must not be parsed as a frame — the pre-fix scan emitted a JSON
+    // parse error for the "not-a-frame" text.
+    #[tokio::test]
+    async fn sse_data_substring_in_non_data_line_is_not_a_frame() {
+        let wire = concat!(
+            "event: ping data: not-a-frame\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let events = run_sse(vec![wire]).await;
+        assert!(
+            !events.iter().any(|e| matches!(e, StreamEvent::Error(_))),
+            "embedded data: substring must not produce an error: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::Text(s) if s == "ok")),
+            "expected the real frame's text, got {events:?}"
+        );
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Done { .. })),
+            "expected Done, got {:?}",
+            events.last()
         );
     }
 
@@ -1538,6 +1588,42 @@ mod tests {
     fn openai_compat_new_preserves_non_v1_path() {
         let a = OpenAiCompatAdapter::new("http://host:11434/api", "model", 30);
         assert_eq!(a.api_base, "http://host:11434/api");
+    }
+
+    // mm-H15 (WO 47.29): only ONE trailing `/v1` is stripped — a base
+    // legitimately ending in `/v1/v1` keeps its first segment
+    // (`trim_end_matches` erased both).
+    #[test]
+    fn openai_compat_new_strips_only_one_v1() {
+        let a = OpenAiCompatAdapter::new("http://host:11434/v1/v1", "model", 30);
+        assert_eq!(a.api_base, "http://host:11434/v1");
+    }
+
+    // mm-H16 (WO 47.29): `with_base_url_and_key` de-dups a trailing
+    // `/v1` exactly like `new` (the 44.22 fix covered `new` only).
+    #[test]
+    fn openai_compat_with_base_url_and_key_strips_one_v1() {
+        let a = OpenAiCompatAdapter::with_base_url_and_key(
+            "https://api.example.com/v1",
+            "model",
+            "key",
+            30,
+        );
+        assert_eq!(a.api_base, "https://api.example.com");
+        let b = OpenAiCompatAdapter::with_base_url_and_key(
+            "https://api.example.com/v1/",
+            "model",
+            "key",
+            30,
+        );
+        assert_eq!(b.api_base, "https://api.example.com");
+        let c = OpenAiCompatAdapter::with_base_url_and_key(
+            "https://api.example.com/v1/v1",
+            "model",
+            "key",
+            30,
+        );
+        assert_eq!(c.api_base, "https://api.example.com/v1");
     }
 
     #[test]

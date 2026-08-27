@@ -55,7 +55,7 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
                     return;
                 }
 
-                while let Some(start) = find_subseq(&buffer, b"data: ") {
+                while let Some(start) = find_data_frame_start(&buffer) {
                     let after_start = start + 6;
                     let after = &buffer[after_start..];
                     let sep = [
@@ -267,6 +267,22 @@ pub(crate) async fn parse_anthropic_stream<B, E, S>(
     }
 }
 
+// Line-anchored scan for the next `data: ` frame start (mm-H14, WO
+// 47.29): only buffer start or a byte right after `\n`/`\r` qualifies —
+// a `data: ` substring inside a non-data line or a JSON payload must
+// not be parsed as a frame boundary.
+fn find_data_frame_start(buffer: &[u8]) -> Option<usize> {
+    let mut from = 0;
+    while let Some(i) = find_subseq(&buffer[from..], b"data: ") {
+        let at = from + i;
+        if at == 0 || matches!(buffer[at - 1], b'\n' | b'\r') {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
+}
+
 async fn send_done(
     tx: &tokio::sync::mpsc::Sender<StreamEvent>,
     done_emitted: &mut bool,
@@ -290,5 +306,72 @@ async fn send_done(
         true
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn drain_events(
+        mut rx: tokio::sync::mpsc::Receiver<StreamEvent>,
+        max: usize,
+    ) -> Vec<StreamEvent> {
+        let mut out = Vec::new();
+        for _ in 0..max {
+            match rx.recv().await {
+                Some(e) => out.push(e),
+                None => break,
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn find_data_frame_start_is_line_anchored() {
+        // Buffer start and post-newline positions qualify.
+        assert_eq!(find_data_frame_start(b"data: x\n\n"), Some(0));
+        assert_eq!(
+            find_data_frame_start(b"event: ping\n\ndata: x\n\n"),
+            Some(13)
+        );
+        assert_eq!(
+            find_data_frame_start(b"event: ping\r\rdata: x\r\r"),
+            Some(13)
+        );
+        // A `data: ` substring inside a line is not a frame start.
+        assert_eq!(find_data_frame_start(b"event: ping data: x\n\n"), None);
+        assert_eq!(find_data_frame_start(b"note: see data: below"), None);
+    }
+
+    // mm-H14 (WO 47.29): a `data: ` substring inside a non-data line
+    // must not be parsed as a frame — the pre-fix scan emitted a JSON
+    // parse error for the "not-a-frame" text.
+    #[tokio::test]
+    async fn data_substring_in_non_data_line_is_not_a_frame() {
+        let wire = concat!(
+            "event: ping data: not-a-frame\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let stream = tokio_stream::iter(vec![Ok::<_, std::convert::Infallible>(wire)]);
+        parse_anthropic_stream(tx, stream, crate::adapters::STREAM_IDLE_TIMEOUT).await;
+        let events = drain_events(rx, 8).await;
+        assert!(
+            !events.iter().any(|e| matches!(e, StreamEvent::Error(_))),
+            "embedded data: substring must not produce an error: {events:?}"
+        );
+        assert!(
+            matches!(
+                events.last(),
+                Some(StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                    ..
+                })
+            ),
+            "expected Done(Stop), got {events:?}"
+        );
     }
 }

@@ -40,6 +40,31 @@ pub struct AnthropicVertexAdapter {
     token_cache: tokio::sync::Mutex<Option<yup_oauth2::AccessToken>>,
 }
 
+// RFC 3986 pchar encode set (mm-H17, WO 47.29): everything outside
+// unreserved / sub-delims / ':' / '@' — notably '/', '?', '#' — is
+// percent-encoded so a model or project id containing those bytes
+// cannot corrupt the endpoint path. Non-ASCII is encoded by
+// percent_encode_str's UTF-8 handling.
+const PATH_SEGMENT: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}')
+    .add(b'/')
+    .add(b'\\')
+    .add(b'^')
+    .add(b'|');
+
+fn encode_path_segment(seg: &str) -> String {
+    percent_encoding::utf8_percent_encode(seg, PATH_SEGMENT).to_string()
+}
+
 impl AnthropicVertexAdapter {
     pub fn new(
         model_id: &str,
@@ -66,9 +91,16 @@ impl AnthropicVertexAdapter {
     }
 
     fn endpoint(&self) -> String {
+        // project/region/model are percent-encoded per segment (mm-H17,
+        // WO 47.29) so ids containing '/', '?', '#' etc. cannot alter the
+        // URL structure. The ':streamRawPredict' action suffix stays
+        // literal (':' is a legal pchar; Google documents it unencoded).
         format!(
             "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/anthropic/models/{}:streamRawPredict",
-            self.region, self.project_id, self.region, self.model_id
+            self.region,
+            encode_path_segment(&self.project_id),
+            encode_path_segment(&self.region),
+            encode_path_segment(&self.model_id),
         )
     }
 
@@ -204,6 +236,47 @@ mod tests {
     fn endpoint_includes_stream_raw_predict_suffix() {
         let a = AnthropicVertexAdapter::new("claude-3-5-sonnet", "p", "us-central1", None, 30);
         assert!(a.endpoint().ends_with(":streamRawPredict"));
+    }
+
+    // mm-H17 (WO 47.29): path-segment ids are percent-encoded — a '/'
+    // or '?' in a model/project/region id must not reshape the URL.
+    #[test]
+    fn endpoint_percent_encodes_path_segments() {
+        let a = AnthropicVertexAdapter::new(
+            "claude/3-5?sonnet@v2#1",
+            "my/project",
+            "us-central1",
+            None,
+            30,
+        );
+        let url = a.endpoint();
+        assert!(
+            url.contains("projects/my%2Fproject/"),
+            "project '/' must be encoded, got: {url}"
+        );
+        assert!(
+            url.contains("models/claude%2F3-5%3Fsonnet@v2%231:streamRawPredict"),
+            "model '/' '?' '#' must be encoded, got: {url}"
+        );
+    }
+
+    // Unreserved ids pass through byte-identical (no over-encoding).
+    #[test]
+    fn endpoint_keeps_pchar_ids_unencoded() {
+        let a = AnthropicVertexAdapter::new(
+            "claude-3-5-sonnet-v2@20241022",
+            "my-project",
+            "us-central1",
+            None,
+            30,
+        );
+        let url = a.endpoint();
+        assert!(url.contains("projects/my-project/"));
+        assert!(url.contains("models/claude-3-5-sonnet-v2@20241022:streamRawPredict"));
+        assert!(
+            !url.contains('%'),
+            "no percent-encoding expected, got: {url}"
+        );
     }
 
     #[test]

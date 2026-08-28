@@ -944,3 +944,42 @@
   completion live in tui/keys/, config plumbing in shared/config +
   session/config. Disclosed in WO Done. Line-mode /carryover (src/main/
   line_mode.rs) left ungated — out of scope, disclosed as follow-up.
+## WO 47.14 session (verifier trait unification, step 1: plugins bus-only)
+
+- Coordinator premise drift again: "WO 47.1 already merged" was false on
+  this branch (WO file + README row said Planned, init_default_verifiers
+  still had the 14x boilerplate, no wo47.1 merge in git log). Always verify
+  claimed-merged prerequisite WOs against the worktree's own git log before
+  building on them.
+- The plugin-verifier dual registration (slots adapter + bus) meant every
+  plugin verifier subprocess ran TWICE per file-modifying tool call and a
+  failing one produced two CorrectionResults. Deleting the legacy adapter
+  (`PluginVerifierAdapter` + `verifiers_from_registry` +
+  `rebuild_plugin_verifiers` + BUILTIN_VERIFIERS allowlist) was the
+  correct first consumer migration onto the surviving `BusVerifier` trait.
+- Deleting `rebuild_plugin_verifiers` also structurally eliminated the
+  WO 44.29 allowlist-drift hazard — the regression test guarding it was
+  reworked to drive `reload_plugins` instead (kept the invariant, lost the
+  dead allowlist).
+- Security-pin ports: when deleting a path that carried a security
+  regression test (env-leak), re-land the pin on the surviving path —
+  `add_plugin_verifier_does_not_leak_session_env` now covers the bus path.
+- `TsOrchestratorBridgeVerifier` has NO production registration site —
+  TECHNICAL.md claimed "built-in verifiers register directly" on the bus,
+  which was false (bus starts empty in production). Fixed in the same
+  doc-sync commit; it's the intended landing spot for the built-in
+  migration (WO 47.14 remaining step 3).
+- The edit tool fuzzy-matched an oldString containing a typo I introduced
+  (`slots.write().unwrap().unwrap_or_else` vs actual
+  `slots.write().unwrap_or_else`) and still applied correctly — ALWAYS
+  re-read the edited region after a large edit; a fuzzy match could just as
+  easily have landed somewhere unintended.
+- Cold `cargo check -p kf-code --lib` in this worktree: 7m40s at load ~7.
+  Full workspace check after (warm): 5m23s. Background setsid + log-file
+  polling is mandatory; the 120s tool timeout kills foreground cargo.
+- scope creep: src/session/executor/mod.rs + executor/tests/verifier_cross.rs
+  + docs/TECHNICAL.md beyond the WO's "src/session/verifier/**, AGENTS.md"
+  file list — the consumer registration sites live in the executor;
+  doc-sync rule 9 (verifier bus + plugin system) requires TECHNICAL.md.
+  AGENTS.md NOT touched (coordinator: only when the old trait is fully
+  deleted).

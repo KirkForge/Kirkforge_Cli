@@ -62,9 +62,9 @@ Only the two most recent series are kept live.
 
 | 47.1 | [Table-driven verifier registration (11 of 16 verifiers share the same 90-160-line shape)](47.1-table-driven-verifiers.md) | Done |
 | 47.10 | [send_or_warn! ceremony → single emit! macro (47 sites × 4-6 lines)](47.10-send-or-warn-ceremony.md) | Done |
-| 47.1 | [Table-driven verifier registration (11 of 16 verifiers share the same 90-160-line shape)](47.1-table-driven-verifiers.md) | Planned |
+| 47.1 | [Table-driven verifier registration (11 of 16 verifiers share the same 90-160-line shape)](47.1-table-driven-verifiers.md) | Done |
 | 47.10 | [send_or_warn! ceremony → single emit! macro (47 sites × 4-6 lines)](47.10-send-or-warn-ceremony.md) | Done |
-| 47.1 | [Table-driven verifier registration (11 of 16 verifiers share the same 90-160-line shape)](47.1-table-driven-verifiers.md) | Planned |
+| 47.1 | [Table-driven verifier registration (11 of 16 verifiers share the same 90-160-line shape)](47.1-table-driven-verifiers.md) | Done |
 | 47.10 | [send_or_warn! ceremony → single emit! macro (47 sites × 4-6 lines)](47.10-send-or-warn-ceremony.md) | Done |
 | 47.11 | [Freeze/delete computer_use (513 lines, default-off mini browser framework)](47.11-computer-use-freeze.md) | Done |
 | 47.11 | [Freeze/delete computer_use (513 lines, default-off mini browser framework)](47.11-computer-use-freeze.md) | Done |
@@ -77,15 +77,15 @@ Only the two most recent series are kept live.
 | 47.4 | [Fold kf-routing + kf-memory-store into kf-orchestrator (0 direct src/ refs)](47.4-fold-routing-memory-crates.md) | Done |
 | 47.5 | [Feature-gate bench + testdoctor out of the default binary (~5K lines)](47.5-devtools-out-of-binary.md) | Done |
 | 47.6 | [Six live compression layers → two (stratum modes should map to 2 pipelines)](47.6-compression-layers-6-to-2.md) | Done |
-| 47.2 | [Generic env-override loader (91 hand-parsed KF_* vars in 4 layers)](47.2-generic-env-loader.md) | Planned |
-| 47.3 | [Delete the dead JWT/JWKS half of kf-rbac (keep the live RBAC core)](47.3-delete-kf-rbac.md) | Planned |
-| 47.4 | [Fold kf-routing + kf-memory-store into kf-orchestrator (0 direct src/ refs)](47.4-fold-routing-memory-crates.md) | Planned |
-| 47.5 | [Feature-gate bench + testdoctor out of the default binary (~5K lines)](47.5-devtools-out-of-binary.md) | Planned |
+| 47.2 | [Generic env-override loader (91 hand-parsed KF_* vars in 4 layers)](47.2-generic-env-loader.md) | Done |
+| 47.3 | [Delete the dead JWT/JWKS half of kf-rbac (keep the live RBAC core)](47.3-delete-kf-rbac.md) | Done |
+| 47.4 | [Fold kf-routing + kf-memory-store into kf-orchestrator (0 direct src/ refs)](47.4-fold-routing-memory-crates.md) | Done |
+| 47.5 | [Feature-gate bench + testdoctor out of the default binary (~5K lines)](47.5-devtools-out-of-binary.md) | Done |
 | 47.6 | [Six live compression layers → two (stratum modes should map to 2 pipelines)](47.6-compression-layers-6-to-2.md) | Done |
-| 47.2 | [Generic env-override loader (91 hand-parsed KF_* vars in 4 layers)](47.2-generic-env-loader.md) | Planned |
-| 47.3 | [Delete the dead JWT/JWKS half of kf-rbac (keep the live RBAC core)](47.3-delete-kf-rbac.md) | Planned |
-| 47.4 | [Fold kf-routing + kf-memory-store into kf-orchestrator (0 direct src/ refs)](47.4-fold-routing-memory-crates.md) | Planned |
-| 47.5 | [Feature-gate bench + testdoctor out of the default binary (~5K lines)](47.5-devtools-out-of-binary.md) | Planned |
+| 47.2 | [Generic env-override loader (91 hand-parsed KF_* vars in 4 layers)](47.2-generic-env-loader.md) | Done |
+| 47.3 | [Delete the dead JWT/JWKS half of kf-rbac (keep the live RBAC core)](47.3-delete-kf-rbac.md) | Done |
+| 47.4 | [Fold kf-routing + kf-memory-store into kf-orchestrator (0 direct src/ refs)](47.4-fold-routing-memory-crates.md) | Done |
+| 47.5 | [Feature-gate bench + testdoctor out of the default binary (~5K lines)](47.5-devtools-out-of-binary.md) | Done |
 | 47.6 | [Six live compression layers → two (stratum modes should map to 2 pipelines)](47.6-compression-layers-6-to-2.md) | Done |
 | 47.7 | [# WO 47.6 — MCP transport trait (every op exists 3×: enum + stdio_* + http)](47.7-mcp-transport-trait.md) | Done |
 | 47.7 | [# WO 47.6 — MCP transport trait (every op exists 3×: enum + stdio_* + http)](47.7-mcp-transport-trait.md) | Done |

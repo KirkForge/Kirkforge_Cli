@@ -11,7 +11,7 @@ use crate::session::access::GuardVerdict;
 use crate::session::verifier::CorrectionResult;
 use crate::shared::{read_shared_config, Message, Role, ToolInvocation, ToolOutcome};
 
-use super::helpers::tool_cancel_token;
+use super::helpers::{tool_cancel_token, tool_outcome_success};
 use super::pre_run::PreRunVerdict;
 use super::types::TurnEvent;
 use super::{ApprovalRequest, Executor};
@@ -560,8 +560,10 @@ impl Executor {
             let outcome = run_prepared_call(prep).await.map(|(_, o, ms)| (o, ms));
             if let Some((ref o, ms)) = outcome {
                 // Mark reads immediately so later writes in the same batch
-                // see them when their read-before-edit gate runs.
-                if name == "read_file" || name == "read_image" {
+                // see them when their read-before-edit gate runs — but only
+                // on a successful read: a FAILED read must not satisfy the
+                // gate (WO 48.16).
+                if (name == "read_file" || name == "read_image") && tool_outcome_success(o) {
                     self.sandbox.mark_read(&path);
                 }
                 results.insert(idx, (invocation, o.clone(), Some(path.clone()), ms, false));

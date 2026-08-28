@@ -31,6 +31,12 @@ why, and the gate evidence.
   `fallback_c_like` expander now track regex literals (conservative
   prev-token heuristic, verbatim body emission).
   [48.12](docs/workorders/48.12-minify-js-regex-literal-corruption.md)
+- WO 48.16 — a FAILED read no longer satisfies the read-before-edit
+  gate: both `mark_read` sites (dispatch `spawn_batch` + turn
+  `record_tool_result`) now require `tool_outcome_success`, so an
+  I/O-failed read_file/read_image can't unlock a blind later
+  edit_file/write_file.
+  [48.16](docs/workorders/48.16-mark-read-on-failed-read.md)
 - WO 48.9 — `--no-default-features` build (ADR-0017 minimal build) was
   broken: 3 un-gated `kf_budget_core::estimate_tokens` refs. The gate now
   lives in one choke point (`prompt::count_tokens`, bytes/4 fallback when

@@ -555,6 +555,86 @@ async fn test_read_then_write_in_same_batch_passes_read_gate() {
     assert_eq!(content, "updated", "file should have been overwritten");
 }
 
+// WO 48.16: a read whose body FAILED must not satisfy the
+// read-before-edit gate for a later write in the same batch.
+#[tokio::test]
+async fn failed_read_does_not_satisfy_read_before_edit_gate() {
+    let tmp = std::env::temp_dir().join(format!("kf_code_failed_read_{}.txt", std::process::id()));
+    std::fs::write(&tmp, "original").expect("seed existing file");
+    let _cleanup = CleanupFile(tmp.clone());
+
+    let read_tool: Arc<dyn Tool> = Arc::new(MockTool {
+        def: ToolDef {
+            name: "read_file",
+            description: "failing read",
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"]
+            }),
+        },
+        captured_args: Arc::new(Mutex::new(None)),
+        outcome: crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Internal {
+            message: "simulated I/O failure".into(),
+        }),
+    });
+    let write_tool: Arc<dyn Tool> = Arc::new(crate::tools::write_file::WriteFile::new(
+        None,
+        crate::session::access::PathGuard::default(),
+        false,
+        false,
+    ));
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-read".into(),
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": tmp.to_string_lossy()}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-write".into(),
+                name: "write_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "content": "updated"
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(
+        Box::new(adapter),
+        vec![read_tool, write_tool],
+        make_config(true),
+    )
+    .unwrap();
+
+    let events = exe
+        .run_turn_collecting("failed read then write", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let write_denied = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, success, .. } if name == "write_file" && !*success
+        )
+    });
+    assert!(
+        write_denied,
+        "write_file after a FAILED read must be denied by the read-before-edit gate; got events: {events:?}"
+    );
+    let content = std::fs::read_to_string(&tmp).unwrap();
+    assert_eq!(content, "original", "file must be untouched");
+}
+
 #[tokio::test]
 async fn test_plan_reason_emitted_after_tool_call() {
     let captured = Arc::new(Mutex::new(None));

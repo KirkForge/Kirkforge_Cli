@@ -1136,3 +1136,19 @@
 - scope creep disclosed: expand.rs touched though WO named only
   lang.rs — required by the WO's own round-trip gate (sibling site,
   same root cause).
+## WO 48.16 session (2026-08-28)
+
+- Both `mark_read` sites already had the tool outcome in scope — the WO's
+  "dispatch may mark before the body runs" worry didn't materialize; no
+  48.2-style timing move was needed, just `tool_outcome_success` in the
+  condition. Read the site before planning a move.
+- `ToolDef.name`/`description` are `&'static str` (not String) — `.into()`
+  on literals in test ToolDefs trips `clippy::useless_conversion`.
+- Contended box: sibling worktrees running parallel cargo builds made a
+  cold `cargo test` exceed 30 min; workspace check alone took 12 min.
+  Budget long timeouts, and prefer `--lib <filter>` first for signal.
+- gitnexus detect_changes/MCP tools index the MAIN checkout — worktree
+  diffs show as 0 changed symbols (same as WO 48.10). `git diff --stat`
+  is the honest scope evidence in a worktree.
+- WO status flip reminder (confirmed again): WO file `## Status` AND
+  docs/workorders/README.md row — both updated for 48.16.

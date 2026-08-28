@@ -19,8 +19,8 @@ use template::render_template;
 
 /// Token counter — cl100k_base via `kf_budget_core::estimate_tokens` when
 /// the `budget` feature is on; minimal builds (`--no-default-features`,
-/// ADR-0017) fall back to a bytes/4 heuristic. Estimate-only consumers
-/// (display, heuristics) — nothing billing-critical reads the fallback.
+/// ADR-0017) fall back to a CJK-aware bytes/4 heuristic. Estimate-only
+/// consumers (display, heuristics) — nothing billing-critical reads the fallback.
 pub(crate) fn count_tokens(s: &str) -> usize {
     #[cfg(feature = "budget")]
     {
@@ -28,8 +28,29 @@ pub(crate) fn count_tokens(s: &str) -> usize {
     }
     #[cfg(not(feature = "budget"))]
     {
-        s.len() / 4
+        fallback_estimate_tokens(s)
     }
+}
+
+// ponytail: heuristic, not BPE — non-CJK bytes/4, one token per CJK char
+// (a CJK char is 3 UTF-8 bytes, so flat bytes/4 credited it 0.75 and
+// under-estimated CJK/code content 25-50%, making the truncation ladder
+// under-fire into provider context-overflow — WO 48.21). Ceiling: ~±20%
+// on mixed-script text and CJK ext-B+ (4-byte) chars count via bytes only;
+// upgrade path: ship the BPE table in minimal builds if the drift bites.
+#[cfg(not(feature = "budget"))]
+fn fallback_estimate_tokens(s: &str) -> usize {
+    let mut cjk = 0usize;
+    let mut other_bytes = 0usize;
+    for c in s.chars() {
+        let n = c as u32;
+        if matches!(n, 0x2E80..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF) {
+            cjk += 1;
+        } else {
+            other_bytes += c.len_utf8();
+        }
+    }
+    other_bytes / 4 + cjk
 }
 
 /// Estimate the token count of a single message (content + thinking +
@@ -2138,6 +2159,34 @@ mod tests {
         let cached = estimate_message_tokens(&msg);
         let counted = count_tokens("hello world this is a test");
         assert_eq!(cached, counted);
+    }
+
+    // WO 48.21: the minimal-build fallback must not under-estimate CJK —
+    // the truncation ladder reads these numbers. Flat bytes/4 gave CJK
+    // 0.75 tokens/char; real cl100k ratio is >=1/char.
+    #[cfg(not(feature = "budget"))]
+    #[test]
+    fn count_tokens_fallback_cjk_counts_at_least_one_per_char() {
+        let s = "漢字テスト".repeat(25); // 100 CJK chars, 300 bytes
+        assert!(
+            count_tokens(&s) >= 100,
+            "CJK content under-estimated: {}",
+            count_tokens(&s)
+        );
+    }
+
+    #[cfg(not(feature = "budget"))]
+    #[test]
+    fn count_tokens_fallback_ascii_unchanged() {
+        let s = "hello world, this is pure ASCII code; fn main() {}";
+        assert_eq!(count_tokens(s), s.len() / 4);
+    }
+
+    #[cfg(not(feature = "budget"))]
+    #[test]
+    fn count_tokens_fallback_mixed_bumps_cjk_only() {
+        let s = format!("{}{}", "code code code ", "漢".repeat(10)); // 15 ASCII bytes + 10 CJK
+        assert_eq!(count_tokens(&s), 15 / 4 + 10);
     }
 
     #[test]

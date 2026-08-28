@@ -983,3 +983,31 @@
   doc-sync rule 9 (verifier bus + plugin system) requires TECHNICAL.md.
   AGENTS.md NOT touched (coordinator: only when the old trait is fully
   deleted).
+
+## Session 2026-08-28 — stability cleanup (flake stab + state truth pass)
+
+- **Wave-merging lesson: README-row sync must be wholesale-scripted.**
+  Merging a wave of workorders by hand-editing README index rows per-WO
+  drifts — the WO 47 final-wave merge missed the 47.1-47.5 rows (fixed
+  afterward in 33137100846 "dead merger missed them"). The reliable shape:
+  one script/one pass that regenerates every row from the WO file headers
+  (the same source `adr_xref_drift` checks), applied at wave close — never
+  incremental per-WO edits across parallel merges.
+- **Wave-merging lesson: keep-both conflict resolution loses source intent
+  on rewritten files — take theirs.** When a wave rewrites a file (state.md
+  Shipped section, README index) and a sibling branch also touched it,
+  "keep both sides" produces a document that is neither: stale blobs from
+  the pre-wave shape survive next to the new truth. For files a wave
+  deliberately REWROTE, resolve with "take theirs" (the wave's version);
+  keep-both is only for append-only files (lessons.md itself, CHANGELOG).
+  Root cause of the stale state.md this session had to truth-pass.
+- Test-flake triage: nextest per-test overrides in .config/nextest.toml
+  (`[[profile.ci-fast.overrides]]`) are the cheap, centralized fix for
+  wall-clock-budget flakes — but they only help where the in-test bound
+  isn't the binding constraint. For each flake, find WHICH deadline fires
+  first (in-test assert vs profile slow-timeout) and raise that one; the
+  other needs matching headroom or nextest kills the test before its own
+  diagnostic assert can report.
+- gitnexus impact does not index #[cfg(test)]/#[tokio::test] symbols —
+  for test-only edits, "no production callers possible" is the impact
+  answer; don't burn time on re-indexing.

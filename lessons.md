@@ -1073,3 +1073,31 @@
 - Cold-worktree cost: first `cargo check -p kf-code --all-targets` in a
   fresh worktree is ~14 min (deps), first lib-test link another ~15 min.
   Budget gates accordingly or reuse the main checkout's target dir.
+
+## WO 48.10 session (2026-08-28)
+
+- The 47.12 disk fallback was only ever wired into `unix_imp`; the
+  `windows_imp` sibling kept `Ok(None)` stubs. Platform-split modules
+  (`cfg(unix)` / `cfg(windows)` twins) are another instance of the
+  duplicated-pattern divergence theme — when a fix lands in one arm,
+  grep the other arm.
+- The fix was genuinely just "let Windows call the same code": the whole
+  session-index path (`session_index::list_sessions`,
+  `resolve_session_id`, `RECENT_SESSIONS_LIMIT`, `test_data_dir_lock`,
+  `EnvGuard`) is platform-neutral std-fs. The non-unix `DaemonState`
+  already scanned disk the same way.
+- gitnexus `detect_changes` without the `worktree` param diffs the MAIN
+  checkout and reports "no changes" — always pass
+  `worktree: <worktree-path>` when working in `.worktrees/woXX`.
+- gitnexus impact on a symbol implemented per-platform reports the
+  Unix-side blast radius (the Linux symbol graph). cfg(windows)-only
+  body edits with unchanged signatures show as 0 changed indexed
+  symbols — expected, not a tool failure.
+- Fresh worktree = cold target dir: `cargo test` took >10 min,
+  Windows cross clippy 25 min, workspace check 8 min. Budget long
+  timeouts (or pre-warm with a plain `cargo check` first).
+- `cargo fmt --check` on a cold worktree can exceed 60s; it is not
+  instant until the toolchain metadata is warm.
+- WO status flip is two-source-of-truth like ADRs: WO file `## Status`
+  AND docs/workorders/README.md row must agree
+  (adr_xref_drift.rs WO-status test enforces it).

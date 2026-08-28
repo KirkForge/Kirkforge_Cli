@@ -405,8 +405,14 @@ pub struct SessionState {
     /// completed. Each scheduled job overwrites its `last_run`, so this tracks
     /// run IDs (not job IDs) so every run is announced exactly once.
     pub notified_scheduled_runs: std::collections::HashSet<String>,
-    /// Recent-session picker (daemon follow-up). When set, the TUI is showing
-    /// the recent-session picker overlay instead of the normal input box.
+    /// Recent sessions from the daemon's `ThreadsChanged` pushes. Data
+    /// only: feeds the Sessions tab and the welcome screen. Never opens
+    /// anything by itself (WO 48.4).
+    pub recent_sessions: Vec<crate::session::session_index::SessionEntry>,
+    /// Recent-session picker overlay (daemon follow-up). When set, the TUI
+    /// is showing the recent-session picker modal instead of the normal
+    /// input box. Set ONLY by explicit user action (`/resume` with no
+    /// arguments) — background refresh writes `recent_sessions` (WO 48.4).
     pub session_picker: Option<crate::tui::components::session_picker::SessionPicker>,
     /// Shared undo stack (review.md gap #7). The executor owns the write side;
     /// the TUI uses it read-only for `/undo list` and `/undo count`.
@@ -442,6 +448,7 @@ impl Default for SessionState {
             should_exit: false,
             notified_jobs: std::collections::HashSet::new(),
             notified_scheduled_runs: std::collections::HashSet::new(),
+            recent_sessions: Vec::new(),
             session_picker: None,
             undo_stack: None,
             memory_status: None,

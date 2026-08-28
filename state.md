@@ -31,6 +31,17 @@
   targeted tests/fmt green; full suite + Windows cross gate owed before
   any merge — see CI/branch state).
   [48.3](docs/workorders/48.3-sessions-tab-empty-without-daemon.md)
+- **WO 48.4 (2026-08-28)**: daemon `ThreadsChanged` pushes no longer open
+  the full-screen "Resume a recent session" modal at every TUI startup.
+  Split the dual-purpose `session_picker` field into data-only
+  `SessionState::recent_sessions` (written by background
+  `refresh_sessions`; read by Sessions tab + welcome screen) vs the
+  modal `session_picker` (set ONLY by explicit `/resume` with no args).
+  Also fixed the picker dropping itself on advertised k/j/↑/↓ nav keys
+  (`handle_session_picker_keys` now restores the picker while still
+  open). Regression tests for both. Fast gates green (workspace check,
+  clippy -p kf-code, fmt, targeted tests); full suites deferred to CI.
+  [48.4](docs/workorders/48.4-session-picker-modal-pops-at-startup.md)
 - **Known-flake stabilization (2026-08-28)**: the four wall-clock flake
   families that caused red/noise across the WO 47 campaign got realistic
   budgets — assertions unchanged, nothing weakened. (1)

@@ -334,7 +334,9 @@ async fn handle_session_picker_keys(
 ) -> Option<anyhow::Result<()>> {
     let mut picker = state.session.session_picker.take()?;
     let consumed = picker.handle_key(key);
-    if consumed && picker.is_confirmed() {
+    // is_confirmed/is_cancelled can only be set by handle_key, which
+    // also reports the key consumed — no extra `consumed &&` needed.
+    if picker.is_confirmed() {
         if let Some(path) = picker.selected_path() {
             match crate::session::conversation::ConversationLog::open_async(path).await {
                 Ok((log, _outcome)) => {
@@ -357,13 +359,26 @@ async fn handle_session_picker_keys(
                 }
             }
         }
+        state.mark_dirty();
         return Some(Ok(()));
     }
-    if consumed && picker.is_cancelled() {
+    if picker.is_cancelled() {
+        state.mark_dirty();
         return Some(Ok(()));
     }
+    // Still open (nav key moved the selection, or the key is not the
+    // picker's): put the picker back so the modal survives its own
+    // key handling. The pre-48.4 code returned None here WITHOUT
+    // restoring, so the first k/j/↑/↓ dropped the modal and the key
+    // leaked into the input box (WO 48.4 P2).
+    state.session.session_picker = Some(picker);
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         state.session.should_exit = true;
+        state.mark_dirty();
+        return Some(Ok(()));
+    }
+    if consumed {
+        state.mark_dirty();
         return Some(Ok(()));
     }
     None
@@ -2087,6 +2102,7 @@ mod tests {
         assert_eq!(char_index_for_line_col(input, 1, 10), 4);
     }
 
+<<<<<<< HEAD
     #[test]
     fn prime_overlay_cold_data_trips_sessions_and_jobs_flags() {
         use crate::tui::app::ActiveTab;
@@ -2109,6 +2125,97 @@ mod tests {
         // Cold Jobs entry still trips jobs_dirty (pre-existing behavior).
         prime_overlay_cold_data(&mut state, ActiveTab::Jobs);
         assert!(state.session.jobs_dirty);
+||||||| b5a64a0b
+=======
+    /// WO 48.4 P2: the picker's advertised k/j nav used to drop the modal —
+    /// `handle_session_picker_keys` took the picker and only returned it to
+    /// `None` on non-commit keys, so the first nav key closed the overlay
+    /// and leaked into the input box. Nav must consume the key AND leave
+    /// the modal open; Esc must still close it.
+    #[tokio::test]
+    async fn session_picker_nav_keys_keep_modal_open() {
+        use crate::session::session_index::SessionEntry;
+        use crate::tui::components::session_picker::SessionPicker;
+
+        let mut state = app_state();
+        let entries = vec![
+            SessionEntry {
+                id: "s1".into(),
+                path: "/tmp/wo48-1.conv.ndjson".into(),
+                started_at: "2026-08-28T10:00:00Z".into(),
+                message_count: 1,
+                size_bytes: 1,
+            },
+            SessionEntry {
+                id: "s2".into(),
+                path: "/tmp/wo48-2.conv.ndjson".into(),
+                started_at: "2026-08-28T11:00:00Z".into(),
+                message_count: 2,
+                size_bytes: 2,
+            },
+        ];
+        state.session.session_picker = Some(SessionPicker::new(entries));
+
+        let (input_tx, _input_rx) = mpsc::unbounded_channel();
+        let (cancel_tx, _cancel_rx) = mpsc::unbounded_channel();
+        let (resume_tx, _resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let (compact_tx, _compact_rx) = mpsc::unbounded_channel();
+        let (model_tx, _model_rx) = mpsc::unbounded_channel();
+        let (undo_tx, _undo_rx) = mpsc::unbounded_channel();
+        let (config_tx, _config_rx) = mpsc::unbounded_channel();
+        let (plan_tx, _plan_rx) = mpsc::unbounded_channel();
+        let (persona_tx, _persona_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
+        let (plugin_reload_tx, _plugin_reload_rx) =
+            mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel::<crate::tui::commands::BgCmdDone>();
+        let ctx = HandleInputContext {
+            input_tx: &input_tx,
+            cancel_tx: &cancel_tx,
+            resume_tx: &resume_tx,
+            compact_tx: &compact_tx,
+            model_tx: &model_tx,
+            undo_tx: &undo_tx,
+            config_tx: &config_tx,
+            plan_tx: &plan_tx,
+            persona_tx: &persona_tx,
+            event_tx: &event_tx,
+            plugin_reload_tx: &plugin_reload_tx,
+            bg_tx: &bg_tx,
+        };
+
+        // 'j' (advertised nav): consumed, modal stays open, selection moves.
+        let r = super::handle_session_picker_keys(
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            &mut state,
+            &ctx,
+        )
+        .await;
+        assert!(matches!(r, Some(Ok(()))), "nav key must be consumed");
+        let picker = state
+            .session
+            .session_picker
+            .as_ref()
+            .expect("picker must stay open after nav key");
+        assert_eq!(
+            picker.selected_path(),
+            Some(std::path::PathBuf::from("/tmp/wo48-2.conv.ndjson")),
+            "nav key must move the selection"
+        );
+
+        // Esc (cancel): consumed and closes the modal.
+        let r = super::handle_session_picker_keys(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &mut state,
+            &ctx,
+        )
+        .await;
+        assert!(matches!(r, Some(Ok(()))), "Esc must be consumed");
+        assert!(
+            state.session.session_picker.is_none(),
+            "Esc must close the picker"
+        );
+>>>>>>> wo/wo48.4
     }
 
     #[tokio::test]

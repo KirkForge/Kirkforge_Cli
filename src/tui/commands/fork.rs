@@ -224,16 +224,20 @@ async fn load_recent_sessions_for_picker(
     }
 }
 
-/// Refresh the Sessions tab's session picker from the daemon's current
-/// recent-session list. Mirrors `refresh_jobs_output`: called when
-/// `sessions_dirty` is set so the tab re-reads session metadata on the
+/// Refresh the recent-session list from the daemon's current view.
+/// Mirrors `refresh_jobs_output`: called when `sessions_dirty` is set so
+/// the Sessions tab / welcome screen re-read session metadata on the
 /// next draw tick instead of showing stale state.
+///
+/// Data refresh only — this must NOT open the picker modal: it fires on
+/// every daemon `ThreadsChanged` push (registration, Touch, claim
+/// release), so opening here popped the full-screen "Resume a recent
+/// session" modal at every TUI startup (WO 48.4). The modal is opened
+/// exclusively by `/resume` with no arguments.
 pub async fn refresh_sessions(state: &mut AppState) {
     match load_recent_sessions_for_picker().await {
         Ok(sessions) => {
-            state.session.session_picker = Some(
-                crate::tui::components::session_picker::SessionPicker::new(sessions),
-            );
+            state.session.recent_sessions = sessions;
         }
         Err(e) => {
             tracing::warn!(error = %e, "failed to refresh recent sessions");
@@ -255,6 +259,20 @@ mod tests {
             &log_path,
         ));
         state
+    }
+
+    /// WO 48.4: the background refresh (daemon `ThreadsChanged` push)
+    /// updates the tab/welcome data but must NOT open the picker modal —
+    /// it used to pop the full-screen "Resume a recent session" overlay
+    /// at every TUI startup, where Enter silently resumed another session.
+    #[tokio::test]
+    async fn refresh_sessions_updates_data_without_opening_picker() {
+        let mut state = app_state_with_log(std::path::PathBuf::from("/dev/null"));
+        refresh_sessions(&mut state).await;
+        assert!(
+            state.session.session_picker.is_none(),
+            "background refresh must not open the picker modal"
+        );
     }
 
     #[tokio::test]

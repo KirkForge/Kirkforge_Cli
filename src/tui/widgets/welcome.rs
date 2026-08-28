@@ -20,7 +20,7 @@ use ratatui::{
 ///   - banner `k i r k f o r g e`
 ///   - subtitle `AI coding assistant for your repository`
 ///   - CWD
-///   - recent sessions (3-5, from `session_picker` if present)
+///   - recent sessions (3-5, from `recent_sessions` if non-empty)
 ///   - quick actions: `/`, `@`, `Ctrl+K`, `Ctrl+S`
 ///   - status: `● Ready · <model>`
 ///
@@ -57,34 +57,32 @@ pub fn render_welcome(f: &mut Frame, area: Rect, state: &AppState) {
     ]));
     lines.push(Line::from(""));
 
-    // Recent sessions (3-5, only if the session picker has entries).
-    // The picker is populated by the daemon on startup or by `/resume`;
-    // if it's absent or empty we skip the section entirely (no empty
-    // header — per WO 34.8 done condition).
-    if let Some(ref picker) = state.session.session_picker {
-        let entries = picker.entries();
-        if !entries.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  Recent sessions",
-                Style::default().fg(Color::DarkGray),
-            )));
-            for entry in entries.iter().take(5) {
-                let dot = if entry.path.exists() {
-                    Span::styled("●", Style::default().fg(Color::Green))
-                } else {
-                    Span::styled("○", Style::default().fg(Color::DarkGray))
-                };
-                lines.push(Line::from(vec![
-                    dot,
-                    Span::raw(format!(" {}", entry.id)),
-                    Span::styled(
-                        format!("  · {} msgs", entry.message_count),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]));
-            }
-            lines.push(Line::from(""));
+    // Recent sessions (3-5, only when the daemon's list is populated).
+    // `recent_sessions` is data only (WO 48.4): populated by the daemon's
+    // ThreadsChanged pushes via `refresh_sessions`; the picker modal is a
+    // separate, explicit `/resume` concern.
+    let entries = &state.session.recent_sessions;
+    if !entries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  Recent sessions",
+            Style::default().fg(Color::DarkGray),
+        )));
+        for entry in entries.iter().take(5) {
+            let dot = if entry.path.exists() {
+                Span::styled("●", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("○", Style::default().fg(Color::DarkGray))
+            };
+            lines.push(Line::from(vec![
+                dot,
+                Span::raw(format!(" {}", entry.id)),
+                Span::styled(
+                    format!("  · {} msgs", entry.message_count),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
         }
+        lines.push(Line::from(""));
     }
 
     // Quick actions
@@ -213,24 +211,23 @@ mod tests {
         );
     }
 
-    /// Recent sessions section is SKIPPED when the picker is absent
+    /// Recent sessions section is SKIPPED when the daemon list is empty
     /// (no empty header — per WO 34.8 done condition).
     #[test]
-    fn welcome_omits_recent_sessions_when_no_picker() {
+    fn welcome_omits_recent_sessions_when_list_empty() {
         let s = bare_state();
-        assert!(s.session.session_picker.is_none());
+        assert!(s.session.recent_sessions.is_empty());
         let rendered = render_to_string(&s, 80, 24);
         assert!(
             !rendered.contains("Recent sessions"),
-            "Recent sessions header should be absent when no picker"
+            "Recent sessions header should be absent when list is empty"
         );
     }
 
-    /// Recent sessions section appears when the picker has entries.
+    /// Recent sessions section appears when the daemon list has entries.
     #[test]
-    fn welcome_shows_recent_sessions_when_picker_has_entries() {
+    fn welcome_shows_recent_sessions_when_list_has_entries() {
         use crate::session::session_index::SessionEntry;
-        use crate::tui::components::session_picker::SessionPicker;
         use std::path::PathBuf;
 
         let mut s = bare_state();
@@ -250,7 +247,7 @@ mod tests {
                 size_bytes: 256,
             },
         ];
-        s.session.session_picker = Some(SessionPicker::new(entries));
+        s.session.recent_sessions = entries;
         let rendered = render_to_string(&s, 80, 24);
         assert!(
             rendered.contains("Recent sessions"),

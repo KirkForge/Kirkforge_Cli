@@ -862,8 +862,8 @@ fn raw_config_lines(config: &crate::shared::Config) -> Vec<String> {
 ///
 /// Shows two subsections:
 ///   - **RECENT**: recent sessions with timestamp + message count, fed by
-///     the daemon's `ThreadsChanged` push events (WO 17.2/17.9) via the
-///     session picker.
+///     the daemon's `ThreadsChanged` push events (WO 17.2/17.9) into
+///     `recent_sessions`.
 ///   - **FORKS**: forks of the current session (from `ForkManager`).
 pub fn render_sessions(f: &mut Frame, area: Rect, state: &AppState) {
     let mut lines = Vec::new();
@@ -877,35 +877,31 @@ pub fn render_sessions(f: &mut Frame, area: Rect, state: &AppState) {
     lines.push(Line::from(""));
 
     // ── RECENT subsection ──────────────────────────────────────────
-    let recent_count = state
-        .session
-        .session_picker
-        .as_ref()
-        .map(|p| p.len())
-        .unwrap_or(0);
-    if recent_count > 0 {
+    // Data-only read (WO 48.4): `recent_sessions` is refreshed by the
+    // daemon's ThreadsChanged pushes; the picker modal is a separate,
+    // explicit `/resume` concern.
+    let recent = &state.session.recent_sessions;
+    if !recent.is_empty() {
         lines.push(Line::from(Span::styled(
             " RECENT",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )));
-        if let Some(ref picker) = state.session.session_picker {
-            for entry in picker.entries().iter().take(20) {
-                let status = if entry.path.exists() {
-                    Span::styled("●", Style::default().fg(Color::Green))
-                } else {
-                    Span::styled("○", Style::default().fg(Color::DarkGray))
-                };
-                lines.push(Line::from(vec![
-                    status,
-                    Span::raw(format!(" {}", entry.id)),
-                    Span::styled(
-                        format!("  · {} msgs", entry.message_count),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]));
-            }
+        for entry in recent.iter().take(20) {
+            let status = if entry.path.exists() {
+                Span::styled("●", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("○", Style::default().fg(Color::DarkGray))
+            };
+            lines.push(Line::from(vec![
+                status,
+                Span::raw(format!(" {}", entry.id)),
+                Span::styled(
+                    format!("  · {} msgs", entry.message_count),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
         }
         lines.push(Line::from(""));
     } else {

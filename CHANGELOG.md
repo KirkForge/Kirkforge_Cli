@@ -38,6 +38,14 @@ why, and the gate evidence.
   `prime_overlay_cold_data` helper), so the tab lists from the on-disk
   session index via the WO 47.12 fallback.
   [48.3](docs/workorders/48.3-sessions-tab-empty-without-daemon.md)
+- WO 48.4 — daemon `ThreadsChanged` pushes no longer open the full-screen
+  "Resume a recent session" modal at every TUI startup (Enter could silently
+  resume a different session). Data refresh (`recent_sessions`, feeds the
+  Sessions tab + welcome screen) is split from modal presentation (now opened
+  only by explicit `/resume`). Also fixed: the picker's advertised k/j/↑/↓ nav
+  keys no longer drop the modal (the key handler took the picker and never
+  restored it on non-commit keys).
+  [48.4](docs/workorders/48.4-session-picker-modal-pops-at-startup.md)
 - Known-flake stabilization — the four wall-clock test families that
   caused red/noise across the WO 47 campaign
   (`attached_cancel_token_kills_inflight_bash_promptly`,

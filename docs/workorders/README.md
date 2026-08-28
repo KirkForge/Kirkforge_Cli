@@ -125,6 +125,8 @@ Only the two most recent series are kept live.
 | 48.2 | [Pre-tool hooks run twice per file-tool call — second run is post-mutation (WO 43.30 tail)](48.2-pre-tool-hook-double-run.md) | Planned |
 | 48.3 | [WO 47.12 regression: Sessions tab shows 'No recent sessions' in default (daemon-less) config](48.3-sessions-tab-empty-without-daemon.md) | Done |
 | 48.4 | [daemon ThreadsChanged opens the session-picker MODAL at every TUI startup](48.4-session-picker-modal-pops-at-startup.md) | Planned |
+| 48.4 | [daemon ThreadsChanged opens the session-picker MODAL at every TUI startup](48.4-session-picker-modal-pops-at-startup.md) | Planned |
+| 48.4 | [daemon ThreadsChanged opens the session-picker MODAL at every TUI startup](48.4-session-picker-modal-pops-at-startup.md) | Done |
 | 48.5 | [MCP tools/call isError:true classified as Success — doom-loop breaker blinded](48.5-mcp-iserror-ignored.md) | Planned |
 | 48.6 | [set_json_mode(false) never clears response_format — hot-reload keeps json_object forever; Anthropic arm never worked](48.6-json-mode-toggle-never-clears.md) | Planned |
 | 48.7 | [tee -a bypasses the tee dangerous-path gate (gate only checks the token right after 'tee')](48.7-tee-append-gate-bypass.md) | Planned |

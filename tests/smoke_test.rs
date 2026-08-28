@@ -69,9 +69,14 @@ fn completions_command_outputs_script() {
 /// positional args or side effects, so it is safe for daemon/replay/etc.
 #[test]
 fn help_flag_for_remaining_subcommands() {
-    let subcommands = [
-        "run", "verify", "sessions", "daemon", "jobd", "replay", "bench", "plugin", "doctor",
+    // WO 47.5: bench + doctor are devtools-gated (default-off) — only
+    // asserted when the binary is built with --features devtools.
+    let mut subcommands = vec![
+        "run", "verify", "sessions", "daemon", "jobd", "replay", "plugin",
     ];
+    if cfg!(feature = "devtools") {
+        subcommands.extend(["bench", "doctor"]);
+    }
     for sub in subcommands {
         let output = Command::new(bin())
             .args([sub, "--help"])

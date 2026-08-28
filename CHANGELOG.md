@@ -25,6 +25,15 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 48.17 — `notebook_edit` shipped outside the file-tool pipeline: no
+  Phase-1 path resolution / hook path substitution, no Phase-2.5
+  sequential ordering, no symlink-swap walk, no read-before-edit gate,
+  no audit rows, and no destructive-tool approval (it mutated disk
+  without ever asking). Now classified as a file tool at every sibling
+  site (pre_run list, dispatch gate + audit mirror, turn.rs
+  should_audit/resolve list/defensive gate); it asks approval like
+  edit_file unless auto-approve is on.
+  [48.17](docs/workorders/48.17-notebook-edit-outside-file-tool-pipeline.md)
 - WO 48.9 — `--no-default-features` build (ADR-0017 minimal build) was
   broken: 3 un-gated `kf_budget_core::estimate_tokens` refs. The gate now
   lives in one choke point (`prompt::count_tokens`, bytes/4 fallback when

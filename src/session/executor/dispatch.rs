@@ -476,7 +476,8 @@ impl Executor {
             // a symlink after Phase-1 canonicalization. A same-batch bash call can
             // swap a dir or file for a symlink in the check-to-open window. The
             // walk runs unconditionally for every deferred file call (read_file,
-            // read_image, write_file, edit_file) so it covers the read-before-edit
+            // read_image, write_file, edit_file, notebook_edit) so it covers the
+            // read-before-edit
             // gate's Allowed arm too — pre-44.28 it only ran inside the Denied
             // arm, so the attack's exact precondition (file pre-read, gate allows)
             // bypassed it.
@@ -507,7 +508,12 @@ impl Executor {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let needs_read_gate = name == "edit_file" || (name == "write_file" && path.exists());
+            // notebook_edit only ever modifies an existing notebook (its body
+            // fails on a missing file), so — like edit_file — it always needs
+            // the read gate; write_file only needs it when overwriting.
+            let needs_read_gate = name == "edit_file"
+                || name == "notebook_edit"
+                || (name == "write_file" && path.exists());
             if needs_read_gate {
                 if let GuardVerdict::Denied(msg) = self
                     .sandbox
@@ -640,7 +646,7 @@ impl Executor {
             {
                 let is_destructive = matches!(
                     tc.name.as_str(),
-                    "write_file" | "edit_file" | "bash" | "read_file"
+                    "write_file" | "edit_file" | "notebook_edit" | "bash" | "read_file"
                 );
                 if is_destructive {
                     self.audit_log

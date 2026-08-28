@@ -1088,6 +1088,264 @@ async fn symlink_swap_blocks_edit_file_when_read_gate_allows() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// WO 48.17: notebook_edit is a file tool — it must get the same Phase-2.5
+// symlink walk its siblings get. Same attack shape as the edit_file case
+// above: a same-batch bash call swaps the notebook for a symlink after
+// Phase-1 canonicalization; the walk must deny before the body runs and
+// the symlink target must be untouched.
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_swap_blocks_notebook_edit_when_read_gate_allows() {
+    use crate::tools::bash::Bash;
+    use crate::tools::notebook_edit::NotebookEdit;
+
+    let tmp = std::env::temp_dir();
+    let dir = tmp.join(format!("kf_code_symlink_swap_nb_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("nb.ipynb");
+    let secret = dir.join("secret.txt");
+    std::fs::write(
+        &target,
+        r#"{"cells":[{"cell_type":"code","source":["a"]}],"nbformat":4}"#,
+    )
+    .unwrap();
+    std::fs::write(&secret, "EXFIL_SECRET").unwrap();
+
+    let bash = Arc::new(Bash::new(
+        crate::shared::access::DenyList::default(),
+        crate::shared::access::PathGuard::default(),
+        false,
+        None,
+        crate::shared::SandboxConfig::default(),
+    ));
+    let nb_tool: Arc<dyn Tool> = Arc::new(NotebookEdit::new(
+        None,
+        crate::session::access::PathGuard::default(),
+    ));
+
+    let swap_cmd = format!(
+        "rm -f {tgt} && ln -s {sec} {tgt}",
+        tgt = target.to_string_lossy(),
+        sec = secret.to_string_lossy(),
+    );
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-bash-swap".into(),
+                name: "bash".into(),
+                arguments: serde_json::json!({ "command": swap_cmd }),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-nb".into(),
+                name: "notebook_edit".into(),
+                arguments: serde_json::json!({
+                    "path": target.to_string_lossy(),
+                    "index": 0,
+                    "source": "MUTATED",
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe = make_executor(Box::new(adapter), vec![bash, nb_tool], make_config(true)).unwrap();
+    // Pre-mark read so the read-before-edit gate ALLOWS — this is the
+    // attack precondition. The symlink walk must still deny.
+    exe.sandbox.mark_read(&target.canonicalize().unwrap());
+
+    let events = exe
+        .run_turn_collecting("swap then notebook_edit", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let denied = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, output, success: false }
+                if name == "notebook_edit" && output.contains("symlink")
+        )
+    });
+    assert!(
+        denied,
+        "notebook_edit after a same-batch symlink swap must be denied, got events: {events:?}"
+    );
+
+    // The symlink target must be untouched — the notebook_edit body never ran.
+    let on_disk = std::fs::read_to_string(&secret).unwrap();
+    assert_eq!(
+        on_disk, "EXFIL_SECRET",
+        "symlink target must be unchanged; notebook_edit body ran and wrote through the symlink"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// WO 48.17: the pre-tool hook for notebook_edit must receive the Phase-1
+// resolved path in its args (KF_TOOL_ARGS_JSON). Note: for write-class
+// tools `check_write` returns the raw literal verbatim (access/mod.rs
+// `GuardVerdict::Allowed(path.to_path_buf())`), so "resolved" == the
+// model-supplied path here — the assertion pins that the substitution
+// code path feeds the hook the file-tool path arg at all.
+#[cfg(unix)]
+#[tokio::test]
+async fn pre_tool_hook_receives_resolved_path_for_notebook_edit() {
+    use crate::tools::notebook_edit::NotebookEdit;
+
+    let tmp = std::env::temp_dir();
+    let dir = tmp.join(format!("kf_code_hook_resolved_nb_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let nb = dir.join("nb.ipynb");
+    std::fs::write(
+        &nb,
+        r#"{"cells":[{"cell_type":"code","source":["a"]}],"nbformat":4}"#,
+    )
+    .unwrap();
+
+    let nb_tool: Arc<dyn Tool> = Arc::new(NotebookEdit::new(
+        None,
+        crate::session::access::PathGuard::default(),
+    ));
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-nb".into(),
+                name: "notebook_edit".into(),
+                arguments: serde_json::json!({
+                    "path": nb.to_string_lossy(),
+                    "index": 0,
+                    "source": "updated",
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (hook_tmp, hooks_dir) = temp_hooks_dir();
+    let captured = hook_tmp.path().join("hook_args");
+    std::fs::write(&captured, b"").unwrap();
+    let script =
+        format!("#!/bin/bash\nprintf '%s' \"$KF_TOOL_ARGS_JSON\" > {captured:?}\nexit 0\n");
+    std::fs::write(hooks_dir.join("pre-tool-notebook_edit.sh"), script).unwrap();
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut config = make_config(true);
+    config.tools.hooks_dir = Some(hooks_dir);
+    let mut exe = make_executor(Box::new(adapter), vec![nb_tool], config).unwrap();
+    exe.sandbox.mark_read(&nb);
+
+    let events = exe
+        .run_turn_collecting(
+            "notebook_edit with args-capturing hook",
+            &approval_tx,
+            never_cancelled(),
+        )
+        .await
+        .unwrap();
+
+    let ok = events
+        .iter()
+        .any(|e| matches!(e, TurnEvent::ToolResult { name, success: true, .. } if name == "notebook_edit"));
+    assert!(ok, "notebook_edit should succeed, got events: {events:?}");
+
+    let hook_args = std::fs::read_to_string(&captured).unwrap();
+    let nb_str = nb.to_string_lossy().into_owned();
+    assert!(
+        hook_args.contains(&nb_str),
+        "hook must receive the notebook path in KF_TOOL_ARGS_JSON, got: {hook_args}"
+    );
+
+    // The body wrote through the resolved path — the file changed.
+    let on_disk: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&nb).unwrap()).unwrap();
+    assert_eq!(
+        on_disk["cells"][0]["source"][0], "updated",
+        "body must edit the file"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// WO 48.17: notebook_edit only ever modifies an existing notebook, so the
+// read-before-edit gate applies (same as edit_file): a cold call on a file
+// not read this session must be denied with the Read-before-edit reason.
+#[cfg(unix)]
+#[tokio::test]
+async fn notebook_edit_cold_call_denied_by_read_gate() {
+    use crate::tools::notebook_edit::NotebookEdit;
+
+    let tmp = std::env::temp_dir();
+    let dir = tmp.join(format!("kf_code_cold_nb_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let nb = dir.join("nb.ipynb");
+    std::fs::write(
+        &nb,
+        r#"{"cells":[{"cell_type":"code","source":["a"]}],"nbformat":4}"#,
+    )
+    .unwrap();
+
+    let nb_tool: Arc<dyn Tool> = Arc::new(NotebookEdit::new(
+        None,
+        crate::session::access::PathGuard::default(),
+    ));
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-nb".into(),
+                name: "notebook_edit".into(),
+                arguments: serde_json::json!({
+                    "path": nb.to_string_lossy(),
+                    "index": 0,
+                    "source": "MUTATED",
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    // Deliberately do NOT mark_read — the read-before-edit gate must deny.
+    let mut exe = make_executor(Box::new(adapter), vec![nb_tool], make_config(true)).unwrap();
+
+    let events = exe
+        .run_turn_collecting("cold notebook_edit", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let denied = events.iter().any(|e| {
+        matches!(
+            e,
+            TurnEvent::ToolResult { name, output, success: false }
+                if name == "notebook_edit" && output.contains("Read-before-edit")
+        )
+    });
+    assert!(
+        denied,
+        "cold notebook_edit must be denied by the read gate, got events: {events:?}"
+    );
+
+    // The notebook is untouched — the body never ran.
+    let on_disk = std::fs::read_to_string(&nb).unwrap();
+    assert!(on_disk.contains("\"a\""), "notebook must be unchanged");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // WO 44.28 regression (read side): a same-batch bash call swaps the read
 // target's final component for a symlink before the read_file body runs.
 // Pre-fix the symlink walk never ran for reads (needs_read_gate is false

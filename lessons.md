@@ -1117,3 +1117,31 @@
 - WO status flip is two-source-of-truth like ADRs: WO file `## Status`
   AND docs/workorders/README.md row must agree
   (adr_xref_drift.rs WO-status test enforces it).
+
+## WO 48.17 session (2026-08-28)
+
+- `PathGuard::check_write` returns the RAW literal as its "resolved"
+  path (`GuardVerdict::Allowed(path.to_path_buf())`) — the sandbox-branch
+  `canonicalize` is only used for containment comparison. `check_read` →
+  `check_traversal` DOES return the canonical path. So "Phase-1 resolved
+  path" means canonical for read tools but identity for write tools
+  (write_file/edit_file/notebook_edit): the pre_run hook substitution is
+  a no-op for writes, and the Phase-2.5 symlink walk therefore denies ANY
+  symlinked parent component on a write path (walk stats the raw path's
+  prefixes). Test-writing consequence: you cannot demonstrate
+  "hook sees canonical ≠ raw" for a write tool — the resolved==raw.
+  Fixing check_write's return is a cross-tool behavior change (candidate
+  WO, noted in 48.17's Done section).
+- The Phase-2.5 deferral, symlink walk, and body-opens-resolved-path are
+  ALL driven by `resolved_path.is_some()` — one pre_run list entry
+  activates the whole chain. The mirrors that need manual sync: dispatch
+  `needs_read_gate`, dispatch AccessDenied audit list, turn.rs
+  `should_audit` + file-tool arm + defensive read gate, pre_run
+  `is_destructive`.
+- WO sweep-audit line numbers drift: WO 48.17 cited "src/tools/mod.rs:245"
+  but the registry line is 217. Trust grep, not the WO's line refs.
+- Scope creep avoided: helpers/mod.rs `check_deny_list` file-tool arm
+  still lists only the 4 siblings, but `PathGuard::check_write` itself
+  enforces `deny_list.is_path_denied` — the helpers arm is a
+  pre-approval duplicate, so notebook_edit deny-list coverage is already
+  closed via the pre_run listing. No edit needed.

@@ -91,7 +91,10 @@ impl Executor {
                 cfg.security.permission_rules.clone(),
             )
         };
-        let is_destructive = matches!(tc.name.as_str(), "write_file" | "edit_file" | "bash");
+        let is_destructive = matches!(
+            tc.name.as_str(),
+            "write_file" | "edit_file" | "notebook_edit" | "bash"
+        );
         let is_read_only_bash_call = tc.name == "bash"
             && tc
                 .arguments
@@ -270,7 +273,7 @@ impl Executor {
         // fired after the write was already applied).
         let file_resolved: Option<std::path::PathBuf> = if matches!(
             tc.name.as_str(),
-            "read_file" | "read_image" | "write_file" | "edit_file"
+            "read_file" | "read_image" | "write_file" | "edit_file" | "notebook_edit"
         ) {
             let path_str = tc
                 .arguments

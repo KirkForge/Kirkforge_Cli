@@ -543,3 +543,8 @@ Release prep — version bump only. WO 33-34 series highlights:
 
 
 
+- WO 48 sweep wave — minify shell-heredoc/JS-regex/ruby scanners, startup-picker
+  TUI gate, gate-vs-body denial classification, mark_read success-only,
+  notebook_edit pipeline coverage, reload response_format, normalize #/case
+  gaps, picker consume-all, CJK token estimate, nightly subprocess filter (P0),
+  crate-count docs, no-default-features tests+clippy.

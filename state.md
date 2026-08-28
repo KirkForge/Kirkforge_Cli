@@ -19,6 +19,18 @@
   per owner directive (check --workspace --all-targets, clippy -p kf-code,
   session::hooks + dispatch tests, fmt, adr_xref_drift).
   [48.2](docs/workorders/48.2-pre-tool-hook-double-run.md)
+- **WO 48.3 (2026-08-28, branch `wo/wo48.3`, not merged)**: fixed the WO
+  47.12 regression where the Sessions tab permanently showed "No recent
+  sessions" in the default daemon-less config. The three tab-switch sites
+  in `src/tui/keys/mod.rs` primed Jobs cold-start but never tripped
+  `sessions_dirty`; now one shared `prime_overlay_cold_data` helper (used
+  by `open_overlay`, palette Enter, and the F-key arm) trips both flags,
+  and the draw loop's existing `refresh_sessions` handler populates the
+  picker via the on-disk session-index fallback. Startup picker path was
+  already correct. FAST GATES ONLY per owner directive (check/clippy/
+  targeted tests/fmt green; full suite + Windows cross gate owed before
+  any merge — see CI/branch state).
+  [48.3](docs/workorders/48.3-sessions-tab-empty-without-daemon.md)
 - **Known-flake stabilization (2026-08-28)**: the four wall-clock flake
   families that caused red/noise across the WO 47 campaign got realistic
   budgets — assertions unchanged, nothing weakened. (1)

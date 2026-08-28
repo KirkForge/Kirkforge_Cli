@@ -16,6 +16,18 @@
   DEFERRED: CI job for the no-default-features combo (~10-line new job block,
   not the allowed 3-line add; see Pending).
   [48.9](docs/workorders/48.9-no-default-features-broken.md)
+- **WO 48.10 (2026-08-28, branch `wo48.10`, not merged)**: Windows
+  daemon-stub `try_list_recent`/`try_resolve_recent`/`try_resolve_id`
+  (`src/daemon/client.rs` `windows_imp`) now serve the on-disk session
+  index instead of `Ok(None)` — the same platform-neutral
+  `session_index` code the Unix WO 47.12 disk fallback uses, so
+  `--attach`, `--auto-resume`, the startup picker and `/fork` picker
+  behave as the 47.12 help promises on Windows too. cli.rs unchanged
+  (wording accurate post-fix). FAST GATES ONLY per owner directive:
+  daemon::client tests 8/8, Windows cross clippy -D warnings green,
+  workspace check green, fmt green. detect_changes: 0 indexed symbols
+  affected (cfg(windows) bodies are outside the Linux symbol graph).
+  [48.10](docs/workorders/48.10-windows-daemon-stub-no-fallback.md)
 
 - **WO 48.2 (2026-08-28)**: pre-tool hooks no longer run twice per
   file-tool call. The Phase-3 recorder (`record_tool_result`) re-ran

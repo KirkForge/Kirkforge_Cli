@@ -1,8 +1,9 @@
 //! Daemon client — connect to the session daemon over its transport.
 //!
 //! On Unix the daemon communicates over a domain socket; on Windows the
-//! daemon is not implemented yet, so the client provides no-op stubs that
-//! gracefully degrade to file-based session discovery.
+//! daemon is not implemented yet, so the client stubs degrade to the
+//! on-disk session index (WO 47.12): the try_* helpers serve the same
+//! data the Unix disk fallback serves.
 //!
 //! The daemon is opt-in (WO 47.12): the try_* helpers auto-start it only
 //! when `KF_CODE_DAEMON_AUTOSTART` is set; otherwise they fall back to
@@ -608,16 +609,35 @@ mod windows_imp {
         }
     }
 
+    /// Serve the on-disk session index (WO 47.12 contract): no daemon
+    /// exists on Windows, so the index is the only source — the same
+    /// data the Unix disk fallback serves. Returns `Ok(None)` only
+    /// when the index scan itself fails.
     pub async fn try_list_recent() -> anyhow::Result<Option<Vec<SessionEntry>>> {
-        Ok(None)
+        match crate::session::session_index::list_sessions() {
+            Ok(entries) => Ok(Some(
+                entries
+                    .into_iter()
+                    .take(crate::daemon::RECENT_SESSIONS_LIMIT)
+                    .collect(),
+            )),
+            Err(e) => {
+                tracing::info!(error = %e, "session index scan failed; no recent sessions available");
+                Ok(None)
+            }
+        }
     }
 
     pub async fn try_resolve_recent() -> anyhow::Result<Option<PathBuf>> {
-        Ok(None)
+        Ok(try_list_recent()
+            .await?
+            .and_then(|s| s.into_iter().next().map(|e| e.path)))
     }
 
-    pub async fn try_resolve_id(_id_or_prefix: &str) -> anyhow::Result<Option<PathBuf>> {
-        Ok(None)
+    /// Resolve via the on-disk index — same exact-then-prefix, newest-first
+    /// matching `resolve_session_id` gives the Unix fallback.
+    pub async fn try_resolve_id(id_or_prefix: &str) -> anyhow::Result<Option<PathBuf>> {
+        crate::session::session_index::resolve_session_id(id_or_prefix)
     }
 
     pub async fn try_touch(_id: &str, _path: PathBuf) {
@@ -942,20 +962,64 @@ mod tests {
 #[cfg(all(test, not(unix)))]
 mod windows_stub_tests {
     use super::windows_imp::{try_list_recent, try_resolve_id, try_resolve_recent, try_touch};
+    use crate::shared::test_util::EnvGuard;
 
+    /// WO 48.10: no daemon exists on Windows, so `try_list_recent`
+    /// serves the on-disk session index — the fallback the 47.12 help
+    /// text promises. Mirrors the Unix fallback test.
     #[tokio::test]
-    async fn try_list_recent_returns_none() {
-        assert!(try_list_recent().await.unwrap().is_none());
+    async fn try_list_recent_serves_session_index() {
+        let _guard = crate::session::test_data_dir_lock().lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let _env_data = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::fs::write(sessions_dir.join("win-session.conv.ndjson"), "").unwrap();
+
+        let listed = try_list_recent().await.unwrap();
+        let listed = listed.expect("disk fallback should serve the session index");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "win-session");
     }
 
+    /// WO 48.10: `try_resolve_recent` returns the newest index entry.
     #[tokio::test]
-    async fn try_resolve_recent_returns_none() {
-        assert!(try_resolve_recent().await.unwrap().is_none());
+    async fn try_resolve_recent_returns_newest_session() {
+        let _guard = crate::session::test_data_dir_lock().lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let _env_data = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::fs::write(sessions_dir.join("win-newest.conv.ndjson"), "").unwrap();
+
+        let resolved = try_resolve_recent().await.unwrap();
+        assert_eq!(
+            resolved,
+            Some(sessions_dir.join("win-newest.conv.ndjson")),
+            "most recent session should resolve from disk"
+        );
     }
 
+    /// WO 48.10: `try_resolve_id` resolves exact ids and prefixes from
+    /// the on-disk index — the `--attach` UX must not error without a
+    /// daemon.
     #[tokio::test]
-    async fn try_resolve_id_returns_none() {
-        assert!(try_resolve_id("foo").await.unwrap().is_none());
+    async fn try_resolve_id_resolves_exact_and_prefix() {
+        let _guard = crate::session::test_data_dir_lock().lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let _env_data = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let target = sessions_dir.join("win-session.conv.ndjson");
+        std::fs::write(&target, "").unwrap();
+
+        let exact = try_resolve_id("win-session").await.unwrap();
+        assert_eq!(exact, Some(target.clone()), "exact id should resolve");
+        let prefix = try_resolve_id("win-sess").await.unwrap();
+        assert_eq!(prefix, Some(target), "id prefix should resolve");
     }
 
     #[tokio::test]

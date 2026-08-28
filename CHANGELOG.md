@@ -51,6 +51,13 @@ why, and the gate evidence.
   keys no longer drop the modal (the key handler took the picker and never
   restored it on non-commit keys).
   [48.4](docs/workorders/48.4-session-picker-modal-pops-at-startup.md)
+- WO 48.10 — Windows daemon stubs returned `Ok(None)` where Unix falls
+  back to the on-disk session index, so `--attach` errored and
+  `--auto-resume`/pickers no-oped despite the 47.12 help promising index
+  fallback. The Windows `try_*` client helpers now serve the same
+  platform-neutral session index the Unix fallback uses; cli.rs help
+  needed no change.
+  [48.10](docs/workorders/48.10-windows-daemon-stub-no-fallback.md)
 - Known-flake stabilization — the four wall-clock test families that
   caused red/noise across the WO 47 campaign
   (`attached_cancel_token_kills_inflight_bash_promptly`,

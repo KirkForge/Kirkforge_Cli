@@ -225,7 +225,7 @@
 - **WO 44 series created** (25 workorders + 44.0 overview): full WO 43
   regression audit (36 WOs verified — 34 clean, 2 findings) + five-area
   fresh sweep (adapters/shared, session, tui/main/daemon, tools/crates,
-  tests/CI). Start at [44.0](docs/workorders/44.0-wo44-overview.md).
+  tests/CI). Start at [44.0](docs/archive/workorders/44.0-wo44-overview.md).
 - **README drift fix**: 17 stale WO 43 status rows synced to file-header
   truth (left red by the interrupted prior session).
 
@@ -344,7 +344,7 @@
   `.map_err(super::classify_transport_error)` to each adapter's
   `send_with_retry(...).await?` call, then remove the `contains()` block in
   `error.rs:49-73` once all producers are typed. Tracked in
-  [43.1](docs/workorders/43.1-typed-adapter-errors.md).
+  [43.1](docs/archive/workorders/43.1-typed-adapter-errors.md).
 - **WO 43.2, 43.5-43.19, 43.21**: honest-assessment backlog (rounds 1-4) —
   ALL Done (verified by the WO 44 regression audit; stale "Planned" claims
   corrected). Series closed.
@@ -360,21 +360,21 @@
   Tracked here (pending) — no separate WO yet.
 - **WO 39.4**: Claude compat phase 3 (hook stdin-JSON contract + generic
   pre/post-tool events). Deferred — lowest wild frequency of the artifact
-  classes. Tracked in [39.4](docs/workorders/39.4-claude-compat-phase3.md).
+  classes. Tracked in [39.4](docs/archive/workorders/39.4-claude-compat-phase3.md).
 - **WO 39.1 Phase 3-4**: external runner for `claude -p`/`codex exec`/`opencode
   run` + same-model LiteLLM gateway. Phase 1-2 done. Tracked in
-  [39.1](docs/workorders/39.1-bench-cross-tool.md).
+  [39.1](docs/archive/workorders/39.1-bench-cross-tool.md).
 - **WO 38.10 P2s**: `--read-stdin-full` flag, JSON error-object emission,
   session.id in summary, replay/Ctrl-C/CLI polish. P0+P1 done. Tracked in
-  [38.10](docs/workorders/38.10-cli-first-run.md).
+  [38.10](docs/archive/workorders/38.10-cli-first-run.md).
 - **WO 19.11**: plugin production hardening (partial). Tracked in
-  [19.11](docs/workorders/19.11-plugin-production-hardening.md).
+  [19.11](docs/archive/workorders/19.11-plugin-production-hardening.md).
 - **WO 21.0.14**: deferred tracker (tracking — this is the ledger of all
   deferrals, kept open by design). Tracked in
-  [21.0.14](docs/workorders/21.0.14-deferred-tracker.md).
+  [21.0.14](docs/archive/workorders/21.0.14-deferred-tracker.md).
 - **WO 29.1**: fold bundled plugin into compiled-in Rust tools — Phase 1
   shipped; verify tools deferred to 29.7. Tracked in
-  [29.1](docs/workorders/29.1-fold-bundled-plugin.md).
+  [29.1](docs/archive/workorders/29.1-fold-bundled-plugin.md).
 
 ## Known flakes (pre-existing, not introduced this session)
 

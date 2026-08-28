@@ -1369,7 +1369,7 @@ references to "use Read" map to the native tool name.
 - **Hooks phase 3** (WO 39.4): the Claude hook stdin-JSON contract and
   generic pre/post-tool events are not yet implemented. This is the
   lowest-frequency artifact class and is tracked in
-  [39.4](docs/workorders/39.4-claude-compat-phase3.md). Skills, commands,
+  [39.4](docs/archive/workorders/39.4-claude-compat-phase3.md). Skills, commands,
   agents, and `.mcp.json` all ship; hooks do not.
 
 ---

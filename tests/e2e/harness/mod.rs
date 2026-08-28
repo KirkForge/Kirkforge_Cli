@@ -1,5 +1,5 @@
 //! E2E test harness: binary driver, mock provider, PTY driver, and
-//! regression catalog.  See docs/workorders/17.8-e2e-test-harness.md
+//! regression catalog.  See docs/archive/workorders/17.8-e2e-test-harness.md
 //! for the design rationale.
 
 #[allow(dead_code)]

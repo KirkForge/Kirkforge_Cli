@@ -708,3 +708,23 @@
 - **Commit-per-defect with entangled edits**: stage an honest intermediate
   state (defect-1-only), verify, commit, then layer defect 2. Cheaper
   than git add -p surgery through a CLI.
+
+## WO 47.9 session (archive workorder corpus)
+
+- The WO drift test needed NO code change: it scans docs/workorders/
+  non-recursively against that dir's README index, so moving pre-46 files
+  out AND trimming the index to 46/47 keeps it green — layout and scan
+  path stay in agreement by construction. Index rows whose files are gone
+  are silently skipped, so trim-then-move (or move-without-trim) would
+  have left a lying index even while green; do both in one commit.
+- README index had merge-cruft duplicate rows (47.18/19 x4, 47.24/25/26
+  x3, 47.27/28 x3) — an awk first-occurrence dedupe on the row key
+  ($2 splitting on '|') collapsed them in place.
+- Scope creep (disclosed): src/shared/sandbox_policy.rs,
+  crates/kf-plugin-sdk/src/lib.rs, tests/e2e/harness/mod.rs doc-comments,
+  docs/TECHNICAL.md, and state.md live links repointed at
+  docs/archive/workorders/ — grep proved these were the only non-history
+  references to moved files (CHANGELOG's 120 historical links left
+  as-is, disclosed as deferred).
+- git mv of 450 files in one xargs-less `git mv $(ls ...)` worked fine;
+  `git status` shows them as renames (R), preserving history.

@@ -263,6 +263,12 @@ pub(super) fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
     if let Some(Value::Boolean(v)) = table.get("mouse_enabled") {
         cfg.display.mouse_enabled = *v;
     }
+    if let Some(Value::Array(v)) = table.get("extra_commands") {
+        cfg.display.extra_commands = v
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+    }
     if let Some(Value::Integer(v)) = table.get("checkpoint_interval_messages") {
         cfg.session.checkpoint_interval_messages = (*v).max(0) as usize;
     }

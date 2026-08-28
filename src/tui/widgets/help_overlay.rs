@@ -39,7 +39,11 @@ pub fn render_help_overlay(f: &mut Frame, area: Rect, state: &AppState) {
     let body_area = chunks[0];
     let footer_area = chunks[1];
 
-    let text = crate::tui::keys::slash_commands::help_text(&state.services.skill_registry);
+    let extras = crate::shared::read_shared_config(&state.services.config)
+        .display
+        .extra_commands
+        .clone();
+    let text = crate::tui::keys::slash_commands::help_text(&state.services.skill_registry, &extras);
     let lines: Vec<Line> = text.lines().map(Line::from).collect();
     let total = lines.len();
 

@@ -1217,11 +1217,12 @@ mod tests {
         // ── 1. Total struct-level fields ──────────────────────────
         // ModelConfig=34 (33 direct + subagent_provider sub-struct handle),
         // SecurityConfig=22, ToolConfig=35, SessionConfig=8,
-        // DisplayConfig=7 → 107 total pub fields.
+        // DisplayConfig=8 → 108 total pub fields.
         // (WO 45.37: SessionConfig 9 → 8 — worktree_enabled +
         // auto_apply_patch replaced by artifact_policy enum.)
+        // (WO 47.13: DisplayConfig 7 → 8 — added extra_commands.)
         assert_eq!(
-            CONFIG_FIELD_COUNT, 107,
+            CONFIG_FIELD_COUNT, 108,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -1292,6 +1293,7 @@ mod tests {
             memory_show_in_status = true
             theme = "x"
             mouse_enabled = true
+            extra_commands = ["gh"]
             checkpoint_interval_messages = 999
             anthropic_provider = "x"
             anthropic_api_base = "x"
@@ -1350,7 +1352,8 @@ mod tests {
         // WO 39.2: +1 (load_project_mcp_json) = 98
         // WO 43.17: +1 (plugin_consent_ledger) = 99
         // WO 44.22: +1 (anthropic_api_base) = 100
-        const MERGE_TOML_EXPECTED: usize = 100;
+        // WO 47.13: +1 (extra_commands) = 101
+        const MERGE_TOML_EXPECTED: usize = 101;
         assert_eq!(
             toml_key_count, MERGE_TOML_EXPECTED,
             "merge_toml_into_config key count changed — did you add/remove a handled field?"
@@ -1402,6 +1405,7 @@ mod tests {
         // Additionally skipped by apply_env_overrides (4 more, beyond the 15):
         //   SecurityConfig: deny_paths, deny_urls, deny_extensions,
         //                   allowed_write_dirs
+        //   DisplayConfig: extra_commands
         //   (Arrays/Vec fields without env-var representations.)
         //
         // The expansion of computer_use (1 struct field → 7 TOML keys)

@@ -18,8 +18,10 @@ use ratatui::{
 /// The popup is a bordered box showing filtered commands with the
 /// selected row highlighted. It occupies up to 8 rows above the
 /// input bar, aligned to the bottom of the main content area.
-pub fn render_slash_menu(f: &mut Frame, input_area: Rect, menu: &SlashMenu) {
-    let filtered = complete_command(&menu.query);
+/// `extras` is the `[display] extra_commands` list — gated commands
+/// (WO 47.13) are hidden unless enabled.
+pub fn render_slash_menu(f: &mut Frame, input_area: Rect, menu: &SlashMenu, extras: &[String]) {
+    let filtered = complete_command(&menu.query, extras);
     if filtered.is_empty() {
         return;
     }

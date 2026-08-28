@@ -24,9 +24,9 @@ use serde::{Deserialize, Serialize};
 ///   SecurityConfig 22  (19 direct + 3 sub-struct handles)
 ///   ToolConfig     33
 ///   SessionConfig   7
-///   DisplayConfig   7
+///   DisplayConfig   8
 ///   Note: 1 field (seed) has #[serde(skip_serializing)], so serde
-///   produces 97 keys; ToolConfig.memory_auto_populate and
+///   produces 98 keys; ToolConfig.memory_auto_populate and
 ///   DisplayConfig.memory_auto_populate flatten to the same JSON key,
 ///   dropping 1 more. The drift-guard test accounts for both.
 //
@@ -46,7 +46,8 @@ use serde::{Deserialize, Serialize};
 // WO 45.37: replaced SessionConfig.worktree_enabled + auto_apply_patch
 //           (2 bools) with SessionConfig.artifact_policy (1 enum):
 //           108 → 107.
-pub const CONFIG_FIELD_COUNT: usize = 107;
+// WO 47.13: bumped 107 → 108 (added DisplayConfig.extra_commands).
+pub const CONFIG_FIELD_COUNT: usize = 108;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

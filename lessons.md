@@ -708,3 +708,34 @@
 - **Commit-per-defect with entangled edits**: stage an honest intermediate
   state (defect-1-only), verify, commit, then layer defect 2. Cheaper
   than git add -p surgery through a CLI.
+
+## WO 47.13 session (TUI command diet, gating)
+
+- Coordinator directive "cut or gate, pick the reversible one" flipped
+  the WO from line-trimming to config gating. Config flag (runtime)
+  beats default-off cargo feature here: feature-gated code is never
+  compiled by default gates/CI -> guaranteed rot; config-gated code
+  stays compiled + tested, reversible per user, live via /reload.
+- The WO's "doom banner" trim item was mislabeled — it is the
+  doom-loop runaway WARNING interrupt (safety UI, WO 43.31
+  regression-pinned), not a cosmetic banner. Left ungated + disclosed.
+  Re-verify what a trim item actually IS before gating it.
+- Persona module cannot be gated as a unit: /workflow dispatch and the
+  doom-banner Plan action route through persona_tx/PersonaResult. Only
+  the /plan /explore /coder entry commands are gated; /implement stays
+  (plan-mode exit).
+- `complete_command`/`help_text` now take `&[String]` extras, NOT
+  &Config: complete_slash mutates state after the call, and a held
+  RwLockReadGuard borrow would conflict. Clone the Vec out of the lock
+  first (empty by default — cheap).
+- `for (trigger, _) in EXTRA_KEYS` binds trigger as &&str (slice-of-
+  tuples iteration), while `for t in ["a","b"]` binds &str — Vec::<&str>
+  ::contains needs &&str in both cases. One E0308 taught it twice.
+- Editing test bodies by replacing whole functions left stale duplicate
+  closing braces once (rustc "unexpected closing delimiter" pointed at
+  the NEXT test). Diff-review each test edit before compiling.
+- scope note: gate plumbing necessarily touched files beyond the WO's
+  `src/tui/commands/**, src/tui/widgets/**` list — dispatch/help/
+  completion live in tui/keys/, config plumbing in shared/config +
+  session/config. Disclosed in WO Done. Line-mode /carryover (src/main/
+  line_mode.rs) left ungated — out of scope, disclosed as follow-up.

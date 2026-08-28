@@ -1384,7 +1384,11 @@ pub(crate) fn render_app(f: &mut Frame, state: &mut AppState) {
 
     // ── Slash menu popup (above input) ──
     if let Some(ref menu) = state.ui.slash_menu {
-        crate::tui::widgets::slash_menu::render_slash_menu(f, chunks[2], menu);
+        let extras = crate::shared::read_shared_config(&state.services.config)
+            .display
+            .extra_commands
+            .clone();
+        crate::tui::widgets::slash_menu::render_slash_menu(f, chunks[2], menu, &extras);
     }
 
     // ── File completer popup (above input) ──

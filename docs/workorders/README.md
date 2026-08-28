@@ -998,7 +998,7 @@ tree, ~11 stale claims corrected in-line. See
 | 47.10 | [send_or_warn! ceremony → single emit! macro (47 sites × 4-6 lines)](47.10-send-or-warn-ceremony.md) | Planned |
 | 47.11 | [Freeze/delete computer_use (513 lines, default-off mini browser framework)](47.11-computer-use-freeze.md) | Planned |
 | 47.12 | [Daemon becomes opt-in (~5.6K lines out of the default path)](47.12-daemon-opt-in.md) | Planned |
-| 47.13 | [TUI command diet (trim set ≈ 3-4K shipped lines)](47.13-tui-command-diet.md) | Planned |
+| 47.13 | [TUI command diet (trim set ≈ 3-4K shipped lines)](47.13-tui-command-diet.md) | Done |
 | 47.14 | [Unify the two verifier trait systems (LAST + riskiest)](47.14-unify-verifier-traits.md) | Planned |
 | 47.2 | [Generic env-override loader (91 hand-parsed KF_* vars in 4 layers)](47.2-generic-env-loader.md) | Planned |
 | 47.3 | [Delete the dead JWT/JWKS half of kf-rbac (keep the live RBAC core)](47.3-delete-kf-rbac.md) | Planned |

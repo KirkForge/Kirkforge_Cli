@@ -28,6 +28,10 @@ fn default_mouse_enabled() -> bool {
     true
 }
 
+fn default_extra_commands() -> Vec<String> {
+    Vec::new()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DisplayConfig {
@@ -52,6 +56,15 @@ pub struct DisplayConfig {
     /// the scroll wheel). Default: `true` (WO 27.7).
     #[serde(default = "default_mouse_enabled")]
     pub mouse_enabled: bool,
+    /// WO 47.13 command diet: low-traffic TUI commands are off unless
+    /// their key is listed here. Recognized keys: `"gh"`, `"route"`,
+    /// `"metrics"`, `"carryover"`, `"personas"` (/plan, /explore,
+    /// /coder), `"jobs-schedule"` (/jobs cron surface), `"mentions"`
+    /// (@-path expansion). Default: empty (all gated commands off).
+    /// TOML-only — no env override (same Vec-without-env class as
+    /// `deny_paths`). Live-reloads via `/reload`.
+    #[serde(default = "default_extra_commands")]
+    pub extra_commands: Vec<String>,
 }
 
 impl Default for DisplayConfig {
@@ -64,6 +77,7 @@ impl Default for DisplayConfig {
             memory_show_in_status: default_memory_show_in_status(),
             theme: default_theme(),
             mouse_enabled: default_mouse_enabled(),
+            extra_commands: default_extra_commands(),
         }
     }
 }

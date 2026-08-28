@@ -138,5 +138,5 @@ Only the two most recent series are kept live.
 | 48.19 | [normalize_for_safety mid-word # truncation + permission deny-glob case mismatch](48.19-normalize-hash-and-case-gaps.md) | Planned |
 | 48.20 | [Every non-nav key leaks through the open picker modal — 48.4 fixed k/j only](48.20-picker-non-nav-key-leak.md) | Planned |
 | 48.21 | [count_tokens minimal-build off-arm (bytes/4) under-estimates 25-50% on code/CJK — feeds context-fit truncation ladder](48.21-count-tokens-minimal-underestimate.md) | Planned |
-| 48.22 | [P0: nightly subprocess-lifecycle test(=bare_name) filter matches zero tests — the two timeout tests have NEVER run](48.22-nightly-subprocess-filter-matches-zero.md) | Planned |
+| 48.22 | [P0: nightly subprocess-lifecycle test(=bare_name) filter matches zero tests — the two timeout tests have NEVER run](48.22-nightly-subprocess-filter-matches-zero.md) | Done |
 | 48.23 | [TECHNICAL.md self-contradiction: 13 satellite crates vs 10 (post-47.4 fold)](48.23-technical-crate-count-contradiction.md) | Planned |

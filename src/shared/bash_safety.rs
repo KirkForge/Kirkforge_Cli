@@ -296,22 +296,30 @@ fn redirects_to_dangerous_path(cmd: &str) -> Option<&'static str> {
 fn tee_to_dangerous_path(cmd: &str) -> Option<&'static str> {
     let normalized = normalize_for_safety(cmd);
     // Tokenize naively and look for a `tee` word followed by a dangerous path.
+    // Flag tokens (`-a`, `-i`, `--append`, anything starting with `-`) sit
+    // between `tee` and its target and must be skipped or the gate is blind
+    // to `tee -a /etc/passwd` (WO 48).
     let tokens: Vec<&str> = normalized.split_whitespace().collect();
-    for window in tokens.windows(2) {
-        let is_tee = window[0] == "tee"
-            || window[0].ends_with("|tee")
-            || window[0].ends_with(";tee")
-            || window[0].ends_with("&&tee")
-            || window[0].ends_with("||tee");
-        if is_tee {
-            let target = window[1].to_lowercase();
-            if target_has_glob_metachar(&target) {
-                return Some(GLOB_METACHAR_DENY);
-            }
-            for prefix in DANGEROUS_REDIRECTION_TARGETS {
-                if target.starts_with(prefix) || target == prefix.trim_end_matches('/') {
-                    return Some(*prefix);
-                }
+    for (i, tok) in tokens.iter().enumerate() {
+        let is_tee = *tok == "tee"
+            || tok.ends_with("|tee")
+            || tok.ends_with(";tee")
+            || tok.ends_with("&&tee")
+            || tok.ends_with("||tee");
+        if !is_tee {
+            continue;
+        }
+        let mut j = i + 1;
+        while j < tokens.len() && tokens[j].starts_with('-') {
+            j += 1;
+        }
+        let target = tokens.get(j)?.to_lowercase();
+        if target_has_glob_metachar(&target) {
+            return Some(GLOB_METACHAR_DENY);
+        }
+        for prefix in DANGEROUS_REDIRECTION_TARGETS {
+            if target.starts_with(prefix) || target == prefix.trim_end_matches('/') {
+                return Some(*prefix);
             }
         }
     }
@@ -915,6 +923,31 @@ mod private_tests {
             tee_to_dangerous_path("echo x | tee /e[t]c/hosts"),
             Some("<glob-metacharacter>")
         );
+    }
+
+    // ponytail: pin the `tee -a` flag bypass (WO 48). The gate used to inspect
+    // only the token immediately after `tee`, so `tee -a /etc/passwd` slipped
+    // through with the flag shielding the path. If this fails, flag-skipping
+    // regressed and the bypass is back.
+    #[test]
+    fn tee_to_dangerous_path_denies_append_flag_target() {
+        assert_eq!(
+            tee_to_dangerous_path("echo x | tee -a /etc/passwd"),
+            Some("/etc/")
+        );
+    }
+
+    #[test]
+    fn tee_to_dangerous_path_denies_long_append_flag_target() {
+        assert_eq!(
+            tee_to_dangerous_path("echo x | tee --append ~/.ssh/config"),
+            Some("~/.ssh/")
+        );
+    }
+
+    #[test]
+    fn tee_to_dangerous_path_allows_append_flag_safe_target() {
+        assert_eq!(tee_to_dangerous_path("echo x | tee -a /tmp/ok.txt"), None);
     }
 
     #[test]

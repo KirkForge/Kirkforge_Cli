@@ -112,13 +112,13 @@ pub fn load_config() -> (Config, Option<String>) {
     // Layer 1: config file
     let path = super::config_path();
     if let Ok(content) = std::fs::read_to_string(&path) {
-        // Always parse as a TOML table and merge field-by-field into the
-        // default config. This preserves ALL user-set values while filling
-        // missing fields from Default. The previous approach tried
-        // `toml::from_str::<Config>` first, but serde's flatten + default
-        // interaction is broken (known serde issue #2230), so a minimal
-        // config file with only 4 keys would fail to parse and the merge
-        // fallback didn't handle all fields — wiping user values.
+        // Parse as a TOML table and overlay field-by-field onto the
+        // default config (WO 47.2: the overlay serializes the current
+        // config, inserts each key, and decodes back via serde — the
+        // flatten layout routes keys, types values, and fills missing
+        // fields from Default). A minimal or partially-unknown config
+        // file loads with user values preserved; a key with a bad value
+        // type is skipped without touching other fields.
         match content.parse::<toml::Table>() {
             Ok(table) => {
                 merge_toml_into_config(&mut cfg, table);
@@ -1040,6 +1040,102 @@ mod tests {
         );
     }
 
+    /// WO 47.2: the env loader derives config keys from var names, so an
+    /// unknown `KF_CODE_*` var must be a no-op (serde drops the unknown
+    /// key on the overlay decode), never a load failure or a phantom
+    /// field.
+    #[test]
+    fn test_env_unknown_var_is_ignored() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        let _env = set_env("KF_CODE_NO_SUCH_KNOB", Some("42"));
+        apply_env_overrides(&mut cfg);
+        assert!(
+            cfg.model.default_model.is_empty(),
+            "unknown var must not leak into any field"
+        );
+        assert_eq!(cfg.model.request_timeout_secs, 120);
+    }
+
+    /// WO 47.2: derived vars make previously env-less fields settable —
+    /// a `Vec<String>` field takes a comma-separated list. Pin the
+    /// derivation with deny_urls, which had no env var before.
+    #[test]
+    fn test_env_derived_list_var() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        let _env = set_env(
+            "KF_CODE_DENY_URLS",
+            Some("https://a.example, https://b.example"),
+        );
+        apply_env_overrides(&mut cfg);
+        assert_eq!(
+            cfg.security.deny_urls,
+            vec!["https://a.example", "https://b.example"]
+        );
+    }
+
+    /// WO 47.2: `KF_CODE_COMPACTION_USE_HEURISTIC` (new name) wins over
+    /// the legacy `KF_CODE_COMPACTION_USE_LLM` when both are set — the
+    /// precedence must not depend on env iteration order.
+    #[test]
+    fn test_env_compaction_alias_new_name_wins() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        let _legacy = set_env("KF_CODE_COMPACTION_USE_LLM", Some("false"));
+        let _new = set_env("KF_CODE_COMPACTION_USE_HEURISTIC", Some("true"));
+        apply_env_overrides(&mut cfg);
+        assert!(cfg.session.compaction_use_heuristic);
+
+        let mut cfg2 = Config::default();
+        let _legacy_only = set_env("KF_CODE_COMPACTION_USE_HEURISTIC", None);
+        apply_env_overrides(&mut cfg2);
+        assert!(
+            !cfg2.session.compaction_use_heuristic,
+            "legacy var alone still works"
+        );
+    }
+
+    /// WO 47.2: `KF_CODE_SANDBOX_DIR=""` is the documented unsandboxed
+    /// opt-out (matches `sandbox_dir = ""` in the config file and the
+    /// WO 28.1 contract: "Operators who want unsandboxed operation must
+    /// explicitly opt out via ... `KF_CODE_SANDBOX_DIR=\"\"` env var").
+    /// The old hand-parsed loader mapped "" to `None`, which
+    /// `freeze_launch_sandbox` silently re-sandboxed to cwd — the env
+    /// opt-out was broken. It now lands as `Some("")`.
+    #[test]
+    fn test_env_sandbox_dir_empty_is_explicit_opt_out() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        let _env = set_env("KF_CODE_SANDBOX_DIR", Some(""));
+        apply_env_overrides(&mut cfg);
+        assert_eq!(
+            cfg.security.sandbox_dir.as_deref(),
+            Some(""),
+            "empty KF_CODE_SANDBOX_DIR is the documented unsandboxed opt-out"
+        );
+    }
+
+    /// WO 47.2: the env layer overlays nested tables by deep merge — an
+    /// env var for `computer_use.width` must not wipe a file-layer
+    /// `computer_use.headful` (the overlay serializes the current
+    /// config, merges the key in, and decodes back).
+    #[test]
+    fn env_computer_use_merges_with_file_layer() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cfg = Config::default();
+        // simulate the file layer having set headful
+        cfg.security.computer_use.headful = true;
+
+        let _env = set_env("KF_CODE_COMPUTER_USE_WIDTH", Some("1366"));
+        apply_env_overrides(&mut cfg);
+        assert!(
+            cfg.security.computer_use.headful,
+            "file-layer sibling survives"
+        );
+        assert_eq!(cfg.security.computer_use.width, 1366);
+    }
+
     #[test]
     fn first_run_banner_printed_to_stderr() {
         let path = std::path::PathBuf::from("/tmp/kf-code/config.toml");
@@ -1194,22 +1290,19 @@ mod tests {
 
     /// Drift-guard: when a new field is added to any Config sub-struct
     /// (ModelConfig, SecurityConfig, ToolConfig, SessionConfig, DisplayConfig)
-    /// the author must also add it to:
-    ///   1. `merge_toml_into_config`
-    ///   2. `apply_env_overrides`
-    ///   3. this test's TOML table / env-var list
+    /// the author must update `CONFIG_FIELD_COUNT` in `shared::config`.
     ///
-    ///   and update `CONFIG_FIELD_COUNT` in `shared::config`.
-    ///
-    /// If any site is missing the field, the counts below will diverge
-    /// from their expected values and the test will fail.
+    /// WO 47.2: the file/env override layers are a generic serde overlay,
+    /// so a new field is reachable from config.toml and `KF_CODE_<FIELD>`
+    /// automatically — no per-field loader edits, no literal tables here.
+    /// The remaining drift surface is `env_overrides::KEY_MAP` (irregular
+    /// var names): check 2 pins that every KEY_MAP path resolves against
+    /// the serialized config, and check 3 that every env-var literal in
+    /// the loader is accounted for.
     //
     // WO 27.2-R2: un-ignored after recomputing the expected literals.
     // The const itself had drifted (+5 over the real struct count) and
     // the env-var assertion was tautological (`assert_eq!(80, 80)`).
-    // Both corrected: const 103 → 98, env-var count made real, merge
-    // TOML expected bumped 78 → 85 to cover compaction_use_llm,
-    // doom_loop_action, and plugin_trust_workspace.
     #[test]
     fn config_field_count_drift_guard() {
         use crate::shared::config::CONFIG_FIELD_COUNT;
@@ -1225,142 +1318,62 @@ mod tests {
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
-        // ── 2. merge_toml_into_config field coverage ──────────────
-        // Build a TOML table with every key that merge_toml_into_config
-        // processes and count the entries. The number must stay in sync
-        // with the function body.
-        let merge_toml_source = r#"
-            default_model = "x"
-            ollama_host = "x"
-            auto_approve = true
-            sandbox_dir = "x"
-            block_dotfiles = true
-            max_file_read_size = 999
-            request_timeout_secs = 999
-            streaming_timeout_secs = 999
-            follow_symlinks = true
-            block_binary_reads = true
-            minify_write_side = true
-            minify_above_bytes = 999
-            scheduled_bash_auto_approve = true
-            max_concurrent_scheduled_jobs = 999
-            carryover_enabled = true
-            compaction_use_heuristic = true
-            compaction_use_llm = true
-            compaction_drop_threshold = 0.5
-            stem_file_cap = 999
-            shutdown_timeout_secs = 999
-            dry_run = true
-            cache_enabled = true
-            cache_dir = "x"
-            bang_requires_approval = true
-            json_mode = true
-            extended_thinking = true
-            budget_tokens = 999
-            max_tokens = 999
-            bash_sandbox_workdir = true
-            bash_require_allowlist = true
-            bash_allowlist = ["ls", "echo"]
-            block_gitignored_dotfiles = true
-            max_overwrite_size = 999
-            summarize_model = "x"
-            routing_enabled = true
-            router_model = "x"
-            commit_max_file_size = 999
-            preserve_recent_messages = 999
-            max_tool_calls_per_turn = 999
-            max_persona_turns = 999
-            max_continuation_rounds = 5
-            max_background_tasks = 4
-            task_concurrency_mode = "queue"
-            doom_loop_max_hits = 3
-            doom_loop_action = "x"
-            load_project_mcp_json = false
-            plugin_consent_ledger = true
-            tool_timeout_secs = 999
-            audit_log_path = "x"
-            diff_review = false
-            hooks_dir = "x"
-            reject_on_excess_plugin_trust = true
-            plugin_signature_validation = true
-            plugin_trust_workspace = true
-            plugin_public_key_path = "x"
-            memory_enabled = true
-            memory_max_tokens = 999
-            memory_top_n = 999
-            memory_auto_populate = true
-            memory_show_in_status = true
-            theme = "x"
-            mouse_enabled = true
-            checkpoint_interval_messages = 999
-            anthropic_provider = "x"
-            anthropic_api_base = "x"
-            aws_region = "x"
-            gcp_project_id = "x"
-            gcp_region = "x"
-            gcp_service_account_path = "x"
-            anthropic_api_key = "x"
-            openai_api_key = "x"
-            deepseek_api_key = "x"
-            gemini_api_key = "x"
-            kimi_api_key = "x"
-            deny_paths = ["/x"]
-            deny_urls = ["x"]
-            deny_extensions = [".x"]
-            allowed_write_dirs = ["/x"]
-            landlock_extra_paths = ["/x"]
-            plugin_allowed_env_vars = ["x"]
-            plugin_sources = { x = "/x" }
-            enabled_plugins = ["x"]
-            disabled_plugins = ["x"]
-            routing_model_map = { x = "x" }
-            adapter_routing = { x = "x" }
-
-            [computer_use]
-            enabled = true
-            chrome_path = "x"
-            headful = true
-            width = 999
-            height = 999
-            startup_timeout_secs = 999
-            wait_timeout_secs = 999
-            hosted = true
-
-            [subagent_provider]
-            model = "x"
-            ollama_host = "x"
-            anthropic_api_key = "x"
-            openai_api_key = "x"
-            deepseek_api_key = "x"
-            gemini_api_key = "x"
-            kimi_api_key = "x"
-        "#;
-
-        let table: toml::Table = merge_toml_source.parse().unwrap();
-        let mut toml_key_count: usize = 0;
-        for (_key, value) in &table {
-            if let Some(sub) = value.as_table() {
-                toml_key_count += sub.len();
-            } else {
-                toml_key_count += 1;
+        // ── 2. KEY_MAP path integrity ─────────────────────────────
+        // WO 47.2: the file and env layers are a generic serde overlay
+        // (merge.rs + env_overrides.rs), so every Config field is
+        // reachable from both layers by construction — the TOML/env
+        // literal-count tripwires this test used to carry are gone.
+        // What CAN drift now is KEY_MAP (the env vars whose config key
+        // isn't derivable from the var name): every intermediate path
+        // segment must resolve to a table in the serialized default
+        // config, and every leaf must be a known key — present in the
+        // serialized form, or an Option that serializes to nothing
+        // (tracked in ABSENT_KEY_MAP_LEAVES).
+        let serialized =
+            toml::Value::try_from(Config::default()).expect("serialize default config");
+        let serialized_table = serialized.as_table().expect("flat top-level table");
+        const ABSENT_KEY_MAP_LEAVES: &[&str] = &[
+            "computer_use.chrome_path",
+            "subagent_provider.model",
+            "subagent_provider.ollama_host",
+            "subagent_provider.anthropic_api_key",
+            "subagent_provider.openai_api_key",
+            "subagent_provider.deepseek_api_key",
+            "subagent_provider.gemini_api_key",
+            "subagent_provider.kimi_api_key",
+            "anthropic_api_key",
+            "openai_api_key",
+            "deepseek_api_key",
+            "gemini_api_key",
+            "kimi_api_key",
+        ];
+        for (_, key) in env_overrides::KEY_MAP {
+            let mut node = serialized_table;
+            let mut segments = key.split('.');
+            let last = segments.next_back().unwrap();
+            for seg in segments {
+                node = node
+                    .get(seg)
+                    .and_then(|v| v.as_table())
+                    .unwrap_or_else(|| panic!("KEY_MAP path {key}: segment {seg} is not a table"));
             }
+            assert!(
+                node.contains_key(last) || ABSENT_KEY_MAP_LEAVES.contains(key),
+                "KEY_MAP leaf {key} is not a serialized config key — typo, or a new \
+                 Option leaf that must be tracked in ABSENT_KEY_MAP_LEAVES"
+            );
         }
-        // 70 top-level leaf keys + 9 array keys + 3 single-key inline
-        // tables + 8 computer_use sub-keys + 7 subagent_provider sub-keys = 97
-        // WO 39.2: +1 (load_project_mcp_json) = 98
-        // WO 43.17: +1 (plugin_consent_ledger) = 99
-        // WO 44.22: +1 (anthropic_api_base) = 100
-        const MERGE_TOML_EXPECTED: usize = 100;
-        assert_eq!(
-            toml_key_count, MERGE_TOML_EXPECTED,
-            "merge_toml_into_config key count changed — did you add/remove a handled field?"
-        );
 
-        // ── 3. apply_env_overrides field coverage ─────────────────
-        // Count env-var read calls (direct std::env::var + env_bool!
-        // macro invocations) in env_overrides.rs. This must stay in
-        // sync with the function body. WO 27.2-R2: replaced the
-        // tautological `assert_eq!(80, 80)` with a real source scan.
+        // ── 3. env_overrides literal tripwire ─────────────────────
+        // Every env-var string literal in env_overrides.rs must be
+        // accounted for: KEY_MAP entries (19 KF_CODE_* + 5 provider
+        // keys) + the prefix strip (1) + the compaction fixup (1) +
+        // the three post-block vars (exclusion in config_key + the
+        // post-block reads = 6) + the custom-value path-field arm (7)
+        // + colon lists (2) + the compaction legacy alias (1) =
+        // KEY_MAP + 18 KF_CODE_* literals. Bumping this number means
+        // env coverage changed — do it deliberately and document why
+        // in the WO.
         let env_overrides_src = include_str!("env_overrides.rs");
         let env_var_count = env_overrides_src.matches("\"KF_CODE_").count()
             + env_overrides_src.matches("\"ANTHROPIC_API_KEY\"").count()
@@ -1368,50 +1381,23 @@ mod tests {
             + env_overrides_src.matches("\"DEEPSEEK_API_KEY\"").count()
             + env_overrides_src.matches("\"GEMINI_API_KEY\"").count()
             + env_overrides_src.matches("\"KIMI_API_KEY\"").count();
-        // 88 KF_CODE_* literals (77 base + 7 KF_CODE_SUBAGENT_* + 2 bash
-        // allowlist + 1 streaming_timeout_secs + 1 computer_use_hosted)
-        // + 5 API-key literals = 93
-        // WO 39.2: +1 (KF_CODE_LOAD_PROJECT_MCP_JSON) = 94
-        // WO 43.17: +1 (KF_CODE_PLUGIN_CONSENT_LEDGER) = 95
-        // WO 44.22: +1 (KF_CODE_ANTHROPIC_API_BASE) = 96
-        const ENV_OVERRIDE_EXPECTED: usize = 96;
+        let key_map_kf_count = env_overrides::KEY_MAP
+            .iter()
+            .filter(|(v, _)| v.starts_with("KF_CODE_"))
+            .count();
         assert_eq!(
-            env_var_count, ENV_OVERRIDE_EXPECTED,
-            "apply_env_overrides env-var count changed — did you add/remove a KF_CODE_* var?"
+            env_var_count,
+            key_map_kf_count + 18 + 5,
+            "apply_env_overrides env-var literal count changed — did you add/remove a KF_CODE_* var?"
         );
 
         // ── 4. Relationship to total field count ──────────────────
-        // When CONFIG_FIELD_COUNT changes, verify that the difference
-        // between it and the TOML/env counts is still intentional.
-        // merge_toml expands sub-structs (e.g. computer_use has 7 sub-keys)
-        // and skips some struct fields entirely, so the gap is NOT simply
-        // CONFIG_FIELD_COUNT - MERGE_TOML_EXPECTED. The important invariant
-        // is: every struct field is EITHER handled by merge_toml OR
-        // intentionally skipped. The same applies to apply_env_overrides.
-        //
-        // Intentionally skipped by merge_toml (14 struct-level fields):
-        //   ModelConfig:  summarize_enabled, subagent_allowed_models,
-        //                 opencode_zen_api_key, opencode_zen_endpoint, seed
-        //   SecurityConfig: permission_rules, docker (4 sub-fields),
-        //                   sandbox (4 sub-fields), computer_use.max_steps
-        //   ToolConfig:  max_tool_result_chars,
-        //                mcp_servers, lsp_servers, max_plugin_trust,
-        //                stratum_mode, budget_ceiling, budget_approaching_ratio
-        //   SessionConfig: artifact_policy
-        //
-        // Additionally skipped by apply_env_overrides (4 more, beyond the 15):
-        //   SecurityConfig: deny_paths, deny_urls, deny_extensions,
-        //                   allowed_write_dirs
-        //   (Arrays/Vec fields without env-var representations.)
-        //
-        // The expansion of computer_use (1 struct field → 7 TOML keys)
-        // means MERGE_TOML_EXPECTED = top-level leaf keys + 7 expansion
-        // keys.
-        let _ = (
-            CONFIG_FIELD_COUNT,
-            MERGE_TOML_EXPECTED,
-            ENV_OVERRIDE_EXPECTED,
-        );
+        // Derived vars (name → key by stripping the prefix) reach every
+        // field automatically; KEY_MAP only covers irregular names, so
+        // its size is no longer coupled to CONFIG_FIELD_COUNT. The
+        // invariants that remain: every KEY_MAP path resolves (check 2)
+        // and every env-var literal in the loader is accounted for
+        // (check 3).
 
         // ── 5. Serde field count vs CONFIG_FIELD_COUNT ──────────
         // Serialize a default Config to JSON and count top-level keys.

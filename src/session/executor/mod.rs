@@ -927,19 +927,10 @@ impl Executor {
             }
         }
 
-        // Register plugin verifiers (Phase 2.4).
-        if let Some(registry) = plugin_registry {
-            let plugin_verifiers =
-                crate::session::verifier::plugin::verifiers_from_registry(registry);
-            {
-                let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-                for v in plugin_verifiers {
-                    if s.register(v).is_ok() {
-                        count += 1;
-                    }
-                }
-            }
-        }
+        // WO 47.14: plugin verifiers register ONLY into the VerifierBus
+        // below — the legacy dual registration into VerifierSlots (which
+        // made every plugin verifier run twice per file-modifying tool
+        // call) is deleted.
 
         let handler = Arc::new(VerifierHandler::new(slots, self.sandbox.path_guard.clone()));
         self.correction_loop = Some(CorrectionLoop::new(handler));
@@ -968,50 +959,6 @@ impl Executor {
                 0
             }
         }
-    }
-
-    /// Re-register plugin verifiers from a fresh registry while keeping the
-    /// built-in verifier slots intact.
-    ///
-    /// Returns the number of plugin verifiers now registered.
-    fn rebuild_plugin_verifiers(&mut self, registry: &kf_plugin_host::PluginRegistry) -> usize {
-        const BUILTIN_VERIFIERS: &[&str] = &[
-            "security",
-            "lint",
-            "build",
-            "git",
-            "rustfmt",
-            "test",
-            "python_test",
-            "python_lint",
-            "python_typecheck",
-            // WO 32.20 Node/Go/generic built-ins. Must stay in sync with
-            // init_default_verifiers or reload drops them silently (WO 44.29).
-            "node_test",
-            "node_lint",
-            "go_test",
-            "go_vet",
-            "generic_test",
-        ];
-
-        let Some(ref correction_loop) = self.correction_loop else {
-            return 0;
-        };
-        let handler = correction_loop.verifier_handler();
-        let slots = handler.slots();
-        let plugin_verifiers = crate::session::verifier::plugin::verifiers_from_registry(registry);
-
-        let mut new_count = 0;
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            s.retain(|v| BUILTIN_VERIFIERS.contains(&v.name()));
-            for v in plugin_verifiers {
-                if s.register(v).is_ok() {
-                    new_count += 1;
-                }
-            }
-        }
-        new_count
     }
 
     /// Reload the plugin layer: tools, hooks, and verifiers.
@@ -1088,13 +1035,12 @@ impl Executor {
         }
         self.hook_runner = hook_runner;
 
-        // 3. Rebuild plugin verifiers while keeping built-in verifiers.
-        let plugin_verifier_count = self.rebuild_plugin_verifiers(registry);
-
-        // 4. Rebuild plugin verifiers on the unified bus (ADR-028): drop
-        // old plugin verifiers, keep built-in stub verifiers, re-add from
-        // the fresh registry.
-        self.rebuild_bus_plugin_verifiers(registry);
+        // 3. Rebuild plugin verifiers on the unified bus (ADR-028; the
+        // sole plugin-verifier path since WO 47.14): drop old plugin
+        // verifiers, keep built-in bus verifiers, re-add from the fresh
+        // registry. The event-driven slots hold only built-ins and need
+        // no rebuild.
+        let plugin_verifier_count = self.rebuild_bus_plugin_verifiers(registry);
 
         format!(
             "Reloaded plugins: {} active plugin(s), {} plugin tool(s), {} plugin verifier(s)",
@@ -1105,8 +1051,8 @@ impl Executor {
     }
 
     /// Re-register plugin verifiers on the `VerifierBus` while keeping the
-    /// built-in bus verifiers (`security`, `git`) intact. Mirrors
-    /// `rebuild_plugin_verifiers` for the event-driven path. ADR-028.
+    /// built-in bus verifiers (`security`, `git`) intact. The sole
+    /// plugin-verifier reload path since WO 47.14. ADR-028.
     fn rebuild_bus_plugin_verifiers(&mut self, registry: &kf_plugin_host::PluginRegistry) -> usize {
         const BUILTIN_BUS_VERIFIERS: &[&str] = &["security", "git"];
         let Some(ref bus_lock) = self.verifier_bus else {

@@ -97,15 +97,17 @@ async fn write_file_event_is_non_conflicting_across_both_verifier_paths() {
     // `Verdict::Clean` and the bus path returns zero error verdicts.
 }
 
-// WO 44.29: `rebuild_plugin_verifiers` retains built-ins via a hand-maintained
-// allowlist (`BUILTIN_VERIFIERS`). WO 32.20 added 5 verifier registrations to
-// `init_default_verifiers` but never extended the list, so the first `/plugins`
-// reload silently dropped node_test/node_lint/go_test/go_vet/generic_test.
-// This test registers the full default set on a fresh executor, runs a reload
-// with an empty plugin registry, and asserts every built-in survived — so the
-// next added verifier fails here instead of silently regressing.
+// WO 44.29 heritage (reworked for WO 47.14): plugin verifiers no longer
+// register into `VerifierSlots` at all, so the old hazard — reload pruning
+// built-ins via a hand-maintained `BUILTIN_VERIFIERS` allowlist — is
+// structurally gone (the allowlist and `rebuild_plugin_verifiers` were
+// deleted with the dual registration). What must still hold: a `/plugins`
+// reload leaves every built-in event-driven verifier registered. This test
+// registers the full default set on a fresh executor, runs a reload with an
+// empty plugin registry, and asserts the slots are untouched — so the next
+// added verifier fails here instead of silently regressing.
 #[tokio::test]
-async fn rebuild_plugin_verifiers_keeps_every_built_in() {
+async fn reload_plugins_keeps_every_built_in_verifier() {
     use super::common::{make_config, make_executor, make_info, MockAdapter};
     use crate::shared::{FinishReason, StreamEvent};
 
@@ -131,11 +133,11 @@ async fn rebuild_plugin_verifiers_keeps_every_built_in() {
         .unwrap_or_else(|e| e.into_inner())
         .names();
 
-    // Reload with an empty registry: no plugin verifiers, but every built-in
-    // must survive the retain.
+    // Reload with an empty registry: no plugin verifiers anywhere (WO
+    // 47.14: plugins register only on the bus), and every built-in must
+    // survive in the slots.
     let empty_registry = kf_plugin_host::PluginRegistry::new();
-    let plugin_added = executor.rebuild_plugin_verifiers(&empty_registry);
-    assert_eq!(plugin_added, 0, "empty registry adds no plugin verifiers");
+    executor.reload_plugins(&empty_registry);
 
     let after = executor
         .correction_loop
@@ -149,8 +151,7 @@ async fn rebuild_plugin_verifiers_keeps_every_built_in() {
 
     assert_eq!(
         after, before,
-        "rebuild_plugin_verifiers dropped a built-in: before={before:?} after={after:?}.\n\
-         BUILTIN_VERIFIERS is out of sync with init_default_verifiers — add the missing name."
+        "reload_plugins dropped a built-in: before={before:?} after={after:?}"
     );
 
     // Explicit belt-and-braces: the WO 32.20 five must be present. If this
@@ -174,7 +175,7 @@ async fn rebuild_plugin_verifiers_keeps_every_built_in() {
     ] {
         assert!(
             after.iter().any(|n| n == required),
-            "built-in `{required}` missing after rebuild_plugin_verifiers; after={after:?}"
+            "built-in `{required}` missing after reload_plugins; after={after:?}"
         );
     }
 }

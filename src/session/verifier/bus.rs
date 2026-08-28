@@ -7,7 +7,7 @@
 //! file-modifying tool calls; error verdicts are injected into the
 //! conversation so the model sees them immediately.
 //!
-//! ## Why two verifier traits?
+//! ## Why two verifier traits? (WO 47.14: unification in progress)
 //!
 //! The `Verifier` trait (in `types.rs`) is async and event-driven: verifiers
 //! receive a `BusEvent` and can do async I/O (run `cargo build`, spawn
@@ -18,11 +18,15 @@
 //! `VerdictEntry`s synchronously. It powers the structured verdict report
 //! (WO 11.7) and plugin verifiers that run via subprocess exit codes.
 //!
-//! Plugin verifiers use `BusVerifier` (via `PluginBusVerifier`) because the
-//! plugin host's `PluginVerifier` is synchronous (exit-code based). Migrating
-//! plugin verifiers to the async `Verifier` trait would require making the
-//! plugin host async or spawning blocking tasks — a larger change that's not
-//! justified today. Both traits serve different execution models.
+//! WO 47.14 designates `BusVerifier` the surviving trait of the eventual
+//! unification; consumers of the event-driven `Verifier` trait migrate one
+//! at a time. Migrated so far: plugin verifiers (the legacy async
+//! `PluginVerifierAdapter` is deleted — they register here exclusively and
+//! no longer run twice per file-modifying tool call). Still on the
+//! event-driven path: the 14 built-in language/toolchain verifiers and the
+//! `VerifierHandler`/`CorrectionLoop` pipeline (they need the event payload,
+//! fix suggestions, and bounded async concurrency — see the WO 47.14
+//! remaining-work ledger before extending this trait).
 
 use kf_plugin_host::PluginVerifier;
 use std::collections::HashMap;
@@ -254,8 +258,9 @@ impl Default for VerifierBus {
 /// command with a curated (env-cleared) environment: exit 0 means pass,
 /// any non-zero exit fails with stderr as the message. This is the same
 /// subprocess convention used by `PluginToolWrapper` for plugin tools.
-/// ADR-028: plugin verifiers register into the unified bus rather than
-/// only the old event-driven `Verifier` trait path.
+/// ADR-028: plugin verifiers register into the unified bus — since WO
+/// 47.14 this is their sole integration path (the event-driven
+/// `Verifier`-trait adapter was the second, deleted).
 pub struct PluginBusVerifier {
     inner: PluginVerifier,
     priority: u8,
@@ -267,16 +272,15 @@ impl BusVerifier for PluginBusVerifier {
     }
 
     fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
-        // `ceiling:` env-var contract divergence (bucketlist 3.30). This
-        // bus path passes `KF_CHANGED_FILES` (newline-separated list from
-        // `VerifyContext`), while the legacy event-driven path
-        // (`PluginVerifierAdapter` in `plugin.rs`) passes `KF_EVENT_KIND`
-        // + `KF_EVENT_JSON` (the full serialized `BusEvent`). The two
-        // paths intentionally serve different shapes: the bus verifier is
-        // sync and context-based (a file list), the event-driven verifier
-        // is async and event-based (the full event payload). Unifying the
-        // env-var contract would change the behaviour plugin verifier
-        // scripts depend on; the divergence is documented, not closed.
+        // Env-var contract (bucketlist 3.30; single path since WO 47.14
+        // deleted the event-driven `PluginVerifierAdapter`): this bus path
+        // passes `KF_VERIFIER_NAME` + `KF_CHANGED_FILES` (newline-separated
+        // list from `VerifyContext`). The retired adapter additionally
+        // passed `KF_EVENT_KIND` + `KF_EVENT_JSON` (the full serialized
+        // `BusEvent`) and also fired on read/bash events — plugin scripts
+        // depending on those vars must read `KF_CHANGED_FILES` instead;
+        // restoring event visibility requires extending `VerifyContext`
+        // (tracked in WO 47.14 remaining work).
         let mut env = HashMap::new();
         env.insert("KF_VERIFIER_NAME".to_string(), self.inner.name.clone());
         env.insert(
@@ -780,6 +784,7 @@ mod tests {
         assert!(bus.has_errors());
     }
 
+    #[cfg(unix)]
     #[test]
     fn add_plugin_verifier_missing_command_yields_error_verdict() {
         let mut bus = VerifierBus::new();
@@ -793,6 +798,42 @@ mod tests {
         assert_eq!(bus.verdicts().len(), 1);
         assert_eq!(bus.verdicts()[0].severity, Severity::Error);
         assert!(bus.has_errors());
+    }
+
+    // Ported from the deleted event-driven `PluginVerifierAdapter` (WO
+    // 47.14): a plugin verifier must not inherit sensitive session
+    // variables such as API keys. The host crate env_clear()s before
+    // overlaying the curated allowlist + the KF_* variables — this pins
+    // that contract on the now-sole bus path.
+    #[cfg(unix)]
+    #[test]
+    fn add_plugin_verifier_does_not_leak_session_env() {
+        use crate::shared::test_util::EnvGuard;
+        let tmp = tempfile::tempdir().unwrap();
+        let script = tmp.path().join("envleak.sh");
+        std::fs::write(&script, "#!/bin/sh\necho \"$OPENAI_API_KEY\" >&2\nexit 1\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let _env = EnvGuard::set("OPENAI_API_KEY", "sk-leaked-secret");
+        let mut bus = VerifierBus::new();
+        bus.add_plugin_verifier(
+            "envleak".into(),
+            1,
+            tmp.path().to_path_buf(),
+            PathBuf::from("envleak.sh"),
+        );
+        bus.run(&make_verify_ctx());
+        assert_eq!(bus.verdicts().len(), 1);
+        let v = &bus.verdicts()[0];
+        assert_eq!(v.severity, Severity::Error);
+        assert!(
+            !v.message.contains("sk-leaked-secret"),
+            "session env leaked into plugin verifier stderr: {}",
+            v.message
+        );
     }
 
     // ── WO 29.2: TsOrchestratorBridgeVerifier delegates to the Rust emitter ──

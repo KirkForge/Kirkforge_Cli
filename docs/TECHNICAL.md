@@ -797,7 +797,9 @@ but cannot shut down the daemon.
 ## Verification
 
 Verification is first-class. Two coexisting verifier designs serve different
-needs (intentionally not unified, per AGENTS.md):
+needs (unification in progress per WO 47.14 — `BusVerifier` is the
+designated survivor; consumers of the event-driven `Verifier` trait migrate
+one at a time):
 
 ### Event-driven `Verifier` trait
 
@@ -813,8 +815,7 @@ pub trait Verifier: Send + Sync {
 `Verdict` is `Clean`, `Fixable(FixSuggestion)`, `Unfixable(VerificationError)`,
 or `Skipped`. Built-in verifiers: `build` (cargo build on edited files),
 `lint` (clippy), `rustfmt`, `test` (targeted tests for edited files), `git`
-(git-state validation), `security` (dangerous-pattern scan), `plugin` (verifiers
-declared by plugins). WO 31.1+31.4 added Python self-gating verifiers —
+(git-state validation), `security` (dangerous-pattern scan). WO 31.1+31.4 added Python self-gating verifiers —
 `python_test` (pytest), `python_lint` (ruff/flake8), `python_typecheck` (mypy,
 fires only when configured) — alongside the Rust ones. WO 32.20 added
 Node/Go/Generic verifiers following the same pattern: `node_test` (npm test /
@@ -852,17 +853,24 @@ Each plugin verifier runs through the host crate's env-cleared
 is tagged `VerifierSource::Plugin(name)`. The executor's
 `emit_tool_event_and_correct` converts each `Severity::Error` verdict into a
 `CorrectionResult`, so a single correction path handles built-in and plugin
-verdicts. The legacy event-driven `PluginVerifierAdapter` path is retained
-for backward compatibility. The cross-language NDJSON wire bridge from WO
+verdicts. WO 47.14 retired the legacy event-driven `PluginVerifierAdapter`
+(it dual-registered every plugin verifier into `VerifierSlots`, so each ran
+twice per file-modifying tool call): the bus is the sole plugin-verifier
+integration path, and plugin verifiers see `KF_CHANGED_FILES` (not the
+adapter's retired `KF_EVENT_KIND`/`KF_EVENT_JSON`) and run only after
+file-modifying tool calls. The cross-language NDJSON wire bridge from WO
 10.8 (a Node `bridge-emitter.ts` subprocess) is **retired as of WO 29.2**:
 the 14 regex security rules now live in Rust
 (`src/session/verifier/security_emitter.rs`) and the
 `TsOrchestratorBridgeVerifier` is a thin `BusVerifier` wrapper that calls
 `security_emitter::emit_security_findings(&changed_files)` directly — no
-subprocess, no NDJSON round-trip. This was the last Rust→TS call path. The
-Rust `VerifierBus` is authoritative: built-in verifiers register directly,
-plugin verifiers register via `register_plugin_verifiers_into_bus`, and the
-security scan registers via the `TsOrchestratorBridgeVerifier` wrapper.
+subprocess, no NDJSON round-trip. This was the last Rust→TS call path. In
+production the `VerifierBus` starts empty and holds only what the executor
+explicitly registers: plugin verifiers via `register_plugin_verifiers_into_bus`.
+The `TsOrchestratorBridgeVerifier` wrapper currently has no production
+registration site (bus.rs defines + tests it); it is the intended landing
+spot when the built-in verifiers migrate onto the bus (WO 47.14 remaining
+work).
 
 The `kf-orchestrator` crate (library, cannot depend on the binary) has its
 own crate-local verify cycle (WO 32.19 R7): `run_correction_loop` scans the

@@ -6,6 +6,9 @@ pub mod adapter_swap;
 pub mod agents;
 pub mod bash_jobs;
 pub mod bash_runner;
+// devtools-gated (WO 47.5): session bench harness (drives the Executor
+// against TOML bench tasks) — only compiled with --features devtools.
+#[cfg(feature = "devtools")]
 pub mod bench;
 pub mod carryover;
 pub mod config;

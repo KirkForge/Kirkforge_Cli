@@ -16,7 +16,11 @@
 mod chrome_launcher;
 mod cli_dispatch;
 mod error;
+// devtools-gated (WO 47.5): bench + doctor handlers only compile with
+// --features devtools; the subcommands don't exist in default builds.
+#[cfg(feature = "devtools")]
 mod handle_bench;
+#[cfg(feature = "devtools")]
 mod handle_doctor;
 mod handle_plugin;
 mod handle_replay;

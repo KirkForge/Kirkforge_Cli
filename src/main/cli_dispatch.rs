@@ -7,7 +7,10 @@ use std::path::PathBuf;
 use tracing_subscriber::prelude::*;
 
 use super::error::KirkForgeError;
+// devtools-gated handlers (WO 47.5).
+#[cfg(feature = "devtools")]
 use super::handle_bench::handle_bench_command;
+#[cfg(feature = "devtools")]
 use super::handle_doctor::handle_doctor_command;
 use super::handle_plugin::handle_plugin_command;
 use super::handle_replay::handle_replay_command;
@@ -231,8 +234,12 @@ pub async fn main() {
             to,
             interactive,
         } => handle_replay_command(id, data_dir, turn, from, to, interactive),
+        // devtools-gated subcommands (WO 47.5) — variants only exist when
+        // the binary is built with --features devtools.
+        #[cfg(feature = "devtools")]
         Command::Bench { command } => handle_bench_command(command).await,
         Command::Plugin { command } => handle_plugin_command(command),
+        #[cfg(feature = "devtools")]
         Command::Doctor { command } => handle_doctor_command(command),
         Command::Update { check } => handle_update_command(check).await,
     }

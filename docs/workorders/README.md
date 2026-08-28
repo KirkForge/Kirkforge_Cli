@@ -1003,7 +1003,7 @@ tree, ~11 stale claims corrected in-line. See
 | 47.2 | [Generic env-override loader (91 hand-parsed KF_* vars in 4 layers)](47.2-generic-env-loader.md) | Planned |
 | 47.3 | [Delete the dead JWT/JWKS half of kf-rbac (keep the live RBAC core)](47.3-delete-kf-rbac.md) | Done |
 | 47.4 | [Fold kf-routing + kf-memory-store into kf-orchestrator (0 direct src/ refs)](47.4-fold-routing-memory-crates.md) | Done |
-| 47.5 | [Feature-gate bench + testdoctor out of the default binary (~5K lines)](47.5-devtools-out-of-binary.md) | Planned |
+| 47.5 | [Feature-gate bench + testdoctor out of the default binary (~5K lines)](47.5-devtools-out-of-binary.md) | Done |
 | 47.6 | [Six live compression layers → two (stratum modes should map to 2 pipelines)](47.6-compression-layers-6-to-2.md) | Planned |
 | 47.7 | [# WO 47.6 — MCP transport trait (every op exists 3×: enum + stdio_* + http)](47.7-mcp-transport-trait.md) | Planned |
 | 47.8 | [Wire or delete the 9 fuzz targets (100% unwired dead weight)](47.8-wire-or-delete-fuzz-targets.md) | Planned |

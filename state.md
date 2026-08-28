@@ -33,6 +33,24 @@
   session::executor::tests 104/104, shared::access 69/69, fmt — all
   green. Full suite + Windows cross gate owed to CI before merge.
   [48.16](docs/workorders/48.16-mark-read-on-failed-read.md)
+- **WO 48.17 (2026-08-28, branch `wo48.17`, not merged)**: `notebook_edit`
+  brought inside the file-tool pipeline — added to the pre_run file-tool
+  list (Phase-1 `check_write` + resolved-path substitution into pre-tool
+  hook args), Phase-2.5 sequential deferral (with the symlink-swap walk),
+  the read-before-edit gate (unconditional, like edit_file — a notebook
+  edit only ever modifies an existing file), `should_audit` + its
+  dispatch AccessDenied mirror, and the `is_destructive` approval list
+  (now asks like edit_file unless auto-approve). Phase-3 record arm
+  recognizes it too. Behavior change disclosed in the WO: notebook_edit
+  previously ran with NO approval gate. Audit finding left for a future
+  WO: `check_write` returns the raw literal as "resolved" for ALL write
+  tools (reads canonicalize), so the WO 38.1 body-opens-resolved-path
+  contract is only fully realized for reads; fixing it changes
+  write_file/edit_file behavior and needs its own WO. FAST GATES ONLY
+  per owner directive (workspace check --all-targets, clippy -p kf-code,
+  fmt, dispatch 22/22 + hooks 46/46 + notebook_edit 21/21; detect_changes
+  low, 2 symbols).
+  [48.17](docs/workorders/48.17-notebook-edit-outside-file-tool-pipeline.md)
 - **WO 48.9 (2026-08-28, branch `wo48.9`, not merged)**: `--no-default-features`
   build fixed — 3 un-gated `kf_budget_core::estimate_tokens` refs (ADR-0017
   documents the minimal build as supported). cfg gate now lives in ONE choke

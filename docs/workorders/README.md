@@ -142,6 +142,20 @@ Only the two most recent series are kept live.
 | 48.15 | [collect_batch pattern-matches body-produced AccessDenied as gate denial — skips record_tool_result](48.15-collect-batch-denial-classification.md) | Done |
 | 48.16 | [mark_read runs with no outcome check — failed reads satisfy the read-before-edit gate](48.16-mark-read-on-failed-read.md) | Done |
 | 48.17 | [notebook_edit ships but is absent from pre_run file-tool list, symlink walk, and audit](48.17-notebook-edit-outside-file-tool-pipeline.md) | Planned |
+| 48.11 | [minify_shell drops heredoc body lines starting # — disk write-back deletes them](48.11-minify-shell-heredoc-corruption.md) | Planned |
+| 48.12 | [minify_js_like truncates at // inside regex literals — js/ts corruption on the disk write-back chain](48.12-minify-js-regex-literal-corruption.md) | Planned |
+| 48.13 | [minify ruby: same heredoc/# string blindness family](48.13-minify-ruby-heredoc-and-comment-blindness.md) | Planned |
+| 48.14 | [Startup picker gate misses can_run_tui conditions — headless runs crash (os error 6)](48.14-startup-picker-launches-where-tui-impossible.md) | Planned |
+| 48.15 | [collect_batch pattern-matches body-produced AccessDenied as gate denial — skips record_tool_result](48.15-collect-batch-denial-classification.md) | Planned |
+| 48.16 | [mark_read runs with no outcome check — failed reads satisfy the read-before-edit gate](48.16-mark-read-on-failed-read.md) | Planned |
+| 48.17 | [notebook_edit ships but is absent from pre_run file-tool list, symlink walk, and audit](48.17-notebook-edit-outside-file-tool-pipeline.md) | Planned |
+| 48.11 | [minify_shell drops heredoc body lines starting # — disk write-back deletes them](48.11-minify-shell-heredoc-corruption.md) | Planned |
+| 48.12 | [minify_js_like truncates at // inside regex literals — js/ts corruption on the disk write-back chain](48.12-minify-js-regex-literal-corruption.md) | Planned |
+| 48.13 | [minify ruby: same heredoc/# string blindness family](48.13-minify-ruby-heredoc-and-comment-blindness.md) | Planned |
+| 48.14 | [Startup picker gate misses can_run_tui conditions — headless runs crash (os error 6)](48.14-startup-picker-launches-where-tui-impossible.md) | Planned |
+| 48.15 | [collect_batch pattern-matches body-produced AccessDenied as gate denial — skips record_tool_result](48.15-collect-batch-denial-classification.md) | Planned |
+| 48.16 | [mark_read runs with no outcome check — failed reads satisfy the read-before-edit gate](48.16-mark-read-on-failed-read.md) | Planned |
+| 48.17 | [notebook_edit ships but is absent from pre_run file-tool list, symlink walk, and audit](48.17-notebook-edit-outside-file-tool-pipeline.md) | Done |
 | 48.18 | [reload_config never re-pushes set_response_format — hot-reload with json_mode=false now DELETES a live response format](48.18-reload-config-response-format-regression.md) | Planned |
 | 48.19 | [normalize_for_safety mid-word # truncation + permission deny-glob case mismatch](48.19-normalize-hash-and-case-gaps.md) | Planned |
 | 48.20 | [Every non-nav key leaks through the open picker modal — 48.4 fixed k/j only](48.20-picker-non-nav-key-leak.md) | Planned |

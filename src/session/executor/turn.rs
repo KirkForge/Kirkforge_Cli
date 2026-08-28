@@ -599,13 +599,13 @@ impl Executor {
     ) -> anyhow::Result<()> {
         let should_audit = matches!(
             tc.name.as_str(),
-            "write_file" | "edit_file" | "bash" | "read_file"
+            "write_file" | "edit_file" | "notebook_edit" | "bash" | "read_file"
         );
         let max_tool_result_chars = read_shared_config(&self.config).tools.max_tool_result_chars;
 
         if matches!(
             tc.name.as_str(),
-            "read_file" | "read_image" | "write_file" | "edit_file"
+            "read_file" | "read_image" | "write_file" | "edit_file" | "notebook_edit"
         ) {
             // Phase 1 already resolved and sandbox-checked the path; reuse
             // that verdict here. Falling back to a fresh check only happens
@@ -675,7 +675,9 @@ impl Executor {
             // Only the defensive fallback (no resolved path carried in,
             // i.e. direct record calls outside the batch flow) re-checks.
             let needs_read_gate = resolved_path.is_none()
-                && (tc.name == "edit_file" || (tc.name == "write_file" && path.exists()));
+                && (tc.name == "edit_file"
+                    || tc.name == "notebook_edit"
+                    || (tc.name == "write_file" && path.exists()));
             if needs_read_gate {
                 if let GuardVerdict::Denied(msg) = self.sandbox.check_edit(path, &resolved) {
                     let denied = format!("🔒 Access denied: {msg}");

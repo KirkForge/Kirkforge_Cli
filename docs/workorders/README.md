@@ -131,5 +131,5 @@ Only the two most recent series are kept live.
 | 48.6 | [set_json_mode(false) never clears response_format — hot-reload keeps json_object forever; Anthropic arm never worked](48.6-json-mode-toggle-never-clears.md) | Done |
 | 48.7 | [tee -a bypasses the tee dangerous-path gate (gate only checks the token right after 'tee')](48.7-tee-append-gate-bypass.md) | Planned |
 | 48.8 | [minify VFS cache ignores preserve_tests on read — test-stripped entries served to the every-turn stem](48.8-minify-cache-ignores-preserve-tests.md) | Planned |
-| 48.9 | [--no-default-features build broken — 3 un-gated kf_budget_core refs (ADR-0017 documents this build as supported)](48.9-no-default-features-broken.md) | Planned |
+| 48.9 | [--no-default-features build broken — 3 un-gated kf_budget_core refs (ADR-0017 documents this build as supported)](48.9-no-default-features-broken.md) | Done |
 | 48.10 | [Windows daemon stubs return Ok(None) with no disk fallback — --attach errors, --auto-resume no-ops despite help promising fallback](48.10-windows-daemon-stub-no-fallback.md) | Planned |

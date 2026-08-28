@@ -17,11 +17,19 @@ use kf_context_index::ContextIndex;
 
 use template::render_template;
 
-/// Token counter — cl100k_base via `kf_budget_core::estimate_tokens`.
-/// The `budget` feature is in `default`, so this is always available
-/// in release builds.
+/// Token counter — cl100k_base via `kf_budget_core::estimate_tokens` when
+/// the `budget` feature is on; minimal builds (`--no-default-features`,
+/// ADR-0017) fall back to a bytes/4 heuristic. Estimate-only consumers
+/// (display, heuristics) — nothing billing-critical reads the fallback.
 pub(crate) fn count_tokens(s: &str) -> usize {
-    kf_budget_core::estimate_tokens(s)
+    #[cfg(feature = "budget")]
+    {
+        kf_budget_core::estimate_tokens(s)
+    }
+    #[cfg(not(feature = "budget"))]
+    {
+        s.len() / 4
+    }
 }
 
 /// Estimate the token count of a single message (content + thinking +

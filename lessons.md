@@ -1073,3 +1073,20 @@
 - Cold-worktree cost: first `cargo check -p kf-code --all-targets` in a
   fresh worktree is ~14 min (deps), first lib-test link another ~15 min.
   Budget gates accordingly or reuse the main checkout's target dir.
+
+## WO 48.9 session (2026-08-28)
+
+- `#[cfg(...)]` on a trailing expression (e.g. a cfg'd `return` followed by a
+  cfg'd tail expr) is E0658 unstable. Pattern that works: cfg'd `{ }` blocks
+  as statements — with one cfg'd out, the survivor is the tail expression.
+- `budget = ["dep:kf-budget-core"]` means --no-default-features removes the
+  crate entirely; the right gate shape for a widely-called helper is a cfg
+  pair INSIDE one choke-point fn, not gating every caller.
+- The full check/clippy gates on this worktree are COLD (own target dir):
+  check --no-default-features ~11min first run (timed out at 10min), check
+  --all-targets ~9min, clippy -p kf-code ~21min, test-profile build ~10min.
+  Budget ~1h for the fast-gate set from scratch.
+- docs/workorders/README.md has pre-existing duplicate rows (48.2 ×3,
+  48.3 ×3, 48.4 ×3) from parallel-worktree merges — predicted by the AGENTS.md
+  lessons entry. Left alone (out of scope); merge-resolve by keeping one.
+- scope creep: none.

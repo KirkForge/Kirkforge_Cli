@@ -4,6 +4,19 @@
 
 ## Shipped (closed this session)
 
+- **WO 48.9 (2026-08-28, branch `wo48.9`, not merged)**: `--no-default-features`
+  build fixed — 3 un-gated `kf_budget_core::estimate_tokens` refs (ADR-0017
+  documents the minimal build as supported). cfg gate now lives in ONE choke
+  point: `prompt::count_tokens` body (`budget` on → BPE, off → `s.len() / 4`
+  heuristic; fn stays un-gated, many un-gated callers); the TUI
+  `estimate_messages_tokens` rerouted through it (dedup, no direct crate refs).
+  FAST GATES ONLY per owner directive: workspace check --all-targets,
+  workspace check --no-default-features (previously broken), clippy -p
+  kf-code -D warnings, fmt, estimate_message_tokens tests 3/3 — all green.
+  DEFERRED: CI job for the no-default-features combo (~10-line new job block,
+  not the allowed 3-line add; see Pending).
+  [48.9](docs/workorders/48.9-no-default-features-broken.md)
+
 - **WO 48.2 (2026-08-28)**: pre-tool hooks no longer run twice per
   file-tool call. The Phase-3 recorder (`record_tool_result`) re-ran
   `pre-tool-{name}` AFTER the write/edit hit disk (doubled side-effects +
@@ -78,6 +91,14 @@
   archival pass). History: `git log` + `docs/archive/workorders/`.
 
 ## Pending / Deferred (open)
+
+- **WO 48.9 (deferred tail)**: CI job running `cargo check --workspace
+  --no-default-features` in `ci-merge.yml` (+ `ci-pr.yml`) so the minimal
+  build (ADR-0017) can't silently break again. Deferred because it needs a
+  new ~10-line job block, beyond the 3-line allowance in this WO's scope.
+  Also observed (pre-existing, minimal-build-only warnings, not fixed):
+  `unused_mut` `src/session/skills.rs:174`, dead-code `apply_budget_slice`.
+  [48.9](docs/workorders/48.9-no-default-features-broken.md)
 
 - **WO 47.8 (owner-skipped)**: wire or delete the 9 fuzz targets — the
   only WO in the 47 series not Done (Status: Planned by owner choice).

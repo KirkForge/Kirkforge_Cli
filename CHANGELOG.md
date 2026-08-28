@@ -25,6 +25,11 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 48.9 — `--no-default-features` build (ADR-0017 minimal build) was
+  broken: 3 un-gated `kf_budget_core::estimate_tokens` refs. The gate now
+  lives in one choke point (`prompt::count_tokens`, bytes/4 fallback when
+  `budget` is off); the TUI estimator routes through it. CI combo job
+  deferred (see WO). [48.9](docs/workorders/48.9-no-default-features-broken.md)
 - WO 48.2 — pre-tool hooks fired twice per file-tool call: the Phase-3
   recorder re-ran `pre-tool-{name}` after the write/edit had already hit
   disk. The single evaluation now happens in the Phase-1 pre-gate with the

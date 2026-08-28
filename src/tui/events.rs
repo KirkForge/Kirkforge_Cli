@@ -562,19 +562,20 @@ fn remove_tool_placeholder(messages: &mut VecDeque<ConversationEntry>, name: &st
     }
 }
 
-/// BPE-based token estimate for a message list. Uses the same
-/// cl100k_base tokenizer as `session::prompt::count_tokens`.
+/// BPE-based token estimate for a message list. Routes through
+/// `session::prompt::count_tokens` so the `budget` feature gate lives
+/// in one place (minimal builds get the bytes/4 fallback there).
 fn estimate_messages_tokens(messages: &[crate::shared::Message]) -> usize {
     messages
         .iter()
         .map(|m| {
-            let content_tokens = kf_budget_core::estimate_tokens(&m.content);
+            let content_tokens = crate::session::prompt::count_tokens(&m.content);
             let tool_call_tokens = m
                 .tool_calls
                 .as_ref()
                 .map(|calls| {
                     let json = serde_json::to_string(calls).unwrap_or_default();
-                    let json_tokens = kf_budget_core::estimate_tokens(&json);
+                    let json_tokens = crate::session::prompt::count_tokens(&json);
                     json_tokens.max(calls.len() * 8)
                 })
                 .unwrap_or(0);

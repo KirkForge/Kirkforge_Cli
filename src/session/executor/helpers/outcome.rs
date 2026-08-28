@@ -36,15 +36,13 @@ pub(crate) async fn handle_tool_outcome(
 ) -> anyhow::Result<Option<String>> {
     match outcome {
         ToolOutcome::Success { content } => {
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: content.clone(),
-                        success: true,
-                    })
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
+            crate::emit!(
+                event_tx,
+                TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: content.clone(),
+                    success: true,
+                }
             );
             conversation
                 .append_async(Message {
@@ -57,15 +55,13 @@ pub(crate) async fn handle_tool_outcome(
                 .await?;
         }
         ToolOutcome::FileContent { content, .. } => {
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: content.clone(),
-                        success: true,
-                    })
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
+            crate::emit!(
+                event_tx,
+                TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: content.clone(),
+                    success: true,
+                }
             );
             conversation
                 .append_async(Message {
@@ -82,15 +78,13 @@ pub(crate) async fn handle_tool_outcome(
             // the correction loop so downstream verifiers see the
             // real unified diff rather than the user's `old_string`.
             // diff text — see the docstring on this fn.
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: diff.clone(),
-                        success: true,
-                    })
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
+            crate::emit!(
+                event_tx,
+                TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: diff.clone(),
+                    success: true,
+                }
             );
             conversation
                 .append_async(Message {
@@ -109,15 +103,13 @@ pub(crate) async fn handle_tool_outcome(
             total: _,
         } => {
             let output = format_grep_output(&path, &matches);
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: output.clone(),
-                        success: true,
-                    })
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
+            crate::emit!(
+                event_tx,
+                TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: output.clone(),
+                    success: true,
+                }
             );
             conversation
                 .append_async(Message {
@@ -131,15 +123,13 @@ pub(crate) async fn handle_tool_outcome(
         }
         ToolOutcome::Error { message } => {
             let output = render_tool_error_with_hint(&tc.name, &message, &tc.arguments);
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: output.clone(),
-                        success: false,
-                    })
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
+            crate::emit!(
+                event_tx,
+                TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: output.clone(),
+                    success: false,
+                }
             );
             conversation
                 .append_async(Message {
@@ -170,15 +160,13 @@ pub(crate) async fn handle_tool_outcome(
         ToolOutcome::Failure(err) => {
             let message = err.to_user_message();
             let output = render_tool_error_with_hint(&tc.name, &message, &tc.arguments);
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: output.clone(),
-                        success: false,
-                    })
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
+            crate::emit!(
+                event_tx,
+                TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: output.clone(),
+                    success: false,
+                }
             );
             conversation
                 .append_async(Message {
@@ -222,15 +210,13 @@ pub(crate) async fn handle_tool_outcome(
                 mime,
                 data_base64.len()
             );
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: projection.clone(),
-                        success: true,
-                    })
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
+            crate::emit!(
+                event_tx,
+                TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: projection.clone(),
+                    success: true,
+                }
             );
             conversation
                 .append_async(Message {
@@ -275,16 +261,14 @@ pub(crate) async fn emit_correction_results(
     conversation: &mut ConversationLog,
 ) -> anyhow::Result<()> {
     for cr in &results {
-        crate::send_or_warn!(
-            event_tx
-                .send(TurnEvent::Verification {
-                    message: cr.message.clone(),
-                    outcome: cr.outcome,
-                    file: cr.file.clone(),
-                    line: cr.line,
-                })
-                .await,
-            "TurnEvent receiver dropped; discarding event"
+        crate::emit!(
+            event_tx,
+            TurnEvent::Verification {
+                message: cr.message.clone(),
+                outcome: cr.outcome,
+                file: cr.file.clone(),
+                line: cr.line,
+            }
         );
         conversation.append(Message {
             role: Role::Tool,

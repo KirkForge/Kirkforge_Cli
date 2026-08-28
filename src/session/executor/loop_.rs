@@ -542,14 +542,7 @@ impl Executor {
                                         .lock()
                                         .unwrap_or_else(|e| e.into_inner())
                                         .cancel();
-                                    crate::send_or_warn!(
-                                        event_tx
-                                            .send(TurnEvent::Token(
-                                                "\n⚠️ Generation cancelled\n".into()
-                                            ))
-                                            .await,
-                                        "TurnEvent receiver dropped; discarding event"
-                                    );
+                                    crate::emit!(event_tx, TurnEvent::Token( "\n⚠️ Generation cancelled\n".into() ));
                                 }
                             }
                         }
@@ -563,16 +556,8 @@ impl Executor {
                         // busy state, and keep the loop alive so the user
                         // can retry. Exit is reserved for channel closure
                         // (the `else => break` arm below).
-                        crate::send_or_warn!(
-                            event_tx
-                                .send(TurnEvent::Error(format!("Turn failed: {e}")))
-                                .await,
-                            "TurnEvent receiver dropped; discarding event"
-                        );
-                        crate::send_or_warn!(
-                            event_tx.send(TurnEvent::TurnComplete).await,
-                            "TurnEvent receiver dropped; discarding event"
-                        );
+                        crate::emit!(event_tx, TurnEvent::Error(format!("Turn failed: {e}")));
+                        crate::emit!(event_tx, TurnEvent::TurnComplete);
                     }
                 }
                 else => break,

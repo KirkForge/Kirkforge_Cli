@@ -340,14 +340,12 @@ impl Executor {
             // record-time emissions in `record_tool_result` were removed
             // (WO 44.38) — they fired after the body ran, so PTY chunks
             // flowing during the body had no card to land in.
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::ToolStart {
-                        name: prep.invocation.name.clone(),
-                        args: prep.invocation.arguments.clone(),
-                    })
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
+            crate::emit!(
+                event_tx,
+                TurnEvent::ToolStart {
+                    name: prep.invocation.name.clone(),
+                    args: prep.invocation.arguments.clone(),
+                }
             );
             if deterministic {
                 // Run sequentially — no tokio::spawn, no concurrency.
@@ -537,14 +535,12 @@ impl Executor {
             // as the non-file arm above. File tools don't stream PTY chunks
             // but the TUI still shows a streaming card until ToolResult
             // finalizes it, and `run_turn_collecting` pairs the event.
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::ToolStart {
-                        name: name.clone(),
-                        args: prep.invocation.arguments.clone(),
-                    })
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
+            crate::emit!(
+                event_tx,
+                TurnEvent::ToolStart {
+                    name: name.clone(),
+                    args: prep.invocation.arguments.clone(),
+                }
             );
             let outcome = run_prepared_call(prep).await.map(|(_, o, ms)| (o, ms));
             if let Some((ref o, ms)) = outcome {
@@ -596,10 +592,7 @@ impl Executor {
             if let Some(pos) = skipped.iter().position(|(i, _, _, _)| *i == idx) {
                 let (_, _inv, events, msg) = skipped.swap_remove(pos);
                 for ev in events {
-                    crate::send_or_warn!(
-                        event_tx.send(ev).await,
-                        "TurnEvent receiver dropped; discarding event"
-                    );
+                    crate::emit!(event_tx, ev);
                 }
                 self.conversation
                     .append_async(Message {
@@ -616,15 +609,13 @@ impl Executor {
             let Some((invocation, outcome, resolved_path, duration_ms)) = results.remove(&idx)
             else {
                 let err = format!("Tool call {} did not return an outcome", tc.id);
-                crate::send_or_warn!(
-                    event_tx
-                        .send(TurnEvent::ToolResult {
-                            name: tc.name.clone(),
-                            output: err.clone(),
-                            success: false,
-                        })
-                        .await,
-                    "TurnEvent receiver dropped; discarding event"
+                crate::emit!(
+                    event_tx,
+                    TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: err.clone(),
+                        success: false,
+                    }
                 );
                 self.conversation
                     .append_async(Message {
@@ -655,15 +646,13 @@ impl Executor {
                     self.audit_log
                         .log_destructive(&tc.name, &tc.arguments, false, Some(message));
                 }
-                crate::send_or_warn!(
-                    event_tx
-                        .send(TurnEvent::ToolResult {
-                            name: tc.name.clone(),
-                            output: message.clone(),
-                            success: false,
-                        })
-                        .await,
-                    "TurnEvent receiver dropped; discarding event"
+                crate::emit!(
+                    event_tx,
+                    TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: message.clone(),
+                        success: false,
+                    }
                 );
                 self.conversation
                     .append_async(Message {

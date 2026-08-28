@@ -865,8 +865,6 @@ impl PromptBuilder {
 
     fn stub_old_tool_results(messages: &mut [Message]) -> bool {
         const TOOL_RESULT_KEEP_TAIL: usize = 2;
-        const TOOL_RESULT_STUB: &str =
-            "[previous tool result omitted to save budget — see TUI history]";
 
         let tool_indices: Vec<usize> = messages
             .iter()
@@ -878,9 +876,8 @@ impl PromptBuilder {
 
         let mut stubbed_any = false;
         for &i in tool_indices.iter().take(preserve_from) {
-            if messages[i].content != TOOL_RESULT_STUB {
-                messages[i].content = TOOL_RESULT_STUB.to_string();
-                messages[i].token_count = None;
+            if messages[i].content != compaction::TOOL_RESULT_STUB {
+                messages[i] = compaction::stub_tool_result(&messages[i]);
                 stubbed_any = true;
             }
         }

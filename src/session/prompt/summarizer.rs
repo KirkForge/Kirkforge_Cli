@@ -178,7 +178,7 @@ pub async fn summarize_conversation(
     messages: &[Message],
     ollama_host: &str,
 ) -> SummarizeResult {
-    let tokens_before = estimate_token_count(messages);
+    let tokens_before = super::estimate_tokens(messages);
     let msg_count = messages.len();
 
     if msg_count == 0 {
@@ -292,11 +292,6 @@ pub async fn summarize_conversation(
     }
 }
 
-/// Estimate the token count of a set of messages.
-fn estimate_token_count(messages: &[Message]) -> usize {
-    messages.iter().map(super::estimate_message_tokens).sum()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn test_estimate_token_count() {
+    fn test_estimate_tokens() {
         let messages = vec![
             Message {
                 role: Role::User,
@@ -419,7 +414,7 @@ mod tests {
             },
         ];
 
-        let est = estimate_token_count(&messages);
+        let est = crate::session::prompt::estimate_tokens(&messages);
         assert!(est > 0);
         assert!(est < 50);
     }
@@ -470,7 +465,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        assert_eq!(estimate_token_count(&messages), 0);
+        assert_eq!(crate::session::prompt::estimate_tokens(&messages), 0);
 
         let config = SummarizerConfig {
             model: "test".into(),
@@ -636,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn estimate_token_count_handles_tool_calls_payload() {
+    fn estimate_tokens_handles_tool_calls_payload() {
         let messages = vec![Message {
             role: Role::Assistant,
             content: "calling tools".into(),
@@ -647,13 +642,13 @@ mod tests {
             }]),
             ..Default::default()
         }];
-        let est = estimate_token_count(&messages);
+        let est = crate::session::prompt::estimate_tokens(&messages);
         assert!(est > 0, "tool_calls should contribute tokens");
     }
 
     #[test]
-    fn estimate_token_count_zero_for_empty_messages() {
-        assert_eq!(estimate_token_count(&[]), 0);
+    fn estimate_tokens_zero_for_empty_messages() {
+        assert_eq!(crate::session::prompt::estimate_tokens(&[]), 0);
     }
 
     // ── R4.2 — compaction calls LLM for summary ────────────────────────
@@ -703,7 +698,7 @@ mod tests {
                 ]
             })
             .collect();
-        let tokens_before = estimate_token_count(&messages);
+        let tokens_before = crate::session::prompt::estimate_tokens(&messages);
         assert!(
             tokens_before > 100,
             "fixture must be non-trivial: {tokens_before}"

@@ -345,6 +345,28 @@ fn tool_result_from_content_blocks(
     }
 }
 
+/// Remap a `Success` outcome to the failure shape when the MCP result
+/// carries `isError: true` (the server tool ran and reported failure).
+/// The result text is kept as the message — same convention as web_fetch's
+/// non-2xx → `ToolError::Execution`. Without this, metrics, audit, and the
+/// doom-loop breaker all count a failing server tool as a success.
+fn apply_is_error_flag(outcome: ToolOutcome, raw_result: &serde_json::Value) -> ToolOutcome {
+    if raw_result
+        .get("isError")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        if let ToolOutcome::Success { content } = outcome {
+            return ToolOutcome::Failure(ToolError::Execution {
+                message: content,
+                exit_code: None,
+                stderr: String::new(),
+            });
+        }
+    }
+    outcome
+}
+
 /// Translate the `messages` array of an MCP `sampling/createMessage` request
 /// into the internal `Message` type the adapters consume. Non-text content
 /// blocks (image, audio, resource) are surfaced as text placeholders so the
@@ -622,13 +644,16 @@ impl McpClient {
                 // Surface text blocks as joined text; surface image/resource
                 // blocks as `[image: ...]`/`[resource: ...]` placeholders so the
                 // model is informed even when the adapter cannot render them.
-                if let Some(content_blocks) = result.get("content").and_then(|c| c.as_array()) {
+                let outcome = if let Some(content_blocks) =
+                    result.get("content").and_then(|c| c.as_array())
+                {
                     tool_result_from_content_blocks(content_blocks, result)
                 } else {
                     ToolOutcome::Success {
                         content: serde_json::to_string_pretty(result).unwrap_or_default(),
                     }
-                }
+                };
+                apply_is_error_flag(outcome, result)
             }
             Err(e) => match e {
                 McpError::Timeout => ToolOutcome::Failure(ToolError::Timeout {
@@ -1585,6 +1610,61 @@ mod tests {
         let outcome = tool_result_from_content_blocks(blocks, &result);
         assert!(
             matches!(outcome, ToolOutcome::Success { ref content } if content == "Hello, world!"),
+            "got {outcome:?}"
+        );
+    }
+
+    /// WO 48.5: `isError: true` must map to the failure outcome shape with
+    /// the result text as the message, or metrics/audit/doom-loop count a
+    /// failing server tool as a success.
+    #[test]
+    fn test_is_error_flag_maps_success_to_execution_failure() {
+        let result = serde_json::json!({
+            "isError": true,
+            "content": [{ "type": "text", "text": "disk full" }]
+        });
+        let blocks = result.get("content").unwrap().as_array().unwrap();
+        let outcome =
+            apply_is_error_flag(tool_result_from_content_blocks(blocks, &result), &result);
+        match outcome {
+            ToolOutcome::Failure(ToolError::Execution {
+                message,
+                exit_code,
+                stderr,
+            }) => {
+                assert_eq!(message, "disk full");
+                assert_eq!(exit_code, None);
+                assert!(stderr.is_empty());
+            }
+            other => panic!("expected Execution failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_is_error_flag_absent_or_false_keeps_success() {
+        for result in [
+            serde_json::json!({ "content": [{ "type": "text", "text": "ok" }] }),
+            serde_json::json!({ "isError": false, "content": [{ "type": "text", "text": "ok" }] }),
+        ] {
+            let blocks = result.get("content").unwrap().as_array().unwrap();
+            let outcome =
+                apply_is_error_flag(tool_result_from_content_blocks(blocks, &result), &result);
+            assert!(
+                matches!(outcome, ToolOutcome::Success { ref content } if content == "ok"),
+                "got {outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_error_flag_does_not_touch_existing_failures() {
+        let result = serde_json::json!({ "isError": true });
+        let outcome = apply_is_error_flag(
+            ToolOutcome::Failure(ToolError::Timeout { after_secs: 5 }),
+            &result,
+        );
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::Timeout { .. })),
             "got {outcome:?}"
         );
     }

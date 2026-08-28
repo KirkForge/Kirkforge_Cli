@@ -99,10 +99,12 @@ pub(super) fn word_boundary_match(cmd: &str, pattern: &str) -> bool {
 
 /// Normalize a shell command so that trivial quoting/whitespace/comment
 /// evasions do not defeat the deny-list. This is a preprocessor, not a shell
-/// parser: it removes comments, strips single/double quotes, collapses
-/// whitespace, lowercases alphabetic characters, and strips simple backslash
-/// escapes. Backticks are intentionally left intact because they denote
-/// command substitution, which the safety layer treats literally.
+/// parser: it removes comments (a `#` at start of input or after whitespace,
+/// as in bash — a mid-word `#` is part of the token, so `foo#bar` survives
+/// intact), strips single/double quotes, collapses whitespace, lowercases
+/// alphabetic characters, and strips simple backslash escapes. Backticks are
+/// intentionally left intact because they denote command substitution, which
+/// the safety layer treats literally.
 pub(crate) fn normalize_for_safety(cmd: &str) -> String {
     let mut out = String::with_capacity(cmd.len());
     let mut chars = cmd.chars().peekable();
@@ -132,7 +134,14 @@ pub(crate) fn normalize_for_safety(cmd: &str) -> String {
         match c {
             '\'' => in_single = true,
             '"' => in_double = true,
-            '#' => break, // comment to end of line
+            // Comment only where bash starts one: at start of input or after
+            // whitespace. A mid-word `#` (foo#bar) is part of the token —
+            // truncating there also dropped everything after it, blinding
+            // the normalized-only gates (redirect/tee/deny-list scans) to
+            // the real tokens (WO 48.19).
+            '#' if out.is_empty() || out.ends_with(|c: char| c.is_ascii_whitespace()) => {
+                break; // comment to end of line
+            }
             '\\' => {
                 // Strip simple backslash escapes outside quotes.
                 if let Some(next) = chars.next() {
@@ -700,6 +709,17 @@ mod private_tests {
         assert_eq!(n, "echo hi");
     }
 
+    // WO 48.19: a mid-word `#` is part of the token in bash (foo#bar is one
+    // word). The normalizer used to truncate there, dropping the token tail
+    // AND everything after it — blinding the normalized-only gates to the
+    // real command.
+    #[test]
+    fn normalize_keeps_mid_word_hash() {
+        assert_eq!(normalize_for_safety("cat foo#bar"), "cat foo#bar");
+        assert_eq!(normalize_for_safety("#comment at start"), "");
+        assert_eq!(normalize_for_safety("echo\t#comment after tab"), "echo");
+    }
+
     #[test]
     fn normalize_lowercases_alphabetic_chars() {
         let n = normalize_for_safety("RM -RF /");
@@ -843,6 +863,18 @@ mod private_tests {
     fn redirects_to_dangerous_path_normalizes_quotes_in_target() {
         assert_eq!(
             redirects_to_dangerous_path("echo x > '/etc/hosts'"),
+            Some("/etc/")
+        );
+    }
+
+    // WO 48.19: the mid-word-`#` truncation blinded this normalized-only
+    // scan — `echo x >f#o; > /etc/hosts` normalized to just `echo x >f`, so
+    // the second (dangerous) redirection vanished. If this fails, the
+    // normalizer regressed to truncating at any `#`.
+    #[test]
+    fn redirects_to_dangerous_path_sees_past_mid_word_hash() {
+        assert_eq!(
+            redirects_to_dangerous_path("echo x >f#o; > /etc/hosts"),
             Some("/etc/")
         );
     }
@@ -1111,6 +1143,22 @@ mod private_tests {
         let dl = DenyList::new(vec!["/secret/**".into()], vec![]);
         assert!(check_bash_command_str(
             "cat /secret/data",
+            None,
+            &dl,
+            &PathGuard::default(),
+            false
+        )
+        .is_some_and(|m| m.contains("denied path")),);
+    }
+
+    // WO 48.19: the step-8 deny-list token scan reads normalized tokens
+    // only; the mid-word-`#` truncation turned `cat /secret/data#tag` into
+    // `cat`, so the denied path token never reached is_path_denied.
+    #[test]
+    fn check_bash_command_str_blocks_denied_path_after_mid_word_hash() {
+        let dl = DenyList::new(vec!["/secret/**".into()], vec![]);
+        assert!(check_bash_command_str(
+            "cat /secret/data#tag",
             None,
             &dl,
             &PathGuard::default(),

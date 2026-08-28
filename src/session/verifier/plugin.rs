@@ -30,228 +30,8 @@
 //! payload (tracked in WO 47.14 remaining work).
 //!
 //! Exit code `0` means pass; any non-zero exit code fails, with stderr as
-<<<<<<< HEAD
-//! the failure message. The plugin-host `PluginVerifier` already implements
-//! this convention; this adapter just converts between the executor's
-//! async `Verifier` trait and the synchronous plugin verifier.
-
-use super::{Verdict, VerificationError, Verifier};
-use crate::session::verifier::types::BusEvent;
-use kf_plugin_host::{PluginVerifier, VerifierVerdict};
-use std::collections::HashMap;
-use std::sync::Arc;
-
-/// Adapter that runs a plugin verifier inside the executor's verifier slots.
-#[derive(Debug, Clone)]
-pub struct PluginVerifierAdapter {
-    inner: PluginVerifier,
-    priority: u8,
-}
-
-impl PluginVerifierAdapter {
-    /// Wrap a plugin verifier with a priority.
-    pub fn new(inner: PluginVerifier, priority: u8) -> Self {
-        Self { inner, priority }
-    }
-}
-
-#[async_trait::async_trait]
-impl Verifier for PluginVerifierAdapter {
-    fn name(&self) -> &str {
-        &self.inner.name
-    }
-
-    fn priority(&self) -> u8 {
-        self.priority
-    }
-
-    async fn verify(&self, event: &BusEvent) -> Verdict {
-        let mut env = HashMap::new();
-        env.insert("KF_VERIFIER_NAME".to_string(), self.inner.name.clone());
-        env.insert("KF_EVENT_KIND".to_string(), event.kind().to_string());
-        match serde_json::to_string(event) {
-            Ok(json) => env.insert("KF_EVENT_JSON".to_string(), json),
-            Err(e) => {
-                return Verdict::Unfixable(VerificationError {
-                    description: format!(
-                        "plugin verifier {}: failed to serialize event",
-                        self.inner.name
-                    ),
-                    file: None,
-                    details: e.to_string(),
-                    line: None,
-                });
-            }
-        };
-
-        let inner = self.inner.clone();
-        let verdict = match tokio::task::spawn_blocking(move || inner.run(&env)).await {
-            Ok(result) => result,
-            Err(e) => {
-                return Verdict::Unfixable(VerificationError {
-                    description: format!("plugin verifier {}: task panicked", self.inner.name),
-                    file: None,
-                    details: e.to_string(),
-                    line: None,
-                });
-            }
-        };
-
-        match verdict {
-            Ok(VerifierVerdict::Pass) => Verdict::Clean,
-            Ok(VerifierVerdict::Fail { message }) => Verdict::Unfixable(VerificationError {
-                description: format!("plugin verifier {}: {}", self.inner.name, message),
-                file: None,
-                details: message,
-                line: None,
-            }),
-            Err(e) => Verdict::Unfixable(VerificationError {
-                description: format!("plugin verifier {}: execution failed", self.inner.name),
-                file: None,
-                details: e.to_string(),
-                line: None,
-            }),
-        }
-    }
-}
-
-/// Build verifier adapters from every active plugin verifier capability.
-///
-/// Returns a vector so the caller can register each adapter into the
-/// executor's `VerifierSlots` with its declared priority.
-pub fn verifiers_from_registry(
-    registry: &kf_plugin_host::PluginRegistry,
-) -> Vec<Arc<dyn Verifier>> {
-    use kf_plugin_host::Plugin;
-    let mut out: Vec<Arc<dyn Verifier>> = Vec::new();
-    for hosted in registry.active_plugins() {
-        let plugin = &hosted.plugin;
-        for cap in plugin.verifiers() {
-            if let Some((name, priority, command)) = as_verifier_parts(&cap) {
-                let pv = PluginVerifier {
-                    name: name.clone(),
-                    command: command.clone(),
-                    plugin_root: plugin.root().to_path_buf(),
-                };
-                out.push(Arc::new(PluginVerifierAdapter::new(pv, priority)));
-            }
-        }
-    }
-    out
-}
-||||||| 15ad6877
-//! the failure message. The plugin-host `PluginVerifier` already implements
-//! this convention; this adapter just converts between the executor's
-//! async `Verifier` trait and the synchronous plugin verifier.
-
-use super::{Verdict, VerificationError, Verifier};
-use crate::session::verifier::types::BusEvent;
-use kf_plugin_host::{PluginVerifier, VerifierVerdict};
-use std::collections::HashMap;
-use std::sync::Arc;
-
-/// Adapter that runs a plugin verifier inside the executor's verifier slots.
-#[derive(Debug, Clone)]
-pub struct PluginVerifierAdapter {
-    inner: PluginVerifier,
-    priority: u8,
-}
-
-impl PluginVerifierAdapter {
-    /// Wrap a plugin verifier with a priority.
-    pub fn new(inner: PluginVerifier, priority: u8) -> Self {
-        Self { inner, priority }
-    }
-}
-
-#[async_trait::async_trait]
-impl Verifier for PluginVerifierAdapter {
-    fn name(&self) -> &str {
-        &self.inner.name
-    }
-
-    fn priority(&self) -> u8 {
-        self.priority
-    }
-
-    async fn verify(&self, event: &BusEvent) -> Verdict {
-        let mut env = HashMap::new();
-        env.insert("KF_VERIFIER_NAME".to_string(), self.inner.name.clone());
-        env.insert("KF_EVENT_KIND".to_string(), event.kind().to_string());
-        match serde_json::to_string(event) {
-            Ok(json) => env.insert("KF_EVENT_JSON".to_string(), json),
-            Err(e) => {
-                return Verdict::Unfixable(VerificationError {
-                    description: format!(
-                        "plugin verifier {}: failed to serialize event",
-                        self.inner.name
-                    ),
-                    file: None,
-                    details: e.to_string(),
-                    line: None,
-                });
-            }
-        };
-
-        let inner = self.inner.clone();
-        let verdict = match tokio::task::spawn_blocking(move || inner.run(&env)).await {
-            Ok(result) => result,
-            Err(e) => {
-                return Verdict::Unfixable(VerificationError {
-                    description: format!("plugin verifier {}: task panicked", self.inner.name),
-                    file: None,
-                    details: e.to_string(),
-                    line: None,
-                });
-            }
-        };
-
-        match verdict {
-            Ok(VerifierVerdict::Pass) => Verdict::Clean,
-            Ok(VerifierVerdict::Fail { message }) => Verdict::Unfixable(VerificationError {
-                description: format!("plugin verifier {}: {}", self.inner.name, message),
-                file: None,
-                details: message,
-                line: None,
-            }),
-            Err(e) => Verdict::Unfixable(VerificationError {
-                description: format!("plugin verifier {}: execution failed", self.inner.name),
-                file: None,
-                details: e.to_string(),
-                line: None,
-            }),
-        }
-    }
-}
-
-/// Build verifier adapters from every active plugin verifier capability.
-///
-/// Returns a vector so the caller can register each adapter into the
-/// executor's `VerifierSlots` with its declared priority.
-pub fn verifiers_from_registry(
-    registry: &kf_plugin_host::PluginRegistry,
-) -> Vec<Arc<dyn Verifier>> {
-    use kf_plugin_sdk::Plugin;
-    let mut out: Vec<Arc<dyn Verifier>> = Vec::new();
-    for hosted in registry.active_plugins() {
-        let plugin = &hosted.plugin;
-        for cap in plugin.verifiers() {
-            if let Some((name, priority, command)) = as_verifier_parts(&cap) {
-                let pv = PluginVerifier {
-                    name: name.clone(),
-                    command: command.clone(),
-                    plugin_root: plugin.root().to_path_buf(),
-                };
-                out.push(Arc::new(PluginVerifierAdapter::new(pv, priority)));
-            }
-        }
-    }
-    out
-}
-=======
 //! the failure message. The plugin-host `PluginVerifier` implements this
 //! convention; the bus-side `PluginBusVerifier` (bus.rs) is the adapter.
->>>>>>> wo/wo47.14
 
 fn as_verifier_parts(cap: &kf_plugin_host::Capability) -> Option<(String, u8, std::path::PathBuf)> {
     match cap {
@@ -297,7 +77,7 @@ mod tests {
 
     #[test]
     fn as_verifier_parts_returns_none_for_non_verifier_capability() {
-        let cap = kf_plugin_sdk::Capability::Skill {
+        let cap = kf_plugin_host::Capability::Skill {
             trigger: "/x".into(),
             prompt: "do x".into(),
             skill_file: None,
@@ -308,7 +88,7 @@ mod tests {
 
     #[test]
     fn as_verifier_parts_returns_none_for_verifier_without_command() {
-        let cap = kf_plugin_sdk::Capability::Verifier {
+        let cap = kf_plugin_host::Capability::Verifier {
             name: "no-cmd".into(),
             priority: 1,
             command: None,
@@ -318,7 +98,7 @@ mod tests {
 
     #[test]
     fn as_verifier_parts_extracts_fields_when_command_present() {
-        let cap = kf_plugin_sdk::Capability::Verifier {
+        let cap = kf_plugin_host::Capability::Verifier {
             name: "fmt".into(),
             priority: 3,
             command: Some(std::path::PathBuf::from("bin/fmt.sh")),
@@ -330,35 +110,6 @@ mod tests {
         assert_eq!(command, std::path::PathBuf::from("bin/fmt.sh"));
     }
 
-<<<<<<< HEAD
-        let mut registry = PluginRegistry::new();
-        let warnings = registry
-            .load_from_dir(
-                &plugins_dir,
-                TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
-            )
-            .unwrap();
-        assert!(warnings.is_empty(), "{warnings:?}");
-
-        let verifiers = verifiers_from_registry(&registry);
-        assert_eq!(verifiers.len(), 1);
-        assert_eq!(verifiers[0].name(), "demo-v");
-        assert_eq!(verifiers[0].priority(), 7);
-||||||| 15ad6877
-        let mut registry = PluginRegistry::new();
-        let warnings = registry
-            .load_from_dir(
-                &plugins_dir,
-                TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
-            )
-            .unwrap();
-        assert!(warnings.is_empty(), "{warnings:?}");
-
-        let verifiers = verifiers_from_registry(&registry);
-        assert_eq!(verifiers.len(), 1);
-        assert_eq!(verifiers[0].name(), "demo-v");
-        assert_eq!(verifiers[0].priority(), 7);
-=======
     #[test]
     fn register_plugin_verifiers_into_bus_returns_zero_for_empty_registry() {
         let registry = kf_plugin_host::PluginRegistry::new();
@@ -366,7 +117,6 @@ mod tests {
         let count = register_plugin_verifiers_into_bus(&registry, &mut bus);
         assert_eq!(count, 0);
         assert_eq!(bus.verifier_count(), 0);
->>>>>>> wo/wo47.14
     }
 
     #[cfg(unix)]
@@ -408,13 +158,7 @@ command = "bin/check.sh"
         let warnings = registry
             .load_from_dir(
                 &plugins_dir,
-<<<<<<< HEAD
-                TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
-||||||| 15ad6877
-                TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
-=======
-                kf_plugin_host::TrustPolicy::up_to(kf_plugin_sdk::TrustTier::Shell),
->>>>>>> wo/wo47.14
+                kf_plugin_host::TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
             )
             .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
@@ -434,138 +178,4 @@ command = "bin/check.sh"
         assert_eq!(v.severity, Severity::Error);
         assert!(v.message.contains("nope"));
     }
-<<<<<<< HEAD
-
-    #[test]
-    fn as_verifier_parts_returns_none_for_non_verifier_capability() {
-        let cap = kf_plugin_host::Capability::Skill {
-            trigger: "/x".into(),
-            prompt: "do x".into(),
-            skill_file: None,
-            model_hint: None,
-        };
-        assert!(as_verifier_parts(&cap).is_none());
-    }
-
-    #[test]
-    fn as_verifier_parts_returns_none_for_verifier_without_command() {
-        let cap = kf_plugin_host::Capability::Verifier {
-            name: "no-cmd".into(),
-            priority: 1,
-            command: None,
-        };
-        assert!(as_verifier_parts(&cap).is_none());
-    }
-
-    #[test]
-    fn as_verifier_parts_extracts_fields_when_command_present() {
-        let cap = kf_plugin_host::Capability::Verifier {
-            name: "fmt".into(),
-            priority: 3,
-            command: Some(PathBuf::from("bin/fmt.sh")),
-        };
-        let (name, priority, command) =
-            as_verifier_parts(&cap).expect("verifier capability with command should yield parts");
-        assert_eq!(name, "fmt");
-        assert_eq!(priority, 3);
-        assert_eq!(command, PathBuf::from("bin/fmt.sh"));
-    }
-
-    #[test]
-    fn verifiers_from_registry_returns_empty_for_empty_registry() {
-        let registry = PluginRegistry::new();
-        let verifiers = verifiers_from_registry(&registry);
-        assert!(verifiers.is_empty());
-    }
-
-    #[test]
-    fn register_plugin_verifiers_into_bus_returns_zero_for_empty_registry() {
-        let registry = PluginRegistry::new();
-        let mut bus = crate::session::verifier::bus::VerifierBus::new();
-        let count = register_plugin_verifiers_into_bus(&registry, &mut bus);
-        assert_eq!(count, 0);
-        assert_eq!(bus.verifier_count(), 0);
-    }
-
-    #[test]
-    fn plugin_verifier_adapter_priority_round_trips() {
-        let pv = PluginVerifier {
-            name: "p".into(),
-            command: PathBuf::from("c.sh"),
-            plugin_root: PathBuf::from("/tmp"),
-        };
-        for prio in [0u8, 1, 5, 254, 255] {
-            let adapter = PluginVerifierAdapter::new(pv.clone(), prio);
-            assert_eq!(adapter.priority(), prio);
-            assert_eq!(adapter.name(), "p");
-        }
-    }
-||||||| 15ad6877
-
-    #[test]
-    fn as_verifier_parts_returns_none_for_non_verifier_capability() {
-        let cap = kf_plugin_sdk::Capability::Skill {
-            trigger: "/x".into(),
-            prompt: "do x".into(),
-            skill_file: None,
-            model_hint: None,
-        };
-        assert!(as_verifier_parts(&cap).is_none());
-    }
-
-    #[test]
-    fn as_verifier_parts_returns_none_for_verifier_without_command() {
-        let cap = kf_plugin_sdk::Capability::Verifier {
-            name: "no-cmd".into(),
-            priority: 1,
-            command: None,
-        };
-        assert!(as_verifier_parts(&cap).is_none());
-    }
-
-    #[test]
-    fn as_verifier_parts_extracts_fields_when_command_present() {
-        let cap = kf_plugin_sdk::Capability::Verifier {
-            name: "fmt".into(),
-            priority: 3,
-            command: Some(PathBuf::from("bin/fmt.sh")),
-        };
-        let (name, priority, command) =
-            as_verifier_parts(&cap).expect("verifier capability with command should yield parts");
-        assert_eq!(name, "fmt");
-        assert_eq!(priority, 3);
-        assert_eq!(command, PathBuf::from("bin/fmt.sh"));
-    }
-
-    #[test]
-    fn verifiers_from_registry_returns_empty_for_empty_registry() {
-        let registry = PluginRegistry::new();
-        let verifiers = verifiers_from_registry(&registry);
-        assert!(verifiers.is_empty());
-    }
-
-    #[test]
-    fn register_plugin_verifiers_into_bus_returns_zero_for_empty_registry() {
-        let registry = PluginRegistry::new();
-        let mut bus = crate::session::verifier::bus::VerifierBus::new();
-        let count = register_plugin_verifiers_into_bus(&registry, &mut bus);
-        assert_eq!(count, 0);
-        assert_eq!(bus.verifier_count(), 0);
-    }
-
-    #[test]
-    fn plugin_verifier_adapter_priority_round_trips() {
-        let pv = PluginVerifier {
-            name: "p".into(),
-            command: PathBuf::from("c.sh"),
-            plugin_root: PathBuf::from("/tmp"),
-        };
-        for prio in [0u8, 1, 5, 254, 255] {
-            let adapter = PluginVerifierAdapter::new(pv.clone(), prio);
-            assert_eq!(adapter.priority(), prio);
-            assert_eq!(adapter.name(), "p");
-        }
-    }
-=======
->>>>>>> wo/wo47.14
 }

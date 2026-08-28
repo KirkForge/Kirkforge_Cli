@@ -818,3 +818,25 @@
   once warm. Detached setsid + poll remains the only sane pattern.
 - scope creep: none. 4 files, all in the WO's named scope; state.md/
   CHANGELOG left to the coordinator per parallel-wave convention.
+## WO 47.7 (MCP transport trait)
+
+- The WO's "~180 lines" estimate was directionally right: net −310
+  (927 del / 617 ins across mod.rs + http.rs), because the refactor also
+  collapsed the duplicated initialize handshake and let ~130 lines of
+  http-only tests for the simpler content-block helper go (unified on
+  the richer stdio helper).
+- dyn-compatible async trait without async-trait: one `type TransportFut<'a,
+  T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>` alias + explicit `'a`
+  lifetimes on the two async trait methods; impls are `Box::pin(async move
+  { ...body... })`. Two pages of boxing boilerplate total — cheaper than a
+  new dependency in a size-optimized binary.
+- Gotcha: an inherent method called as `http::connect(...)` must stay an
+  inherent method — moving connect's return type did not move its
+  namespace. `http::McpHttpTransport::connect` is the correct path.
+- A trait method used only by one test (`pending()`) trips dead_code in
+  non-test builds — `#[cfg(test)]` on the trait method + both impls, same
+  pattern as the test-only `disconnect`.
+- First `cargo nextest --lib` run after the edit timed out at 15 min —
+  cold test-binary build under load-14 sibling-worktree contention
+  (known from WO 46.28 lessons). The retry with the warm fingerprint
+  finished the whole gate in minutes. Budget the first build.

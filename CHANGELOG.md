@@ -16,6 +16,11 @@ why, and the gate evidence.
   orchestrator API unchanged), kf-plugin-sdk folded into kf-plugin-host
   (`sdk` module, surface re-exported at host root; src/ refs renamed
   `kf_plugin_sdk::` → `kf_plugin_host::`). No behavior change.
+- WO 47.7 — MCP client dedup: `McpClient` is now a `Box<dyn McpTransport>`
+  wrapper (stdio + HTTP impls of the transport primitives); every MCP
+  operation and the initialize handshake exist once instead of 2-3×
+  (−310 lines). HTTP `tools/call` now renders non-text content blocks as
+  placeholders (image/audio/resource), matching the stdio transport.
 
 ### Fixed
 

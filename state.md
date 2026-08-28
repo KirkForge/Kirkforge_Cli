@@ -23,6 +23,26 @@
   TECHNICAL.md diagram/tables. Gate: workspace check clean, clippy -D
   warnings on the 3 touched crates clean, 330/330 orchestrator+host
   tests, adr_xref_drift green, fmt clean.
+- **WO 47.7**: Done. MCP transport trait — `McpClient` (enum Stdio|Http)
+  → struct wrapping `Box<dyn McpTransport>`; the private trait carries
+  only the transport primitives (send_request/send_notification/
+  is_alive/server_name/set_sampling/disconnect) with manually pin-boxed
+  futures (dyn-compatible, zero new deps). All MCP ops
+  (tools/resources/prompts) and the initialize handshake collapsed to
+  single shared impls (handshake helper takes a capabilities param: stdio
+  advertises `roots`, HTTP does not). Per-transport `impl Drop` replaced
+  the enum Drop. Behavior change (deliberate unification): HTTP
+  `tools/call` non-text content blocks now render placeholders via the
+  shared `tool_result_from_content_blocks` instead of a raw JSON dump;
+  the 6 http-only tests of the deleted simpler helper were removed
+  (shared helper fully tested in mod.rs). Net −310 lines. manager.rs /
+  spawn.rs / error.rs untouched. Phase-B impact: McpClient enum +
+  McpHttpTransport LOW (0 upstream dependents outside mcp_client).
+  Branch wo/wo47.7 NOT merged/pushed (parallel-wave worktree, per WO
+  rules). Gate (head 15ad6877 + this commit): check --workspace
+  --all-targets clean, clippy -p kf-code -D warnings clean, nextest
+  mcp_client 81/81, fmt clean (fast-gate scope per worker prompt; full
+  suites NOT run — deferred to the merge gate).
 - **WO 47.27**: Done. Memory subsystem, three defects, one gated commit
   each on `wo/wo47.27` (not merged/pushed — parallel-wave worktree).
   (1) `make_slug` slugified raw user text, so 'I prefer

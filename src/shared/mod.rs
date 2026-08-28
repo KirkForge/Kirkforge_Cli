@@ -1,3 +1,18 @@
+/// Send an event over a channel that requires `.await` (bounded mpsc) and
+/// log a warning if the receiver is gone. Collapses the send_or_warn!
+/// ceremony at the async emission sites; the default message is the one
+/// the TurnEvent sites all repeated. Sync senders (unbounded/oneshot)
+/// keep `send_or_warn!` — `.await` there would not compile.
+#[macro_export]
+macro_rules! emit {
+    ($tx:expr, $event:expr) => {
+        $crate::emit!($tx, $event, "TurnEvent receiver dropped; discarding event");
+    };
+    ($tx:expr, $event:expr, $($fmt:tt)*) => {
+        $crate::send_or_warn!($tx.send($event).await, $($fmt)*);
+    };
+}
+
 /// Send a value over a channel and log a warning if the receiver is gone.
 ///
 /// Use this instead of `let _ = tx.send(...)` so channel drops are not silent.

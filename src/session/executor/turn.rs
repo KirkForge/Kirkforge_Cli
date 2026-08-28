@@ -112,10 +112,7 @@ impl Executor {
         // is_generating/streaming unconditionally — decoupled from
         // CostStats, which only fires when the provider supplies usage.
         if result.is_ok() {
-            crate::send_or_warn!(
-                event_tx.send(TurnEvent::TurnComplete).await,
-                "TurnEvent receiver dropped; discarding event"
-            );
+            crate::emit!(event_tx, TurnEvent::TurnComplete);
         }
 
         // WO 21.6: post-turn memory extraction (best-effort).
@@ -156,14 +153,12 @@ impl Executor {
                         tracing::info!(count, facts = ?names, "auto-remembered facts");
                         // WO 26.7-R3: tell the TUI so the status bar can
                         // update in real-time as memory grows.
-                        crate::send_or_warn!(
-                            event_tx
-                                .send(TurnEvent::MemoryExtracted {
-                                    count: store.all().len(),
-                                    turn: self.turn_count,
-                                })
-                                .await,
-                            "TurnEvent receiver dropped; discarding event"
+                        crate::emit!(
+                            event_tx,
+                            TurnEvent::MemoryExtracted {
+                                count: store.all().len(),
+                                turn: self.turn_count,
+                            }
                         );
                     }
                 }
@@ -173,11 +168,9 @@ impl Executor {
         if result.is_ok() {
             if let Err(e) = self.conversation.checkpoint_async().await {
                 tracing::warn!(error = %e, "post-turn checkpoint failed");
-                crate::send_or_warn!(
-                    event_tx
-                        .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
-                        .await,
-                    "TurnEvent receiver dropped; discarding event"
+                crate::emit!(
+                    event_tx,
+                    TurnEvent::Error(format!("Checkpoint failed: {e}"))
                 );
             }
         }
@@ -328,11 +321,9 @@ impl Executor {
                     .maybe_swap(&cfg_snapshot, &mut self.adapter, user_input);
             if let Some(new_model) = swapped {
                 self.model_name = new_model.clone();
-                crate::send_or_warn!(
-                    event_tx
-                        .send(TurnEvent::Token(format!("🔀 Switched to {new_model}\n")))
-                        .await,
-                    "TurnEvent receiver dropped; discarding event"
+                crate::emit!(
+                    event_tx,
+                    TurnEvent::Token(format!("🔀 Switched to {new_model}\n"))
                 );
             }
         }
@@ -357,12 +348,7 @@ impl Executor {
         // If this session was recovered from a checkpoint, tell the user
         // once before any model output appears.
         if let Some(count) = self.recovered_messages.take() {
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::Recovered { messages: count })
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
-            );
+            crate::emit!(event_tx, TurnEvent::Recovered { messages: count });
         }
 
         let mut tool_calls: Vec<ToolInvocation> = Vec::new();
@@ -413,25 +399,16 @@ impl Executor {
                                 tool_calls.len(),
                                 &crate::shared::FinishReason::Error,
                             );
-                            crate::send_or_warn!(
-                                event_tx
-                                    .send(TurnEvent::Error(
-                                        "Response truncated (max tokens). Continuation disabled (max_continuation_rounds = 0).".into()
-                                    ))
-                                    .await,
-                                "TurnEvent receiver dropped; discarding event"
-                            );
+                            crate::emit!(event_tx, TurnEvent::Error( "Response truncated (max tokens). Continuation disabled (max_continuation_rounds = 0).".into() ));
                             return Ok(());
                         }
                         continuation_count += 1;
-                        crate::send_or_warn!(
-                            event_tx
-                                .send(TurnEvent::ContinuationRound {
-                                    round: continuation_count,
-                                    max: max_continuation_rounds,
-                                })
-                                .await,
-                            "TurnEvent receiver dropped; discarding event"
+                        crate::emit!(
+                            event_tx,
+                            TurnEvent::ContinuationRound {
+                                round: continuation_count,
+                                max: max_continuation_rounds,
+                            }
                         );
                         if continuation_count > max_continuation_rounds {
                             let msg = format!(
@@ -439,10 +416,7 @@ impl Executor {
                                  The response was truncated and could not be completed within \
                                  the allowed rounds."
                             );
-                            crate::send_or_warn!(
-                                event_tx.send(TurnEvent::Error(msg.clone())).await,
-                                "TurnEvent receiver dropped; discarding event"
-                            );
+                            crate::emit!(event_tx, TurnEvent::Error(msg.clone()));
                             record_turn_metric(
                                 &self.model_name,
                                 turn_start,
@@ -451,13 +425,12 @@ impl Executor {
                             );
                             return Ok(());
                         }
-                        crate::send_or_warn!(
-                            event_tx
-                                .send(TurnEvent::Token(
-                                    "\n\u{26a0} Response was truncated (max tokens). Continuing...\n".into()
-                                ))
-                                .await,
-                            "TurnEvent receiver dropped; discarding event"
+                        crate::emit!(
+                            event_tx,
+                            TurnEvent::Token(
+                                "\n\u{26a0} Response was truncated (max tokens). Continuing...\n"
+                                    .into()
+                            )
                         );
                         self.conversation
                             .append_async(Message {
@@ -495,15 +468,13 @@ impl Executor {
                     // turn doesn't see orphaned tool-call ids.
                     for skipped in &tcs[cancelled_idx..] {
                         let msg = format!("Tool call {} cancelled before execution", skipped.id);
-                        crate::send_or_warn!(
-                            event_tx
-                                .send(TurnEvent::ToolResult {
-                                    name: skipped.name.clone(),
-                                    output: msg.clone(),
-                                    success: false,
-                                })
-                                .await,
-                            "TurnEvent receiver dropped; discarding event"
+                        crate::emit!(
+                            event_tx,
+                            TurnEvent::ToolResult {
+                                name: skipped.name.clone(),
+                                output: msg.clone(),
+                                success: false,
+                            }
                         );
                         self.conversation
                             .append_async(Message {
@@ -533,11 +504,9 @@ impl Executor {
                     // before the next assistant response loses less work.
                     if let Err(e) = self.conversation.checkpoint_async().await {
                         tracing::warn!(error = %e, "post-tool-batch checkpoint failed");
-                        crate::send_or_warn!(
-                            event_tx
-                                .send(TurnEvent::Error(format!("Checkpoint failed: {e}")))
-                                .await,
-                            "TurnEvent receiver dropped; discarding event"
+                        crate::emit!(
+                            event_tx,
+                            TurnEvent::Error(format!("Checkpoint failed: {e}"))
                         );
                     }
                 }
@@ -559,11 +528,9 @@ impl Executor {
                                 token_count: None,
                             })
                             .await?;
-                        crate::send_or_warn!(
-                            event_tx
-                                .send(TurnEvent::Token("(JSON parse error, retrying…)\n".into()))
-                                .await,
-                            "TurnEvent receiver dropped; discarding event"
+                        crate::emit!(
+                            event_tx,
+                            TurnEvent::Token("(JSON parse error, retrying…)\n".into())
                         );
                     } else {
                         record_turn_metric(
@@ -578,11 +545,9 @@ impl Executor {
             }
 
             if iteration + 1 >= max_iterations {
-                crate::send_or_warn!(
-                    event_tx
-                        .send(TurnEvent::Error("Tool call loop limit reached".into()))
-                        .await,
-                    "TurnEvent receiver dropped; discarding event"
+                crate::emit!(
+                    event_tx,
+                    TurnEvent::Error("Tool call loop limit reached".into())
                 );
                 record_turn_metric(
                     &self.model_name,
@@ -672,15 +637,13 @@ impl Executor {
                                     Some(&denied),
                                 );
                             }
-                            crate::send_or_warn!(
-                                event_tx
-                                    .send(TurnEvent::ToolResult {
-                                        name: tc.name.clone(),
-                                        output: denied.clone(),
-                                        success: false,
-                                    })
-                                    .await,
-                                "TurnEvent receiver dropped; discarding event"
+                            crate::emit!(
+                                event_tx,
+                                TurnEvent::ToolResult {
+                                    name: tc.name.clone(),
+                                    output: denied.clone(),
+                                    success: false,
+                                }
                             );
                             self.conversation
                                 .append_async(Message {
@@ -723,15 +686,13 @@ impl Executor {
                             Some(&denied),
                         );
                     }
-                    crate::send_or_warn!(
-                        event_tx
-                            .send(TurnEvent::ToolResult {
-                                name: tc.name.clone(),
-                                output: denied.clone(),
-                                success: false,
-                            })
-                            .await,
-                        "TurnEvent receiver dropped; discarding event"
+                    crate::emit!(
+                        event_tx,
+                        TurnEvent::ToolResult {
+                            name: tc.name.clone(),
+                            output: denied.clone(),
+                            success: false,
+                        }
                     );
                     self.conversation
                         .append_async(Message {
@@ -768,15 +729,13 @@ impl Executor {
                     self.audit_log
                         .log_destructive(&tc.name, &tc.arguments, false, Some(&denied));
                 }
-                crate::send_or_warn!(
-                    event_tx
-                        .send(TurnEvent::ToolResult {
-                            name: tc.name.clone(),
-                            output: denied.clone(),
-                            success: false,
-                        })
-                        .await,
-                    "TurnEvent receiver dropped; discarding event"
+                crate::emit!(
+                    event_tx,
+                    TurnEvent::ToolResult {
+                        name: tc.name.clone(),
+                        output: denied.clone(),
+                        success: false,
+                    }
                 );
                 self.conversation
                     .append_async(Message {
@@ -1078,17 +1037,11 @@ impl Executor {
             match event {
                 StreamEvent::Text(t) => {
                     assistant_content.push_str(&t);
-                    crate::send_or_warn!(
-                        event_tx.send(TurnEvent::Token(t)).await,
-                        "TurnEvent receiver dropped; discarding event"
-                    );
+                    crate::emit!(event_tx, TurnEvent::Token(t));
                 }
                 StreamEvent::Thinking(t) => {
                     assistant_thinking.push_str(&t);
-                    crate::send_or_warn!(
-                        event_tx.send(TurnEvent::Thinking(t)).await,
-                        "TurnEvent receiver dropped; discarding event"
-                    );
+                    crate::emit!(event_tx, TurnEvent::Thinking(t));
                 }
                 StreamEvent::ToolCall(tc) => {
                     tool_calls_out.push(tc);
@@ -1097,10 +1050,7 @@ impl Executor {
                     if e.contains("parse") || e.contains("parseable") {
                         had_parse_error = true;
                     }
-                    crate::send_or_warn!(
-                        event_tx.send(TurnEvent::Error(e)).await,
-                        "TurnEvent receiver dropped; discarding event"
-                    );
+                    crate::emit!(event_tx, TurnEvent::Error(e));
                 }
                 StreamEvent::Done {
                     finish_reason,
@@ -1145,10 +1095,7 @@ impl Executor {
                     // completion, surface a PlanComplete event so the TUI
                     // can ask the user to approve implementation.
                     if self.plan_mode && assistant_content.contains(PLAN_COMPLETE_MARKER) {
-                        crate::send_or_warn!(
-                            event_tx.send(TurnEvent::PlanComplete).await,
-                            "TurnEvent receiver dropped; discarding event"
-                        );
+                        crate::emit!(event_tx, TurnEvent::PlanComplete);
                     }
 
                     // WO 43.22: providers that omit usage entirely must
@@ -1208,30 +1155,26 @@ impl Executor {
                         )
                     };
                     self.cost.usage.record_turn(prompt, completion, cost);
-                    crate::send_or_warn!(
-                        event_tx
-                            .send(TurnEvent::CostStats {
-                                prompt_tokens: prompt,
-                                completion_tokens: completion,
-                                turn_cost: cost,
-                                cumulative_cost: self.cost.usage.cumulative_cost,
-                            })
-                            .await,
-                        "TurnEvent receiver dropped; discarding event"
+                    crate::emit!(
+                        event_tx,
+                        TurnEvent::CostStats {
+                            prompt_tokens: prompt,
+                            completion_tokens: completion,
+                            turn_cost: cost,
+                            cumulative_cost: self.cost.usage.cumulative_cost,
+                        }
                     );
                     // Emit cache stats whenever the provider reports
                     // cache-read tokens. The stem size is the stable
                     // prefix the adapter should be reusing; a positive
                     // cached count is the KV-cache hit verification.
-                    crate::send_or_warn!(
-                        event_tx
-                            .send(TurnEvent::CacheStats {
-                                cached_tokens: cached,
-                                prompt_tokens: prompt,
-                                stem_tokens,
-                            })
-                            .await,
-                        "TurnEvent receiver dropped; discarding event"
+                    crate::emit!(
+                        event_tx,
+                        TurnEvent::CacheStats {
+                            cached_tokens: cached,
+                            prompt_tokens: prompt,
+                            stem_tokens,
+                        }
                     );
 
                     if !tool_calls_out.is_empty() {
@@ -1281,14 +1224,12 @@ impl Executor {
             || !tool_calls_out.is_empty()
             || !assistant_thinking.is_empty()
         {
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::Error(
-                        "Model stream ended without completion; partial response saved (truncated)"
-                            .into()
-                    ))
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
+            crate::emit!(
+                event_tx,
+                TurnEvent::Error(
+                    "Model stream ended without completion; partial response saved (truncated)"
+                        .into()
+                )
             );
         }
         Ok(IterationOutcome::Finished(
@@ -1331,15 +1272,13 @@ impl Executor {
 
         for tc in tool_calls.iter() {
             let result = format!("Tool call {} {skip_reason}", tc.id);
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: result.clone(),
-                        success: false,
-                    })
-                    .await,
-                "TurnEvent receiver dropped; discarding event"
+            crate::emit!(
+                event_tx,
+                TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: result.clone(),
+                    success: false,
+                }
             );
             self.conversation
                 .append_async(Message {

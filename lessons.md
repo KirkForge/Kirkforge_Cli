@@ -708,3 +708,30 @@
 - **Commit-per-defect with entangled edits**: stage an honest intermediate
   state (defect-1-only), verify, commit, then layer defect 2. Cheaper
   than git add -p surgery through a CLI.
+
+## WO 47.10 session (send_or_warn! ceremony → emit! macro)
+
+- The WO's "47 sites" counted only the ASYNC emission sites
+  (`event_tx.send(TurnEvent::…).await`); actual 46 (turn 24, outcome 8,
+  dispatch 5, loop_ 3, model 6). The 29 sync `send_or_warn!` sites
+  (unbounded/oneshot, no `.await`) are already 1-3-liners — no ceremony
+  to collapse, correctly out of scope. One macro cannot span both:
+  `.await` on a `Result` won't compile, macro_rules can't branch on
+  awaitability. Don't try a trait-based unification — not worth it for
+  3 saved lines.
+- For a mechanical 46-site rewrite, a 2-regex Python script (single-line
+  vs multi-line `.send(` arg, anchored on `)\n .await,\n "msg"`) beat
+  hand-editing: zero misses, zero typos, whitespace normalized by
+  `cargo fmt` afterwards. The anchor `\)\n\s*\.await,` is safe because
+  no event payload contains `.await,`.
+- regex-rewritten sites come out with ugly spacing (`"…" .into()`);
+  `cargo fmt` fixes all of it — don't hand-fix before fmt.
+- Pre-fmt diff (−299 lines) overstates the win: fmt re-wraps long macro
+  args, honest net was −100 lines for 46 sites (~2.2/site — the WO's
+  ~175-line estimate assumed more single-line sites than exist).
+- Setsid-detached gate runs MUST redirect the outer process too
+  (`setsid nohup bash -c '… > log 2>&1' > /dev/null 2>&1 < /dev/null &`)
+  — an unredirected setsid holds the bash tool's stdout pipe and burns
+  the full 120s timeout on a 5-second launcher.
+- Scope creep: none. Files touched exactly as WO names + the two status
+  docs the worker prompt requires.

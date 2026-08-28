@@ -348,12 +348,9 @@ pub async fn run_ollama_pull(
     let response = match client.post(&url).json(&body).send().await {
         Ok(resp) => resp,
         Err(e) => {
-            crate::send_or_warn!(
-                event_tx
-                    .send(TurnEvent::Token(format!(
-                        "❌ Pull request for {model} failed: {e}"
-                    )))
-                    .await,
+            crate::emit!(
+                event_tx,
+                TurnEvent::Token(format!("❌ Pull request for {model} failed: {e}")),
                 "TUI dropped pull-request error event"
             );
             return;
@@ -362,13 +359,12 @@ pub async fn run_ollama_pull(
 
     let status = response.status();
     if !status.is_success() {
-        crate::send_or_warn!(
-            event_tx
-                .send(TurnEvent::Token(format!(
-                    "❌ Pull request for {model} returned HTTP {}",
-                    status.as_u16()
-                )))
-                .await,
+        crate::emit!(
+            event_tx,
+            TurnEvent::Token(format!(
+                "❌ Pull request for {model} returned HTTP {}",
+                status.as_u16()
+            )),
             "TUI dropped pull-status error event"
         );
         return;
@@ -381,12 +377,9 @@ pub async fn run_ollama_pull(
         let chunk = match chunk {
             Ok(c) => c,
             Err(e) => {
-                crate::send_or_warn!(
-                    event_tx
-                        .send(TurnEvent::Token(format!(
-                            "⚠️ Pull stream for {model} interrupted: {e}"
-                        )))
-                        .await,
+                crate::emit!(
+                    event_tx,
+                    TurnEvent::Token(format!("⚠️ Pull stream for {model} interrupted: {e}")),
                     "TUI dropped pull-stream interruption event"
                 );
                 continue;
@@ -411,12 +404,9 @@ pub async fn run_ollama_pull(
                 // "success" or by repeating the model name; we treat
                 // any status containing "success" as done.
                 if parsed.status.to_ascii_lowercase().contains("success") {
-                    crate::send_or_warn!(
-                        event_tx
-                            .send(TurnEvent::Token(format!(
-                                "✅ Pull for {model} complete. Switching now…"
-                            )))
-                            .await,
+                    crate::emit!(
+                        event_tx,
+                        TurnEvent::Token(format!("✅ Pull for {model} complete. Switching now…")),
                         "TUI dropped pull-complete event"
                     );
                     crate::send_or_warn!(
@@ -427,8 +417,9 @@ pub async fn run_ollama_pull(
                 }
 
                 let msg = format_pull_line(model, &parsed);
-                crate::send_or_warn!(
-                    event_tx.send(TurnEvent::Token(msg + "\n")).await,
+                crate::emit!(
+                    event_tx,
+                    TurnEvent::Token(msg + "\n"),
                     "TUI dropped pull-progress event"
                 );
             }
@@ -438,12 +429,9 @@ pub async fn run_ollama_pull(
     // Stream ended without an explicit success line; the pull may still
     // have completed. Try to switch anyway and let the executor surface
     // any remaining problem on the next turn.
-    crate::send_or_warn!(
-        event_tx
-            .send(TurnEvent::Token(format!(
-                "✅ Pull stream for {model} ended. Switching now…"
-            )))
-            .await,
+    crate::emit!(
+        event_tx,
+        TurnEvent::Token(format!("✅ Pull stream for {model} ended. Switching now…")),
         "TUI dropped pull-stream-ended event"
     );
     crate::send_or_warn!(

@@ -864,17 +864,119 @@ fn minify_ruby(source: &str) -> String {
 
 // ── Shell ─────────────────────────────────────────────────────────
 
+/// Scan one command line for heredoc openings (`<<DELIM`, `<<-DELIM`,
+/// `<<'DELIM'`, `<<"DELIM"`), quote-aware. `<<<` here-strings and `#`
+/// comment tails don't count. Found delimiters are queued (tab_tolerant,
+/// delimiter) — FIFO, matching bash's read order for `<<A <<B` on one line.
+// ponytail: `<<$VAR` dynamic delimiters never terminate statically, so the
+// rest of the file stays "in heredoc" — safe direction (nothing stripped).
+fn shell_heredoc_opens(line: &str, open: &mut Vec<(bool, String)>) {
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    let mut quote: Option<char> = None;
+    while i < chars.len() {
+        let c = chars[i];
+        if let Some(q) = quote {
+            if c == '\\' && q == '"' && i + 1 < chars.len() {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '\'' | '"' => quote = Some(c),
+            '#' => {
+                // Only a word-start `#` starts a comment (bash rule);
+                // `a#b<<EOF` still opens a heredoc.
+                if i == 0
+                    || chars[i - 1].is_whitespace()
+                    || chars[i - 1] == ';'
+                    || chars[i - 1] == '&'
+                {
+                    return;
+                }
+            }
+            '<' if (i == 0 || chars[i - 1] != '<')
+                && chars.get(i + 1) == Some(&'<')
+                && chars.get(i + 2) != Some(&'<') =>
+            {
+                let mut j = i + 2;
+                let tab_tolerant = chars.get(j) == Some(&'-');
+                if tab_tolerant {
+                    j += 1;
+                }
+                while matches!(chars.get(j), Some(' ') | Some('\t')) {
+                    j += 1;
+                }
+                let quoted = matches!(chars.get(j), Some('\'') | Some('"'));
+                if quoted {
+                    j += 1;
+                }
+                let start = j;
+                while j < chars.len()
+                    && !chars[j].is_whitespace()
+                    && !matches!(chars[j], '\'' | '"' | ';' | '&' | ')')
+                {
+                    j += 1;
+                }
+                if j > start {
+                    open.push((tab_tolerant, chars[start..j].iter().collect()));
+                }
+                i = j;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+}
+
 fn minify_shell(source: &str) -> String {
     let mut out = String::new();
+    let mut prev_blank = false;
+    // Open heredocs, oldest first: (tab-tolerant terminator, delimiter).
+    let mut open_heredocs: Vec<(bool, String)> = Vec::new();
+
     for line in source.lines() {
+        // Heredoc body: verbatim (no comment strip, no blank collapse)
+        // until the terminator line.
+        if let Some(&(tab_tolerant, ref delim)) = open_heredocs.first() {
+            let candidate = if tab_tolerant {
+                line.trim_start_matches('\t')
+            } else {
+                line
+            };
+            if candidate == delim.as_str() {
+                open_heredocs.remove(0);
+            }
+            out.push_str(line);
+            out.push('\n');
+            prev_blank = false;
+            continue;
+        }
+
         let trimmed = line.trim();
         if trimmed.starts_with('#') && !trimmed.starts_with("#!") {
             continue; // strip comments but keep shebang
         }
+        shell_heredoc_opens(line, &mut open_heredocs);
+
+        if trimmed.is_empty() {
+            if prev_blank {
+                continue;
+            }
+            prev_blank = true;
+        } else {
+            prev_blank = false;
+        }
         out.push_str(line);
         out.push('\n');
     }
-    collapse_blank_lines(&out)
+    out
 }
 
 // ── Markdown ──────────────────────────────────────────────────────
@@ -1366,5 +1468,122 @@ pub const X: i32 = 1;
         assert!(!out.contains("leading comment"));
         assert!(out.contains("package main"));
         assert!(out.contains("func add"));
+    }
+
+    // ── WO 48.11: shell heredoc bodies survive minification ───────────
+
+    /// WO 48.11: `#` lines inside a heredoc body are literal content
+    /// (config/cron comments), not shell comments — they must survive.
+    /// Real comments outside the heredoc are still stripped. `<<<`
+    /// here-strings must NOT open a heredoc, and a quoted `<<` is inert.
+    #[test]
+    fn test_minify_shell_keeps_hash_lines_in_heredoc_bodies() {
+        let src = "#!/bin/sh\n# real comment\ncrontab -l <<EOF\n# m h dom mon dow command\n5 0 * * * /usr/bin/backup\nEOF\n# another real comment\necho done\n";
+        let out = minify_content_by_ext(src, "sh", false);
+        assert!(
+            out.contains("# m h dom mon dow command"),
+            "heredoc body # line must survive: {out}"
+        );
+        assert!(
+            out.contains("5 0 * * * /usr/bin/backup"),
+            "heredoc body cron entry must survive: {out}"
+        );
+        assert!(out.contains("EOF"), "terminator must survive: {out}");
+        assert!(
+            !out.contains("real comment"),
+            "real comments must be stripped"
+        );
+        assert!(
+            out.contains("crontab -l <<EOF"),
+            "opening must survive: {out}"
+        );
+        assert!(out.contains("echo done"));
+
+        // `<<<` here-string: not a heredoc — following # lines are comments.
+        let here_string = "cat <<< \"hello\"\n# stripped comment\necho x\n";
+        let out = minify_content_by_ext(here_string, "sh", false);
+        assert!(
+            !out.contains("stripped comment"),
+            "here-string must not open a heredoc: {out}"
+        );
+
+        // Quoted "<<": inert inside a string literal.
+        let quoted = "echo \"see <<docs for details\"\n# also stripped\necho y\n";
+        let out = minify_content_by_ext(quoted, "sh", false);
+        assert!(
+            out.contains("\"see <<docs for details\""),
+            "quoted << must not open a heredoc: {out}"
+        );
+        assert!(!out.contains("also stripped"));
+    }
+
+    /// WO 48.11: `<<-DELIM` terminator may be indented with tabs; the
+    /// indented terminator (and only it) closes the heredoc.
+    #[test]
+    fn test_minify_shell_heredoc_tab_stripped_delimiter() {
+        let src = "#!/bin/bash\n# comment\ncat <<-EOF\n\t# indented body comment\n\tdata line\n\tEOF\n# trailing comment\necho ok\n";
+        let out = minify_content_by_ext(src, "bash", false);
+        assert!(
+            out.contains("\t# indented body comment"),
+            "<<- body must pass through verbatim: {out}"
+        );
+        assert!(
+            out.contains("\tdata line"),
+            "<<- body data must survive: {out}"
+        );
+        assert!(
+            out.contains("\tEOF"),
+            "indented terminator must survive: {out}"
+        );
+        assert!(
+            !out.contains("# comment\n"),
+            "comments outside must be stripped: {out}"
+        );
+        assert!(!out.contains("trailing comment"));
+        assert!(out.contains("echo ok"));
+    }
+
+    /// WO 48.11: quoted delimiter `<<'EOF'` — body is fully literal, so
+    /// `#` lines AND `$var` text must survive byte-identically. Quoted and
+    /// unquoted delimiters consume bodies identically here because the
+    /// minifier never touches body content at all.
+    #[test]
+    fn test_minify_shell_quoted_delimiter_heredoc_verbatim() {
+        let src =
+            "cat <<'EOF'\n# literal hash\nPATH=$HOME/bin:$PATH\nEOF\n# real comment\necho after\n";
+        let out = minify_content_by_ext(src, "sh", false);
+        assert!(
+            out.contains("# literal hash"),
+            "quoted-delim body # must survive: {out}"
+        );
+        assert!(
+            out.contains("PATH=$HOME/bin:$PATH"),
+            "quoted-delim body must be verbatim (no expansion awareness needed): {out}"
+        );
+        assert!(!out.contains("real comment"));
+        assert!(out.contains("echo after"));
+    }
+
+    /// WO 48.11: cron-style `#` body lines survive the full minify →
+    /// envelope → expand round trip, so the edit_file path can't delete
+    /// them from disk.
+    #[test]
+    fn test_minify_shell_minify_expand_round_trip_heredoc_comments() {
+        use crate::shared::minify::{expand_minified, wrap_minified_envelope};
+        use std::path::Path;
+
+        let src = "cat <<EOF\n# cron body comment\n30 2 * * * /usr/local/bin/job\nEOF\n";
+        let minified = minify_content_by_ext(src, "sh", false);
+        assert!(minified.contains("# cron body comment"));
+        let wrapped = wrap_minified_envelope("shell", &minified);
+        let expanded = expand_minified(Path::new("x.sh"), &wrapped);
+        assert!(
+            expanded.contains("# cron body comment"),
+            "heredoc # line must survive minify+expand: {expanded}"
+        );
+        assert!(
+            expanded.contains("30 2 * * * /usr/local/bin/job"),
+            "heredoc body must survive minify+expand: {expanded}"
+        );
     }
 }

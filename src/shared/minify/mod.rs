@@ -143,8 +143,9 @@ fn minify_source_impl(path: &Path, content: &str, preserve_tests: bool) -> Strin
         }
     };
 
-    // Check cache
-    {
+    // Check cache — safe variant bypasses it: cached entries are
+    // test-stripped (only the non-preserve mode writes them).
+    if !preserve_tests {
         let mut cache = VFS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(cached) = cache.get(&(path.to_path_buf(), mtime)) {
             return cached.clone();
@@ -464,6 +465,33 @@ mod tests {
         assert!(cache_contains(&tmp), "should be cached after minify");
         invalidate_minify_cache(&tmp);
         assert!(!cache_contains(&tmp), "should be evicted after invalidate");
+
+        remove_test_file(&tmp);
+    }
+
+    /// The safe variant must not be served a test-stripped cache entry
+    /// written by the plain variant for the same path+mtime (WO 48.8).
+    #[test]
+    fn test_safe_variant_bypasses_test_stripped_cache() {
+        clear_minify_cache();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "kf_code_minify_safe_cache_test_{}.rs",
+            std::process::id()
+        ));
+        remove_test_file(&tmp);
+        let src = "fn add(x: i32) -> i32 { x + 1 }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn test_add() {}\n}\n";
+        std::fs::write(&tmp, src).unwrap();
+
+        let plain = minify_source(&tmp, src);
+        assert!(!plain.contains("#[cfg(test)]"));
+        assert!(cache_contains(&tmp), "plain variant caches its result");
+
+        let safe = minify_source_safe(&tmp, src);
+        assert!(
+            safe.contains("#[cfg(test)]"),
+            "safe variant must not get the test-stripped cached entry"
+        );
 
         remove_test_file(&tmp);
     }

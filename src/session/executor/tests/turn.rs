@@ -7,7 +7,7 @@ use super::super::types::PLAN_COMPLETE_MARKER;
 use super::super::*;
 use super::common::*;
 use crate::shared::test_util::remove_test_file;
-use crate::shared::{FinishReason, StreamEvent};
+use crate::shared::{FinishReason, StreamEvent, ToolDef};
 /// Smoke test for `PostTurnHookGuard`. Constructs a guard with the
 /// default `HookRunner` and lets it fall out of scope. The
 /// `HookRunner::run` call inside `Drop` is fire-and-forget and
@@ -51,6 +51,78 @@ fn reload_config_rebuilds_and_reports_changes() {
     assert_eq!(cfg.model.default_model, "qwen2.5:14b");
     assert!(cfg.model.json_mode);
     assert!(cfg.session.carryover_enabled);
+}
+
+/// Adapter that mirrors the openai_compat json_mode/response_format
+/// interplay (48.6 toggle-off semantics: `set_json_mode(false)` clears
+/// the format) so the reload path can be asserted without a live HTTP
+/// adapter. Records the last-pushed format in a shared slot.
+struct FormatRecordingAdapter {
+    response_format: std::sync::Arc<std::sync::Mutex<Option<crate::shared::ResponseFormat>>>,
+}
+
+#[async_trait::async_trait]
+impl crate::adapters::ModelAdapter for FormatRecordingAdapter {
+    fn model_info(&self) -> crate::shared::ModelInfo {
+        make_info()
+    }
+    fn set_json_mode(&mut self, json_mode: bool) {
+        let mut rf = self.response_format.lock().unwrap();
+        if json_mode {
+            *rf = Some(crate::shared::ResponseFormat::JsonObject);
+        } else {
+            *rf = None;
+        }
+    }
+    fn set_response_format(&mut self, format: crate::shared::ResponseFormat) {
+        *self.response_format.lock().unwrap() = Some(format);
+    }
+    async fn stream(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolDef],
+    ) -> anyhow::Result<mpsc::Receiver<StreamEvent>> {
+        let (_tx, rx) = mpsc::channel(8);
+        Ok(rx)
+    }
+}
+
+/// WO 48.18: a hot-reload with `json_mode = false` must not wipe an
+/// explicitly configured `json_schema` response format. Pre-fix,
+/// reload_config pushed `set_json_mode` but not `set_response_format`,
+/// so the 48.6 toggle-off clearing deleted the format.
+#[test]
+fn reload_with_json_mode_false_keeps_explicit_json_schema() {
+    let rf = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let mut config = make_config(false);
+    config.model.json_mode = false;
+    config.model.response_format = Some(crate::shared::ResponseFormat::JsonSchema {
+        name: "turn-result".into(),
+        schema: serde_json::json!({"type": "object"}),
+    });
+
+    let adapter = FormatRecordingAdapter {
+        response_format: rf.clone(),
+    };
+    let mut exe = make_executor(Box::new(adapter), vec![], config.clone()).unwrap();
+
+    // Construction pushed the explicit format (precondition).
+    assert!(matches!(
+        *rf.lock().unwrap(),
+        Some(crate::shared::ResponseFormat::JsonSchema { .. })
+    ));
+
+    // Hot-reload the same config with json_mode=false: the explicit
+    // format must survive the reload.
+    let _summary = exe.reload_config(config);
+
+    assert!(
+        matches!(
+            *rf.lock().unwrap(),
+            Some(crate::shared::ResponseFormat::JsonSchema { .. })
+        ),
+        "reload with json_mode=false wiped the explicit response_format"
+    );
 }
 
 #[tokio::test]

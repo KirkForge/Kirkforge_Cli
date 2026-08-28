@@ -1011,3 +1011,23 @@
 - gitnexus impact does not index #[cfg(test)]/#[tokio::test] symbols —
   for test-only edits, "no production callers possible" is the impact
   answer; don't burn time on re-indexing.
+
+## WO 48.3 session (2026-08-28)
+
+- The 47.12 regression mechanism: `open_overlay`-family tab switches prime
+  cold data via dirty FLAGS consumed by the draw loop — the fix point for
+  "tab X empty" bugs is the flag trip, not the fetch (the fetch already had
+  the disk fallback). There were THREE sibling switch sites (open_overlay,
+  palette Enter Overlay arm, F-key arm), all duplicating the Jobs-only
+  priming; extracted `prime_overlay_cold_data` so Jobs/Sessions can't
+  diverge again. When adding a new cold-primed overlay, extend that one
+  helper — do not inline another `*_dirty` trip at a switch site.
+- Startup picker path was never broken (run_session.rs routes through
+  `try_list_recent` which has the disk fallback) — only the in-TUI tab was.
+  Auditing the actual data path first shrank this WO to a flag trip.
+- gitnexus index is main-checkout-scoped: worktree edits made `impact`
+  return "not found". Manual grep impact (callers of the flag consumers)
+  is the fallback; risk was LOW and stayed LOW.
+- `cargo test -p kf-code --lib <filter>` needs ~19 min on this machine for
+  the first test-profile link — budget accordingly, then filtered reruns
+  are seconds.

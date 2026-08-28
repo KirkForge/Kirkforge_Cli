@@ -25,6 +25,13 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 48.3 — Sessions tab no longer permanently shows "No recent sessions"
+  in the default (daemon-less) config: every tab-switch site (direct
+  shortcut, command palette, F-key) now trips the cold-start refresh for
+  Sessions exactly as it already did for Jobs (one shared
+  `prime_overlay_cold_data` helper), so the tab lists from the on-disk
+  session index via the WO 47.12 fallback.
+  [48.3](docs/workorders/48.3-sessions-tab-empty-without-daemon.md)
 - Known-flake stabilization — the four wall-clock test families that
   caused red/noise across the WO 47 campaign
   (`attached_cancel_token_kills_inflight_bash_promptly`,

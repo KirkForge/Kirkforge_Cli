@@ -836,9 +836,25 @@ fn raw_config_lines_keys(config: &Config) -> Vec<String> {
     lines
 }
 
+/// Trip the cold-start refresh flags when an overlay is entered: Jobs
+/// re-reads its output, Sessions re-lists recent sessions. The draw
+/// loop's dirty-flag handlers do the actual (async) fetch; without a
+/// daemon they fall back to the on-disk session index (WO 47.12), so
+/// priming here is what keeps the Sessions tab populated daemon-less
+/// (WO 48.3). One helper for every tab-switch site so Jobs and
+/// Sessions can't diverge again.
+fn prime_overlay_cold_data(state: &mut AppState, tab: ActiveTab) {
+    if tab == ActiveTab::Jobs && state.session.cached_jobs_output.is_none() {
+        state.session.jobs_dirty = true;
+    }
+    if tab == ActiveTab::Sessions && state.session.session_picker.is_none() {
+        state.session.sessions_dirty = true;
+    }
+}
+
 /// Summon an overlay tab (WO 34.1 direct shortcut helper). Mirrors the
 /// F-key handler: reset list-state highlight, seed it for non-Chat
-/// overlays, and trip the jobs-refresh flag when entering Jobs cold.
+/// overlays, and trip the cold-start refresh flags for Jobs/Sessions.
 fn open_overlay(state: &mut AppState, tab: ActiveTab) {
     if tab != state.ui.active_tab {
         state.ui.tab_list_state = if tab == ActiveTab::Chat {
@@ -848,9 +864,7 @@ fn open_overlay(state: &mut AppState, tab: ActiveTab) {
         };
     }
     state.ui.active_tab = tab;
-    if tab == ActiveTab::Jobs && state.session.cached_jobs_output.is_none() {
-        state.session.jobs_dirty = true;
-    }
+    prime_overlay_cold_data(state, tab);
     state.mark_dirty();
 }
 
@@ -934,9 +948,7 @@ async fn handle_command_palette_keys(
                     } else {
                         Some(0)
                     };
-                    if tab == ActiveTab::Jobs && state.session.cached_jobs_output.is_none() {
-                        state.session.jobs_dirty = true;
-                    }
+                    prime_overlay_cold_data(state, tab);
                     state.mark_dirty();
                 }
                 Some(PaletteKind::Slash(cmd)) => {
@@ -1068,9 +1080,7 @@ pub(crate) async fn handle_input_key(
                 };
             }
             state.ui.active_tab = new_tab;
-            if new_tab == ActiveTab::Jobs && state.session.cached_jobs_output.is_none() {
-                state.session.jobs_dirty = true;
-            }
+            prime_overlay_cold_data(state, new_tab);
             state.mark_dirty();
         }
         KeyCode::Char(c) => {
@@ -2018,7 +2028,9 @@ mod tests {
         check(input, cursor_byte, "héllo", 5);
     }
 
-    use super::{char_index_for_line_col, handle_input_key, HandleInputContext};
+    use super::{
+        char_index_for_line_col, handle_input_key, prime_overlay_cold_data, HandleInputContext,
+    };
     use crate::session::conversation::ConversationLog;
     use crate::session::executor::TurnEvent;
     use crate::shared::test_util::app_state;
@@ -2073,6 +2085,30 @@ mod tests {
         assert_eq!(char_index_for_line_col(input, 1, 1), 4);
         // Clamp past end.
         assert_eq!(char_index_for_line_col(input, 1, 10), 4);
+    }
+
+    #[test]
+    fn prime_overlay_cold_data_trips_sessions_and_jobs_flags() {
+        use crate::tui::app::ActiveTab;
+        use crate::tui::components::session_picker::SessionPicker;
+
+        let mut state = app_state();
+        // Cold Sessions entry trips sessions_dirty — the WO 48.3 fix:
+        // without a daemon push, this flag is the only thing that makes
+        // the draw loop call refresh_sessions (on-disk index fallback).
+        prime_overlay_cold_data(&mut state, ActiveTab::Sessions);
+        assert!(state.session.sessions_dirty);
+        assert!(!state.session.jobs_dirty);
+
+        // Warm Sessions entry (picker already populated) does not re-trip.
+        state.session.sessions_dirty = false;
+        state.session.session_picker = Some(SessionPicker::new(Vec::new()));
+        prime_overlay_cold_data(&mut state, ActiveTab::Sessions);
+        assert!(!state.session.sessions_dirty);
+
+        // Cold Jobs entry still trips jobs_dirty (pre-existing behavior).
+        prime_overlay_cold_data(&mut state, ActiveTab::Jobs);
+        assert!(state.session.jobs_dirty);
     }
 
     #[tokio::test]

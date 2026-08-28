@@ -885,3 +885,32 @@
   the full 120s timeout on a 5-second launcher.
 - Scope creep: none. Files touched exactly as WO names + the two status
   docs the worker prompt requires.
+## WO 47.12 session (daemon opt-in)
+
+- The WO as written (default-off cargo feature) was under-scoped by its own
+  file list: gating src/daemon/** drags in lib.rs, cli.rs, run_session.rs,
+  tui/daemon_events.rs, tui/commands/fork.rs, and jobs/* (jobd reuses the
+  daemon Request/Response/daemonize/check_auth_ct helpers). The
+  worker-prompt caution pre-authorized the runtime fallback; the lazy shape
+  was one env gate (`KF_CODE_DAEMON_AUTOSTART`) + disk fallback inside the
+  two auto-starting try_* helpers — zero consumer-file churn.
+- Auto-start lived ONLY in `try_list_recent` + `try_resolve_id`
+  (`ensure_daemon_running`); `try_touch`, `try_notify_jobs_changed`, and the
+  TUI instance channel already degrade gracefully with no daemon. Knowing
+  exactly which 2 of 6 helpers spawn is what made the 2-file diff possible.
+- `session_index::summarize_file` derives `started_at` from file MTIME for
+  empty logs — tests needing deterministic newest-first ordering can use
+  `set_modified` with 2s steps (same trick as daemon/mod.rs
+  `recent_list_is_capped`).
+- Env races in tests: a new env knob's parse test and its behavior tests
+  must serialize behind `test_data_dir_lock()` (shared with other
+  data-dir-sensitive daemon tests), else the parse test flipping the var
+  can push a fallback test down the autostart path (2s spawn wait of the
+  TEST binary). EnvGuard::remove exists for the unset case.
+- scope creep (disclosed): src/cli.rs `--attach`/`--auto-resume` help text
+  (2 lines) — behavior this WO changed; honest-docs. TECHNICAL.md via the
+  doc-sync rule. Cargo.toml + cli_dispatch.rs were WO-named but needed no
+  change (no deps; dispatch untouched).
+- Fresh-worktree gate costs at load ~4: cargo check -p kf-code 5m15s,
+  nextest lib test-build 13m, clippy 6m23s. Detached setsid+log+poll
+  pattern per prior lessons.

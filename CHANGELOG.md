@@ -42,6 +42,11 @@ why, and the gate evidence.
   files) moved to `docs/archive/workorders/` with the historical index;
   `docs/workorders/README.md` now indexes only the live 46/47 series.
   [47.9](docs/workorders/47.9-archive-workorder-corpus.md)
+- WO 47.12 — session daemon is opt-in: `kf-code` no longer auto-spawns the
+  background daemon; auto-start requires `KF_CODE_DAEMON_AUTOSTART=1`, and
+  `--attach`/`--auto-resume`/startup-picker fall back to the on-disk session
+  index when no daemon runs (explicit `kf-code daemon` unchanged).
+  [47.12](docs/workorders/47.12-daemon-opt-in.md)
 - WO 47.27 — memory subsystem security/dupe fixes: memory-fact slugs strip
   URL/path/KEY=VALUE spans (secrets no longer reach filenames under
   `memory/`), fact bodies/descriptions are scrubbed via the audit-log

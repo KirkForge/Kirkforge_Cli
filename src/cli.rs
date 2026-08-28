@@ -110,11 +110,13 @@ pub enum Command {
         #[arg(long)]
         continue_session: Option<String>,
 
-        /// Resume the most recent session via the session daemon.
+        /// Resume the most recent session (via the session daemon when
+        /// running, else the on-disk session index).
         #[arg(long, conflicts_with = "continue_session", conflicts_with = "resume")]
         auto_resume: bool,
 
-        /// Resume a specific recent session by id or prefix via the daemon.
+        /// Resume a specific recent session by id or prefix (via the
+        /// session daemon when running, else the on-disk session index).
         #[arg(
             long,
             conflicts_with = "continue_session",

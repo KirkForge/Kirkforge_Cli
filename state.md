@@ -43,6 +43,27 @@
   --all-targets clean, clippy -p kf-code -D warnings clean, nextest
   mcp_client 81/81, fmt clean (fast-gate scope per worker prompt; full
   suites NOT run — deferred to the merge gate).
+- **WO 47.12**: Done. Session daemon becomes opt-in at runtime (branch
+  `wo/wo47.12`, not merged/pushed). `kf-code` no longer auto-spawns the
+  background daemon: auto-start is gated behind
+  `KF_CODE_DAEMON_AUTOSTART=1|true` (`daemon::autostart_enabled`, beside
+  the other KF_CODE_DAEMON_* env readers). When no daemon is reachable,
+  `try_list_recent`/`try_resolve_id` fall back to the on-disk session
+  index (`list_sessions`/`resolve_session_id` — same newest-first data
+  the daemon serves), so `--attach`, `--auto-resume`, the TUI startup
+  picker, and `/fork` resume keep working unchanged; explicit
+  `kf-code daemon`/`jobd` and all running-daemon client paths (incl. TUI
+  instance-channel push) are untouched. A default-off cargo feature was
+  rejected per the worker-prompt caution: it would hard-break
+  `kf-code daemon`/`jobd` and needs cfg sites in 6+ files outside the
+  WO scope + a dual-feature CI matrix. Phase-B impact:
+  `try_list_recent` nominal HIGH (3 direct callers, signatures
+  unchanged, change additive None→Some(disk)); `try_resolve_id` LOW.
+  3 new tests (autostart parse matrix, list fallback ordering, resolve
+  fallback exact+prefix). DEFERRED: compile-time excision of
+  src/daemon/** + kf-rbac from default builds via a cargo feature —
+  needs its own WO with consumer cfg sites + CI feature matrix (see
+  Pending).
 - **WO 47.27**: Done. Memory subsystem, three defects, one gated commit
   each on `wo/wo47.27` (not merged/pushed — parallel-wave worktree).
   (1) `make_slug` slugified raw user text, so 'I prefer
@@ -326,6 +347,18 @@
   from `kf_plugin_host::sdk` explicitly for provenance. Zero behavior
   difference. Tracked in
   [47.4](docs/workorders/47.4-fold-routing-memory-crates.md).
+- **WO 47.12 (deferred tail)**: the compile-time half of "daemon opt-in" —
+  a default-off `daemon` cargo feature compiling src/daemon/** and the
+  kf-rbac dep out of default builds — is NOT done (runtime opt-in shipped
+  instead). Why: consumers (run_session.rs, tui/daemon_events.rs,
+  tui/commands/fork.rs, jobs/*, cli.rs, lib.rs) need cfg sites in 6+
+  files outside the WO's named scope, `kf-code daemon`/`jobd` would
+  hard-error in default builds, and CI (ci-local.sh, test-fast/full,
+  workflows) needs a second feature matrix or the gated code never
+  compiles/tests and rots. Remaining: dedicated WO adding the feature +
+  consumer cfgs + CI matrix, keeping explicit-subcommand UX graceful.
+  Tracked in
+  [47.12](docs/workorders/47.12-daemon-opt-in.md).
 
 - **WO 47.21 residual (follow-up needed)**: `same_ms_double_spawn_gets_distinct_temp_dirs`
   and `same_ms_double_spawn_gets_distinct_worktrees` do NOT route through

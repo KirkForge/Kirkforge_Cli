@@ -3,6 +3,10 @@
 //! On Unix the daemon communicates over a domain socket; on Windows the
 //! daemon is not implemented yet, so the client provides no-op stubs that
 //! gracefully degrade to file-based session discovery.
+//!
+//! The daemon is opt-in (WO 47.12): the try_* helpers auto-start it only
+//! when `KF_CODE_DAEMON_AUTOSTART` is set; otherwise they fall back to
+//! the on-disk session index, which carries the same data.
 
 #[cfg(unix)]
 mod unix_imp {
@@ -347,14 +351,42 @@ mod unix_imp {
         wait_for_daemon(std::time::Duration::from_secs(2)).await
     }
 
-    /// Convenience: list recent sessions via the daemon, starting it if needed.
-    /// Returns `Ok(None)` only if the daemon could not be reached even after an
-    /// auto-start attempt.
+    /// Best-effort disk fallback when the daemon is unreachable: the
+    /// on-disk session index is the same source the daemon itself reads
+    /// (`DaemonState::refresh` scans the identical directory), so the
+    /// caller sees the same newest-first list without a background
+    /// process (WO 47.12 opt-in).
+    fn list_recent_from_disk() -> Option<Vec<SessionEntry>> {
+        match crate::session::session_index::list_sessions() {
+            Ok(entries) => Some(
+                entries
+                    .into_iter()
+                    .take(crate::daemon::RECENT_SESSIONS_LIMIT)
+                    .collect(),
+            ),
+            Err(e) => {
+                tracing::info!(error = %e, "session index scan failed; no recent sessions available");
+                None
+            }
+        }
+    }
+
+    /// Convenience: list recent sessions via the daemon. Auto-starts the
+    /// daemon only when `KF_CODE_DAEMON_AUTOSTART` opts in (WO 47.12);
+    /// otherwise — or when the daemon cannot be started/reached — falls
+    /// back to the on-disk session index. Returns `Ok(None)` only when
+    /// both the daemon and the index scan are unavailable.
     pub async fn try_list_recent() -> anyhow::Result<Option<Vec<SessionEntry>>> {
         if DaemonClient::connect().await.is_err() {
+            if !crate::daemon::autostart_enabled() {
+                tracing::trace!(
+                    "daemon not running and autostart not enabled; using session index"
+                );
+                return Ok(list_recent_from_disk());
+            }
             if let Err(e) = ensure_daemon_running().await {
                 tracing::info!(error = %e, "daemon not running and could not be started");
-                return Ok(None);
+                return Ok(list_recent_from_disk());
             }
         }
         let mut c = DaemonClient::connect().await?;
@@ -374,13 +406,22 @@ mod unix_imp {
         Ok(Some(first.path))
     }
 
-    /// Convenience: resolve a specific id/prefix via the daemon, starting it if
-    /// needed.
+    /// Convenience: resolve a specific id/prefix via the daemon.
+    /// Auto-starts the daemon only when `KF_CODE_DAEMON_AUTOSTART` opts
+    /// in (WO 47.12); otherwise falls back to the on-disk session index
+    /// (`resolve_session_id` uses the same exact-then-prefix, newest-
+    /// first matching the daemon serves).
     pub async fn try_resolve_id(id_or_prefix: &str) -> anyhow::Result<Option<PathBuf>> {
         if DaemonClient::connect().await.is_err() {
+            if !crate::daemon::autostart_enabled() {
+                tracing::trace!(
+                    "daemon not running and autostart not enabled; resolving via session index"
+                );
+                return crate::session::session_index::resolve_session_id(id_or_prefix);
+            }
             if let Err(e) = ensure_daemon_running().await {
-                tracing::trace!(error = %e, "daemon not running and could not be started; skipping resolve");
-                return Ok(None);
+                tracing::trace!(error = %e, "daemon not running and could not be started; resolving via session index");
+                return crate::session::session_index::resolve_session_id(id_or_prefix);
             }
         }
         let mut c = DaemonClient::connect().await?;
@@ -591,7 +632,7 @@ pub use windows_imp::*;
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::unix_imp::DaemonClient;
+    use super::unix_imp::{try_list_recent, try_resolve_id, DaemonClient};
     use crate::daemon::{read_line_limited, Response, MAX_FRAME_SIZE};
     use crate::shared::test_util::EnvGuard;
     use tokio::io::{AsyncWriteExt, BufStream};
@@ -610,6 +651,63 @@ mod tests {
             sleep(Duration::from_millis(5)).await;
         }
         panic!("daemon did not bind socket at {}", socket.display());
+    }
+
+    /// WO 47.12: with auto-start off (the default) and no daemon
+    /// running, `try_list_recent` serves the on-disk session index
+    /// instead of spawning a background process. If the auto-start gate
+    /// or the fallback is dropped, this returns `None` (gate revert
+    /// would also attempt a pointless spawn of the test binary).
+    #[tokio::test]
+    async fn try_list_recent_falls_back_to_disk_when_autostart_disabled() {
+        let _guard = crate::session::test_data_dir_lock().lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let _env_data = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+        let _env_autostart = EnvGuard::remove("KF_CODE_DAEMON_AUTOSTART");
+
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        // Distinct mtimes (2s steps) so the newest-first ordering is
+        // deterministic regardless of filesystem timestamp granularity.
+        let base = std::time::SystemTime::UNIX_EPOCH;
+        for i in 0..3u64 {
+            let path = sessions_dir.join(format!("s{i}.conv.ndjson"));
+            std::fs::write(&path, "").unwrap();
+            let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            file.set_modified(base + std::time::Duration::from_secs(i * 2 + 100))
+                .unwrap();
+        }
+
+        let listed = try_list_recent().await.unwrap();
+        let listed = listed.expect("disk fallback should serve the session index");
+        assert_eq!(listed.len(), 3, "index scan should see all sessions");
+        assert_eq!(listed[0].id, "s2", "newest-first ordering");
+        assert_eq!(listed[2].id, "s0");
+    }
+
+    /// WO 47.12: `try_resolve_id` resolves id and prefix from the
+    /// on-disk index when no daemon runs and auto-start is off — the
+    /// `--attach` UX must not regress without a daemon.
+    #[tokio::test]
+    async fn try_resolve_id_falls_back_to_disk_when_autostart_disabled() {
+        let _guard = crate::session::test_data_dir_lock().lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let _env_data = EnvGuard::set("KF_CODE_DATA_DIR", dir.path());
+        let _env_autostart = EnvGuard::remove("KF_CODE_DAEMON_AUTOSTART");
+
+        let sessions_dir = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        let target = sessions_dir.join("my-session.conv.ndjson");
+        std::fs::write(&target, "").unwrap();
+
+        let exact = try_resolve_id("my-session").await.unwrap();
+        assert_eq!(
+            exact,
+            Some(target.clone()),
+            "exact id should resolve from disk"
+        );
+        let prefix = try_resolve_id("my-sess").await.unwrap();
+        assert_eq!(prefix, Some(target), "id prefix should resolve from disk");
     }
 
     /// R1: `connect_at` against a path with no listener returns Err.

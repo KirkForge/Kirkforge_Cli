@@ -8,6 +8,7 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- WO 47.5 — bench + testdoctor gated behind default-off `devtools` feature; the release binary compiles neither. [47.5](docs/workorders/47.5-devtools-out-of-binary.md)
 
 ### Changed
 

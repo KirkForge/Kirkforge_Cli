@@ -101,7 +101,7 @@ impl PluginManifest {
     /// Collects every error it finds (does not short-circuit on the first) and
     /// returns `Err(Vec<ValidationError>)` if any rule fails. Pure: no I/O, no
     /// filesystem checks — just structural and format validation against the
-    /// rules documented in `docs/workorders/8.8-plugin-manifest-validation.md`.
+    /// rules documented in `docs/archive/workorders/8.8-plugin-manifest-validation.md`.
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
         let mut errors = Vec::new();
 

@@ -38,6 +38,10 @@ why, and the gate evidence.
 
 ### Changed
 
+- WO 47.9 — archived the completed workorder corpus: series 6-45 (450
+  files) moved to `docs/archive/workorders/` with the historical index;
+  `docs/workorders/README.md` now indexes only the live 46/47 series.
+  [47.9](docs/workorders/47.9-archive-workorder-corpus.md)
 - WO 47.27 — memory subsystem security/dupe fixes: memory-fact slugs strip
   URL/path/KEY=VALUE spans (secrets no longer reach filenames under
   `memory/`), fact bodies/descriptions are scrubbed via the audit-log

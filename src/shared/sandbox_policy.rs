@@ -1,7 +1,7 @@
 //! Unified sandbox policy intake — the seam for WO 45.11.
 //!
 //! Today KirkForge has four non-unified enforcement surfaces (see
-//! `docs/workorders/45.11-sandbox-policy-unification-audit.md`):
+//! `docs/archive/workorders/45.11-sandbox-policy-unification-audit.md`):
 //!
 //! 1. `PathGuard` + `DenyList` + `ReadGate` — in-process path access control
 //!    consumed by the file tools (`read_file`, `write_file`, `edit_file`,

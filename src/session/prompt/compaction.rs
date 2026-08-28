@@ -49,13 +49,38 @@ pub struct CompactionResult {
     pub tokens_after: usize,
 }
 
-/// Marker text substituted for tool results in the middle region. Kept
-/// in sync with the same marker used by `PromptBuilder::stub_old_tool_results`
-/// (`session/prompt/mod.rs`) so the model sees consistent stub language
+/// Marker text substituted for stubbed tool results. The single source
+/// for the stub shape: used by `compact_to_budget`'s middle region and
+/// by `PromptBuilder::stub_old_tool_results` (`session/prompt/mod.rs`)
+/// via [`stub_tool_result`], so the model sees consistent stub language
 /// whether the trimming happened at compaction time or at request-build
 /// time.
 pub const TOOL_RESULT_STUB: &str =
     "[previous tool result omitted to save budget — see TUI history]";
+
+/// Replace a tool result's content with the [`TOOL_RESULT_STUB`] marker.
+/// Preserves `tool_name` + `tool_call_id` so the TUI can still render a
+/// meaningful header ("🔧 bash — [previous tool result omitted …]").
+/// Shared by `compact_to_budget` (middle region) and
+/// `PromptBuilder::stub_old_tool_results` (request-build fallback).
+pub fn stub_tool_result(msg: &Message) -> Message {
+    let mut stub = msg.clone();
+    stub.content = TOOL_RESULT_STUB.to_string();
+    stub.token_count = None;
+    stub
+}
+
+/// Length of the leading system-message anchor: 1 when the history
+/// starts with a system message, else 0. The anchor is the cache stem
+/// and is always preserved verbatim. Shared by the region splits in
+/// `compact_to_budget` and `maybe_microcompact`.
+pub fn anchor_len(messages: &[Message]) -> usize {
+    if !messages.is_empty() && matches!(messages[0].role, Role::System) {
+        1
+    } else {
+        0
+    }
+}
 
 /// Marker prefix for condensed assistant turns. The trailing `(N chars)` is
 /// the original message's character count, which is useful debugging info
@@ -127,11 +152,7 @@ pub fn compact_to_budget(
     }
 
     // Anchor: a leading system message, if present.
-    let anchor = if !messages.is_empty() && matches!(messages[0].role, Role::System) {
-        1
-    } else {
-        0
-    };
+    let anchor = anchor_len(messages);
 
     // Tail: start with the minimum, then expand backwards if a budget is
     // set and we are currently over budget.
@@ -166,13 +187,8 @@ pub fn compact_to_budget(
     for msg in &messages[anchor..working_set_start] {
         match msg.role {
             Role::Tool => {
-                // Stub the content. Preserve tool_name + tool_call_id
-                // so the TUI can still render a meaningful header
-                // ("🔧 bash — [previous tool result omitted …]").
-                let mut stub = msg.clone();
-                stub.content = TOOL_RESULT_STUB.to_string();
-                stub.token_count = None;
-                new_messages.push(stub);
+                // Stub the content (shared stub shape — see stub_tool_result).
+                new_messages.push(stub_tool_result(msg));
                 dropped_tool_results += 1;
             }
             Role::Assistant => {

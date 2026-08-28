@@ -49,16 +49,12 @@ pub fn maybe_microcompact(
         return None;
     }
 
-    let tokens_before = estimate_tokens(messages);
+    let tokens_before = super::estimate_tokens(messages);
     if tokens_before <= threshold_tokens {
         return None;
     }
 
-    let anchor = if !messages.is_empty() && matches!(messages[0].role, Role::System) {
-        1
-    } else {
-        0
-    };
+    let anchor = super::compaction::anchor_len(messages);
 
     // We must keep the anchor plus keep_tail trailing messages. Everything
     // in between is eligible for summarization.
@@ -69,7 +65,7 @@ pub fn maybe_microcompact(
     }
 
     let heuristic_summary = heuristic_summary(&messages[anchor..tail_start]);
-    let heuristic_tokens = estimate_message_tokens(&Message {
+    let heuristic_tokens = super::estimate_message_tokens(&Message {
         role: Role::System,
         content: heuristic_summary.clone(),
         content_parts: None,
@@ -82,7 +78,7 @@ pub fn maybe_microcompact(
 
     // Decide whether to use LLM summarization instead of heuristic.
     let summary = if use_llm {
-        let middle_tokens = estimate_tokens(&messages[anchor..tail_start]);
+        let middle_tokens = super::estimate_tokens(&messages[anchor..tail_start]);
         let heuristic_ratio = if middle_tokens > 0 {
             1.0 - (heuristic_tokens as f64 / middle_tokens as f64)
         } else {
@@ -122,7 +118,7 @@ pub fn maybe_microcompact(
         out.push(msg.clone());
     }
 
-    let tokens_after = estimate_tokens(&out);
+    let tokens_after = super::estimate_tokens(&out);
     Some(MicrocompactResult {
         messages: out,
         tokens_after,
@@ -341,14 +337,6 @@ fn deterministic_compaction_summary(messages: &[Message]) -> String {
     } else {
         parts.join("\n\n")
     }
-}
-
-fn estimate_message_tokens(m: &Message) -> usize {
-    super::estimate_message_tokens(m)
-}
-
-fn estimate_tokens(messages: &[Message]) -> usize {
-    messages.iter().map(estimate_message_tokens).sum()
 }
 
 #[cfg(test)]
@@ -583,11 +571,6 @@ mod tests {
         // "bash" should appear once in the "tools used" list.
         let count = summary.matches("bash").count();
         assert_eq!(count, 1, "bash should appear once, got: {summary}");
-    }
-
-    #[test]
-    fn estimate_tokens_empty_is_zero() {
-        assert_eq!(estimate_tokens(&[]), 0);
     }
 
     /// WO 17.5: `use_llm=true` with a high drop_threshold triggers the LLM

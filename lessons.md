@@ -792,3 +792,29 @@
   CONFIG_FIELD_COUNT doc still instructed per-field loader edits).
 - Gate timing under sibling load: cold lib check 12m, workspace
   all-targets check 7m, clippy 3m, config test filter 3-14m per pass.
+## WO 47.6 session (compression layers 6→2, smallest safe consolidation)
+
+- The WO's "~2.5K lines, 6→2 pipelines" ask is a strategy-enum rewrite
+  across prompt/ + executor loop_.rs + TUI compact.rs — the latter two
+  outside the WO's own file list. Per the worker-prompt CAUTION the
+  safe scope was deduplicating the shared machinery (stub marker,
+  stub shape, anchor split, estimator delegates) — byte-identical
+  outputs, zero test churn beyond deleting one vacuous duplicate.
+- The "kept in sync" comment on compaction::TOOL_RESULT_STUB was the
+  tell for the duplicate: whenever a comment documents a manual sync
+  obligation between two constants, that's the consolidation target.
+- microcompaction's `use_llm=true` path calls
+  `deterministic_compaction_summary` — NOT an LLM; the real LLM arm is
+  summarizer.rs, reachable only from the executor /compact handler.
+  Any future strategy-enum consolidation must respect that
+  request-build time is sync (no adapter) while /compact time is async.
+- sed over a test file renamed a fn by pattern and corrupted a
+  `fn test_estimate_token_count()` header into
+  `fn test_crate::session::prompt::estimate_tokens()` — path-qualified
+  call replacement must not touch declaration lines; grep the result
+  before compiling.
+- Sibling-agent load (16 rustc procs, load 20): lib check 10m21s,
+  workspace check 7m17s, clippy 10m12s, prompt tests 146/146 in 34s
+  once warm. Detached setsid + poll remains the only sane pattern.
+- scope creep: none. 4 files, all in the WO's named scope; state.md/
+  CHANGELOG left to the coordinator per parallel-wave convention.

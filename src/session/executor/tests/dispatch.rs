@@ -920,6 +920,76 @@ async fn test_pre_tool_hook_deny_blocks_edit_file_before_mutation() {
     );
 }
 
+// WO 48.2: exactly ONE pre-tool-{name} evaluation per file-tool call.
+// Pre-fix, Phase 3 (record_tool_result) re-ran the hook after the body had
+// already mutated disk — doubled hook side-effects on every file call, and
+// a divergent second verdict could deny recording a write that already
+// happened (the WO 43.30 contract violation surviving in the second-run
+// window). The hook appends one byte per invocation; the counter file must
+// contain exactly one byte after a successful edit.
+#[cfg(unix)]
+#[tokio::test]
+async fn pre_tool_hook_runs_exactly_once_per_file_tool_call() {
+    let tmp =
+        std::env::temp_dir().join(format!("kf_code_hook_once_edit_{}.txt", std::process::id()));
+    std::fs::write(&tmp, "original").expect("seed existing file");
+    let _cleanup = CleanupFile(tmp.clone());
+
+    use crate::tools::edit_file::EditFile;
+    let edit_tool: Arc<dyn Tool> = Arc::new(EditFile::new(
+        None,
+        crate::session::access::PathGuard::default(),
+        false,
+        false,
+    ));
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-edit".into(),
+                name: "edit_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "old_string": "original",
+                    "new_string": "updated",
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (hook_tmp, hooks_dir) = temp_hooks_dir();
+    let counter = hook_tmp.path().join("invocations");
+    std::fs::write(&counter, b"").unwrap();
+    let script = format!("#!/bin/bash\nprintf x >> {counter:?}\nexit 0\n");
+    std::fs::write(hooks_dir.join("pre-tool-edit_file.sh"), script).unwrap();
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut config = make_config(true);
+    config.tools.hooks_dir = Some(hooks_dir);
+    let mut exe = make_executor(Box::new(adapter), vec![edit_tool], config).unwrap();
+    // Mark read so the read-before-edit gate passes — the edit must apply.
+    exe.sandbox.mark_read(&tmp);
+
+    exe.run_turn_collecting("edit counts one hook run", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let invocations = std::fs::read_to_string(&counter).unwrap().len();
+    assert_eq!(
+        invocations, 1,
+        "pre-tool hook must run exactly once per file-tool call, ran {invocations} times"
+    );
+
+    // The edit itself still applied (exit 0 => allow).
+    let on_disk = std::fs::read_to_string(&tmp).unwrap();
+    assert_eq!(on_disk, "updated");
+}
+
 // WO 44.28 regression: a same-batch bash call swaps the edit target for a
 // symlink after Phase-1 canonicalization but before the Phase 2.5 body.
 // The file is pre-marked read so the read-before-edit gate ALLOWS — pre-fix

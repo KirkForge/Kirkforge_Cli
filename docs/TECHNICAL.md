@@ -172,6 +172,10 @@ The largest module (~30 submodules). It owns:
   `post-tool-write_file`, `pre-compact`). Folded plugins register
   `InProcessHook` handlers that run in-process with full `HookContext`
   (including tool result content). External plugins use shell scripts.
+  Pre-tool hooks gate exactly once per call, in the Phase-1 pre-gate with
+  the resolved path already substituted for file tools — `record_tool_result`
+  (Phase 3) never re-runs them, so a deny always lands before the mutation
+  (WO 43.30 / WO 48.2).
 - **Prompt** (`prompt/`): builds the model prompt from conversation history,
   system instructions, tool definitions, and retrieved context. Includes
   microcompaction (ADR-0027) for stale turns.

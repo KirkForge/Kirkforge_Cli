@@ -25,6 +25,12 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 48.2 — pre-tool hooks fired twice per file-tool call: the Phase-3
+  recorder re-ran `pre-tool-{name}` after the write/edit had already hit
+  disk. The single evaluation now happens in the Phase-1 pre-gate with the
+  resolved path substituted into the hook args; a hook deny always lands
+  before the mutation. Regression test: a counting hook sees exactly one
+  invocation per file-tool call. [48.2](docs/workorders/48.2-pre-tool-hook-double-run.md)
 - Known-flake stabilization — the four wall-clock test families that
   caused red/noise across the WO 47 campaign
   (`attached_cancel_token_kills_inflight_bash_promptly`,

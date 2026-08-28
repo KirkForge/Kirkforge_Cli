@@ -574,8 +574,9 @@ impl Executor {
 
     /// Phase-3 recorder: apply the mutable side-effects of one completed tool
     /// call in input order. The tool body itself has already run in Phase 2,
-    /// so this method only performs stateful checks (read-before-edit gate,
-    /// pre-tool hook for file tools) and records the result.
+    /// so this method only performs stateful checks (read-before-edit gate)
+    /// and records the result. The pre-tool hook is NOT re-run here — Phase 1
+    /// owns the single evaluation (WO 48.2).
     ///
     /// `resolved_path` carries the path that Phase 1 (`pre_run_verdict`)
     /// already canonicalized and sandbox-checked for file tools. Passing it
@@ -714,40 +715,12 @@ impl Executor {
                 }
             }
 
-            // Pre-tool hook for file tools now that paths are resolved.
+            // No pre-tool hook here: the single pre-tool-{name} evaluation
+            // ran in Phase 1 (pre_run.rs) with the resolved path already
+            // substituted into its args (WO 48.2). Re-running it post-body
+            // would double hook side-effects and let a divergent second
+            // verdict deny recording a write that already hit disk.
             let args_json = serde_json::to_string(&run_args).unwrap_or_default();
-            if let Some(reason) = self
-                .run_pre_tool_hook(
-                    &format!("pre-tool-{}", tc.name),
-                    Some(&tc.name),
-                    Some(&args_json),
-                )
-                .await
-            {
-                let denied = format!("❌ Hook denied {}: {}", tc.name, reason);
-                if should_audit {
-                    self.audit_log
-                        .log_destructive(&tc.name, &tc.arguments, false, Some(&denied));
-                }
-                crate::emit!(
-                    event_tx,
-                    TurnEvent::ToolResult {
-                        name: tc.name.clone(),
-                        output: denied.clone(),
-                        success: false,
-                    }
-                );
-                self.conversation
-                    .append_async(Message {
-                        role: Role::Tool,
-                        content: denied,
-                        tool_call_id: Some(tc.id.clone()),
-                        tool_name: Some(tc.name.clone()),
-                        ..Default::default()
-                    })
-                    .await?;
-                return Ok(());
-            }
 
             // ToolStart was emitted at dispatch time in spawn_batch (WO 44.38).
 

@@ -118,7 +118,7 @@ Only the two most recent series are kept live.
 10 workorders from the fresh-area baseline audit (2026-08-28). 0 P0 / 4 P1 / 6 P2 — includes one WO 47.12 regression.
 
 | 48.1 | [minify_python strips # inside string literals — corrupts source on read AND on disk](48.1-minify-python-string-corruption.md) | Planned |
-| 48.2 | [Pre-tool hooks run twice per file-tool call — second run is post-mutation (WO 43.30 tail)](48.2-pre-tool-hook-double-run.md) | Planned |
+| 48.2 | [Pre-tool hooks run twice per file-tool call — second run is post-mutation (WO 43.30 tail)](48.2-pre-tool-hook-double-run.md) | Done |
 | 48.3 | [WO 47.12 regression: Sessions tab shows 'No recent sessions' in default (daemon-less) config](48.3-sessions-tab-empty-without-daemon.md) | Planned |
 | 48.4 | [daemon ThreadsChanged opens the session-picker MODAL at every TUI startup](48.4-session-picker-modal-pops-at-startup.md) | Planned |
 | 48.5 | [MCP tools/call isError:true classified as Success — doom-loop breaker blinded](48.5-mcp-iserror-ignored.md) | Planned |

@@ -4,6 +4,21 @@
 
 ## Shipped (closed this session)
 
+- **WO 48.2 (2026-08-28)**: pre-tool hooks no longer run twice per
+  file-tool call. The Phase-3 recorder (`record_tool_result`) re-ran
+  `pre-tool-{name}` AFTER the write/edit hit disk (doubled side-effects +
+  a divergent verdict could deny recording a completed write — the WO
+  43.30 contract violation surviving in the second-run window). The
+  single evaluation now runs in the Phase-1 pre-gate
+  (`pre_run.rs`) with the resolved path substituted into the hook args —
+  identical JSON to what the deleted Phase-3 run passed, so hooks see the
+  same view, now enforced pre-mutation. Regression test
+  `pre_tool_hook_runs_exactly_once_per_file_tool_call` (counting hook
+  asserts 1 invocation; 2 pre-fix). ADR-020 Phase-1 wording + TECHNICAL.md
+  hooks bullet updated to pin the single-gate contract. FAST GATES ONLY
+  per owner directive (check --workspace --all-targets, clippy -p kf-code,
+  session::hooks + dispatch tests, fmt, adr_xref_drift).
+  [48.2](docs/workorders/48.2-pre-tool-hook-double-run.md)
 - **Known-flake stabilization (2026-08-28)**: the four wall-clock flake
   families that caused red/noise across the WO 47 campaign got realistic
   budgets — assertions unchanged, nothing weakened. (1)

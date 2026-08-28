@@ -69,6 +69,18 @@ pub fn check_auth_ct(supplied: Option<&str>, expected: Option<&str>) -> Result<(
     }
 }
 
+/// Whether clients may auto-start the session daemon in the background
+/// (WO 47.12). Opt-in via `KF_CODE_DAEMON_AUTOSTART=1` (or `true`);
+/// unset/any other value means off. With auto-start off (the default),
+/// `kf-code` never spawns a background process — the try_* client
+/// helpers fall back to the on-disk session index, which serves the
+/// same newest-first data. Explicit `kf-code daemon` always works.
+pub fn autostart_enabled() -> bool {
+    std::env::var("KF_CODE_DAEMON_AUTOSTART")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 /// Read the daemon role from `KF_CODE_DAEMON_ROLE` (WO 43.6). Falls back
 /// to `admin` when unset or unparseable, so single-token deployments keep
 /// today's all-access behavior. Unknown values are denied by
@@ -654,6 +666,23 @@ mod tests {
         DataDirGuard {
             _dir: dir,
             _env: env,
+        }
+    }
+
+    #[test]
+    fn autostart_is_opt_in() {
+        let _guard = crate::session::test_data_dir_lock().blocking_lock();
+        // Unset → off (the WO 47.12 default: no background spawn).
+        let unset = EnvGuard::remove("KF_CODE_DAEMON_AUTOSTART");
+        assert!(!autostart_enabled());
+        drop(unset);
+        for v in ["1", "true", "TRUE"] {
+            let _env = EnvGuard::set("KF_CODE_DAEMON_AUTOSTART", v);
+            assert!(autostart_enabled(), "{v} should enable auto-start");
+        }
+        for v in ["0", "false", "yes", ""] {
+            let _env = EnvGuard::set("KF_CODE_DAEMON_AUTOSTART", v);
+            assert!(!autostart_enabled(), "{v:?} should not enable auto-start");
         }
     }
 

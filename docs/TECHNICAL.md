@@ -739,6 +739,18 @@ Session daemon (background process tracking recent sessions), scheduled-job
 daemon (cron-style, Unix-only), non-interactive line mode, and the binary entry
 point.
 
+**Daemon is opt-in (WO 47.12):** clients (`--attach`, `--auto-resume`, the
+TUI startup picker, `/fork` resume) only auto-start the session daemon when
+`KF_CODE_DAEMON_AUTOSTART=1` (or `true`) is set; the default is off and `kf-code`
+never spawns a background process on its own. When no daemon is reachable,
+the client helpers fall back to the on-disk session index
+(`session_index::list_sessions` / `resolve_session_id`) — the same
+newest-first data the daemon itself serves, so the flags keep working
+unchanged. Explicit `kf-code daemon` (or the bundled systemd/launchd units)
+always starts it, and every client uses a running daemon when one is there
+(including TUI instance-channel push events). `try_touch` and
+`try_notify_jobs_changed` never auto-started and are unchanged.
+
 **RBAC permission tiers (WO 43.6):** the daemon maps its bearer token to a
 `kf_rbac::Actor` with a role read from `KF_CODE_DAEMON_ROLE` (fallback
 `admin`). After the existing constant-time `check_auth` token gate, each

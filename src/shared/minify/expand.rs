@@ -226,13 +226,46 @@ fn normalize_trailing_newline(code: &str) -> String {
 /// Simple C-like pretty printer. Not a substitute for rustfmt, but good
 /// enough to keep code readable when no formatter is installed.
 fn fallback_c_like(code: &str) -> String {
+    use super::lang::prev_opens_regex;
+
     let mut out = String::with_capacity(code.len() * 2);
     let mut chars = code.chars().peekable();
     let mut in_string = false;
     let mut string_char = '"';
+    let mut in_regex = false;
+    let mut in_char_class = false;
     let mut prev_was_newline = false;
 
     while let Some(ch) = chars.next() {
+        // Regex literal protection (WO 48.12): emit verbatim until the
+        // closing unescaped `/` — the punctuation spacing below must not
+        // fire inside a regex body.
+        if in_regex {
+            if ch == '\\' {
+                out.push(ch);
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+                continue;
+            }
+            if ch == '\n' {
+                // Regex literals can't span lines — misdetected; bail.
+                in_regex = false;
+                in_char_class = false;
+            } else {
+                if ch == '[' {
+                    in_char_class = true;
+                } else if ch == ']' {
+                    in_char_class = false;
+                } else if ch == '/' && !in_char_class {
+                    in_regex = false;
+                    in_char_class = false;
+                }
+                out.push(ch);
+                continue;
+            }
+        }
+
         // String / char literal protection
         if !in_string && (ch == '"' || ch == '\'') {
             in_string = true;
@@ -277,6 +310,15 @@ fn fallback_c_like(code: &str) -> String {
                 }
             }
             prev_was_newline = true;
+            continue;
+        }
+
+        // Regex literal open (WO 48.12): same conservative heuristic as the
+        // minifier — `//` and `/*` (handled above) win over a regex open.
+        if ch == '/' && prev_opens_regex(&out) {
+            in_regex = true;
+            in_char_class = false;
+            out.push(ch);
             continue;
         }
 

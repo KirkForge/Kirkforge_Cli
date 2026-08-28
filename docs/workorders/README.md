@@ -128,7 +128,7 @@ Only the two most recent series are kept live.
 | 48.9 | [--no-default-features build broken — 3 un-gated kf_budget_core refs (ADR-0017 documents this build as supported)](48.9-no-default-features-broken.md) | Done |
 | 48.10 | [Windows daemon stubs return Ok(None) with no disk fallback — --attach errors, --auto-resume no-ops despite help promising fallback](48.10-windows-daemon-stub-no-fallback.md) | Done |
 | 48.11 | [minify_shell drops heredoc body lines starting # — disk write-back deletes them](48.11-minify-shell-heredoc-corruption.md) | Planned |
-| 48.12 | [minify_js_like truncates at // inside regex literals — js/ts corruption on the disk write-back chain](48.12-minify-js-regex-literal-corruption.md) | Planned |
+| 48.12 | [minify_js_like truncates at // inside regex literals — js/ts corruption on the disk write-back chain](48.12-minify-js-regex-literal-corruption.md) | Done |
 | 48.13 | [minify ruby: same heredoc/# string blindness family](48.13-minify-ruby-heredoc-and-comment-blindness.md) | Planned |
 | 48.14 | [Startup picker gate misses can_run_tui conditions — headless runs crash (os error 6)](48.14-startup-picker-launches-where-tui-impossible.md) | Planned |
 | 48.15 | [collect_batch pattern-matches body-produced AccessDenied as gate denial — skips record_tool_result](48.15-collect-batch-denial-classification.md) | Planned |

@@ -4,6 +4,22 @@
 
 ## Shipped (closed this session)
 
+- **WO 48.12 (2026-08-28, branch `wo48.12`, not merged)**: js/ts minify no
+  longer corrupts regex literals — `minify_js_like`
+  (`src/shared/minify/lang.rs`) truncated `/https?:\/\//` at the first
+  unescaped-looking `//`, eating the newline (disk write-back chain).
+  Regex-literal state now tracked with a conservative prev-token heuristic
+  (`prev_opens_regex`: operator/punctuator set + expression keywords;
+  verbatim body with `\` escapes and `[...]` classes; `\n` bails).
+  Sibling site on the same chain, `fallback_c_like`
+  (`src/shared/minify/expand.rs`), was inserting spaces inside regex
+  bodies via its `:` arm — fixed with the shared heuristic (scope creep:
+  expand.rs because the WO's round-trip gate routes through it).
+  Ceiling: regexes after `)`/`}`/identifier/number stay untracked
+  (`ponytail:` comment at the heuristic). FAST GATES ONLY per owner
+  directive: minify tests 76/76, clippy -p kf-code -D warnings, workspace
+  check --all-targets, fmt — all green. gitnexus impact (dev index): LOW.
+  [48.12](docs/workorders/48.12-minify-js-regex-literal-corruption.md)
 - **WO 48.9 (2026-08-28, branch `wo48.9`, not merged)**: `--no-default-features`
   build fixed — 3 un-gated `kf_budget_core::estimate_tokens` refs (ADR-0017
   documents the minimal build as supported). cfg gate now lives in ONE choke

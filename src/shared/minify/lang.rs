@@ -569,26 +569,65 @@ fn minify_python(source: &str) -> String {
     let mut out = String::with_capacity(source.len());
     let mut prev_was_newline = false;
     let mut chars = source.chars().peekable();
+    // String-literal state: Some(q) inside a '...'/"..."/triple literal.
+    let mut string_char: Option<char> = None;
+    let mut in_triple = false;
 
     while let Some(ch) = chars.next() {
-        // Line comment
-        if ch == '#' {
-            while chars.next().is_some() && chars.peek() != Some(&'\n') {}
+        if let Some(q) = string_char {
+            // Escape: the char after a backslash stays inside the literal.
+            if ch == '\\' {
+                out.push(ch);
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+                continue;
+            }
+            out.push(ch);
+            if ch == q {
+                if in_triple {
+                    // Only a run of three delimiters closes a triple-quoted string.
+                    if chars.peek() == Some(&q) && chars.clone().nth(1) == Some(q) {
+                        chars.next();
+                        chars.next();
+                        out.push(q);
+                        out.push(q);
+                        string_char = None;
+                        in_triple = false;
+                    }
+                } else {
+                    string_char = None;
+                }
+            }
             continue;
         }
 
-        // Triple-quoted string detection
-        if (ch == '"' || ch == '\'') && chars.peek() == Some(&ch) {
-            let next2 = chars.clone().nth(1);
-            if next2 == Some(ch) {
+        // Line comment — only outside string literals
+        if ch == '#' {
+            while chars.peek().is_some_and(|&c| c != '\n') {
+                chars.next();
+            }
+            continue;
+        }
+
+        // String literal start (triple-quoted needs docstring check)
+        if ch == '"' || ch == '\'' {
+            let is_triple = chars.peek() == Some(&ch) && chars.clone().nth(1) == Some(ch);
+            if is_triple {
                 chars.next();
                 chars.next();
                 let current_line = out.rsplit('\n').next().unwrap_or("");
                 let is_docstring = current_line.trim().is_empty();
 
                 if is_docstring {
+                    // Docstring: drop the whole literal (escape-aware scan).
                     let mut count = 0;
-                    for c in chars.by_ref() {
+                    while let Some(c) = chars.next() {
+                        if c == '\\' {
+                            chars.next();
+                            count = 0;
+                            continue;
+                        }
                         if c == ch {
                             count += 1;
                             if count == 3 {
@@ -603,8 +642,13 @@ fn minify_python(source: &str) -> String {
                 out.push(ch);
                 out.push(ch);
                 out.push(ch);
+                string_char = Some(ch);
+                in_triple = true;
                 continue;
             }
+            out.push(ch);
+            string_char = Some(ch);
+            continue;
         }
 
         if ch == '\n' {
@@ -1251,6 +1295,66 @@ pub const X: i32 = 1;
         assert!(!out.contains("inline"));
         assert!(out.contains("def f():"));
         assert!(out.contains("return x"));
+    }
+
+    /// WO 48.1: `#` inside string literals must survive minification —
+    /// the stripper used to truncate `"http://x#anchor"` at the `#`.
+    #[test]
+    fn test_minify_python_keeps_hash_in_string_literals() {
+        let src = "url = \"http://x#anchor\"\nfrag = 'also#fine'\nesc = \"a\\\"#still\"\nx = 1  # real comment\n";
+        let out = minify_content_by_ext(src, "py", false);
+        assert!(
+            out.contains("\"http://x#anchor\""),
+            "URL fragment literal must survive: {out}"
+        );
+        assert!(
+            out.contains("'also#fine'"),
+            "single-quoted literal with # must survive: {out}"
+        );
+        assert!(
+            out.contains("\"a\\\"#still\""),
+            "escaped quote must not close the literal: {out}"
+        );
+        assert!(
+            !out.contains("real comment"),
+            "real comment must be stripped"
+        );
+    }
+
+    /// WO 48.1: `#` inside non-docstring triple-quoted strings must survive
+    /// (the old scanner lost string state right after the opening quotes).
+    #[test]
+    fn test_minify_python_keeps_hash_in_triple_quoted_strings() {
+        let src = "tmpl = \"\"\"line with # inside\"\"\"\ndef f():\n    \"\"\"Docstring # here\"\"\"\n    pass";
+        let out = minify_content_by_ext(src, "py", false);
+        assert!(
+            out.contains("\"\"\"line with # inside\"\"\""),
+            "non-docstring triple literal must survive intact: {out}"
+        );
+        assert!(
+            !out.contains("Docstring"),
+            "docstrings must still be stripped: {out}"
+        );
+        assert!(out.contains("pass"));
+    }
+
+    /// WO 48.1: URL-with-fragment literal survives the full minify →
+    /// envelope → expand round trip byte-identically, so the edit_file
+    /// path can't write the corruption back to disk.
+    #[test]
+    fn test_minify_python_minify_expand_round_trip_url_fragment() {
+        use crate::shared::minify::{expand_minified, wrap_minified_envelope};
+        use std::path::Path;
+
+        let src = "url = \"http://x#anchor\"\n";
+        let minified = minify_content_by_ext(src, "py", false);
+        assert!(minified.contains("\"http://x#anchor\""));
+        let wrapped = wrap_minified_envelope("python", &minified);
+        let expanded = expand_minified(Path::new("x.py"), &wrapped);
+        assert!(
+            expanded.contains("\"http://x#anchor\""),
+            "URL fragment must survive minify+expand: {expanded}"
+        );
     }
 
     /// Go: `//` line and `/* */` block comments stripped; code preserved.

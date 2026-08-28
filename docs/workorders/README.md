@@ -1005,7 +1005,7 @@ tree, ~11 stale claims corrected in-line. See
 | 47.4 | [Fold kf-routing + kf-memory-store into kf-orchestrator (0 direct src/ refs)](47.4-fold-routing-memory-crates.md) | Planned |
 | 47.5 | [Feature-gate bench + testdoctor out of the default binary (~5K lines)](47.5-devtools-out-of-binary.md) | Planned |
 | 47.6 | [Six live compression layers → two (stratum modes should map to 2 pipelines)](47.6-compression-layers-6-to-2.md) | Planned |
-| 47.7 | [# WO 47.6 — MCP transport trait (every op exists 3×: enum + stdio_* + http)](47.7-mcp-transport-trait.md) | Planned |
+| 47.7 | [MCP transport trait (every op exists 3×: enum + stdio_* + http)](47.7-mcp-transport-trait.md) | Done |
 | 47.8 | [Wire or delete the 9 fuzz targets (100% unwired dead weight)](47.8-wire-or-delete-fuzz-targets.md) | Planned |
 | 47.9 | [Archive the completed workorder corpus (490 files, 45.6K lines = 74% of docs)](47.9-archive-workorder-corpus.md) | Planned |
 

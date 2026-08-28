@@ -9,6 +9,14 @@ why, and the gate evidence.
 
 ## [Unreleased]
 
+### Changed
+
+- WO 47.7 — MCP client dedup: `McpClient` is now a `Box<dyn McpTransport>`
+  wrapper (stdio + HTTP impls of the transport primitives); every MCP
+  operation and the initialize handshake exist once instead of 2-3×
+  (−310 lines). HTTP `tools/call` now renders non-text content blocks as
+  placeholders (image/audio/resource), matching the stdio transport.
+
 ### Fixed
 
 - WO 47.35 — prompt-injection defense: web_fetch/web_search/read_file now wrap

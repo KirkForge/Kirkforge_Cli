@@ -1191,7 +1191,10 @@ deep lifecycle integration (hooks, verifiers, skills, trust gating).
 #### MCP (primary path for new tool integrations)
 
 The MCP client (`src/session/mcp_client/`) speaks the Model Context Protocol
-over stdio and streamable-HTTP transports. It supports `tools/list` and
+over stdio and streamable-HTTP transports. Transports implement the private
+`McpTransport` trait (framing/liveness primitives); all MCP operations
+(tools/resources/prompts) are shared wrappers in `McpClient`, so a future
+transport is a single trait impl (WO 47.7). It supports `tools/list` and
 `tools/call` — the subset needed to expose any MCP-compatible server as
 tools in the agent loop. Tools are prefixed `mcp/<server>/<tool>` and are
 resolved alongside built-in tools in `CompositeToolset` (priority: builtin >

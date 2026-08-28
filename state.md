@@ -4,6 +4,19 @@
 
 ## Shipped (closed this session)
 
+- **WO 48.16 (2026-08-28, branch `wo48.16`, not merged)**: failed reads no
+  longer satisfy the read-before-edit gate. Both `mark_read` sites —
+  dispatch `spawn_batch` (intra-batch) and turn `record_tool_result`
+  (cross-batch/direct) — now gate on `tool_outcome_success`, so a
+  read_file/read_image whose body returned Failure/Error doesn't unlock a
+  later edit_file (blind-edit-after-failed-read closed). Both sites
+  already had the outcome in scope; no timing move needed. Regression
+  test `failed_read_does_not_satisfy_read_before_edit_gate` + mirror
+  success-path test both green. FAST GATES ONLY per owner directive:
+  workspace check --all-targets, clippy -p kf-code -D warnings,
+  session::executor::tests 104/104, shared::access 69/69, fmt — all
+  green. Full suite + Windows cross gate owed to CI before merge.
+  [48.16](docs/workorders/48.16-mark-read-on-failed-read.md)
 - **WO 48.9 (2026-08-28, branch `wo48.9`, not merged)**: `--no-default-features`
   build fixed — 3 un-gated `kf_budget_core::estimate_tokens` refs (ADR-0017
   documents the minimal build as supported). cfg gate now lives in ONE choke

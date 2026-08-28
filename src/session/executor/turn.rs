@@ -724,7 +724,11 @@ impl Executor {
 
             // ToolStart was emitted at dispatch time in spawn_batch (WO 44.38).
 
-            if matches!(tc.name.as_str(), "read_file" | "read_image") {
+            // Only a successful read satisfies the read-before-edit gate —
+            // a FAILED read must not (WO 48.16).
+            if matches!(tc.name.as_str(), "read_file" | "read_image")
+                && tool_outcome_success(&outcome)
+            {
                 self.sandbox.mark_read(&resolved);
             }
 

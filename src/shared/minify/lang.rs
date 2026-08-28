@@ -1551,7 +1551,6 @@ pub const X: i32 = 1;
         assert!(out.contains("func add"));
     }
 
-<<<<<<< HEAD
     // ── WO 48.11: shell heredoc bodies survive minification ───────────
 
     /// WO 48.11: `#` lines inside a heredoc body are literal content
@@ -1667,8 +1666,8 @@ pub const X: i32 = 1;
             expanded.contains("30 2 * * * /usr/local/bin/job"),
             "heredoc body must survive minify+expand: {expanded}"
         );
-||||||| 8184fa32
-=======
+    }
+
     /// WO 48.12: `//` inside a regex literal must survive — the stripper
     /// used to truncate `/https?:\/\//` at the escaped-slash/closing-slash
     /// pair and eat the newline.
@@ -1722,6 +1721,5 @@ pub const X: i32 = 1;
         assert!(out.contains("f(x) / 2"), "division after call: {out}");
         assert!(!out.contains("comment at regex position"));
         assert!(out.contains("5;"), "code after the comment survives: {out}");
->>>>>>> wo/wo48.12
     }
 }

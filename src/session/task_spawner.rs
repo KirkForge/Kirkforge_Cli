@@ -825,7 +825,10 @@ mod tests {
 
         // Both dirs must be alive at the same time (the adapter's retry
         // backoff keeps the tasks in flight for seconds).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // Readiness deadline generous on purpose: under ~50 parallel test
+        // processes the spawns starved at the old 10s deadline (WO 47.21
+        // residual) — nextest ci-fast grants this test 90s.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let dirs = loop {
             let dirs = task_temp_dirs_for_this_pid();
             if dirs.len() >= 2 {
@@ -906,7 +909,9 @@ mod tests {
         let b = tokio::spawn(async move { spawner_b.run_task(mk("doomed b")).await });
 
         let prefix = format!("kf-code-session-task-{}", std::process::id());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // Readiness deadline generous on purpose — see the temp-dir variant
+        // above (WO 47.21 residual).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let dirs = loop {
             let dirs = live_dirs_with_prefix(&prefix);
             if dirs.len() >= 2 {

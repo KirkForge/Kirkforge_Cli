@@ -1174,7 +1174,10 @@ async fn attached_cancel_token_kills_inflight_bash_promptly() {
         let flag_clone = Arc::clone(&flag);
         let token_clone = token.clone();
         tokio::spawn(async move {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            // Readiness deadline is generous on purpose: under parallel-
+            // worktree load the bash spawn itself can take seconds
+            // (state.md "Known flakes") — the file normally appears in ms.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             while std::time::Instant::now() < deadline {
                 if ready_clone.exists() {
                     flag_clone.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1193,8 +1196,12 @@ async fn attached_cancel_token_kills_inflight_bash_promptly() {
         .expect("turn should end cooperatively, not error");
 
     let elapsed = start.elapsed();
+    // Bound must stay below the child's 30s sleep so a no-kill regression
+    // (bash running to completion) still fails it. 25s: observed 12-18s
+    // under parallel-worktree load on an 8-core box (state.md "Known
+    // flakes") — the old 10s bound flagged healthy runs.
     assert!(
-        elapsed < std::time::Duration::from_secs(10),
+        elapsed < std::time::Duration::from_secs(25),
         "bash must die on cancel within a bounded window, took {elapsed:?}; events: {events:?}"
     );
 

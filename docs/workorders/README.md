@@ -133,7 +133,7 @@ Only the two most recent series are kept live.
 | 48.12 | [minify_js_like truncates at // inside regex literals — js/ts corruption on the disk write-back chain](48.12-minify-js-regex-literal-corruption.md) | Done |
 | 48.11 | [minify_shell drops heredoc body lines starting # — disk write-back deletes them](48.11-minify-shell-heredoc-corruption.md) | Done |
 | 48.12 | [minify_js_like truncates at // inside regex literals — js/ts corruption on the disk write-back chain](48.12-minify-js-regex-literal-corruption.md) | Done |
-| 48.13 | [minify ruby: same heredoc/# string blindness family](48.13-minify-ruby-heredoc-and-comment-blindness.md) | Planned |
+| 48.13 | [minify ruby: same heredoc/# string blindness family](48.13-minify-ruby-heredoc-and-comment-blindness.md) | Done |
 | 48.14 | [Startup picker gate misses can_run_tui conditions — headless runs crash (os error 6)](48.14-startup-picker-launches-where-tui-impossible.md) | Done |
 | 48.15 | [collect_batch pattern-matches body-produced AccessDenied as gate denial — skips record_tool_result](48.15-collect-batch-denial-classification.md) | Done |
 | 48.16 | [mark_read runs with no outcome check — failed reads satisfy the read-before-edit gate](48.16-mark-read-on-failed-read.md) | Done |

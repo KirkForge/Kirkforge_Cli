@@ -925,22 +925,199 @@ fn minify_java(source: &str) -> String {
 
 // ── Ruby ──────────────────────────────────────────────────────────
 
-fn minify_ruby(source: &str) -> String {
-    let mut out = String::new();
-    for line in source.lines() {
-        let trimmed = line.trim();
-        // Skip comment lines and shebang
-        if trimmed.starts_with('#') {
-            // Check if it's a heredoc or string containing # — skip for now
-            if !trimmed.starts_with("# encoding") && !trimmed.starts_with("# frozen_string_literal")
-            {
+/// One %-literal (`%q(...)`, `%w[...]`, `%{...}`, `%!...!`) left open
+/// across lines: delimiters + nesting depth (bracket pairs nest in
+/// ruby, same-char delimiters don't).
+struct PctOpen {
+    open: char,
+    close: char,
+    depth: usize,
+}
+
+/// Is this a `=begin`/`=end` block-comment marker line? Ruby requires
+/// column 0, followed by end-of-line or whitespace.
+fn ruby_block_marker(line: &str, marker: &str) -> bool {
+    line.starts_with(marker)
+        && line[marker.len()..]
+            .chars()
+            .next()
+            .is_none_or(char::is_whitespace)
+}
+
+/// Scan one ruby code line left to right for scanner state: pending
+/// heredoc delimiters (`<<~ID`, `<<-ID`, `<<ID`, `<<'ID'`, `<<"ID"`,
+/// queued FIFO like the shell path) and %-literals left open at EOL.
+/// Single-line '...'/"..." quotes shield their contents, and the first
+/// `#` outside any literal ends the scan — the rest is a comment tail
+/// and can't open anything.
+// ponytail: `x <<y` (shift with no space) and `%` after other operators
+// read as heredoc/literal openings — over-opening only skips stripping,
+// it never deletes literal content (48.11's safe-direction trade-off).
+fn ruby_scan_code(line: &str, heredocs: &mut Vec<(bool, String)>, pct: &mut Option<PctOpen>) {
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    let mut quote: Option<char> = None;
+    while i < chars.len() {
+        let c = chars[i];
+        if let Some(q) = quote {
+            if c == '\\' && q == '"' && i + 1 < chars.len() {
+                i += 2;
                 continue;
             }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(p) = pct.as_mut() {
+            if c == '\\' && i + 1 < chars.len() {
+                i += 2;
+                continue;
+            }
+            if c == p.close {
+                if p.open == p.close || p.depth == 1 {
+                    *pct = None;
+                } else {
+                    p.depth -= 1;
+                }
+            } else if c == p.open {
+                p.depth += 1;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '\'' | '"' => quote = Some(c),
+            '#' => return,
+            '%' if i == 0 || matches!(chars[i - 1], ' ' | '\t' | '=' | '(' | '[' | '{' | ',') => {
+                // `%` at term position: optional type letters, then the
+                // delimiter. Alphanumeric/space after `%` is modulo, not a
+                // literal (ruby allows no space before the delimiter).
+                let mut j = i + 1;
+                while j < chars.len() && chars[j].is_alphabetic() {
+                    j += 1;
+                }
+                if let Some(&d) = chars.get(j) {
+                    if !d.is_alphanumeric() && !d.is_whitespace() {
+                        let close = match d {
+                            '(' => ')',
+                            '{' => '}',
+                            '[' => ']',
+                            '<' => '>',
+                            _ => d, // same-char delimiter: no nesting
+                        };
+                        *pct = Some(PctOpen {
+                            open: d,
+                            close,
+                            depth: 1,
+                        });
+                        i = j + 1;
+                        continue;
+                    }
+                }
+            }
+            '<' if (i == 0 || chars[i - 1] != '<')
+                && chars.get(i + 1) == Some(&'<')
+                && chars.get(i + 2) != Some(&'<') =>
+            {
+                // Ruby allows no whitespace between `<<` and the delimiter,
+                // so `a << b` (left shift) never opens anything.
+                let mut j = i + 2;
+                let indent_tolerant = matches!(chars.get(j), Some('~') | Some('-'));
+                if indent_tolerant {
+                    j += 1;
+                }
+                let quoted = matches!(chars.get(j), Some('\'') | Some('"'));
+                if quoted {
+                    j += 1;
+                }
+                let start = j;
+                while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_') {
+                    j += 1;
+                }
+                if j > start {
+                    heredocs.push((indent_tolerant, chars[start..j].iter().collect()));
+                    i = j;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+}
+
+fn minify_ruby(source: &str) -> String {
+    let mut out = String::new();
+    let mut prev_blank = false;
+    // Open heredocs, oldest first: (indent-tolerant terminator, delimiter).
+    let mut open_heredocs: Vec<(bool, String)> = Vec::new();
+    // %-literal spanning lines.
+    let mut pct: Option<PctOpen> = None;
+    // Inside a =begin/=end block comment.
+    let mut in_block = false;
+
+    for line in source.lines() {
+        // Heredoc body: verbatim (no comment strip, no blank collapse)
+        // until the terminator line.
+        if let Some(&(indent_tolerant, ref delim)) = open_heredocs.first() {
+            let candidate = if indent_tolerant { line.trim() } else { line };
+            if candidate == delim.as_str() {
+                open_heredocs.remove(0);
+            }
+            out.push_str(line);
+            out.push('\n');
+            prev_blank = false;
+            continue;
+        }
+
+        // %-literal continuation: verbatim; the scan may close it mid-line
+        // (and the remainder can then open a heredoc, ruby-wise the string
+        // is part of the same logical line).
+        if pct.is_some() {
+            ruby_scan_code(line, &mut open_heredocs, &mut pct);
+            out.push_str(line);
+            out.push('\n');
+            prev_blank = false;
+            continue;
+        }
+
+        // =begin/=end block comments.
+        if in_block {
+            if ruby_block_marker(line, "=end") {
+                in_block = false;
+            }
+            continue;
+        }
+        if ruby_block_marker(line, "=begin") {
+            in_block = true;
+            continue;
+        }
+
+        let trimmed = line.trim();
+        // Skip comment lines and shebang; keep magic comments.
+        if trimmed.starts_with('#')
+            && !trimmed.starts_with("# encoding")
+            && !trimmed.starts_with("# frozen_string_literal")
+        {
+            continue;
+        }
+
+        ruby_scan_code(line, &mut open_heredocs, &mut pct);
+
+        if trimmed.is_empty() {
+            if prev_blank {
+                continue;
+            }
+            prev_blank = true;
+        } else {
+            prev_blank = false;
         }
         out.push_str(line);
         out.push('\n');
     }
-    collapse_blank_lines(&out)
+    out
 }
 
 // ── Shell ─────────────────────────────────────────────────────────
@@ -1721,5 +1898,130 @@ pub const X: i32 = 1;
         assert!(out.contains("f(x) / 2"), "division after call: {out}");
         assert!(!out.contains("comment at regex position"));
         assert!(out.contains("5;"), "code after the comment survives: {out}");
+    }
+
+    // ── WO 48.13: ruby heredoc / %-literal / =begin awareness ─────────
+
+    /// WO 48.13: `#` lines inside a ruby heredoc body are literal content,
+    /// not comments — they must survive. Real comments outside the heredoc
+    /// are still stripped, and `<<~DELIM` terminators may be indented.
+    #[test]
+    fn test_minify_ruby_keeps_hash_lines_in_heredoc_bodies() {
+        let src = "# frozen_string_literal: true\n# real comment\nsql = <<~SQL\n  -- not a comment anyway\n  # yaml-looking line\n  SELECT * FROM users\nSQL\n# another real comment\nputs sql\n";
+        let out = minify_content_by_ext(src, "rb", false);
+        assert!(
+            out.contains("# yaml-looking line"),
+            "heredoc body # line must survive: {out}"
+        );
+        assert!(
+            out.contains("SELECT * FROM users"),
+            "heredoc body must survive: {out}"
+        );
+        assert!(out.contains("SQL"), "terminator must survive: {out}");
+        assert!(
+            !out.contains("real comment"),
+            "comments outside must be stripped: {out}"
+        );
+        assert!(
+            out.contains("# frozen_string_literal: true"),
+            "magic comment must survive: {out}"
+        );
+        assert!(out.contains("sql = <<~SQL"), "opening must survive: {out}");
+        assert!(out.contains("puts sql"));
+    }
+
+    /// WO 48.13: quoted-delimiter and `<<-` heredocs behave the same way;
+    /// the body passes through verbatim.
+    #[test]
+    fn test_minify_ruby_quoted_and_dash_heredocs_verbatim() {
+        let src = "x = <<-'EOS'\n# literal hash\nbody line\n  EOS\n# real comment\nputs x\n";
+        let out = minify_content_by_ext(src, "rb", false);
+        assert!(
+            out.contains("# literal hash"),
+            "quoted-delim body # must survive: {out}"
+        );
+        assert!(out.contains("body line"));
+        assert!(!out.contains("real comment"));
+        assert!(out.contains("puts x"));
+    }
+
+    /// WO 48.13: `#` lines inside a multi-line %-literal (`%q(...)` with
+    /// bracket delimiters, nesting-aware) are string content — they must
+    /// survive, and stripping resumes after the closer.
+    #[test]
+    fn test_minify_ruby_keeps_hash_lines_in_pct_literals() {
+        let src = "# real comment\nquery = %q(SELECT # not a comment\nFROM (select # inner\n  1))\n# another real comment\nputs query\n";
+        let out = minify_content_by_ext(src, "rb", false);
+        assert!(
+            out.contains("SELECT # not a comment"),
+            "%q body # must survive: {out}"
+        );
+        assert!(
+            out.contains("FROM (select # inner"),
+            "nested bracket must keep the literal open: {out}"
+        );
+        assert!(
+            out.contains("puts query"),
+            "code after the literal must survive: {out}"
+        );
+        assert!(
+            !out.contains("real comment"),
+            "comments outside must be stripped: {out}"
+        );
+        // A `%` that is modulo (identifier before, or space-delimited
+        // operand) must not eat the rest of the file.
+        let modulo = "x = n % 2\n# stripped comment\nputs x\n";
+        let out = minify_content_by_ext(modulo, "rb", false);
+        assert!(
+            !out.contains("stripped comment"),
+            "modulo must not open a literal: {out}"
+        );
+        assert!(out.contains("x = n % 2"));
+    }
+
+    /// WO 48.13: `=begin`/`=end` block comments (column 0) are stripped,
+    /// while code before and after survives.
+    #[test]
+    fn test_minify_ruby_strips_begin_end_blocks() {
+        let src = "a = 1\n=begin\nblock comment line\n=end\nb = 2\n";
+        let out = minify_content_by_ext(src, "rb", false);
+        assert!(!out.contains("block comment line"), "{out}");
+        assert!(!out.contains("=begin"), "{out}");
+        assert!(!out.contains("=end"), "{out}");
+        assert!(out.contains("a = 1"), "code before must survive: {out}");
+        assert!(out.contains("b = 2"), "code after must survive: {out}");
+    }
+
+    /// WO 48.13: heredoc `#` lines survive the full minify → envelope →
+    /// expand round trip, so the edit_file path can't delete them from
+    /// disk.
+    #[test]
+    fn test_minify_ruby_round_trip_heredoc_and_pct() {
+        use crate::shared::minify::{expand_minified, wrap_minified_envelope};
+        use std::path::Path;
+
+        let src = "text = <<~TEXT\n  # keep me\n  body\nTEXT\n";
+        let minified = minify_content_by_ext(src, "rb", false);
+        assert!(minified.contains("# keep me"));
+        let wrapped = wrap_minified_envelope("ruby", &minified);
+        let expanded = expand_minified(Path::new("x.rb"), &wrapped);
+        assert!(
+            expanded.contains("# keep me"),
+            "heredoc # line must survive minify+expand: {expanded}"
+        );
+        assert!(
+            expanded.contains("body"),
+            "heredoc body must survive minify+expand: {expanded}"
+        );
+
+        let src = "re = %q(a # b\n c)\n";
+        let minified = minify_content_by_ext(src, "rb", false);
+        assert!(minified.contains("a # b"));
+        let wrapped = wrap_minified_envelope("ruby", &minified);
+        let expanded = expand_minified(Path::new("x.rb"), &wrapped);
+        assert!(
+            expanded.contains("a # b"),
+            "%q # must survive minify+expand: {expanded}"
+        );
     }
 }

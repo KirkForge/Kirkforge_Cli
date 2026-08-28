@@ -39,9 +39,11 @@
 //! **Command rules match case-insensitively (WO 44.21):** `bash`
 //! `command` rule values are normalized (whitespace collapsed, quotes
 //! stripped, lowercased) before matching, so `RM -RF /`, `rm  -rf  /`,
-//! and `rm "-rf" /` all match a deny rule `rm -rf /`. Glob *patterns*
-//! stay case-sensitive as written — write patterns in lowercase to
-//! match the lowercased values.
+//! and `rm "-rf" /` all match a deny rule `rm -rf /`. **Deny** glob
+//! patterns are lowercased before the comparison too (WO 48.19), so
+//! `RM*` blocks `rm -rf /` — an uppercase deny rule is no longer
+//! silently dead. Allow/Ask glob patterns stay case-sensitive as
+//! written — write those in lowercase to match the lowercased values.
 //!
 //! Rules are evaluated in declaration order — first match wins. The
 //! **default action** is `Ask` (forces approval prompt) unless the
@@ -303,11 +305,12 @@ fn tool_matches(pattern: &str, tool: &str) -> bool {
 /// WO 44.21: each clause is run through `normalize_for_safety` first
 /// (collapse whitespace, strip quotes, lowercase) so trivial quoting /
 /// spacing / casing evasions (`rm  -rf  /`, `rm "-rf" /`, `RM -RF /`)
-/// no longer bypass user-written deny rules. The deny prefix comparison
-/// lowercases the pattern to match the lowercased clause; glob patterns
-/// stay case-sensitive (patterns are config-authored, values are now
-/// lowercased — command rules match case-insensitively). Fail-closed:
-/// normalization makes MORE commands match, closing the bypasses.
+/// no longer bypass user-written deny rules. Both the glob and the prefix
+/// comparison lowercase the pattern to match the lowercased clause (WO
+/// 48.19 closed the last gap: an uppercase deny glob like `RM*` used to
+/// compare case-sensitively against the lowercased value and was silently
+/// dead). Fail-closed: normalization makes MORE commands match, closing
+/// the bypasses.
 fn deny_command_matches(pattern: &str, command: &str) -> bool {
     let normalized = normalize_command_pattern(pattern);
     let pattern_lower = normalized.to_ascii_lowercase();
@@ -324,7 +327,7 @@ fn deny_command_matches(pattern: &str, command: &str) -> bool {
     // survives quote-aware normalization.
     let matches_clause = |c: &str| -> bool {
         let n = normalize_for_safety(c);
-        if glob_match(&normalized, &n) {
+        if glob_match(&pattern_lower, &n) {
             return true;
         }
         // Prefix deny: a pattern ending with a path or word boundary denies
@@ -505,7 +508,13 @@ fn rule_subsumes(earlier: &PermissionRule, later: &PermissionRule) -> bool {
         };
         // Promotion surface: the promoted earlier glob matches later's
         // pattern string → earlier matches every value later matches.
-        if glob_match(e_norm.as_str(), later_pat.as_str()) {
+        // Both sides lowercased: the runtime lowercases the deny pattern
+        // before the glob compare (WO 48.19), so an uppercase deny can
+        // shadow too — mirroring the prefix surface's lowercasing.
+        if glob_match(
+            &e_norm.to_ascii_lowercase(),
+            &later_pat.to_ascii_lowercase(),
+        ) {
             return true;
         }
         // Prefix surface: a deny pattern ending in a path/word boundary
@@ -1021,6 +1030,27 @@ mod tests {
             PermissionAction::Deny,
             "tab-separated rm -rf / must be denied"
         );
+    }
+
+    /// WO 48.19: uppercase deny patterns are lowercased before the glob
+    /// compare (mirroring the 44.21 prefix lowercasing) — `RM*` now blocks
+    /// `rm -rf /` variants instead of being silently dead.
+    #[test]
+    fn test_evaluate_deny_command_uppercase_pattern_blocks() {
+        let rules = vec![rule("bash", "command", "RM*", PermissionAction::Deny)];
+        for command in ["rm -rf /", "RM -RF /", "rm  -rf  /home", "rm \"-rf\" /"] {
+            assert_eq!(
+                evaluate(
+                    &rules,
+                    "bash",
+                    &json!({"command": command}),
+                    PermissionAction::Ask
+                )
+                .0,
+                PermissionAction::Deny,
+                "uppercase deny RM* must block {command:?}"
+            );
+        }
     }
 
     /// WO 44.21 ceiling guard: `echo "git status"` normalizes to
@@ -1798,6 +1828,24 @@ mod tests {
             shadows,
             vec![(1, 0)],
             "deny rm -rf ** shadows deny rm -rf *"
+        );
+    }
+
+    #[test]
+    fn shadow_deny_uppercase_pattern_shadows_lowercase_allow() {
+        // WO 48.19: the runtime lowercases deny patterns before the glob
+        // compare, so an uppercase deny `RM -RF **` fires on the same values
+        // as its lowercase twin — the promotion surface models that and
+        // reports the shadowing of a later allow.
+        let rules = vec![
+            rule("bash", "command", "RM -RF **", PermissionAction::Deny),
+            rule("bash", "command", "rm -rf /home", PermissionAction::Allow),
+        ];
+        let shadows = detect_shadowed_rules(&rules);
+        assert_eq!(
+            shadows,
+            vec![(1, 0)],
+            "uppercase deny RM -RF ** shadows allow rm -rf /home"
         );
     }
 

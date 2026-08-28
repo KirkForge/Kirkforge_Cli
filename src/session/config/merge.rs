@@ -1,454 +1,167 @@
-//! TOML→Config field-by-field merge.
+//! Generic TOML→Config overlay (WO 47.2).
 //!
-//! Extracted from `mod.rs`: handles partial configs gracefully — missing
-//! fields keep their current value. `merge_toml_into_config` is the single
-//! largest function in the config module; isolating it keeps `mod.rs`
-//! focused on bootstrap/load/save.
+//! The config file layer and the env-var layer both funnel through
+//! `merge_toml_into_config`: serialize the current `Config` to its flat
+//! TOML form, overlay one key at a time, decode back via serde. The
+//! `#[serde(flatten)]` on `Config` does the key→sub-struct routing,
+//! typing, defaults, and alias handling, so a new Config field is
+//! reachable from both layers with no loader changes. A key whose value
+//! doesn't fit the field is skipped (prior value kept) — a bad value can
+//! never wipe unrelated fields. Unknown keys decode fine and are
+//! dropped by serde, matching the historical soft-merge behavior.
 
 use crate::shared::Config;
 use std::path::PathBuf;
 
 use super::expand_tilde_str;
 
+// Legacy TOML/env key aliases: the alias names the same field as the
+// primary. Inserting an alias while the serialized base already holds
+// the primary would make serde reject a duplicate field, so aliases
+// are swapped to the primary before insert.
+const KEY_ALIASES: &[(&str, &str)] = &[("compaction_use_llm", "compaction_use_heuristic")];
+
 /// Merge a parsed TOML table into a Config, field by field.
 ///
 /// This handles partial configs gracefully — missing fields keep
 /// their current value.
-pub(super) fn merge_toml_into_config(cfg: &mut Config, table: toml::Table) {
-    use toml::Value;
+pub(super) fn merge_toml_into_config(cfg: &mut Config, mut table: toml::Table) {
+    // Alias precedence: the primary name wins when a source sets both
+    // (matches the old hand-parsed if/else-if ordering).
+    if table.contains_key("compaction_use_heuristic") {
+        table.remove("compaction_use_llm");
+    }
+    // Flatten collision: memory_auto_populate is declared by BOTH
+    // ToolConfig and DisplayConfig. The custom SessionConfig
+    // Deserialize between them hides the key from DisplayConfig, and
+    // serialization writes display's copy (last writer wins) — the
+    // only round-trip-stable state is both fields equal, so apply the
+    // incoming value to both directly instead of through the overlay.
+    let memory_auto_populate = table
+        .remove("memory_auto_populate")
+        .and_then(|v| v.as_bool());
+    for (key, value) in table {
+        let key = KEY_ALIASES
+            .iter()
+            .find(|(from, _)| *from == key)
+            .map(|(_, to)| to.to_string())
+            .unwrap_or(key);
+        let mut trial = match toml::Value::try_from(&*cfg) {
+            Ok(toml::Value::Table(t)) => t,
+            _ => return,
+        };
+        insert_path(&mut trial, &key, value);
+        if let Ok(merged) = toml::Value::Table(trial).try_into() {
+            *cfg = merged;
+        }
+    }
+    if let Some(v) = memory_auto_populate {
+        cfg.tools.memory_auto_populate = v;
+        cfg.display.memory_auto_populate = v;
+    }
+    normalize(cfg);
+}
 
-    if let Some(Value::String(v)) = table.get("default_model") {
-        cfg.model.default_model = v.clone();
-    }
-    if let Some(Value::String(v)) = table.get("ollama_host") {
-        cfg.model.ollama_host = v.clone();
-    }
-    if let Some(Value::Boolean(v)) = table.get("auto_approve") {
-        cfg.security.auto_approve = *v;
-    }
-    if let Some(Value::String(v)) = table.get("sandbox_dir") {
-        cfg.security.sandbox_dir = Some(expand_tilde_str(v));
-    }
-    if let Some(Value::Boolean(v)) = table.get("block_dotfiles") {
-        cfg.security.block_dotfiles = *v;
-    }
-    if let Some(Value::Integer(v)) = table.get("max_file_read_size") {
-        if let Ok(n) = usize::try_from(*v) {
-            cfg.security.max_file_read_size = n;
+// Insert `value` at `path` (dot-separated for nested fields), merging
+// sub-tables so a partial `[section]` doesn't wipe keys set by an
+// earlier layer. Non-table values replace whatever was there; a value
+// that then fails to decode is dropped by the caller's per-key loop.
+fn insert_path(table: &mut toml::Table, path: &str, value: toml::Value) {
+    match path.split_once('.') {
+        Some((head, rest)) => {
+            let entry = table
+                .entry(head.to_string())
+                .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+            if let toml::Value::Table(sub) = entry {
+                insert_path(sub, rest, value);
+            }
         }
+        None => match value {
+            toml::Value::Table(new) => {
+                let entry = table
+                    .entry(path.to_string())
+                    .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+                if let toml::Value::Table(base) = entry {
+                    for (k, v) in new {
+                        insert_path(base, &k, v);
+                    }
+                }
+            }
+            value => {
+                table.insert(path.to_string(), value);
+            }
+        },
     }
-    if let Some(Value::Integer(v)) = table.get("request_timeout_secs") {
-        if let Ok(n) = u64::try_from(*v) {
-            cfg.model.request_timeout_secs = n.max(1);
-        }
+}
+
+/// Post-overlay normalization shared by the file and env layers:
+/// tilde expansion for path fields and minimum clamps for numeric
+/// knobs. Idempotent, so running it after each layer is safe.
+fn normalize(cfg: &mut Config) {
+    // Path fields: expand `~`, and treat an empty string as "clear"
+    // (None) for the Option-path fields. sandbox_dir and cache_dir
+    // keep Some("") — the documented "unsandboxed"/unset escape hatch.
+    if let Some(dir) = cfg.security.sandbox_dir.clone() {
+        cfg.security.sandbox_dir = Some(expand_tilde_str(&dir));
     }
-    if let Some(Value::Integer(v)) = table.get("streaming_timeout_secs") {
-        if let Ok(n) = u64::try_from(*v) {
-            cfg.model.streaming_timeout_secs = n.max(1);
-        }
+    if let Some(dir) = cfg.model.cache_dir.clone() {
+        cfg.model.cache_dir = Some(PathBuf::from(expand_tilde_str(&dir.to_string_lossy())));
     }
-    if let Some(Value::Boolean(v)) = table.get("follow_symlinks") {
-        cfg.tools.follow_symlinks = *v;
-    }
-    if let Some(Value::Boolean(v)) = table.get("block_binary_reads") {
-        cfg.tools.block_binary_reads = *v;
-    }
-    if let Some(Value::Boolean(v)) = table.get("minify_write_side") {
-        cfg.tools.minify_write_side = *v;
-    }
-    if let Some(Value::Integer(v)) = table.get("minify_above_bytes") {
-        cfg.tools.minify_above_bytes = (*v as usize).max(0);
-    }
-    if let Some(Value::Boolean(v)) = table.get("scheduled_bash_auto_approve") {
-        cfg.tools.scheduled_bash_auto_approve = *v;
-    }
-    if let Some(Value::Integer(v)) = table.get("max_concurrent_scheduled_jobs") {
-        cfg.tools.max_concurrent_scheduled_jobs = (*v as usize).max(1);
-    }
-    if let Some(Value::Boolean(v)) = table.get("carryover_enabled") {
-        cfg.session.carryover_enabled = *v;
-    }
-    if let Some(Value::Boolean(v)) = table.get("compaction_use_heuristic") {
-        cfg.session.compaction_use_heuristic = *v;
-    }
-    if let Some(Value::Boolean(v)) = table.get("compaction_use_llm") {
-        cfg.session.compaction_use_heuristic = *v;
-    }
-    if let Some(Value::Float(v)) = table.get("compaction_drop_threshold") {
-        cfg.session.compaction_drop_threshold = *v;
-    }
-    if let Some(Value::Integer(v)) = table.get("stem_file_cap") {
-        if let Ok(n) = usize::try_from(*v) {
-            cfg.session.stem_file_cap = Some(n);
-        }
-    }
-    if let Some(Value::Integer(v)) = table.get("shutdown_timeout_secs") {
-        if let Ok(n) = u64::try_from(*v) {
-            cfg.session.shutdown_timeout_secs = Some(n);
-        }
-    }
-    if let Some(Value::Boolean(v)) = table.get("dry_run") {
-        cfg.tools.dry_run = *v;
-    }
-    if let Some(Value::Boolean(v)) = table.get("cache_enabled") {
-        cfg.model.cache_enabled = *v;
-    }
-    if let Some(Value::String(v)) = table.get("cache_dir") {
-        cfg.model.cache_dir = Some(PathBuf::from(expand_tilde_str(v)));
-    }
-    if let Some(Value::Boolean(v)) = table.get("bang_requires_approval") {
-        cfg.security.bang_requires_approval = *v;
-    }
-    if let Some(Value::Boolean(v)) = table.get("json_mode") {
-        cfg.model.json_mode = *v;
-    }
-    if let Some(Value::Integer(v)) = table.get("max_tokens") {
-        if let Ok(n) = u32::try_from(*v) {
-            cfg.model.max_tokens = n.max(1);
-        }
-    }
-    if let Some(Value::Boolean(v)) = table.get("extended_thinking") {
-        cfg.model.extended_thinking = *v;
-    }
-    if let Some(Value::Integer(v)) = table.get("budget_tokens") {
-        if let Ok(n) = usize::try_from(*v) {
-            cfg.model.budget_tokens = n.max(1);
-        }
-    }
-    if let Some(Value::Boolean(v)) = table.get("bash_sandbox_workdir") {
-        cfg.security.bash_sandbox_workdir = *v;
-    }
-    if let Some(Value::Boolean(v)) = table.get("bash_require_allowlist") {
-        cfg.security.bash_require_allowlist = *v;
-    }
-    if let Some(Value::Array(v)) = table.get("bash_allowlist") {
-        cfg.security.bash_allowlist = v
-            .iter()
-            .filter_map(|x| x.as_str().map(|s| s.to_string()))
-            .collect();
-    }
-    if let Some(Value::Boolean(v)) = table.get("block_gitignored_dotfiles") {
-        cfg.security.block_gitignored_dotfiles = *v;
-    }
-    if let Some(Value::Integer(v)) = table.get("max_overwrite_size") {
-        if let Ok(n) = usize::try_from(*v) {
-            cfg.security.max_overwrite_size = n;
-        }
-    }
-    if let Some(Value::String(v)) = table.get("summarize_model") {
-        cfg.model.summarize_model = v.clone();
-    }
-    if let Some(Value::Boolean(v)) = table.get("routing_enabled") {
-        cfg.model.routing_enabled = *v;
-    }
-    if let Some(Value::String(v)) = table.get("router_model") {
-        cfg.model.router_model = v.clone();
-    }
-    if let Some(Value::Table(v)) = table.get("routing_model_map") {
-        cfg.model.routing_model_map = v
-            .iter()
-            .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
-            .collect();
-    }
-    if let Some(Value::Table(v)) = table.get("adapter_routing") {
-        cfg.model.adapter_routing = v
-            .iter()
-            .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
-            .collect();
-    }
-    if let Some(Value::Integer(v)) = table.get("commit_max_file_size") {
-        if let Ok(n) = u64::try_from(*v) {
-            cfg.security.commit_max_file_size = n;
-        }
-    }
-    if let Some(Value::Integer(v)) = table.get("preserve_recent_messages") {
-        cfg.session.preserve_recent_messages = (*v).max(1) as usize;
-    }
-    if let Some(Value::Integer(v)) = table.get("max_tool_calls_per_turn") {
-        cfg.tools.max_tool_calls_per_turn = (*v).max(1) as usize;
-    }
-    if let Some(Value::Integer(v)) = table.get("max_persona_turns") {
-        cfg.tools.max_persona_turns = (*v).max(1) as usize;
-    }
-    if let Some(Value::Integer(v)) = table.get("max_continuation_rounds") {
-        cfg.tools.max_continuation_rounds = (*v).clamp(0, 50) as usize;
-    }
-    if let Some(Value::Integer(v)) = table.get("doom_loop_max_hits") {
-        cfg.tools.doom_loop_max_hits = (*v).max(0) as usize;
-    }
-    if let Some(Value::String(v)) = table.get("doom_loop_action") {
-        cfg.tools.doom_loop_action = v.clone();
-    }
-    if let Some(Value::Boolean(v)) = table.get("load_project_mcp_json") {
-        cfg.tools.load_project_mcp_json = *v;
-    }
-    if let Some(Value::Boolean(v)) = table.get("plugin_consent_ledger") {
-        cfg.tools.plugin_consent_ledger = *v;
-    }
-    if let Some(Value::Integer(v)) = table.get("max_background_tasks") {
-        cfg.tools.max_background_tasks = (*v as usize).clamp(1, 64);
-    }
-    if let Some(Value::String(v)) = table.get("task_concurrency_mode") {
-        let mode = v.to_lowercase();
-        if mode == "queue" || mode == "reject" {
-            cfg.tools.task_concurrency_mode = mode;
-        }
-    }
-    if let Some(Value::Integer(v)) = table.get("tool_timeout_secs") {
-        if let Ok(n) = u64::try_from(*v) {
-            cfg.tools.tool_timeout_secs = Some(n.clamp(1, 3600));
-        }
-    }
-    if let Some(Value::String(v)) = table.get("audit_log_path") {
-        cfg.security.audit_log_path = if v.is_empty() {
+    clear_empty_path(&mut cfg.security.audit_log_path);
+    clear_empty_path(&mut cfg.tools.hooks_dir);
+    clear_empty_path(&mut cfg.model.gcp_service_account_path);
+    clear_empty_path(&mut cfg.security.computer_use.chrome_path);
+    let pubkey = cfg.tools.plugin_public_key_path.clone();
+    if let Some(p) = pubkey {
+        cfg.tools.plugin_public_key_path = if p.is_empty() {
             None
         } else {
-            Some(PathBuf::from(expand_tilde_str(v)))
+            Some(expand_tilde_str(&p))
         };
     }
-    if let Some(Value::Boolean(v)) = table.get("diff_review") {
-        cfg.security.diff_review = *v;
+    for p in cfg
+        .security
+        .deny_paths
+        .iter_mut()
+        .chain(cfg.security.allowed_write_dirs.iter_mut())
+        .chain(cfg.security.landlock_extra_paths.iter_mut())
+    {
+        *p = expand_tilde_str(p);
     }
-    if let Some(Value::String(v)) = table.get("hooks_dir") {
-        cfg.tools.hooks_dir = if v.is_empty() {
+
+    // Numeric knobs: a config file or env override cannot set an
+    // unusable zero-second timeout or a zero/negative cap where the
+    // consumer divides by or loops on the value.
+    cfg.model.request_timeout_secs = cfg.model.request_timeout_secs.max(1);
+    cfg.model.streaming_timeout_secs = cfg.model.streaming_timeout_secs.max(1);
+    cfg.session.preserve_recent_messages = cfg.session.preserve_recent_messages.max(1);
+    cfg.tools.max_tool_calls_per_turn = cfg.tools.max_tool_calls_per_turn.max(1);
+    cfg.tools.max_persona_turns = cfg.tools.max_persona_turns.max(1);
+    cfg.tools.max_continuation_rounds = cfg.tools.max_continuation_rounds.clamp(0, 50);
+    cfg.tools.max_concurrent_scheduled_jobs = cfg.tools.max_concurrent_scheduled_jobs.max(1);
+    cfg.tools.max_background_tasks = cfg.tools.max_background_tasks.clamp(1, 64);
+    cfg.model.max_tokens = cfg.model.max_tokens.max(1);
+    cfg.model.budget_tokens = cfg.model.budget_tokens.max(1);
+    if let Some(t) = cfg.tools.tool_timeout_secs {
+        cfg.tools.tool_timeout_secs = Some(t.clamp(1, 3600));
+    }
+    cfg.display.memory_max_tokens = cfg.display.memory_max_tokens.max(1);
+    cfg.display.memory_top_n = cfg.display.memory_top_n.max(1);
+    let cu = &mut cfg.security.computer_use;
+    cu.width = cu.width.max(1);
+    cu.height = cu.height.max(1);
+    cu.startup_timeout_secs = cu.startup_timeout_secs.max(1);
+    cu.wait_timeout_secs = cu.wait_timeout_secs.max(1);
+}
+
+// Some("") clears; Some(path) tilde-expands in place.
+fn clear_empty_path(p: &mut Option<PathBuf>) {
+    if let Some(s) = p.as_ref().and_then(|x| x.to_str()) {
+        *p = if s.is_empty() {
             None
         } else {
-            Some(PathBuf::from(expand_tilde_str(v)))
+            Some(PathBuf::from(expand_tilde_str(s)))
         };
-    }
-
-    // Plugin trust / sandbox knobs
-    if let Some(Value::Boolean(v)) = table.get("reject_on_excess_plugin_trust") {
-        cfg.tools.reject_on_excess_plugin_trust = *v;
-    }
-    if let Some(Value::Boolean(v)) = table.get("plugin_signature_validation") {
-        cfg.tools.plugin_signature_validation = *v;
-    }
-    if let Some(Value::Boolean(v)) = table.get("plugin_trust_workspace") {
-        cfg.tools.plugin_trust_workspace = *v;
-    }
-    if let Some(Value::String(v)) = table.get("plugin_public_key_path") {
-        cfg.tools.plugin_public_key_path = if v.is_empty() {
-            None
-        } else {
-            Some(expand_tilde_str(v))
-        };
-    }
-    if let Some(Value::Array(v)) = table.get("plugin_allowed_env_vars") {
-        cfg.tools.plugin_allowed_env_vars = v
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-    }
-
-    // Memory knobs
-    if let Some(Value::Boolean(v)) = table.get("memory_enabled") {
-        cfg.display.memory_enabled = *v;
-    }
-    if let Some(Value::Integer(v)) = table.get("memory_max_tokens") {
-        cfg.display.memory_max_tokens = (*v).max(1) as usize;
-    }
-    if let Some(Value::Integer(v)) = table.get("memory_top_n") {
-        cfg.display.memory_top_n = (*v).max(1) as usize;
-    }
-    if let Some(Value::Boolean(v)) = table.get("memory_auto_populate") {
-        cfg.display.memory_auto_populate = *v;
-    }
-    if let Some(Value::Boolean(v)) = table.get("memory_show_in_status") {
-        cfg.display.memory_show_in_status = *v;
-    }
-    if let Some(Value::String(v)) = table.get("theme") {
-        cfg.display.theme = v.clone();
-    }
-    if let Some(Value::Boolean(v)) = table.get("mouse_enabled") {
-        cfg.display.mouse_enabled = *v;
-    }
-    if let Some(Value::Integer(v)) = table.get("checkpoint_interval_messages") {
-        cfg.session.checkpoint_interval_messages = (*v).max(0) as usize;
-    }
-
-    // Workspace plugin sources
-    if let Some(Value::Table(v)) = table.get("plugin_sources") {
-        cfg.tools.plugin_sources = v
-            .iter()
-            .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), PathBuf::from(s))))
-            .collect();
-    }
-    if let Some(Value::Array(v)) = table.get("enabled_plugins") {
-        cfg.tools.enabled_plugins = v
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-    }
-    if let Some(Value::Array(v)) = table.get("disabled_plugins") {
-        cfg.tools.disabled_plugins = v
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-    }
-
-    // Anthropic cloud-provider routing
-    if let Some(Value::String(v)) = table.get("anthropic_provider") {
-        cfg.model.anthropic_provider = v.clone();
-    }
-    if let Some(Value::String(v)) = table.get("anthropic_api_base") {
-        cfg.model.anthropic_api_base = v.clone();
-    }
-    if let Some(Value::String(v)) = table.get("aws_region") {
-        cfg.model.aws_region = v.clone();
-    }
-    if let Some(Value::String(v)) = table.get("gcp_project_id") {
-        cfg.model.gcp_project_id = v.clone();
-    }
-    if let Some(Value::String(v)) = table.get("gcp_region") {
-        cfg.model.gcp_region = v.clone();
-    }
-    if let Some(Value::String(v)) = table.get("gcp_service_account_path") {
-        cfg.model.gcp_service_account_path = if v.is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(expand_tilde_str(v)))
-        };
-    }
-
-    // Per-provider API keys
-    if let Some(Value::String(v)) = table.get("anthropic_api_key") {
-        cfg.model.anthropic_api_key = if v.is_empty() { None } else { Some(v.clone()) };
-    }
-    if let Some(Value::String(v)) = table.get("openai_api_key") {
-        cfg.model.openai_api_key = if v.is_empty() { None } else { Some(v.clone()) };
-    }
-    if let Some(Value::String(v)) = table.get("deepseek_api_key") {
-        cfg.model.deepseek_api_key = if v.is_empty() { None } else { Some(v.clone()) };
-    }
-    if let Some(Value::String(v)) = table.get("gemini_api_key") {
-        cfg.model.gemini_api_key = if v.is_empty() { None } else { Some(v.clone()) };
-    }
-    if let Some(Value::String(v)) = table.get("kimi_api_key") {
-        cfg.model.kimi_api_key = if v.is_empty() { None } else { Some(v.clone()) };
-    }
-
-    // Config-driven pricing overrides (WO 38.5):
-    // [price_overrides."<prefix>"] with input_per_mtok /
-    // output_per_mtok / cache_write_per_mtok / cache_read_per_mtok.
-    if let Some(Value::Table(v)) = table.get("price_overrides") {
-        for (prefix, entry) in v {
-            let Some(t) = entry.as_table() else { continue };
-            let rate = |key: &str| t.get(key).and_then(|x| x.as_float()).unwrap_or(0.0);
-            cfg.model.price_overrides.insert(
-                prefix.clone(),
-                crate::shared::ModelPrice {
-                    input_per_mtok: rate("input_per_mtok"),
-                    output_per_mtok: rate("output_per_mtok"),
-                    cache_write_per_mtok: rate("cache_write_per_mtok"),
-                    cache_read_per_mtok: rate("cache_read_per_mtok"),
-                },
-            );
-        }
-    }
-
-    // Computer-use tool config
-    if let Some(Value::Table(v)) = table.get("computer_use") {
-        if let Some(Value::Boolean(b)) = v.get("enabled") {
-            cfg.security.computer_use.enabled = *b;
-        }
-        if let Some(Value::String(s)) = v.get("chrome_path") {
-            cfg.security.computer_use.chrome_path = if s.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(expand_tilde_str(s)))
-            };
-        }
-        if let Some(Value::Boolean(b)) = v.get("headful") {
-            cfg.security.computer_use.headful = *b;
-        }
-        if let Some(Value::Integer(n)) = v.get("width") {
-            cfg.security.computer_use.width = (*n).max(1) as u32;
-        }
-        if let Some(Value::Integer(n)) = v.get("height") {
-            cfg.security.computer_use.height = (*n).max(1) as u32;
-        }
-        if let Some(Value::Integer(n)) = v.get("startup_timeout_secs") {
-            cfg.security.computer_use.startup_timeout_secs = (*n).max(1) as u64;
-        }
-        if let Some(Value::Integer(n)) = v.get("wait_timeout_secs") {
-            cfg.security.computer_use.wait_timeout_secs = (*n).max(1) as u64;
-        }
-        if let Some(Value::Boolean(b)) = v.get("hosted") {
-            cfg.security.computer_use.hosted = *b;
-        }
-    }
-
-    // Arrays
-    if let Some(Value::Array(v)) = table.get("deny_paths") {
-        cfg.security.deny_paths = v
-            .iter()
-            .filter_map(|v| v.as_str().map(expand_tilde_str))
-            .collect();
-    }
-    if let Some(Value::Array(v)) = table.get("deny_urls") {
-        cfg.security.deny_urls = v
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-    }
-    if let Some(Value::Array(v)) = table.get("deny_extensions") {
-        cfg.security.deny_extensions = v
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-    }
-    if let Some(Value::Array(v)) = table.get("allowed_write_dirs") {
-        cfg.security.allowed_write_dirs = v
-            .iter()
-            .filter_map(|v| v.as_str().map(expand_tilde_str))
-            .collect();
-    }
-    if let Some(Value::Array(v)) = table.get("landlock_extra_paths") {
-        cfg.security.landlock_extra_paths = v
-            .iter()
-            .filter_map(|v| v.as_str().map(expand_tilde_str))
-            .collect();
-    }
-
-    // Subagent provider override (WO 30.0.6 brain+brawn). Each field is
-    // optional; an empty string normalises to None so the subagent falls
-    // back to the parent's value.
-    if let Some(Value::Table(v)) = table.get("subagent_provider") {
-        if let Some(Value::String(s)) = v.get("model") {
-            cfg.model.subagent_provider.model = if s.is_empty() { None } else { Some(s.clone()) };
-        }
-        if let Some(Value::String(s)) = v.get("ollama_host") {
-            cfg.model.subagent_provider.ollama_host =
-                if s.is_empty() { None } else { Some(s.clone()) };
-        }
-        if let Some(Value::String(s)) = v.get("anthropic_api_key") {
-            cfg.model.subagent_provider.anthropic_api_key =
-                if s.is_empty() { None } else { Some(s.clone()) };
-        }
-        if let Some(Value::String(s)) = v.get("openai_api_key") {
-            cfg.model.subagent_provider.openai_api_key =
-                if s.is_empty() { None } else { Some(s.clone()) };
-        }
-        if let Some(Value::String(s)) = v.get("deepseek_api_key") {
-            cfg.model.subagent_provider.deepseek_api_key =
-                if s.is_empty() { None } else { Some(s.clone()) };
-        }
-        if let Some(Value::String(s)) = v.get("gemini_api_key") {
-            cfg.model.subagent_provider.gemini_api_key =
-                if s.is_empty() { None } else { Some(s.clone()) };
-        }
-        if let Some(Value::String(s)) = v.get("kimi_api_key") {
-            cfg.model.subagent_provider.kimi_api_key =
-                if s.is_empty() { None } else { Some(s.clone()) };
-        }
-    }
-
-    if let Some(Value::Integer(v)) = table.get("budget_ceiling") {
-        cfg.tools.budget_ceiling = (*v as usize).max(0);
-    }
-    if let Some(Value::Boolean(v)) = table.get("summarize_enabled") {
-        cfg.model.summarize_enabled = *v;
     }
 }
 
@@ -652,12 +365,9 @@ mod tests {
     }
 
     // WO 27.2-R2: un-ignored after fixing the test fixture. The alias
-    // wiring (compaction_use_llm → compaction_use_heuristic) is flat
-    // top-level in merge_toml_into_config; the original test wrapped
-    // the key in [session], which the fallback merger doesn't descend
-    // into. The primary serde path handles [session] via SessionConfig
-    // (with the alias = "compaction_use_llm" annotation); this test
-    // exercises the flat fallback path.
+    // wiring (compaction_use_llm → compaction_use_heuristic) rides on
+    // SessionConfig's serde alias, exercised here through the flat
+    // overlay path.
     #[test]
     fn compaction_use_llm_alias_backward_compat() {
         let toml = "compaction_use_llm = true\n";
@@ -870,5 +580,65 @@ mod tests {
         assert!((p.output_per_mtok - 2.0).abs() < 1e-9);
         assert!((p.cache_write_per_mtok - 1.25).abs() < 1e-9);
         assert!((p.cache_read_per_mtok - 0.1).abs() < 1e-9);
+    }
+
+    // WO 47.2: a bad-typed value must only skip its own key — the
+    // hand-merged predecessor guaranteed this per-if-let, and the
+    // serde overlay must keep the guarantee (it's what stops one
+    // wrong line in a user's config.toml from wiping every other
+    // customization).
+    #[test]
+    fn bad_typed_key_does_not_wipe_sibling_keys() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            default_model = "keep-me"
+            max_file_read_size = "not-a-number"
+            auto_approve = true
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(cfg.model.default_model, "keep-me");
+        assert!(cfg.security.auto_approve);
+        assert_eq!(
+            cfg.security.max_file_read_size,
+            Config::default().security.max_file_read_size
+        );
+    }
+
+    // WO 47.2: unknown keys are soft-merged (ignored), never a load
+    // failure — pinned by the strict-loader contract too.
+    #[test]
+    fn unknown_keys_are_ignored() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            default_model = "x"
+            no_such_field = 42
+            [no_such_table]
+            inner = "y"
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(cfg.model.default_model, "x");
+    }
+
+    // WO 47.2: a partial [computer_use] from a later layer must merge
+    // into the current values, not replace the whole sub-table (the
+    // env layer overlays computer_use.width after the file layer may
+    // have set computer_use.headful).
+    #[test]
+    fn partial_sub_table_merges_without_wiping_siblings() {
+        let mut cfg = Config::default();
+        cfg.security.computer_use.headful = true;
+        let table: toml::Table = r#"
+            [computer_use]
+            width = 999
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert!(cfg.security.computer_use.headful, "sibling key survives");
+        assert_eq!(cfg.security.computer_use.width, 999);
     }
 }

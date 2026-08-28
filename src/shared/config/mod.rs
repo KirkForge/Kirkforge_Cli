@@ -15,9 +15,13 @@ use serde::{Deserialize, Serialize};
 /// Total number of pub fields across all Config sub-structs.
 ///
 /// When you add a field to ModelConfig, SecurityConfig, ToolConfig,
-/// SessionConfig, or DisplayConfig, **increment this constant** and add
-/// handling in both `merge_toml_into_config` and `apply_env_overrides`.
-/// If either site is missing the new field, the drift-guard test will fail.
+/// SessionConfig, or DisplayConfig, **increment this constant**. The
+/// drift-guard test in `session::config` checks it against the serde
+/// field count. WO 47.2: the config-file and env layers are a generic
+/// serde overlay, so a new field is reachable from `config.toml` and
+/// `KF_CODE_<FIELD>` automatically — no per-field loader edits needed
+/// (only an `env_overrides::KEY_MAP` entry if the var name can't be
+/// derived from the field name).
 ///
 /// Breakdown:
 ///   ModelConfig    32  (31 direct + subagent_provider sub-struct handle)

@@ -1,628 +1,256 @@
-//! Environment-variable overrides for layered config resolution.
+//! Generic `KF_CODE_*` env-var loader (WO 47.2).
 //!
-//! Extracted from `mod.rs`: reads `KF_CODE_*` env vars and applies
-//! them to a `Config` (priority layer 2, above the config file).
+//! Var → config key: strip `KF_CODE_` and lowercase, so a new Config
+//! field is env-overridable with zero loader changes (`KF_CODE_FROB_RATE`
+//! → `frob_rate`). Irregular names live in `KEY_MAP`. Values are coerced
+//! to the field's type using the current config's serialized form as the
+//! type guide; a var whose value doesn't parse is ignored, matching the
+//! historical per-field behavior. The result is applied through
+//! `merge_toml_into_config`'s serde overlay (and its normalize pass:
+//! tilde expansion + clamps), so the file and env layers share one code
+//! path.
+//!
+//! KF_CODE_BUDGET_CEILING (WO 14.7, Token Budget Challenge) and every
+//! other documented var in the `config` module header route through the
+//! same derived path.
 
 use crate::shared::Config;
-use std::path::PathBuf;
+use toml::Value;
 
-use super::{expand_tilde_str, parse_bool_env, parse_plugin_sources_env};
+use super::merge::merge_toml_into_config;
+use super::{parse_bool_env, parse_plugin_sources_env};
+
+// Env vars whose config key isn't derivable from the var name
+// (`KF_CODE_<SUFFIX>` lowercased doesn't match the field).
+pub(super) const KEY_MAP: &[(&str, &str)] = &[
+    ("KF_CODE_MODEL", "default_model"),
+    ("KF_CODE_HOST", "ollama_host"),
+    ("KF_CODE_MAX_READ_SIZE", "max_file_read_size"),
+    ("KF_CODE_BLOCK_BINARY", "block_binary_reads"),
+    // [computer_use] table
+    ("KF_CODE_COMPUTER_USE_ENABLED", "computer_use.enabled"),
+    (
+        "KF_CODE_COMPUTER_USE_CHROME_PATH",
+        "computer_use.chrome_path",
+    ),
+    ("KF_CODE_COMPUTER_USE_HEADFUL", "computer_use.headful"),
+    ("KF_CODE_COMPUTER_USE_WIDTH", "computer_use.width"),
+    ("KF_CODE_COMPUTER_USE_HEIGHT", "computer_use.height"),
+    (
+        "KF_CODE_COMPUTER_USE_STARTUP_TIMEOUT",
+        "computer_use.startup_timeout_secs",
+    ),
+    (
+        "KF_CODE_COMPUTER_USE_WAIT_TIMEOUT",
+        "computer_use.wait_timeout_secs",
+    ),
+    ("KF_CODE_COMPUTER_USE_HOSTED", "computer_use.hosted"),
+    // [subagent_provider] table (WO 30.0.6)
+    ("KF_CODE_SUBAGENT_MODEL", "subagent_provider.model"),
+    ("KF_CODE_SUBAGENT_HOST", "subagent_provider.ollama_host"),
+    (
+        "KF_CODE_SUBAGENT_ANTHROPIC_API_KEY",
+        "subagent_provider.anthropic_api_key",
+    ),
+    (
+        "KF_CODE_SUBAGENT_OPENAI_API_KEY",
+        "subagent_provider.openai_api_key",
+    ),
+    (
+        "KF_CODE_SUBAGENT_DEEPSEEK_API_KEY",
+        "subagent_provider.deepseek_api_key",
+    ),
+    (
+        "KF_CODE_SUBAGENT_GEMINI_API_KEY",
+        "subagent_provider.gemini_api_key",
+    ),
+    (
+        "KF_CODE_SUBAGENT_KIMI_API_KEY",
+        "subagent_provider.kimi_api_key",
+    ),
+    // Per-provider API keys resolved by `adapters::auth::resolve_api_key`
+    // (Series 18): plain `<PROVIDER>_API_KEY`, no KF_CODE_ prefix.
+    ("ANTHROPIC_API_KEY", "anthropic_api_key"),
+    ("OPENAI_API_KEY", "openai_api_key"),
+    ("DEEPSEEK_API_KEY", "deepseek_api_key"),
+    ("GEMINI_API_KEY", "gemini_api_key"),
+    ("KIMI_API_KEY", "kimi_api_key"),
+];
 
 /// Apply environment variable overrides to a Config.
 pub(super) fn apply_env_overrides(cfg: &mut Config) {
-    // Helper for the repeated bool-override pattern: read a KF_CODE_*
-    // env var, parse it as a bool, and write it to a config field.
-    macro_rules! env_bool {
-        ($var:literal, $field:expr) => {
-            if let Ok(val) = std::env::var($var) {
-                if let Some(v) = parse_bool_env(&val) {
-                    $field = v;
-                }
-            }
+    let base = match toml::Value::try_from(&*cfg) {
+        Ok(toml::Value::Table(t)) => t,
+        _ => return,
+    };
+
+    let mut overrides = toml::Table::new();
+    for (var, val) in std::env::vars_os() {
+        let (Ok(var), Ok(val)) = (var.into_string(), val.into_string()) else {
+            continue;
         };
-    }
-    // KF_CODE_MODEL
-    if let Ok(val) = std::env::var("KF_CODE_MODEL") {
-        if !val.is_empty() {
-            cfg.model.default_model = val;
-        }
-    }
-
-    // KF_CODE_HOST
-    if let Ok(val) = std::env::var("KF_CODE_HOST") {
-        if !val.is_empty() {
-            cfg.model.ollama_host = val;
-        }
-    }
-
-    // KF_CODE_AUTO_APPROVE
-    env_bool!("KF_CODE_AUTO_APPROVE", cfg.security.auto_approve);
-
-    // KF_CODE_SANDBOX_DIR
-    if let Ok(val) = std::env::var("KF_CODE_SANDBOX_DIR") {
-        cfg.security.sandbox_dir = if val.is_empty() {
-            None
-        } else {
-            Some(expand_tilde_str(&val))
+        let Some(key) = config_key(&var) else {
+            continue;
         };
+        let value = match custom_value(&var, &val) {
+            Some(v) => v,
+            None => match coerce(&val, guide_value(&base, &key)) {
+                Some(v) => v,
+                None => continue,
+            },
+        };
+        overrides.insert(key, value);
     }
 
-    // KF_CODE_BLOCK_DOTFILES
-    env_bool!("KF_CODE_BLOCK_DOTFILES", cfg.security.block_dotfiles);
-
-    // KF_CODE_MAX_READ_SIZE
-    if let Ok(val) = std::env::var("KF_CODE_MAX_READ_SIZE") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.security.max_file_read_size = n;
-        }
+    // Legacy alias precedence: KF_CODE_COMPACTION_USE_HEURISTIC wins
+    // over the old KF_CODE_COMPACTION_USE_LLM when both are set —
+    // re-insert it last so overlay order can't decide.
+    if let Some(v) = std::env::var("KF_CODE_COMPACTION_USE_HEURISTIC")
+        .ok()
+        .and_then(|v| parse_bool_env(&v))
+        .map(Value::Boolean)
+    {
+        overrides.insert("compaction_use_heuristic".to_string(), v);
     }
 
-    // KF_CODE_FOLLOW_SYMLINKS
-    env_bool!("KF_CODE_FOLLOW_SYMLINKS", cfg.tools.follow_symlinks);
+    merge_toml_into_config(cfg, overrides);
 
-    // KF_CODE_BLOCK_BINARY
-    env_bool!("KF_CODE_BLOCK_BINARY", cfg.tools.block_binary_reads);
-
-    // KF_CODE_MINIFY_WRITE_SIDE
-    env_bool!("KF_CODE_MINIFY_WRITE_SIDE", cfg.tools.minify_write_side);
-
-    // KF_CODE_MINIFY_ABOVE_BYTES
-    if let Ok(val) = std::env::var("KF_CODE_MINIFY_ABOVE_BYTES") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.tools.minify_above_bytes = n;
-        }
-    }
-
-    // KF_CODE_BUDGET_CEILING
-    // WO 14.7: the Token Budget Challenge exports this to pin the
-    // token budget ceiling for a single run. The bench runner sets
-    // it before invoking the model; init_from_config reads it off
-    // cfg.tools.budget_ceiling via the standard env-override layer.
-    if let Ok(val) = std::env::var("KF_CODE_BUDGET_CEILING") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.tools.budget_ceiling = n;
-        }
-    }
-
-    // KF_CODE_CARRYOVER_ENABLED
-    env_bool!("KF_CODE_CARRYOVER_ENABLED", cfg.session.carryover_enabled);
-    // KF_CODE_COMPACTION_USE_HEURISTIC (backward compat: KF_CODE_COMPACTION_USE_LLM)
-    if let Ok(val) = std::env::var("KF_CODE_COMPACTION_USE_HEURISTIC") {
-        if let Ok(v) = val.parse::<bool>() {
-            cfg.session.compaction_use_heuristic = v;
-        }
-    } else if let Ok(val) = std::env::var("KF_CODE_COMPACTION_USE_LLM") {
-        if let Ok(v) = val.parse::<bool>() {
-            cfg.session.compaction_use_heuristic = v;
-        }
-    }
-    // KF_CODE_COMPACTION_DROP_THRESHOLD
-    if let Ok(val) = std::env::var("KF_CODE_COMPACTION_DROP_THRESHOLD") {
-        if let Ok(v) = val.parse::<f64>() {
-            cfg.session.compaction_drop_threshold = v;
-        }
-    }
-    // KF_CODE_STEM_FILE_CAP
-    if let Ok(val) = std::env::var("KF_CODE_STEM_FILE_CAP") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.session.stem_file_cap = Some(n);
-        }
-    }
-    // KF_CODE_SHUTDOWN_TIMEOUT_SECS
-    if let Ok(val) = std::env::var("KF_CODE_SHUTDOWN_TIMEOUT_SECS") {
-        if let Ok(n) = val.parse::<u64>() {
-            cfg.session.shutdown_timeout_secs = Some(n);
-        }
-    }
-    // KF_CODE_DRY_RUN
-    env_bool!("KF_CODE_DRY_RUN", cfg.tools.dry_run);
-
-    // KF_CODE_CACHE_ENABLED
-    env_bool!("KF_CODE_CACHE_ENABLED", cfg.model.cache_enabled);
-
-    // KF_CODE_CACHE_DIR
-    if let Ok(val) = std::env::var("KF_CODE_CACHE_DIR") {
-        cfg.model.cache_dir = Some(PathBuf::from(expand_tilde_str(&val)));
-    }
-
-    // KF_CODE_BANG_REQUIRES_APPROVAL
-    env_bool!(
-        "KF_CODE_BANG_REQUIRES_APPROVAL",
-        cfg.security.bang_requires_approval
-    );
-
-    // KF_CODE_JSON_MODE
-    env_bool!("KF_CODE_JSON_MODE", cfg.model.json_mode);
-
-    // KF_CODE_MAX_TOKENS
-    if let Ok(n) = std::env::var("KF_CODE_MAX_TOKENS") {
-        if let Ok(v) = n.parse::<u32>() {
-            cfg.model.max_tokens = v.max(1);
-        }
-    }
-
-    // KF_CODE_EXTENDED_THINKING
-    env_bool!("KF_CODE_EXTENDED_THINKING", cfg.model.extended_thinking);
-
-    // KF_CODE_BUDGET_TOKENS
-    if let Ok(val) = std::env::var("KF_CODE_BUDGET_TOKENS") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.model.budget_tokens = n.max(1);
-        }
-    }
-
-    // KF_CODE_BASH_SANDBOX_WORKDIR
-    env_bool!(
-        "KF_CODE_BASH_SANDBOX_WORKDIR",
-        cfg.security.bash_sandbox_workdir
-    );
-
-    // KF_CODE_BASH_REQUIRE_ALLOWLIST (WO 32.18)
-    env_bool!(
-        "KF_CODE_BASH_REQUIRE_ALLOWLIST",
-        cfg.security.bash_require_allowlist
-    );
-
-    // KF_CODE_BASH_ALLOWLIST — colon-separated command prefixes (WO 32.18)
-    if let Ok(val) = std::env::var("KF_CODE_BASH_ALLOWLIST") {
-        cfg.security.bash_allowlist = val
-            .split(':')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
-
-    // KF_CODE_LANDLOCK_EXTRA_PATHS — colon-separated extra landlock allow-list
-    // paths (WO 27.1). Mirrors PATH-style splitting.
-    if let Ok(val) = std::env::var("KF_CODE_LANDLOCK_EXTRA_PATHS") {
-        cfg.security.landlock_extra_paths = val
-            .split(':')
-            .map(|s| expand_tilde_str(s.trim()))
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
-
-    // KF_CODE_BLOCK_GITIGNORED_DOTFILES
-    env_bool!(
-        "KF_CODE_BLOCK_GITIGNORED_DOTFILES",
-        cfg.security.block_gitignored_dotfiles
-    );
-
-    // KF_CODE_MAX_OVERWRITE_SIZE
-    if let Ok(val) = std::env::var("KF_CODE_MAX_OVERWRITE_SIZE") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.security.max_overwrite_size = n;
-        }
-    }
-
-    // KF_CODE_SUMMARIZE_MODEL
-    if let Ok(val) = std::env::var("KF_CODE_SUMMARIZE_MODEL") {
+    // Whole-section / validated env overrides — semantics the generic
+    // overlay can't express (documented to replace the TOML section
+    // entirely, or to ignore invalid values rather than coerce them).
+    if let Ok(val) = std::env::var("KF_CODE_ADAPTER_ROUTING") {
         if !val.is_empty() {
-            cfg.model.summarize_model = val;
+            cfg.model.adapter_routing = parse_adapter_routing(&val);
         }
     }
-
-    // KF_CODE_ROUTING_ENABLED
-    env_bool!("KF_CODE_ROUTING_ENABLED", cfg.model.routing_enabled);
-
-    // KF_CODE_ROUTER_MODEL
-    if let Ok(val) = std::env::var("KF_CODE_ROUTER_MODEL") {
-        if !val.is_empty() {
-            cfg.model.router_model = val;
-        }
+    if let Ok(val) = std::env::var("KF_CODE_PLUGIN_SOURCES") {
+        cfg.tools.plugin_sources = parse_plugin_sources_env(&val);
     }
-
-    // KF_CODE_COMMIT_MAX_FILE_SIZE
-    if let Ok(val) = std::env::var("KF_CODE_COMMIT_MAX_FILE_SIZE") {
-        if let Ok(n) = val.parse::<u64>() {
-            cfg.security.commit_max_file_size = n;
-        }
-    }
-
-    // KF_CODE_PRESERVE_RECENT_MESSAGES
-    if let Ok(val) = std::env::var("KF_CODE_PRESERVE_RECENT_MESSAGES") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.session.preserve_recent_messages = n.max(1);
-        }
-    }
-
-    // KF_CODE_MAX_TOOL_CALLS_PER_TURN
-    if let Ok(val) = std::env::var("KF_CODE_MAX_TOOL_CALLS_PER_TURN") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.tools.max_tool_calls_per_turn = n.max(1);
-        }
-    }
-
-    // KF_CODE_MAX_PERSONA_TURNS
-    if let Ok(val) = std::env::var("KF_CODE_MAX_PERSONA_TURNS") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.tools.max_persona_turns = n.max(1);
-        }
-    }
-
-    // KF_CODE_MAX_CONTINUATION_ROUNDS
-    if let Ok(val) = std::env::var("KF_CODE_MAX_CONTINUATION_ROUNDS") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.tools.max_continuation_rounds = n.clamp(0, 50);
-        }
-    }
-
-    // KF_CODE_DOOM_LOOP_MAX_HITS
-    if let Ok(val) = std::env::var("KF_CODE_DOOM_LOOP_MAX_HITS") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.tools.doom_loop_max_hits = n;
-        }
-    }
-
-    // KF_CODE_DOOM_LOOP_ACTION
-    if let Ok(val) = std::env::var("KF_CODE_DOOM_LOOP_ACTION") {
-        if !val.is_empty() {
-            cfg.tools.doom_loop_action = val;
-        }
-    }
-
-    // KF_CODE_LOAD_PROJECT_MCP_JSON (WO 39.2)
-    if let Ok(val) = std::env::var("KF_CODE_LOAD_PROJECT_MCP_JSON") {
-        if let Some(b) = parse_bool_env(&val) {
-            cfg.tools.load_project_mcp_json = b;
-        }
-    }
-
-    // KF_CODE_PLUGIN_CONSENT_LEDGER (WO 43.17)
-    if let Ok(val) = std::env::var("KF_CODE_PLUGIN_CONSENT_LEDGER") {
-        if let Some(b) = parse_bool_env(&val) {
-            cfg.tools.plugin_consent_ledger = b;
-        }
-    }
-
-    // KF_CODE_MAX_BACKGROUND_TASKS
-    if let Ok(val) = std::env::var("KF_CODE_MAX_BACKGROUND_TASKS") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.tools.max_background_tasks = n.clamp(1, 64);
-        }
-    }
-
-    // KF_CODE_TASK_CONCURRENCY_MODE
     if let Ok(val) = std::env::var("KF_CODE_TASK_CONCURRENCY_MODE") {
         let mode = val.to_lowercase();
         if mode == "queue" || mode == "reject" {
             cfg.tools.task_concurrency_mode = mode;
         }
     }
+}
 
-    // KF_CODE_TOOL_TIMEOUT_SECS
-    if let Ok(val) = std::env::var("KF_CODE_TOOL_TIMEOUT_SECS") {
-        if let Ok(n) = val.parse::<u64>() {
-            cfg.tools.tool_timeout_secs = Some(n.clamp(1, 3600));
-        }
+// Map an env-var name to its (possibly dotted) config key. `None`
+// means the var isn't a config override at all — including the vars
+// applied by the post-overlay block, which carry validated or
+// whole-section semantics the generic path can't express.
+fn config_key(var: &str) -> Option<String> {
+    if matches!(
+        var,
+        "KF_CODE_ADAPTER_ROUTING" | "KF_CODE_PLUGIN_SOURCES" | "KF_CODE_TASK_CONCURRENCY_MODE"
+    ) {
+        return None;
     }
+    if let Some((_, key)) = KEY_MAP.iter().find(|(v, _)| *v == var) {
+        return Some(key.to_string());
+    }
+    var.strip_prefix("KF_CODE_")
+        .filter(|suffix| !suffix.is_empty())
+        .map(|suffix| suffix.to_lowercase())
+}
 
-    // KF_CODE_AUDIT_LOG_PATH
-    if let Ok(val) = std::env::var("KF_CODE_AUDIT_LOG_PATH") {
-        cfg.security.audit_log_path = if val.is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(expand_tilde_str(&val)))
-        };
+// The current config's serialized value at `key`, used as the type
+// guide for coercing the env string. Absent keys are Option fields
+// that are currently None (they serialize to nothing).
+fn guide_value<'a>(base: &'a toml::Table, key: &str) -> Option<&'a Value> {
+    let mut node = base;
+    let mut segments = key.split('.');
+    let last = segments.next_back()?;
+    for seg in segments {
+        node = node.get(seg)?.as_table()?;
     }
+    node.get(last)
+}
 
-    // KF_CODE_HOOKS_DIR
-    if let Ok(val) = std::env::var("KF_CODE_HOOKS_DIR") {
-        cfg.tools.hooks_dir = if val.is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(expand_tilde_str(&val)))
-        };
-    }
-
-    // KF_CODE_REJECT_ON_EXCESS_PLUGIN_TRUST
-    env_bool!(
-        "KF_CODE_REJECT_ON_EXCESS_PLUGIN_TRUST",
-        cfg.tools.reject_on_excess_plugin_trust
-    );
-
-    // KF_CODE_PLUGIN_SIGNATURE_VALIDATION
-    env_bool!(
-        "KF_CODE_PLUGIN_SIGNATURE_VALIDATION",
-        cfg.tools.plugin_signature_validation
-    );
-
-    // KF_CODE_PLUGIN_TRUST_WORKSPACE
-    env_bool!(
-        "KF_CODE_PLUGIN_TRUST_WORKSPACE",
-        cfg.tools.plugin_trust_workspace
-    );
-
-    // KF_CODE_PLUGIN_PUBLIC_KEY_PATH
-    if let Ok(val) = std::env::var("KF_CODE_PLUGIN_PUBLIC_KEY_PATH") {
-        cfg.tools.plugin_public_key_path = if val.is_empty() {
-            None
-        } else {
-            Some(expand_tilde_str(&val))
-        };
-    }
-
-    // KF_CODE_PLUGIN_ALLOWED_ENV_VARS
-    if let Ok(val) = std::env::var("KF_CODE_PLUGIN_ALLOWED_ENV_VARS") {
-        cfg.tools.plugin_allowed_env_vars = val
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
-
-    // KF_CODE_PLUGIN_SOURCES
-    if let Ok(val) = std::env::var("KF_CODE_PLUGIN_SOURCES") {
-        cfg.tools.plugin_sources = parse_plugin_sources_env(&val);
-    }
-
-    // KF_CODE_ENABLED_PLUGINS
-    if let Ok(val) = std::env::var("KF_CODE_ENABLED_PLUGINS") {
-        cfg.tools.enabled_plugins = val
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
-
-    // KF_CODE_DISABLED_PLUGINS
-    if let Ok(val) = std::env::var("KF_CODE_DISABLED_PLUGINS") {
-        cfg.tools.disabled_plugins = val
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
-
-    // KF_CODE_MEMORY_ENABLED
-    env_bool!("KF_CODE_MEMORY_ENABLED", cfg.display.memory_enabled);
-
-    // KF_CODE_MEMORY_AUTO_POPULATE
-    env_bool!(
-        "KF_CODE_MEMORY_AUTO_POPULATE",
-        cfg.tools.memory_auto_populate
-    );
-
-    // KF_CODE_MEMORY_MAX_TOKENS
-    if let Ok(val) = std::env::var("KF_CODE_MEMORY_MAX_TOKENS") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.display.memory_max_tokens = n.max(1);
-        }
-    }
-
-    // KF_CODE_MEMORY_TOP_N
-    if let Ok(val) = std::env::var("KF_CODE_MEMORY_TOP_N") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.display.memory_top_n = n.max(1);
-        }
-    }
-
-    // KF_CODE_MEMORY_AUTO_POPULATE
-    env_bool!(
-        "KF_CODE_MEMORY_AUTO_POPULATE",
-        cfg.display.memory_auto_populate
-    );
-
-    // KF_CODE_MEMORY_SHOW_IN_STATUS
-    env_bool!(
-        "KF_CODE_MEMORY_SHOW_IN_STATUS",
-        cfg.display.memory_show_in_status
-    );
-
-    // KF_CODE_THEME
-    if let Ok(val) = std::env::var("KF_CODE_THEME") {
-        if !val.is_empty() {
-            cfg.display.theme = val;
-        }
-    }
-
-    // KF_CODE_MOUSE_ENABLED
-    env_bool!("KF_CODE_MOUSE_ENABLED", cfg.display.mouse_enabled);
-
-    // KF_CODE_REQUEST_TIMEOUT_SECS
-    if let Ok(val) = std::env::var("KF_CODE_REQUEST_TIMEOUT_SECS") {
-        if let Ok(n) = val.parse::<u64>() {
-            cfg.model.request_timeout_secs = n.max(1);
-        }
-    }
-
-    // KF_CODE_STREAMING_TIMEOUT_SECS
-    if let Ok(val) = std::env::var("KF_CODE_STREAMING_TIMEOUT_SECS") {
-        if let Ok(n) = val.parse::<u64>() {
-            cfg.model.streaming_timeout_secs = n.max(1);
-        }
-    }
-
-    // KF_CODE_CHECKPOINT_INTERVAL_MESSAGES
-    if let Ok(val) = std::env::var("KF_CODE_CHECKPOINT_INTERVAL_MESSAGES") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.session.checkpoint_interval_messages = n;
-        }
-    }
-
-    // KF_CODE_SCHEDULED_BASH_AUTO_APPROVE
-    env_bool!(
-        "KF_CODE_SCHEDULED_BASH_AUTO_APPROVE",
-        cfg.tools.scheduled_bash_auto_approve
-    );
-
-    // KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS
-    if let Ok(val) = std::env::var("KF_CODE_MAX_CONCURRENT_SCHEDULED_JOBS") {
-        if let Ok(n) = val.parse::<usize>() {
-            cfg.tools.max_concurrent_scheduled_jobs = n.max(1);
-        }
-    }
-
-    // Anthropic cloud-provider routing
-    if let Ok(val) = std::env::var("KF_CODE_ANTHROPIC_PROVIDER") {
-        if !val.is_empty() {
-            cfg.model.anthropic_provider = val;
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_ANTHROPIC_API_BASE") {
-        if !val.is_empty() {
-            cfg.model.anthropic_api_base = val;
-        }
-    }
-
-    // Per-provider API keys (env layer — these supplement the config
-    // fields and are resolved by `adapters::auth::resolve_api_key`).
-    if let Ok(val) = std::env::var("ANTHROPIC_API_KEY") {
-        if !val.is_empty() {
-            cfg.model.anthropic_api_key = Some(val);
-        }
-    }
-    if let Ok(val) = std::env::var("OPENAI_API_KEY") {
-        if !val.is_empty() {
-            cfg.model.openai_api_key = Some(val);
-        }
-    }
-    if let Ok(val) = std::env::var("DEEPSEEK_API_KEY") {
-        if !val.is_empty() {
-            cfg.model.deepseek_api_key = Some(val);
-        }
-    }
-    if let Ok(val) = std::env::var("GEMINI_API_KEY") {
-        if !val.is_empty() {
-            cfg.model.gemini_api_key = Some(val);
-        }
-    }
-    if let Ok(val) = std::env::var("KIMI_API_KEY") {
-        if !val.is_empty() {
-            cfg.model.kimi_api_key = Some(val);
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_AWS_REGION") {
-        if !val.is_empty() {
-            cfg.model.aws_region = val;
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_GCP_PROJECT_ID") {
-        if !val.is_empty() {
-            cfg.model.gcp_project_id = val;
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_GCP_REGION") {
-        if !val.is_empty() {
-            cfg.model.gcp_region = val;
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_GCP_SERVICE_ACCOUNT_PATH") {
-        cfg.model.gcp_service_account_path = if val.is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(expand_tilde_str(&val)))
-        };
-    }
-
-    // Computer-use tool config
-    env_bool!(
-        "KF_CODE_COMPUTER_USE_ENABLED",
-        cfg.security.computer_use.enabled
-    );
-    if let Ok(val) = std::env::var("KF_CODE_COMPUTER_USE_CHROME_PATH") {
-        cfg.security.computer_use.chrome_path = if val.is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(expand_tilde_str(&val)))
-        };
-    }
-    env_bool!(
-        "KF_CODE_COMPUTER_USE_HEADFUL",
-        cfg.security.computer_use.headful
-    );
-    if let Ok(val) = std::env::var("KF_CODE_COMPUTER_USE_WIDTH") {
-        if let Ok(n) = val.parse::<u32>() {
-            cfg.security.computer_use.width = n.max(1);
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_COMPUTER_USE_HEIGHT") {
-        if let Ok(n) = val.parse::<u32>() {
-            cfg.security.computer_use.height = n.max(1);
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_COMPUTER_USE_STARTUP_TIMEOUT") {
-        if let Ok(n) = val.parse::<u64>() {
-            cfg.security.computer_use.startup_timeout_secs = n.max(1);
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_COMPUTER_USE_WAIT_TIMEOUT") {
-        if let Ok(n) = val.parse::<u64>() {
-            cfg.security.computer_use.wait_timeout_secs = n.max(1);
-        }
-    }
-    env_bool!(
-        "KF_CODE_COMPUTER_USE_HOSTED",
-        cfg.security.computer_use.hosted
-    );
-
-    // Clamp after all layers so a config file or env override cannot set an
-    // unusable zero-second timeout.
-    cfg.model.request_timeout_secs = cfg.model.request_timeout_secs.max(1);
-    cfg.model.streaming_timeout_secs = cfg.model.streaming_timeout_secs.max(1);
-
-    // KF_CODE_ADAPTER_ROUTING
-    // Format: comma-separated prefix=Kind pairs, e.g.
-    //   "grok-=OpenAiCompat,my-llm=Ollama"
-    // Pairs without '=' are ignored. Overrides the [adapter_routing] TOML
-    // section entirely when set.
-    if let Ok(val) = std::env::var("KF_CODE_ADAPTER_ROUTING") {
-        if !val.is_empty() {
-            let mut map = std::collections::HashMap::new();
-            for entry in val.split(',') {
-                let entry = entry.trim();
-                if entry.is_empty() {
-                    continue;
-                }
-                let Some((prefix, kind)) = entry.split_once('=') else {
-                    continue;
-                };
-                let prefix = prefix.trim().to_string();
-                let kind = kind.trim().to_string();
-                if !prefix.is_empty() && !kind.is_empty() {
-                    map.insert(prefix, kind);
-                }
+// Coerce an env string to the type the guide value indicates. Vec
+// fields (string-element) take a comma-separated list. Returns None
+// for unparseable/empty values so the prior layer is kept.
+fn coerce(val: &str, guide: Option<&Value>) -> Option<Value> {
+    match guide {
+        Some(Value::Boolean(_)) => parse_bool_env(val).map(Value::Boolean),
+        Some(Value::Integer(_)) => val.parse::<i64>().ok().map(Value::Integer),
+        Some(Value::Float(_)) => val.parse::<f64>().ok().map(Value::Float),
+        Some(Value::String(_)) => {
+            if val.is_empty() {
+                None
+            } else {
+                Some(Value::String(val.to_string()))
             }
-            cfg.model.adapter_routing = map;
         }
+        Some(Value::Array(_)) => Some(Value::Array(split_list(val, ','))),
+        _ => guess(val),
     }
+}
 
-    // Subagent provider override (WO 30.0.6 brain+brawn). Each var maps
-    // to the matching [subagent_provider] TOML field; an empty value is
-    // ignored so the subagent keeps inheriting the parent's value.
-    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_MODEL") {
-        if !val.is_empty() {
-            cfg.model.subagent_provider.model = Some(val);
+// Shape-guessing for keys absent from the serialized config (an
+// Option field that is currently None, e.g. stem_file_cap).
+fn guess(val: &str) -> Option<Value> {
+    if let Ok(n) = val.parse::<i64>() {
+        Some(Value::Integer(n))
+    } else if let Ok(f) = val.parse::<f64>() {
+        Some(Value::Float(f))
+    } else if !val.is_empty() {
+        Some(Value::String(val.to_string()))
+    } else {
+        None
+    }
+}
+
+fn split_list(val: &str, sep: char) -> Vec<Value> {
+    val.split(sep)
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| Value::String(s.to_string()))
+        .collect()
+}
+
+// Vars whose value semantics can't be derived from the field type.
+// Returns None for values that must be ignored.
+fn custom_value(var: &str, val: &str) -> Option<Value> {
+    match var {
+        // Path-valued fields where an empty env value is meaningful
+        // (it must flow through, not be skipped): sandbox_dir/cache_dir
+        // keep Some("") — the unsandboxed/unset escape hatch; the rest
+        // clear to None via normalize's empty→None rule ("empty
+        // disables" per the module doc). Tildes expand in normalize.
+        "KF_CODE_SANDBOX_DIR"
+        | "KF_CODE_CACHE_DIR"
+        | "KF_CODE_AUDIT_LOG_PATH"
+        | "KF_CODE_HOOKS_DIR"
+        | "KF_CODE_PLUGIN_PUBLIC_KEY_PATH"
+        | "KF_CODE_GCP_SERVICE_ACCOUNT_PATH"
+        | "KF_CODE_COMPUTER_USE_CHROME_PATH" => Some(Value::String(val.to_string())),
+        // Colon-separated (PATH-style) lists.
+        "KF_CODE_BASH_ALLOWLIST" | "KF_CODE_LANDLOCK_EXTRA_PATHS" => {
+            Some(Value::Array(split_list(val, ':')))
+        }
+        // Legacy name for compaction_use_heuristic (WO 21.6-R5).
+        "KF_CODE_COMPACTION_USE_LLM" => parse_bool_env(val).map(Value::Boolean),
+        _ => None,
+    }
+}
+
+// Comma-separated prefix=Kind pairs, e.g.
+// "grok-=OpenAiCompat,my-llm=Ollama". Pairs without '=' are ignored.
+fn parse_adapter_routing(val: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for entry in val.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((prefix, kind)) = entry.split_once('=') else {
+            continue;
+        };
+        let prefix = prefix.trim();
+        let kind = kind.trim();
+        if !prefix.is_empty() && !kind.is_empty() {
+            map.insert(prefix.to_string(), kind.to_string());
         }
     }
-    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_HOST") {
-        if !val.is_empty() {
-            cfg.model.subagent_provider.ollama_host = Some(val);
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_ANTHROPIC_API_KEY") {
-        if !val.is_empty() {
-            cfg.model.subagent_provider.anthropic_api_key = Some(val);
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_OPENAI_API_KEY") {
-        if !val.is_empty() {
-            cfg.model.subagent_provider.openai_api_key = Some(val);
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_DEEPSEEK_API_KEY") {
-        if !val.is_empty() {
-            cfg.model.subagent_provider.deepseek_api_key = Some(val);
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_GEMINI_API_KEY") {
-        if !val.is_empty() {
-            cfg.model.subagent_provider.gemini_api_key = Some(val);
-        }
-    }
-    if let Ok(val) = std::env::var("KF_CODE_SUBAGENT_KIMI_API_KEY") {
-        if !val.is_empty() {
-            cfg.model.subagent_provider.kimi_api_key = Some(val);
-        }
-    }
+    map
 }

@@ -708,3 +708,45 @@
 - **Commit-per-defect with entangled edits**: stage an honest intermediate
   state (defect-1-only), verify, commit, then layer defect 2. Cheaper
   than git add -p surgery through a CLI.
+
+## WO 47.2 session (generic env/config override loader)
+
+- The "serde flatten+default broken (#2230)" claim in config/mod.rs was
+  STALE: with container-level `#[serde(default)]` on every sub-struct,
+  `toml::from_str::<Config>`/`Value::try_into::<Config>` handles partial
+  flat files, unknown keys (dropped), the compaction alias, and partial
+  sub-tables. Always re-verify "known broken" claims empirically —
+  /tmp/opencode scratch crates settle them in minutes.
+- serde flatten gotcha 1: inserting an ALIAS key while the serialized
+  base holds the primary is a duplicate-field decode error (silently
+  skipped by per-key isolation). Swap alias→primary at insert time.
+- serde flatten gotcha 2: a field name declared in TWO flattened structs
+  (memory_auto_populate in ToolConfig + DisplayConfig) is hidden from
+  the struct AFTER a custom-Deserialize sibling (SessionConfig sits
+  between them), AND serialization writes the LAST struct's copy —
+  round-trips smear the value. Only stable state is both equal → mirror
+  the incoming value onto both fields outside the overlay.
+- Per-key overlay (serialize→insert one key→decode→assign, skip on
+  error) reproduces the old if-let "bad value ignored, siblings keep"
+  semantics exactly, and deep-inserting sub-tables preserves
+  earlier-layer siblings. Cost is irrelevant (once per startup).
+- When a custom-syntax env var must REJECT values (task_concurrency_mode
+  queue|reject), returning None from the custom parser is NOT enough —
+  the generic type-guided coercion happily applies any non-empty string
+  to a String field. Vars with validate/replace semantics must be
+  excluded from the generic loop entirely and applied post-overlay.
+- Empty-string env semantics differ per field class and must be encoded
+  deliberately: plain String fields skip empty; Option paths clear to
+  None ("empty disables"); sandbox_dir/cache_dir keep Some("") (escape
+  hatch). KF_CODE_SANDBOX_DIR="" was silently re-sandboxed to cwd before
+  (contradicting the WO 28.1 documented opt-out) — now pinned as Some("").
+- Literal-count tripwires see `"KF_CODE_` in strip_prefix calls and
+  KEY_MAP comments — count what's actually in the file with grep before
+  pinning the expected number; KEY_MAP has 19 KF entries (computer_use
+  has 8 keys incl. chrome_path, not 7).
+- scope creep: src/session/config/mod.rs (drift-guard test rewrite —
+  literal counting meaningless vs generic loader; stale serde comment;
+  +6 pinning tests) and src/shared/config/mod.rs (comment-only —
+  CONFIG_FIELD_COUNT doc still instructed per-field loader edits).
+- Gate timing under sibling load: cold lib check 12m, workspace
+  all-targets check 7m, clippy 3m, config test filter 3-14m per pass.

@@ -594,7 +594,13 @@ impl Executor {
             read_gate,
         };
         // JSON-mode changes are applied to the running adapter too.
+        // set_json_mode(false) clears the adapter's format (48.6
+        // toggle-off semantics), so re-push the effective format after
+        // it — same order as construction, keeping an explicit
+        // json_schema alive across a hot-reload (WO 48.18).
         self.adapter.set_json_mode(fresh.model.json_mode);
+        self.adapter
+            .set_response_format(fresh.model.effective_response_format());
         self.adapter
             .set_extended_thinking(fresh.model.extended_thinking);
         self.adapter.set_budget_tokens(fresh.model.budget_tokens);

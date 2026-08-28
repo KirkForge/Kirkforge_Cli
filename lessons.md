@@ -1011,3 +1011,28 @@
 - gitnexus impact does not index #[cfg(test)]/#[tokio::test] symbols —
   for test-only edits, "no production callers possible" is the impact
   answer; don't burn time on re-indexing.
+
+## WO 48.4 session (2026-08-28) — session-picker modal at startup
+
+- **`SessionState::session_picker` was a dual-purpose field and that was
+  the whole bug**: one `Option<SessionPicker>` served as BOTH the data
+  source for the Sessions tab / welcome screen AND the modal-open flag
+  consumed by render + key capture. Any writer of "data" implicitly
+  opened a full-screen modal. Fix pattern worth reusing: when an
+  `Option<T>` is read by both data consumers and presentation consumers,
+  split into `data: Vec<Entry>` + `modal: Option<T>` — the data field
+  can't render itself.
+- **The `take()?`-without-restore bug class in key handlers**:
+  `handle_session_picker_keys` took the picker, returned `Some` only on
+  confirm/cancel, and dropped it on every other key — advertised nav
+  silently closed the modal. Any handler that does
+  `let x = state.field.take()?` must restore `x` on every path where the
+  interaction continues. Grep for `take()?` in keys/ before adding new
+  modal handlers.
+- **TUI key handlers self-dirty**: the event loop does NOT mark dirty
+  after dispatching a key — every handler that changes visible state
+  must call `state.mark_dirty()` itself. The old picker code got away
+  with it because its bug made the modal close via other handlers.
+- Cold-worktree cost: first `cargo check -p kf-code --all-targets` in a
+  fresh worktree is ~14 min (deps), first lib-test link another ~15 min.
+  Budget gates accordingly or reuse the main checkout's target dir.

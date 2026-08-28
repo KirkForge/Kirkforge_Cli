@@ -24,6 +24,15 @@ why, and the gate evidence.
 
 ### Fixed
 
+- Known-flake stabilization — the four wall-clock test families that
+  caused red/noise across the WO 47 campaign
+  (`attached_cancel_token_kills_inflight_bash_promptly`,
+  `same_ms_double_spawn_gets_distinct_{temp_dirs,worktrees}`,
+  `edit_file_{fuzzy_preserves_unmatched_lines,roundtrip_reverses_replacement}`)
+  got realistic budgets: per-test ci-fast slow-timeout overrides in
+  `.config/nextest.toml` + raised in-test deadlines. Assertions unchanged
+  (the bash-kill bound still sits below the 30s sleep a no-kill
+  regression would run).
 - WO 47.35 — prompt-injection defense: web_fetch/web_search/read_file now wrap
   untrusted bodies in `<untrusted_content>` delimiters + a system-prompt
   data-not-instructions rule; template `{{var}}` substitutions capped at 1024
@@ -47,6 +56,31 @@ why, and the gate evidence.
   `--attach`/`--auto-resume`/startup-picker fall back to the on-disk session
   index when no daemon runs (explicit `kf-code daemon` unchanged).
   [47.12](docs/workorders/47.12-daemon-opt-in.md)
+- WO 47.6 — compression layers deduped with zero behavior drift: the
+  tool-result stub marker is single-sourced (`compaction::TOOL_RESULT_STUB`
+  + shared `stub_tool_result()`), the anchor/region split is shared
+  (`compaction::anchor_len()`), and the microcompaction/summarizer
+  token-estimator delegate copies are deleted. The structural 6→2 fold
+  (MiddleStrategy enum) is deferred — see the WO.
+  [47.6](docs/workorders/47.6-compression-layers-6-to-2.md)
+- WO 47.10 — new `emit!` macro replaces the 46-site `send_or_warn!`
+  ceremony around async `TurnEvent` sends (2-arg form covers the 41
+  identical messages; the 3-arg form preserves custom ones). No behavior
+  change, net −100 lines. [47.10](docs/workorders/47.10-send-or-warn-ceremony.md)
+- WO 47.11 — computer_use FROZEN, not deleted: the default-off feature
+  already excludes the Chrome dep from default builds; a
+  `ceiling: FROZEN (WO 47.11)` pin in Cargo.toml documents the unfreeze
+  condition and delete precondition. [47.11](docs/workorders/47.11-computer-use-freeze.md)
+- WO 47.13 — TUI command diet via gates, not cuts: `/gh` `/route`
+  `/metrics` `/carryover`, the persona switches, the `/jobs` cron surface,
+  and `@`-mention expansion are hidden behind `[display] extra_commands`
+  (default off; gated commands answer with an enable hint).
+  [47.13](docs/workorders/47.13-tui-command-diet.md)
+- WO 47.14 — plugin verifiers are bus-only: `PluginVerifierAdapter` and
+  the dual slots-side registration are deleted; `BusVerifier` is the
+  designated surviving trait (first consumer migration of the
+  unification; remaining consumers tracked in the WO).
+  [47.14](docs/workorders/47.14-unify-verifier-traits.md)
 - WO 47.27 — memory subsystem security/dupe fixes: memory-fact slugs strip
   URL/path/KEY=VALUE spans (secrets no longer reach filenames under
   `memory/`), fact bodies/descriptions are scrubbed via the audit-log

@@ -59,8 +59,18 @@ pub(super) type SkippedCall = (usize, ToolInvocation, Vec<TurnEvent>, String);
 /// Phase-2 output: completed tool bodies keyed by input index. The third
 /// element is the resolved path Phase 1 already sandbox-checked; Phase 3 reuses
 /// it instead of re-running the path guard (closes the WO 15.9 TOCTOU + double
-/// `git check-ignore` window). Non-file tools store `None`.
-pub(super) type ToolResult = (ToolInvocation, ToolOutcome, Option<std::path::PathBuf>, u64);
+/// `git check-ignore` window). Non-file tools store `None`. The trailing bool
+/// marks a Phase-2.5 GATE denial (symlink walk / read-before-edit check —
+/// decided before the body ran) so Phase 3 early-records it instead of
+/// re-running `record_tool_result`'s guard re-checks; body-produced
+/// `AccessDenied` failures carry `false` and record like any failure (WO 48.15).
+pub(super) type ToolResult = (
+    ToolInvocation,
+    ToolOutcome,
+    Option<std::path::PathBuf>,
+    u64,
+    bool,
+);
 
 impl Executor {
     // reason: bash metrics (exit/stdout/stderr) + edit diff are independent optional payloads.
@@ -351,7 +361,7 @@ impl Executor {
                 // Run sequentially — no tokio::spawn, no concurrency.
                 let outcome = run_prepared_call(prep).await;
                 if let Some((invocation, result, ms)) = outcome {
-                    results.insert(idx, (invocation, result, None, ms));
+                    results.insert(idx, (invocation, result, None, ms, false));
                 }
             } else {
                 let handle = tokio::spawn(run_prepared_call(prep));
@@ -467,6 +477,7 @@ impl Executor {
                         }),
                         None,
                         0,
+                        false,
                     ),
                 );
                 continue;
@@ -496,6 +507,8 @@ impl Executor {
                         }),
                         Some(path.clone()),
                         0,
+                        // Gate denial: the body never ran.
+                        true,
                     ),
                 );
                 continue;
@@ -524,6 +537,8 @@ impl Executor {
                             }),
                             Some(path.clone()),
                             0,
+                            // Gate denial: the body never ran.
+                            true,
                         ),
                     );
                     continue;
@@ -549,7 +564,7 @@ impl Executor {
                 if name == "read_file" || name == "read_image" {
                     self.sandbox.mark_read(&path);
                 }
-                results.insert(idx, (invocation, o.clone(), Some(path.clone()), ms));
+                results.insert(idx, (invocation, o.clone(), Some(path.clone()), ms, false));
             }
         }
 
@@ -606,7 +621,8 @@ impl Executor {
                 continue;
             }
 
-            let Some((invocation, outcome, resolved_path, duration_ms)) = results.remove(&idx)
+            let Some((invocation, outcome, resolved_path, duration_ms, gate_denied)) =
+                results.remove(&idx)
             else {
                 let err = format!("Tool call {} did not return an outcome", tc.id);
                 crate::emit!(
@@ -635,8 +651,18 @@ impl Executor {
             // gate and emit a second, identical "Access denied" message —
             // the model would see two denials for one failed edit (WO 15.7
             // 2.8). Record the pre-built denial once and skip the re-check.
-            if let ToolOutcome::Failure(crate::shared::ToolError::AccessDenied { message }) =
-                &outcome
+            //
+            // WO 48.15: only GATE denials (flagged at insert time — the
+            // Phase-2.5 symlink walk and read-before-edit check, decided
+            // before the body ran) take this path. A body-produced
+            // `AccessDenied` (write_file's TOCTOU re-check, tool guards)
+            // means the tool RAN and returned a failure — it flows through
+            // `record_tool_result` like any failure so metrics, post-tool
+            // hooks, the budget slice, and the doom-loop breaker still see it.
+            if let (
+                true,
+                ToolOutcome::Failure(crate::shared::ToolError::AccessDenied { message }),
+            ) = (&gate_denied, &outcome)
             {
                 let is_destructive = matches!(
                     tc.name.as_str(),

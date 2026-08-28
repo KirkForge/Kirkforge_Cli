@@ -990,6 +990,194 @@ async fn pre_tool_hook_runs_exactly_once_per_file_tool_call() {
     assert_eq!(on_disk, "updated");
 }
 
+// WO 48.15: a BODY-produced AccessDenied (the tool ran, its own guard
+// denied — here write_file's extension deny list, same shape as the TOCTOU
+// re-check) must flow through `record_tool_result` like any failure:
+// post-tool hooks, metrics, and the doom-loop breaker all live there.
+// Pre-fix, collect_batch's early-record branch pattern-matched it as a
+// gate denial and skipped the recording pipeline entirely.
+#[cfg(unix)]
+#[tokio::test]
+async fn body_denied_write_file_still_runs_post_tool_hook() {
+    let tmp = std::env::temp_dir().join(format!("kf_code_body_denied_{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let _cleanup = CleanupFile(tmp.clone());
+
+    use crate::tools::write_file::WriteFile;
+    // The TOOL's own guard denies .txt; the executor sandbox (default
+    // config, which does NOT deny .txt) allows — Phase 1 spawns, Phase 2.5
+    // gates pass (new file), the body denies. Deterministic stand-in for
+    // the guard-state-change window the TOCTOU re-checks cover.
+    let guard = crate::session::access::PathGuard {
+        deny_extensions: vec![".txt".to_string()],
+        deny_list: crate::shared::access::DenyList::new(vec![], vec![]),
+        ..Default::default()
+    };
+    let write_tool: Arc<dyn Tool> = Arc::new(WriteFile::new(None, guard, false, false));
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-write".into(),
+                name: "write_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "content": "body denial probe",
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (hook_tmp, hooks_dir) = temp_hooks_dir();
+    let counter = hook_tmp.path().join("post_tool_runs");
+    std::fs::write(&counter, b"").unwrap();
+    let script = format!("#!/bin/bash\nprintf x >> {counter:?}\nexit 0\n");
+    std::fs::write(hooks_dir.join("post-tool-write_file.sh"), script).unwrap();
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut config = make_config(true);
+    config.tools.hooks_dir = Some(hooks_dir);
+    let mut exe = make_executor(Box::new(adapter), vec![write_tool], config).unwrap();
+
+    let events = exe
+        .run_turn_collecting("write denied key", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    // The denial itself is recorded exactly once.
+    let denied_results: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                TurnEvent::ToolResult { name, output, success: false }
+                    if name == "write_file" && output.contains("denied")
+            )
+        })
+        .collect();
+    assert_eq!(
+        denied_results.len(),
+        1,
+        "body-denied write should produce exactly one denied ToolResult, got {denied_results:?}; \
+         events: {events:?}"
+    );
+    let msgs = exe.conversation.all();
+    let denial_msgs: Vec<_> = msgs
+        .iter()
+        .filter(|m| m.role == Role::Tool && m.content.contains("denied"))
+        .collect();
+    assert_eq!(
+        denial_msgs.len(),
+        1,
+        "conversation should contain exactly one denial message, got {denial_msgs:?}"
+    );
+
+    // The post-tool hook FIRED — the body denial went through
+    // record_tool_result, not the gate-denial early-record path. Hook
+    // scripts are spawned fire-and-forget, so poll briefly for the marker.
+    let mut hook_runs = 0;
+    for _ in 0..250 {
+        hook_runs = std::fs::read_to_string(&counter).unwrap().len();
+        if hook_runs == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        hook_runs, 1,
+        "post-tool-write_file hook must run once for a body-denied write (record_tool_result \
+         path), ran {hook_runs} times"
+    );
+
+    assert!(!tmp.exists(), "denied write must not create the file");
+}
+
+// WO 48.15 companion: a GATE denial (read-before-edit gate, decided before
+// the body ran) keeps the early-record fast path — the tool never executed,
+// so the post-tool hook must NOT fire.
+#[cfg(unix)]
+#[tokio::test]
+async fn gate_denied_edit_file_skips_post_tool_hook() {
+    let tmp = std::env::temp_dir().join(format!(
+        "kf_code_gate_denied_edit_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, "original").expect("seed existing file");
+    let _cleanup = CleanupFile(tmp.clone());
+
+    use crate::tools::edit_file::EditFile;
+    let edit_tool: Arc<dyn Tool> = Arc::new(EditFile::new(
+        None,
+        crate::session::access::PathGuard::default(),
+        false,
+        false,
+    ));
+
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-edit".into(),
+                name: "edit_file".into(),
+                arguments: serde_json::json!({
+                    "path": tmp.to_string_lossy(),
+                    "old_string": "original",
+                    "new_string": "updated",
+                }),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (hook_tmp, hooks_dir) = temp_hooks_dir();
+    let counter = hook_tmp.path().join("post_tool_runs");
+    std::fs::write(&counter, b"").unwrap();
+    let script = format!("#!/bin/bash\nprintf x >> {counter:?}\nexit 0\n");
+    std::fs::write(hooks_dir.join("post-tool-edit_file.sh"), script).unwrap();
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut config = make_config(true);
+    config.tools.hooks_dir = Some(hooks_dir);
+    let mut exe = make_executor(Box::new(adapter), vec![edit_tool], config).unwrap();
+    // Deliberately do NOT mark_read — the edit must be denied by the
+    // read-before-edit gate in Phase 2.5.
+
+    let events = exe
+        .run_turn_collecting("edit unread file", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    let denied_results: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                TurnEvent::ToolResult { name, output, success: false }
+                    if name == "edit_file" && output.contains("Access denied")
+            )
+        })
+        .collect();
+    assert_eq!(
+        denied_results.len(),
+        1,
+        "gate-denied edit should produce exactly one Access denied ToolResult, got {denied_results:?}"
+    );
+
+    let hook_runs = std::fs::read_to_string(&counter).unwrap().len();
+    assert_eq!(
+        hook_runs, 0,
+        "post-tool hook must NOT run for a gate denial (the tool body never ran), ran {hook_runs} times"
+    );
+}
+
 // WO 44.28 regression: a same-batch bash call swaps the edit target for a
 // symlink after Phase-1 canonicalization but before the Phase 2.5 body.
 // The file is pre-marked read so the read-before-edit gate ALLOWS — pre-fix

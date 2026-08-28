@@ -142,6 +142,8 @@ impl ModelAdapter for AnthropicVertexAdapter {
         self.json_mode = json_mode;
         if json_mode {
             self.response_format = Some(crate::shared::ResponseFormat::JsonObject);
+        } else {
+            self.response_format = None;
         }
     }
     fn set_response_format(&mut self, format: crate::shared::ResponseFormat) {
@@ -360,6 +362,10 @@ mod tests {
         assert!(!a.json_mode);
         a.set_json_mode(true);
         assert!(a.json_mode);
+        assert!(a.response_format.is_some());
+        a.set_json_mode(false);
+        assert!(!a.json_mode);
+        assert!(a.response_format.is_none());
     }
 
     #[test]

@@ -378,6 +378,8 @@ impl ModelAdapter for CachingAdapter {
         self.json_mode = json_mode;
         if json_mode {
             self.response_format = Some(crate::shared::ResponseFormat::JsonObject);
+        } else {
+            self.response_format = None;
         }
         self.inner.set_json_mode(json_mode);
     }
@@ -1436,6 +1438,10 @@ mod tests {
         assert!(!wrapped.json_mode);
         wrapped.set_json_mode(true);
         assert!(wrapped.json_mode);
+        assert!(wrapped.response_format.is_some());
+        wrapped.set_json_mode(false);
+        assert!(!wrapped.json_mode);
+        assert!(wrapped.response_format.is_none());
     }
 
     #[tokio::test]

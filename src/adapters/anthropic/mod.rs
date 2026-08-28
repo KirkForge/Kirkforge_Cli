@@ -101,6 +101,8 @@ impl ModelAdapter for AnthropicAdapter {
         self.json_mode = json_mode;
         if json_mode {
             self.response_format = Some(ResponseFormat::JsonObject);
+        } else {
+            self.response_format = None;
         }
     }
     fn set_response_format(&mut self, format: crate::shared::ResponseFormat) {
@@ -383,7 +385,18 @@ pub(crate) fn build_anthropic_body(
 
     match response_format {
         Some(crate::shared::ResponseFormat::JsonObject) => {
-            // Anthropic JSON mode via system-prefill; no top-level response_format.
+            // ponytail: Anthropic has no response_format field and no prefill
+            // is implemented — json_object silently degrades to unenforced
+            // output. Upgrade path: system-prompt "respond with JSON only"
+            // suffix + assistant prefill `{` when guaranteed JSON is needed
+            // (WO 48.6). Warn once instead of per request.
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                tracing::warn!(
+                    "json_mode on an Anthropic-family model has no wire effect — \
+                     sending without JSON enforcement (no prefill implemented)"
+                )
+            });
         }
         Some(crate::shared::ResponseFormat::JsonSchema { name, schema }) => {
             let synth = serde_json::json!({
@@ -865,6 +878,10 @@ mod tests {
         assert!(!a.json_mode);
         a.set_json_mode(true);
         assert!(a.json_mode);
+        assert!(a.response_format.is_some());
+        a.set_json_mode(false);
+        assert!(!a.json_mode);
+        assert!(a.response_format.is_none());
     }
 
     #[test]

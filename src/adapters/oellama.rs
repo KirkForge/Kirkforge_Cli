@@ -153,6 +153,8 @@ impl ModelAdapter for OellamaAdapter {
         self.json_mode = json_mode;
         if json_mode {
             self.response_format = Some(crate::shared::ResponseFormat::JsonObject);
+        } else {
+            self.response_format = None;
         }
     }
     fn set_response_format(&mut self, format: crate::shared::ResponseFormat) {
@@ -318,6 +320,10 @@ mod tests {
         assert!(!adapter.json_mode);
         adapter.set_json_mode(true);
         assert!(adapter.json_mode);
+        assert!(adapter.response_format.is_some());
+        adapter.set_json_mode(false);
+        assert!(!adapter.json_mode);
+        assert!(adapter.response_format.is_none());
     }
 
     #[test]

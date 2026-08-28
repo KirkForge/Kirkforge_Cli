@@ -377,11 +377,16 @@ async fn handle_session_picker_keys(
         state.mark_dirty();
         return Some(Ok(()));
     }
+    // WO 48.20: consume every remaining key while the modal is open —
+    // the help-overlay standard (handle_help_overlay_keys). 48.4 fixed
+    // only the advertised nav set; any other key (letters, F-keys,
+    // palette trigger) used to fall through to `None` and leak into
+    // the input box / tab switcher under the modal. Unrecognized keys
+    // are consumed no-ops.
     if consumed {
         state.mark_dirty();
-        return Some(Ok(()));
     }
-    None
+    Some(Ok(()))
 }
 
 fn handle_search_mode_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow::Result<()>> {
@@ -2214,6 +2219,89 @@ mod tests {
             state.session.session_picker.is_none(),
             "Esc must close the picker"
         );
+    }
+
+    /// WO 48.20: while the picker modal is open it must consume ALL
+    /// keys (help-overlay standard) — a letter must not land in the
+    /// input box and an F-key must not switch tabs underneath the
+    /// modal. Drives the full `handle_input_key` dispatcher, not just
+    /// the picker handler, to prove nothing downstream reacts.
+    #[tokio::test]
+    async fn session_picker_consumes_non_nav_keys() {
+        use crate::session::session_index::SessionEntry;
+        use crate::tui::app::ActiveTab;
+        use crate::tui::components::session_picker::SessionPicker;
+
+        let mut state = app_state();
+        state.session.session_picker = Some(SessionPicker::new(vec![SessionEntry {
+            id: "s1".into(),
+            path: "/tmp/wo48-20-1.conv.ndjson".into(),
+            started_at: "2026-08-28T10:00:00Z".into(),
+            message_count: 1,
+            size_bytes: 1,
+        }]));
+
+        let (input_tx, _input_rx) = mpsc::unbounded_channel();
+        let (cancel_tx, _cancel_rx) = mpsc::unbounded_channel();
+        let (resume_tx, _resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let (compact_tx, _compact_rx) = mpsc::unbounded_channel();
+        let (model_tx, _model_rx) = mpsc::unbounded_channel();
+        let (undo_tx, _undo_rx) = mpsc::unbounded_channel();
+        let (config_tx, _config_rx) = mpsc::unbounded_channel();
+        let (plan_tx, _plan_rx) = mpsc::unbounded_channel();
+        let (persona_tx, _persona_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::channel::<TurnEvent>(10_000);
+        let (plugin_reload_tx, _plugin_reload_rx) =
+            mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel::<crate::tui::commands::BgCmdDone>();
+        let ctx = HandleInputContext {
+            input_tx: &input_tx,
+            cancel_tx: &cancel_tx,
+            resume_tx: &resume_tx,
+            compact_tx: &compact_tx,
+            model_tx: &model_tx,
+            undo_tx: &undo_tx,
+            config_tx: &config_tx,
+            plan_tx: &plan_tx,
+            persona_tx: &persona_tx,
+            event_tx: &event_tx,
+            plugin_reload_tx: &plugin_reload_tx,
+            bg_tx: &bg_tx,
+        };
+
+        // A plain letter: consumed no-op — never appended to the input
+        // buffer behind the modal.
+        handle_input_key(
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+            &mut state,
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert!(
+            state.conversation.input.is_empty(),
+            "letter must not leak into the input box while the picker is open"
+        );
+        assert_eq!(state.conversation.cursor_position, 0);
+        assert!(
+            state.session.session_picker.is_some(),
+            "unrecognized key must not close the picker"
+        );
+
+        // An F-key: consumed no-op — no tab switch under the modal.
+        handle_input_key(
+            KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE),
+            &mut state,
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            state.ui.active_tab,
+            ActiveTab::None,
+            "F-key must not switch tabs while the picker is open"
+        );
+        assert!(state.session.session_picker.is_some());
     }
 
     #[tokio::test]

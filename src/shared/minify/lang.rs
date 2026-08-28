@@ -668,12 +668,56 @@ fn minify_python(source: &str) -> String {
 
 // ── JS/TS/JSX/TSX ─────────────────────────────────────────────────────
 
+// Conservative regex-vs-division heuristic: the identifier ending at the
+// end of `s` (after trailing whitespace), empty if the last char isn't a
+// word character.
+pub(super) fn trailing_word(s: &str) -> &str {
+    let trimmed = s.trim_end();
+    let start = trimmed
+        .rfind(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+        .map_or(0, |i| i + 1);
+    &trimmed[start..]
+}
+
+// Can a regex literal follow the last non-whitespace token of `out`?
+// Operators/punctuators and expression keywords say yes (an expression can
+// start there); identifiers/numbers/`)`/`]`/quote say no (division context).
+// ponytail: keyword-list heuristic, not a tokenizer — regexes after `)`/`}`
+// or an identifier (division-looking contexts) stay untracked; a `//` or
+// quote inside one of those can still corrupt. Upgrade path: real lexer.
+pub(super) fn prev_opens_regex(out: &str) -> bool {
+    match out.trim_end().chars().next_back() {
+        None => true, // start of input
+        Some(c) if "(,;:=!+-*%<>&|^~?{[".contains(c) => true,
+        Some(c) if c.is_alphanumeric() || c == '_' || c == '$' => matches!(
+            trailing_word(out),
+            "return"
+                | "typeof"
+                | "instanceof"
+                | "in"
+                | "of"
+                | "new"
+                | "delete"
+                | "void"
+                | "case"
+                | "do"
+                | "else"
+                | "yield"
+                | "await"
+                | "throw"
+        ),
+        Some(_) => false, // `)`, `]`, `}`, quotes → division context
+    }
+}
+
 fn minify_js_like(source: &str) -> String {
     let mut out = String::with_capacity(source.len());
     let mut chars = source.chars().peekable();
     let mut in_block_comment = false;
     let mut in_string = false;
     let mut string_char = '"';
+    let mut in_regex = false;
+    let mut in_char_class = false;
     let mut prev_was_newline = false;
 
     while let Some(ch) = chars.next() {
@@ -683,6 +727,36 @@ fn minify_js_like(source: &str) -> String {
                 in_block_comment = false;
             }
             continue;
+        }
+
+        // Regex literal: emit verbatim until the closing unescaped `/`.
+        // `//` and `/*` inside are literal (comment checks never run here —
+        // the opening `/` was followed by something else).
+        if in_regex {
+            if ch == '\\' {
+                out.push(ch);
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+                continue;
+            }
+            if ch == '\n' {
+                // Regex literals can't span lines — we misdetected; bail to
+                // normal scanning so the damage stops at this line.
+                in_regex = false;
+                in_char_class = false;
+            } else {
+                if ch == '[' {
+                    in_char_class = true;
+                } else if ch == ']' {
+                    in_char_class = false;
+                } else if ch == '/' && !in_char_class {
+                    in_regex = false;
+                    in_char_class = false;
+                }
+                out.push(ch);
+                continue;
+            }
         }
 
         if !in_string && (ch == '"' || ch == '\'' || ch == '`') {
@@ -714,6 +788,13 @@ fn minify_js_like(source: &str) -> String {
         if ch == '/' && chars.peek() == Some(&'*') {
             chars.next();
             in_block_comment = true;
+            continue;
+        }
+
+        if ch == '/' && prev_opens_regex(&out) {
+            in_regex = true;
+            in_char_class = false;
+            out.push(ch);
             continue;
         }
 
@@ -1470,6 +1551,7 @@ pub const X: i32 = 1;
         assert!(out.contains("func add"));
     }
 
+<<<<<<< HEAD
     // ── WO 48.11: shell heredoc bodies survive minification ───────────
 
     /// WO 48.11: `#` lines inside a heredoc body are literal content
@@ -1585,5 +1667,61 @@ pub const X: i32 = 1;
             expanded.contains("30 2 * * * /usr/local/bin/job"),
             "heredoc body must survive minify+expand: {expanded}"
         );
+||||||| 8184fa32
+=======
+    /// WO 48.12: `//` inside a regex literal must survive — the stripper
+    /// used to truncate `/https?:\/\//` at the escaped-slash/closing-slash
+    /// pair and eat the newline.
+    #[test]
+    fn test_minify_js_keeps_regex_literal_with_double_slash() {
+        let src = "const re = /https?:\\/\\//g;\nconst cls = /[/]/;\nconst x = 1;\n";
+        let out = minify_content_by_ext(src, "js", false);
+        assert!(
+            out.contains("/https?:\\/\\//g"),
+            "regex containing // must survive: {out}"
+        );
+        assert!(
+            out.contains("/[/]/"),
+            "slash inside a char class must stay literal: {out}"
+        );
+        assert!(
+            out.contains("const x = 1;"),
+            "code after the regex must survive: {out}"
+        );
+    }
+
+    /// WO 48.12: the regex literal survives the full minify → envelope →
+    /// expand round trip, so the edit_file path can't write the corruption
+    /// back to disk.
+    #[test]
+    fn test_minify_js_regex_round_trip_envelope() {
+        use crate::shared::minify::{expand_minified, wrap_minified_envelope};
+        use std::path::Path;
+
+        let src = "const re = /https?:\\/\\//g;\n";
+        let minified = minify_content_by_ext(src, "js", false);
+        assert!(minified.contains("/https?:\\/\\//g"));
+        let wrapped = wrap_minified_envelope("javascript", &minified);
+        let expanded = expand_minified(Path::new("x.js"), &wrapped);
+        assert!(
+            expanded.contains("/https?:\\/\\//g"),
+            "regex must survive minify+expand: {expanded}"
+        );
+    }
+
+    /// WO 48.12: division and real comments keep working — `a / b` with an
+    /// identifier/number before the slash is division, and `//` comments
+    /// (even directly after `=`, a regex-position token) are still stripped.
+    #[test]
+    fn test_minify_js_division_and_comments_unaffected() {
+        let src = "const q = a / b;\nconst r = n / 2;\nconst s = 4 / 2;\nconst t = f(x) / 2;\nconst y = // comment at regex position\n 5;\n";
+        let out = minify_content_by_ext(src, "js", false);
+        assert!(out.contains("a / b"), "division after identifier: {out}");
+        assert!(out.contains("n / 2"), "division after identifier: {out}");
+        assert!(out.contains("4 / 2"), "division after number: {out}");
+        assert!(out.contains("f(x) / 2"), "division after call: {out}");
+        assert!(!out.contains("comment at regex position"));
+        assert!(out.contains("5;"), "code after the comment survives: {out}");
+>>>>>>> wo/wo48.12
     }
 }

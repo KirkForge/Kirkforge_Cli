@@ -1117,3 +1117,22 @@
 - WO status flip is two-source-of-truth like ADRs: WO file `## Status`
   AND docs/workorders/README.md row must agree
   (adr_xref_drift.rs WO-status test enforces it).
+
+## WO 48.12 session (2026-08-28, branch wo48.12)
+- The minify→expand write-back chain has TWO regex-blind scanners, not
+  one: `minify_js_like` (lang.rs) AND `fallback_c_like` (expand.rs). A
+  fix in only the minifier still ships corruption — the expander's `:`
+  arm inserts a space inside regex bodies. When fixing a minifier bug,
+  grep expand.rs for the same language in the same commit; the
+  round-trip test (minify → wrap_minified_envelope → expand_minified)
+  is what catches it, not a minify-only assert.
+- This box has no prettier/deno, so `expand_minified` for js always
+  exercises `fallback_c_like` in tests — good: the fallback is the
+  corruption-prone path.
+- `//` and `/*` must WIN over regex-open even at regex position
+  (`x = // c` is a comment; a JS regex body can't start with `/` or
+  `*`) — checking the prev-token heuristic only for `/` followed by
+  something else keeps comment stripping intact.
+- scope creep disclosed: expand.rs touched though WO named only
+  lang.rs — required by the WO's own round-trip gate (sibling site,
+  same root cause).

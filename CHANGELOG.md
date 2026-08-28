@@ -25,6 +25,12 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 48.12 — js/ts minifier corrupted regex literals containing `//`
+  (`/https?:\/\//` truncated at the first unescaped-looking `//`, eating
+  the newline) on the disk write-back chain. `minify_js_like` and the
+  `fallback_c_like` expander now track regex literals (conservative
+  prev-token heuristic, verbatim body emission).
+  [48.12](docs/workorders/48.12-minify-js-regex-literal-corruption.md)
 - WO 48.9 — `--no-default-features` build (ADR-0017 minimal build) was
   broken: 3 un-gated `kf_budget_core::estimate_tokens` refs. The gate now
   lives in one choke point (`prompt::count_tokens`, bytes/4 fallback when

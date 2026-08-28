@@ -176,6 +176,20 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             None
         };
 
+    // WO 48.14: whether the full-screen UI can run at all, computed once
+    // and shared by the startup picker below and the TUI/line-mode branch
+    // (`use_tui`). Mirrors the WO 38.10 degradation criteria: --no-tui,
+    // --non-interactive, --prompt/-p, TERM=dumb, or a non-tty stdout all
+    // degrade to line mode.
+    let term_dumb = std::env::var("TERM").is_ok_and(|t| t == "dumb");
+    let tui_capable = can_run_tui(
+        no_tui,
+        non_interactive,
+        prompt.is_some(),
+        term_dumb,
+        std::io::stdout().is_terminal(),
+    );
+
     // Resolve the log path. Priority order:
     //   1. `--continue-session <value>` — id prefix OR full path
     //   2. `--resume <path>`            — legacy path-only flag
@@ -213,7 +227,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         // Try the daemon for a startup picker in TUI mode, or a hint in
         // non-interactive / no-TUI mode.
         match daemon::client::try_list_recent().await? {
-            Some(sessions) if !sessions.is_empty() && !non_interactive && !no_tui => {
+            Some(sessions) if !sessions.is_empty() && tui_capable => {
                 match tui::run_session_picker(sessions).await? {
                     Some(path) => {
                         tracing::info!(path = %path.display(), "resuming selected session");
@@ -834,12 +848,9 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     // mode. `NO_COLOR` is decoupled from this decision — it suppresses
     // colour/emoji in rendering but no longer kills the TUI, matching the
     // spec (previously `NO_COLOR` forced line mode, a spec violation).
-    let term_dumb = std::env::var("TERM").is_ok_and(|t| t == "dumb");
-    let use_tui = !no_tui
-        && !non_interactive
-        && prompt.is_none()
-        && !term_dumb
-        && std::io::stdout().is_terminal();
+    // The conjunction is computed once above (`tui_capable`) and shared
+    // with the startup picker gate (WO 48.14).
+    let use_tui = tui_capable;
     let result = if use_tui {
         tui::run_tui(
             shared_config,
@@ -1004,5 +1015,36 @@ fn print_recent_sessions_hint(sessions: &[kf_code::session::session_index::Sessi
             e.message_count,
             e.started_at
         );
+    }
+}
+
+// WO 48.14: the exact conjunction the TUI launch decision applies. The
+// startup picker is itself a full-screen TUI, so the picker gate and the
+// TUI/line-mode branch both check this one predicate — previously the
+// picker checked only !non_interactive && !no_tui, crashing headless runs
+// (os error 6) and popping an invisible modal on piped stdout / -p.
+fn can_run_tui(
+    no_tui: bool,
+    non_interactive: bool,
+    has_prompt: bool,
+    term_dumb: bool,
+    stdout_is_tty: bool,
+) -> bool {
+    !no_tui && !non_interactive && !has_prompt && !term_dumb && stdout_is_tty
+}
+
+#[cfg(test)]
+mod tests {
+    use super::can_run_tui;
+
+    // WO 48.14: each degradation alone must force line mode.
+    #[test]
+    fn can_run_tui_requires_every_condition() {
+        assert!(can_run_tui(false, false, false, false, true));
+        assert!(!can_run_tui(true, false, false, false, true));
+        assert!(!can_run_tui(false, true, false, false, true));
+        assert!(!can_run_tui(false, false, true, false, true));
+        assert!(!can_run_tui(false, false, false, true, true));
+        assert!(!can_run_tui(false, false, false, false, false));
     }
 }

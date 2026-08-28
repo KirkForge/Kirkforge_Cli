@@ -10,7 +10,7 @@ use crate::send_or_warn;
 use crate::session::conversation::ConversationLog;
 use crate::session::prompt::CompactRequest;
 use crate::session::skills::SkillRegistry;
-use crate::shared::Config;
+use crate::shared::{read_shared_config, Config};
 use crate::tui::app::{AppState, ConversationEntry};
 use crate::tui::commands::{PersonaKind, PersonaResult};
 use kf_plugin_host::PluginRegistry;
@@ -48,6 +48,49 @@ pub(crate) fn group_rank(group: &str) -> u8 {
         "Developer" => 2,
         _ => 3,
     }
+}
+
+// ── WO 47.13 command diet ──────────────────────────────────────────
+// Low-traffic commands are disabled unless their opt-in key appears in
+// `[display] extra_commands` (config.toml, default empty = all off).
+// Maps a COMMANDS primary trigger to its key. The doom-loop banner is
+// deliberately NOT here — it is the runaway-loop safety interrupt, not
+// a diet item. Persona machinery itself stays ungated: /workflow and
+// the doom-banner Plan action run through it.
+pub(crate) const EXTRA_KEYS: &[(&str, &str)] = &[
+    ("/gh", "gh"),
+    ("/route", "route"),
+    ("/metrics", "metrics"),
+    ("/carryover", "carryover"),
+    ("/plan", "personas"),
+    ("/explore", "personas"),
+    ("/coder", "personas"),
+];
+
+/// Is the named extra enabled? `extras` is the configured
+/// `[display] extra_commands` list.
+pub(crate) fn extra_enabled(extras: &[String], key: &str) -> bool {
+    extras.iter().any(|s| s.eq_ignore_ascii_case(key))
+}
+
+/// Opt-in key for a command row, if the row is gated.
+fn extra_key_of(cmd: &SlashCommand) -> Option<&'static str> {
+    EXTRA_KEYS
+        .iter()
+        .find(|(trigger, _)| cmd.triggers.contains(trigger))
+        .map(|(_, key)| *key)
+}
+
+fn command_enabled(extras: &[String], cmd: &SlashCommand) -> bool {
+    extra_key_of(cmd).is_none_or(|key| extra_enabled(extras, key))
+}
+
+/// System message shown when a gated command is invoked while off.
+pub(crate) fn extra_disabled_msg(cmd: &str, key: &str) -> String {
+    format!(
+        "{cmd} is off by default (WO 47.13 command diet). \
+         Enable: add \"{key}\" to [display] extra_commands in config.toml, then /reload."
+    )
 }
 
 pub(crate) const COMMANDS: &[SlashCommand] = &[
@@ -216,7 +259,8 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
         triggers: &["/jobs"],
         description: "Background bash jobs",
         usage: "/jobs | <id> | clean\n\
-                Scheduled jobs: /jobs schedule <spec> bash <cmd>, /jobs scheduled list, /jobs run-now <id>, /jobs logs <id>",
+                Scheduled jobs (opt-in via [display] extra_commands = [\"jobs-schedule\"]):\n\
+                /jobs schedule <spec> bash <cmd>, /jobs scheduled list, /jobs run-now <id>, /jobs logs <id>",
         group: "Developer",
     },
     SlashCommand {
@@ -284,12 +328,16 @@ pub(crate) const COMMANDS: &[SlashCommand] = &[
 /// WO 34.9: ranking is tier-first so the popup surfaces everyday
 /// commands above advanced/developer ones. Within a tier, alphabetical
 /// by trigger (stable secondary sort).
-pub(crate) fn complete_command(prefix: &str) -> Vec<&'static str> {
+///
+/// WO 47.13: gated commands (EXTRA_KEYS) are hidden unless their key
+/// is enabled in `[display] extra_commands`.
+pub(crate) fn complete_command(prefix: &str, extras: &[String]) -> Vec<&'static str> {
     // Collect (trigger, group_rank) pairs so we can sort by tier then
     // by trigger. flat_map over commands × triggers preserves the
     // group lookup; the rank is the SAME for every alias of a command.
     let mut hits: Vec<(&'static str, u8)> = COMMANDS
         .iter()
+        .filter(|c| command_enabled(extras, c))
         .flat_map(|c| {
             let rank = group_rank(c.group);
             c.triggers.iter().map(move |t| (*t, rank))
@@ -317,10 +365,16 @@ pub(crate) fn complete_command(prefix: &str) -> Vec<&'static str> {
 /// still appears in the text — `help_text_includes_every_command_trigger`
 /// stays green). This surfaces the commands a new user needs first without
 /// burying the advanced/developer ones.
-pub(crate) fn help_text(skill_registry: &SkillRegistry) -> String {
+///
+/// WO 47.13: gated commands (EXTRA_KEYS) and the @-mentions section are
+/// hidden unless enabled in `[display] extra_commands`.
+pub(crate) fn help_text(skill_registry: &SkillRegistry, extras: &[String]) -> String {
     let mut out = String::from("Built-in commands:\n");
     for group in GROUPS {
-        let mut rows: Vec<&SlashCommand> = COMMANDS.iter().filter(|c| c.group == *group).collect();
+        let mut rows: Vec<&SlashCommand> = COMMANDS
+            .iter()
+            .filter(|c| c.group == *group && command_enabled(extras, c))
+            .collect();
         rows.sort_by_key(|c| c.triggers[0]);
         out.push_str(&format!("\n{group}:\n"));
         if *group == "Everyday" {
@@ -347,15 +401,21 @@ pub(crate) fn help_text(skill_registry: &SkillRegistry) -> String {
     }
     out.push_str(
         "\nBash passthrough:\n\
-         \n  !<command>  Run a shell command directly — no model round trip. Approval is configurable via `bang_requires_approval`. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n\
-         \n@-mentions (inline file context):\n\
-         \n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n\
-         \n  @<path>:raw      Inline the file verbatim, no minification.\n\
-         \n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n\
-         \n  @<path>:A-B:raw  Range + verbatim, combined.\n\
-         \n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n\
-         \n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n\
-         \nKeybindings:\n\
+         \n  !<command>  Run a shell command directly — no model round trip. Approval is configurable via `bang_requires_approval`. Output is shown as a collapsible tool entry. 30-second timeout; for long jobs use `!<cmd> &` and check /jobs.\n",
+    );
+    if extra_enabled(extras, "mentions") {
+        out.push_str(
+            "\n@-mentions (inline file context):\n\
+             \n  @<path>          Inline the file's contents into the prompt (minified by default). The TUI shows a status row per mention.\n\
+             \n  @<path>:raw      Inline the file verbatim, no minification.\n\
+             \n  @<path>:A-B      Inline lines A–B (1-indexed, inclusive on both ends).\n\
+             \n  @<path>:A-B:raw  Range + verbatim, combined.\n\
+             \n  @~/...           Tilde expansion supported (e.g. @~/notes.md).\n\
+             \n  Multiple @<path> tokens in one input are all expanded. Each mention is capped at 50 KB (head + tail + marker) and respects the same path-safety rules as the model's read_file tool. Failures (missing, denied, I/O) are shown in the TUI as ✗ rows and as quoted placeholders in the prompt, so the model can react.\n",
+        );
+    }
+    out.push_str(
+        "\nKeybindings:\n\
          \n  Ctrl+T   Toggle tool output collapse (default ON)\n\
          \n  Ctrl+F   Search the conversation (Enter to commit and jump, n / Shift+N to cycle, Esc to cancel)\n\
          \n  Enter    Expand/collapse the most recent message (when input is empty)\n\
@@ -513,6 +573,21 @@ pub(crate) async fn dispatch_slash_command(
             Ok(true)
         }
         "/route" => {
+            if !extra_enabled(
+                &read_shared_config(&state.services.config)
+                    .display
+                    .extra_commands,
+                "route",
+            ) {
+                state
+                    .conversation
+                    .messages
+                    .push_back(ConversationEntry::new(
+                        "system",
+                        extra_disabled_msg("/route", "route"),
+                    ));
+                return Ok(true);
+            }
             let msg =
                 crate::tui::commands::handle_route_command(args, ctx.model_tx, ctx.event_tx, state)
                     .await;
@@ -531,6 +606,21 @@ pub(crate) async fn dispatch_slash_command(
             Ok(true)
         }
         "/metrics" => {
+            if !extra_enabled(
+                &read_shared_config(&state.services.config)
+                    .display
+                    .extra_commands,
+                "metrics",
+            ) {
+                state
+                    .conversation
+                    .messages
+                    .push_back(ConversationEntry::new(
+                        "system",
+                        extra_disabled_msg("/metrics", "metrics"),
+                    ));
+                return Ok(true);
+            }
             let msg = crate::tui::commands::handle_metrics_command();
             state
                 .conversation
@@ -606,6 +696,21 @@ pub(crate) async fn dispatch_slash_command(
             Ok(true)
         }
         "/plan" => {
+            if !extra_enabled(
+                &read_shared_config(&state.services.config)
+                    .display
+                    .extra_commands,
+                "personas",
+            ) {
+                state
+                    .conversation
+                    .messages
+                    .push_back(ConversationEntry::new(
+                        "system",
+                        extra_disabled_msg("/plan", "personas"),
+                    ));
+                return Ok(true);
+            }
             let msg = crate::tui::commands::start_persona(
                 PersonaKind::Plan,
                 args,
@@ -620,6 +725,21 @@ pub(crate) async fn dispatch_slash_command(
             Ok(true)
         }
         "/explore" => {
+            if !extra_enabled(
+                &read_shared_config(&state.services.config)
+                    .display
+                    .extra_commands,
+                "personas",
+            ) {
+                state
+                    .conversation
+                    .messages
+                    .push_back(ConversationEntry::new(
+                        "system",
+                        extra_disabled_msg("/explore", "personas"),
+                    ));
+                return Ok(true);
+            }
             let msg = crate::tui::commands::start_persona(
                 PersonaKind::Explore,
                 args,
@@ -634,6 +754,21 @@ pub(crate) async fn dispatch_slash_command(
             Ok(true)
         }
         "/coder" => {
+            if !extra_enabled(
+                &read_shared_config(&state.services.config)
+                    .display
+                    .extra_commands,
+                "personas",
+            ) {
+                state
+                    .conversation
+                    .messages
+                    .push_back(ConversationEntry::new(
+                        "system",
+                        extra_disabled_msg("/coder", "personas"),
+                    ));
+                return Ok(true);
+            }
             let msg = crate::tui::commands::start_persona(
                 PersonaKind::Coder,
                 args,
@@ -666,6 +801,21 @@ pub(crate) async fn dispatch_slash_command(
             // (std::process). Run the whole handler on a blocking thread
             // and report via the background-completion channel so a
             // stalled gh API can no longer freeze the TUI.
+            if !extra_enabled(
+                &read_shared_config(&state.services.config)
+                    .display
+                    .extra_commands,
+                "gh",
+            ) {
+                state
+                    .conversation
+                    .messages
+                    .push_back(ConversationEntry::new(
+                        "system",
+                        extra_disabled_msg("/gh", "gh"),
+                    ));
+                return Ok(true);
+            }
             let owned = args.to_string();
             let bg = ctx.bg_tx.clone();
             tokio::spawn(async move {
@@ -717,6 +867,21 @@ pub(crate) async fn dispatch_slash_command(
             Ok(true)
         }
         "/carryover" => {
+            if !extra_enabled(
+                &read_shared_config(&state.services.config)
+                    .display
+                    .extra_commands,
+                "carryover",
+            ) {
+                state
+                    .conversation
+                    .messages
+                    .push_back(ConversationEntry::new(
+                        "system",
+                        extra_disabled_msg("/carryover", "carryover"),
+                    ));
+                return Ok(true);
+            }
             let msg = crate::tui::commands::handle_carryover_command(args, state);
             state
                 .conversation
@@ -964,6 +1129,17 @@ fn handle_theme_command(args: &str, state: &mut AppState) -> String {
 mod tests {
     use super::*;
 
+    /// Extras list with every WO 47.13 gate enabled.
+    fn all_extras() -> Vec<String> {
+        let mut keys: Vec<&str> = EXTRA_KEYS.iter().map(|(_, k)| *k).collect();
+        for k in ["jobs-schedule", "mentions"] {
+            if !keys.contains(&k) {
+                keys.push(k);
+            }
+        }
+        keys.into_iter().map(String::from).collect()
+    }
+
     #[test]
     fn slash_command_table_covers_all_triggers() {
         let all_triggers: Vec<&&str> = COMMANDS.iter().flat_map(|c| c.triggers).collect();
@@ -1024,13 +1200,15 @@ mod tests {
     #[test]
     fn help_text_includes_every_command_trigger() {
         let registry = SkillRegistry::new();
-        let text = help_text(&registry);
+        // WO 47.13: with every extra enabled the help text must still
+        // list every trigger (original intent preserved).
+        let text = help_text(&registry, &all_extras());
         for cmd in COMMANDS {
             for trigger in cmd.triggers {
                 assert!(
                     text.contains(*trigger),
                     "help text missing trigger {trigger:?}"
-                );
+                )
             }
         }
     }
@@ -1038,7 +1216,7 @@ mod tests {
     #[test]
     fn help_text_includes_group_headers() {
         let registry = SkillRegistry::new();
-        let text = help_text(&registry);
+        let text = help_text(&registry, &Vec::new());
         for group in GROUPS {
             let header = format!("\n{group}:\n");
             assert!(
@@ -1094,7 +1272,7 @@ mod tests {
         // "he" uniquely matches "/help" via the primary trigger.
         // Aliases ("/h", "/?") are NOT returned — `complete_command`
         // returns the primary (first alias) for each command.
-        assert_eq!(complete_command("he"), vec!["/help"]);
+        assert_eq!(complete_command("he", &Vec::new()), vec!["/help"]);
     }
 
     #[test]
@@ -1102,7 +1280,9 @@ mod tests {
         // "p" matches the primary triggers of several commands
         // (/plan, /plugins, ...). The exact set depends on what is
         // in COMMANDS at merge time — pin that it is at least two.
-        let matches = complete_command("p");
+        // WO 47.13: /plan is gated, so enable all extras to keep the
+        // historical assertions meaningful.
+        let matches = complete_command("p", &all_extras());
         assert!(
             matches.len() >= 2,
             "expected >=2 matches for \"p\", got {matches:?}"
@@ -1130,21 +1310,22 @@ mod tests {
         // `/quit` is an alias of `/exit`. Completion must surface aliases,
         // not just primaries — otherwise `/q` shows nothing and the user
         // cannot discover `/quit`.
-        assert_eq!(complete_command("q"), vec!["/quit"]);
-        assert_eq!(complete_command("quit"), vec!["/quit"]);
+        assert_eq!(complete_command("q", &Vec::new()), vec!["/quit"]);
+        assert_eq!(complete_command("quit", &Vec::new()), vec!["/quit"]);
     }
 
     #[test]
     fn complete_command_zzz_returns_empty() {
         // No command starts with "zzz".
-        assert!(complete_command("zzz").is_empty());
+        assert!(complete_command("zzz", &all_extras()).is_empty());
     }
 
     #[test]
     fn complete_command_empty_prefix_returns_all_triggers() {
         // An empty prefix matches every trigger — INCLUDING aliases —
         // so the count is the total alias count, not the command count.
-        let all = complete_command("");
+        // WO 47.13: with all extras enabled this is still every alias.
+        let all = complete_command("", &all_extras());
         let total_aliases: usize = COMMANDS.iter().map(|c| c.triggers.len()).sum();
         assert!(!all.is_empty());
         assert_eq!(
@@ -1184,7 +1365,7 @@ mod tests {
     /// contract — the popup surfaces everyday commands first.
     #[test]
     fn complete_command_ranks_by_tier_everyday_first() {
-        let all = complete_command("");
+        let all = complete_command("", &all_extras());
         // Find the index of the first Advanced and first Developer trigger.
         let first_advanced = all
             .iter()
@@ -1227,7 +1408,7 @@ mod tests {
     #[test]
     fn help_text_everyday_expanded_advanced_developer_collapsed() {
         let registry = SkillRegistry::new();
-        let text = help_text(&registry);
+        let text = help_text(&registry, &all_extras());
         // Everyday: /clear's description must appear (expanded form).
         assert!(
             text.contains("Clear conversation"),
@@ -1263,6 +1444,78 @@ mod tests {
         assert!(group_rank("Everyday") < group_rank("Advanced"));
         assert!(group_rank("Advanced") < group_rank("Developer"));
         assert_eq!(group_rank("unknown"), 3, "unknown groups sort last");
+    }
+
+    // ── WO 47.13: command-diet gating ─────────────────────────────
+
+    /// Every EXTRA_KEYS trigger must exist in COMMANDS — a renamed or
+    /// removed command row would otherwise leave a dead gate entry.
+    #[test]
+    fn extra_keys_triggers_exist_in_commands_table() {
+        for (trigger, _) in EXTRA_KEYS {
+            assert!(
+                COMMANDS
+                    .iter()
+                    .any(|c| c.triggers.contains(trigger)),
+                "EXTRA_KEYS trigger {trigger:?} not found in COMMANDS — remove the stale gate entry"
+            );
+        }
+    }
+
+    /// With the default (empty) extras list, every gated command is
+    /// hidden from completion and /help, and the @-mentions help
+    /// section is gone. Ungated commands stay visible.
+    #[test]
+    fn gated_commands_hidden_by_default() {
+        let empty: Vec<String> = Vec::new();
+        let all = complete_command("", &empty);
+        for (trigger, _) in EXTRA_KEYS {
+            assert!(
+                !all.contains(trigger),
+                "gated trigger {trigger} should be hidden by default"
+            );
+        }
+        // Ungated commands remain.
+        for trigger in ["/help", "/jobs", "/model", "/implement", "/workflow"] {
+            assert!(
+                all.contains(&trigger),
+                "ungated trigger {trigger} must stay visible by default"
+            );
+        }
+        let registry = SkillRegistry::new();
+        let text = help_text(&registry, &empty);
+        assert!(
+            !text.contains("@-mentions"),
+            "mentions help hidden by default"
+        );
+        // No orphaned mention of a gated command in the help text.
+        assert!(!text.contains("/gh"));
+        assert!(!text.contains("/route"));
+        assert!(!text.contains("/metrics"));
+    }
+
+    /// Listing a key in extras re-enables its commands in completion
+    /// and help (the @-mentions section returns with "mentions").
+    #[test]
+    fn gated_commands_enabled_via_config() {
+        let extras = vec!["gh".to_string(), "mentions".to_string()];
+        let all = complete_command("", &extras);
+        assert!(all.contains(&"/gh"), "/gh enabled via extras");
+        assert!(!all.contains(&"/route"), "/route still gated");
+        let registry = SkillRegistry::new();
+        let text = help_text(&registry, &extras);
+        assert!(text.contains("/gh"));
+        assert!(text.contains("@-mentions"));
+    }
+
+    /// The disabled-message helper names the command and the config
+    /// key — it is the only recovery path a user sees.
+    #[test]
+    fn extra_disabled_msg_names_command_and_key() {
+        let msg = extra_disabled_msg("/gh", "gh");
+        assert!(msg.contains("/gh"), "got: {msg}");
+        assert!(msg.contains("\"gh\""), "got: {msg}");
+        assert!(msg.contains("extra_commands"), "got: {msg}");
     }
 
     // ── /auto-approve tests ───────────────────────────────────────

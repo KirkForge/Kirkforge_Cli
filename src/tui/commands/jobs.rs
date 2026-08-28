@@ -11,7 +11,8 @@
 //! - `/jobs <id> cancel`  → cancel a running job
 //! - `/jobs clean`        → drop all finished jobs
 //!
-//! Scheduled-job sub-commands (new):
+//! Scheduled-job sub-commands (WO 47.13: opt-in via
+//! `[display] extra_commands = ["jobs-schedule"]`, default off):
 //! - `/jobs schedule <spec> bash <command>`  → create a bash scheduled job
 //! - `/jobs schedule <spec> workflow <name> [vars...]` → create a workflow job
 //! - `/jobs scheduled list`                    → list scheduled jobs
@@ -149,6 +150,23 @@ pub async fn handle_jobs_command(
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
+
+    // WO 47.13: the scheduled-job surface is an opt-in extra. The
+    // background-bash surface above stays always-on.
+    if matches!(
+        first.as_str(),
+        "schedule" | "scheduled" | "run-now" | "logs"
+    ) && !crate::tui::keys::slash_commands::extra_enabled(
+        &crate::shared::read_shared_config(&state.services.config)
+            .display
+            .extra_commands,
+        "jobs-schedule",
+    ) {
+        return crate::tui::keys::slash_commands::extra_disabled_msg(
+            "Scheduled jobs (/jobs schedule | scheduled | run-now | logs)",
+            "jobs-schedule",
+        );
+    }
 
     match first.as_str() {
         "schedule" => handle_schedule_command(trimmed, state).await,
@@ -791,12 +809,18 @@ mod tests {
     }
 
     fn state() -> AppState {
-        state_with_config(Config::default())
+        // WO 47.13: these tests exercise the scheduled surface, so the
+        // fixture runs as an opted-in user
+        // ([display] extra_commands = ["jobs-schedule"]).
+        let mut cfg = Config::default();
+        cfg.display.extra_commands = vec!["jobs-schedule".to_string()];
+        state_with_config(cfg)
     }
 
     fn state_auto_approve() -> AppState {
         let mut cfg = Config::default();
         cfg.tools.scheduled_bash_auto_approve = true;
+        cfg.display.extra_commands = vec!["jobs-schedule".to_string()];
         state_with_config(cfg)
     }
 
@@ -956,5 +980,23 @@ mod tests {
 
         let out = handle_jobs_command("schedule @daily echo hi", &mut state, &bg).await;
         assert!(out.contains("Usage"), "got: {out}");
+    }
+
+    /// WO 47.13: with the default (empty) extras the scheduled surface
+    /// is gated off, while the core background-bash surface stays on.
+    #[tokio::test]
+    async fn scheduled_surface_disabled_by_default() {
+        let mut state = state_with_config(Config::default());
+        let (bg, _rx) = bg_channel();
+
+        let out = handle_jobs_command("schedule @hourly bash echo hi", &mut state, &bg).await;
+        assert!(out.contains("off by default"), "got: {out}");
+        assert!(out.contains("jobs-schedule"), "got: {out}");
+
+        let list = handle_jobs_command("", &mut state, &bg).await;
+        assert!(
+            !list.contains("off by default"),
+            "core /jobs bash surface must stay enabled: {list}"
+        );
     }
 }

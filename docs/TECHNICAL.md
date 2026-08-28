@@ -385,6 +385,23 @@ is set inline at dispatch and cleared when the completion lands. A stalled
 `gh api`, a 1-hour job run, `git push`, or a 5-minute `cargo test` leaves the
 TUI live (render, Esc, spinner) instead of freezing it.
 
+**Command diet — opt-in extras** (WO 47.13): low-traffic commands are
+disabled unless their key is listed in `[display] extra_commands`
+(config.toml, default empty = all off; live via `/reload`). Gated:
+`/gh` (`"gh"`), `/route` (`"route"`), `/metrics` (`"metrics"`),
+`/carryover` (`"carryover"` — display command only, the profile
+machinery stays), `/plan` `/explore` `/coder` (`"personas"` — the
+persona machinery itself stays ungated; `/workflow` and the doom-banner
+Plan action run through it), the `/jobs` cron surface — `schedule`,
+`scheduled`, `run-now`, `logs` (`"jobs-schedule"`; the background-bash
+`/jobs` surface stays always-on), and `@`-mention expansion +
+completion (`"mentions"`; input is sent verbatim when off). Gated
+commands are hidden from `/help` and Tab completion and answer with an
+enable-hint message when invoked. Deliberately NOT gated: the doom-loop
+banner (runaway-loop safety interrupt, not a diet item) and `/implement`
+(plan-mode exit). The `EXTRA_KEYS` table in
+`src/tui/keys/slash_commands.rs` is the trigger→key map.
+
 The `/help` text is generated from the `COMMANDS` table in
 `src/tui/keys/slash_commands.rs` and grouped into sections (Session, Model,
 Safety, Workflow, Plugins, Diagnostics) in a fixed order defined by the

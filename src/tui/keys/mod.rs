@@ -177,7 +177,11 @@ fn handle_slash_menu_keys(key: KeyEvent, state: &mut AppState) -> Option<anyhow:
             Some(Ok(()))
         }
         KeyCode::Enter => {
-            let commands = complete_command(&menu.query);
+            let extras = crate::shared::read_shared_config(&state.services.config)
+                .display
+                .extra_commands
+                .clone();
+            let commands = complete_command(&menu.query, &extras);
             if menu.selected < commands.len() {
                 state.conversation.input = commands[menu.selected].to_string();
                 state.conversation.cursor_position = state.conversation.input.chars().count();
@@ -978,9 +982,14 @@ async fn handle_command_palette_keys(
 /// disturbed while the overlay is up. Scroll is clamped to the help
 /// text line count (computed lazily here from `help_text()`).
 fn handle_help_overlay_keys(key: KeyEvent, state: &mut AppState) {
-    let total_lines = crate::tui::keys::slash_commands::help_text(&state.services.skill_registry)
-        .lines()
-        .count();
+    let extras = crate::shared::read_shared_config(&state.services.config)
+        .display
+        .extra_commands
+        .clone();
+    let total_lines =
+        crate::tui::keys::slash_commands::help_text(&state.services.skill_registry, &extras)
+            .lines()
+            .count();
     match key.code {
         KeyCode::Esc => {
             state.ui.help_overlay_visible = false;
@@ -1614,17 +1623,10 @@ pub(crate) async fn handle_input_key(
                     }
                 } else {
                     // Regular message — push to display and send to executor.
-                    // v1.2-p15: expand `@<path>` mentions inline before sending.
-                    let mentions = crate::tui::commands::parse_mentions(&input);
-                    let path_guard = crate::session::access::PathGuard::default();
-                    let expansions = crate::tui::commands::expand_mentions(&mentions, &path_guard);
-                    let cleaned = if mentions.is_empty() {
-                        input.clone()
-                    } else {
-                        crate::tui::commands::strip_mentions(&input, &mentions)
-                    };
-                    let rendered_block = crate::tui::commands::render_mentions_block(&expansions);
-                    let status_msg = crate::tui::commands::format_mention_status(&expansions);
+                    // v1.2-p15: expand `@<path>` mentions inline before
+                    // sending (WO 47.13: opt-in extra, off by default).
+                    let (cleaned, rendered_block, status_msg) =
+                        expand_input_mentions(state, &input);
 
                     state
                         .conversation
@@ -1776,17 +1778,64 @@ fn try_completion(state: &mut AppState) -> bool {
     let prefix: String = chars[1..col].iter().collect();
     match first {
         '/' => complete_slash(state, &prefix),
-        '@' => complete_mention(state, &prefix),
+        // WO 47.13: @-completion only fires when mentions are enabled.
+        '@' => {
+            if slash_commands::extra_enabled(
+                &crate::shared::read_shared_config(&state.services.config)
+                    .display
+                    .extra_commands,
+                "mentions",
+            ) {
+                complete_mention(state, &prefix)
+            } else {
+                false
+            }
+        }
         _ => false,
     }
 }
 
 // Slash completion. `complete_command` returns triggers that already
 // include the leading `/`, so we pass an empty trigger to
-// `apply_completion` (it would otherwise double the slash).
+// `apply_completion` (it would otherwise double the slash). WO 47.13:
+// gated commands are hidden unless enabled in `[display]
+// extra_commands` — the list is cloned out of the config lock first
+// because `apply_completion` mutates state.
 fn complete_slash(state: &mut AppState, prefix: &str) -> bool {
-    let matches = complete_command(prefix);
+    let extras = crate::shared::read_shared_config(&state.services.config)
+        .display
+        .extra_commands
+        .clone();
+    let matches = complete_command(prefix, &extras);
     apply_completion(state, "", matches.into_iter().map(String::from).collect())
+}
+
+/// Expand `@<path>` mentions in `input` (v1.2-p15). WO 47.13: mentions
+/// are an opt-in extra (`[display] extra_commands = ["mentions"]`);
+/// when disabled the input is sent verbatim. Returns
+/// `(cleaned_input, rendered_block, status_msg)`.
+fn expand_input_mentions(state: &AppState, input: &str) -> (String, String, String) {
+    if !slash_commands::extra_enabled(
+        &crate::shared::read_shared_config(&state.services.config)
+            .display
+            .extra_commands,
+        "mentions",
+    ) {
+        return (input.to_string(), String::new(), String::new());
+    }
+    let mentions = crate::tui::commands::parse_mentions(input);
+    let path_guard = crate::session::access::PathGuard::default();
+    let expansions = crate::tui::commands::expand_mentions(&mentions, &path_guard);
+    let cleaned = if mentions.is_empty() {
+        input.to_string()
+    } else {
+        crate::tui::commands::strip_mentions(input, &mentions)
+    };
+    (
+        cleaned,
+        crate::tui::commands::render_mentions_block(&expansions),
+        crate::tui::commands::format_mention_status(&expansions),
+    )
 }
 
 // @-mention path completion. The `:A-B:raw` suffix is a modifier, not a
@@ -2332,6 +2381,15 @@ mod tests {
         std::fs::write(tmp.join("tmpfile.txt"), "x").unwrap();
 
         let mut state = app_state();
+        // WO 47.13: @-completion is an opt-in extra — enable it for
+        // this test ("mentions" in [display] extra_commands).
+        state
+            .services
+            .config
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .display
+            .extra_commands = vec!["mentions".to_string()];
         // Type "@<tmp>/tmpfile" — the absolute path prefix. Use the
         // OS-native path so Windows backslashes parse correctly.
         let typed = format!(

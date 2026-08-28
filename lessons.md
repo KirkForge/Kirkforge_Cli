@@ -1011,3 +1011,22 @@
 - gitnexus impact does not index #[cfg(test)]/#[tokio::test] symbols —
   for test-only edits, "no production callers possible" is the impact
   answer; don't burn time on re-indexing.
+
+## WO 48.2 session (2026-08-28)
+
+- Phase-3 pre-tool hook re-run existed because the resolved path was only
+  substituted into hook args at record time; Phase 1 computes
+  `file_resolved` BEFORE its hook fires, so the substitution moved there
+  and the Phase-3 run was pure duplication. Lesson: when a "later phase
+  has better data" gate is found, check whether the earlier phase already
+  holds that data — the WO 43.30 fix (hook moved to Phase 1) left the old
+  Phase-3 site behind as a stale sibling.
+- Parallel worktree sessions make cold cargo builds take 10-15+ min (3+
+  concurrent rustc sets). Budget 30-45 min timeouts for check/test/clippy
+  in woXX worktrees; the 5-min default will kill legitimate builds.
+- gitnexus detect_changes can't see .worktrees/woXX diffs (index tracks
+  the main checkout) — use `git status --short` + `git diff --stat` in the
+  worktree for scope verification.
+- `printf x >> {path:?}` in a bash hook script is the cheapest invocation
+  counter for "hook ran exactly N times" tests — file length = count, no
+  flock needed for single-invocation assertions.

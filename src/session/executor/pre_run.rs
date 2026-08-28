@@ -300,10 +300,25 @@ impl Executor {
             None
         };
 
-        // Pre-tool hook for ALL tools, including file tools. A `deny` here
-        // blocks the spawn before the tool body runs — for file tools this
-        // means the write/edit never reaches disk (WO 43.30).
-        let args_json = serde_json::to_string(&tc.arguments).unwrap_or_default();
+        // Pre-tool hook — THE single pre-tool evaluation per call (WO 48.2).
+        // File tools substitute the Phase-1 resolved path into the hook args
+        // so the hook sees the canonical path (the same one the body opens,
+        // the body args carry, and post-tool-{name} sees). A `deny` blocks
+        // the spawn before the tool body runs — the write/edit never reaches
+        // disk (WO 43.30). Phase 3 (record_tool_result) must NOT re-run
+        // pre-tool-{name}: the body has already mutated disk by then, so a
+        // second, divergent evaluation would deny *recording* a write that
+        // already happened, on top of doubling hook side-effects.
+        let mut hook_args = tc.arguments.clone();
+        if let Some(resolved) = &file_resolved {
+            if let Some(obj) = hook_args.as_object_mut() {
+                obj.insert(
+                    "path".into(),
+                    serde_json::Value::String(resolved.to_string_lossy().into_owned()),
+                );
+            }
+        }
+        let args_json = serde_json::to_string(&hook_args).unwrap_or_default();
         if let Some(reason) = self
             .run_pre_tool_hook(
                 &format!("pre-tool-{}", tc.name),

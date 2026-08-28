@@ -18,7 +18,7 @@ The executor previously dispatched tool calls sequentially in `dispatch_tool_cal
 
 Introduce `dispatch_tool_call_batch` with a three-phase design:
 
-1. **Prepare / pre-gate** — run all read-only safety checks that can block a call *before* its body runs: unknown-tool check, plan-mode enforcement, schema validation, permission rules, deny list, URL deny list, bash command check, search-path check, file path guard, and non-file pre-tool hooks. Denied calls are buffered and replayed in input order during Phase 3.
+1. **Prepare / pre-gate** — run all read-only safety checks that can block a call *before* its body runs: unknown-tool check, plan-mode enforcement, schema validation, permission rules, deny list, URL deny list, bash command check, search-path check, file path guard, and the pre-tool hook for every tool (file tools see the Phase-1 resolved path; this is the single pre-tool evaluation per call — WO 43.30 / WO 48.2). Denied calls are buffered and replayed in input order during Phase 3.
 2. **Run** — spawn non-file tool bodies with `tokio::spawn`. A cancellation check between spawns preserves sequential cancellation semantics. File tools are run sequentially in a separate phase so the read-before-edit gate can observe reads completed earlier in the same batch.
 3. **Record** — sequentially apply mutable side effects (events, conversation append, read gate, audit log, metrics, carryover, correction loop) in input order. Already-completed results are recorded even if cancellation fires; only missing results short-circuit the remainder.
 

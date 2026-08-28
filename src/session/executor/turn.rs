@@ -739,13 +739,16 @@ impl Executor {
             #[cfg(feature = "budget")]
             let outcome = {
                 if let (Some(ref budget), Some(ref store)) = (&self.budget, &self.budget_store) {
-                    apply_budget_slice(outcome, budget, store, &self.session_id)
+                    crate::session::budget::apply_budget_slice(
+                        outcome,
+                        budget,
+                        store,
+                        &self.session_id,
+                    )
                 } else {
                     outcome
                 }
             };
-            #[cfg(not(feature = "budget"))]
-            let outcome = outcome;
             let outcome_for_emit = outcome.clone();
             let edit_diff =
                 handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
@@ -828,13 +831,11 @@ impl Executor {
         #[cfg(feature = "budget")]
         let outcome = {
             if let (Some(ref budget), Some(ref store)) = (&self.budget, &self.budget_store) {
-                apply_budget_slice(outcome, budget, store, &self.session_id)
+                crate::session::budget::apply_budget_slice(outcome, budget, store, &self.session_id)
             } else {
                 outcome
             }
         };
-        #[cfg(not(feature = "budget"))]
-        let outcome = outcome;
         let outcome_for_emit = outcome.clone();
         let edit_diff = handle_tool_outcome(outcome, tc, event_tx, &mut self.conversation).await?;
         if should_audit {

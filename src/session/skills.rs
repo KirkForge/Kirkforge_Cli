@@ -171,7 +171,6 @@ impl SkillRegistry {
     /// silently drop its skills (the manifest no longer loads). Currently
     /// covers the `kf-plugin` `/kf-code` skill (WO 29.1).
     fn register_folded_skills(&mut self, cfg: &crate::shared::Config) -> usize {
-        let mut count = 0;
         #[cfg(feature = "kf-plugin-tools")]
         {
             if crate::session::plugin_tools::folded_feature_enabled("kf-plugin")
@@ -180,11 +179,11 @@ impl SkillRegistry {
                 && self.get_by_trigger("/kf-code").is_none()
             {
                 self.register(kf_plugin_skill());
-                count += 1;
+                return 1;
             }
         }
         let _ = cfg;
-        count
+        0
     }
 
     /// Load plugins from the canonical data-directory plugins folder, any

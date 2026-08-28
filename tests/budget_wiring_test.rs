@@ -8,6 +8,10 @@
 //! slices to their own listeners/stores — the registry fix that replaced
 //! the append-only, first-wins, never-unregistered global Vec.
 
+// Exercises the budget/stratum wiring end-to-end; the modules these tests
+// import only exist under those features (WO 48.24).
+#![cfg(all(feature = "budget", feature = "stratum"))]
+
 mod common;
 
 use common::{MockOllama, Reply};

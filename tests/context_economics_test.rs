@@ -5,6 +5,10 @@
 //! verification (default verifier bus on the turn's file write), in one
 //! real executor turn against the mock provider.
 
+// Exercises budget slicing + stratum listeners end-to-end; the modules these
+// tests import only exist under those features (WO 48.24).
+#![cfg(all(feature = "budget", feature = "stratum"))]
+
 mod common;
 
 use common::{MockOllama, Reply};

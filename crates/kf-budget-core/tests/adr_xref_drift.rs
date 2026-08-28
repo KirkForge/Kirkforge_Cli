@@ -705,6 +705,22 @@ fn parse_wo_index_table(readme: &str) -> Vec<(String, String)> {
     rows
 }
 
+/// WO numbers that appear more than once in the parsed index rows.
+/// The drift test folds rows into a BTreeMap (last status wins), so a
+/// duplicate row would silently mask a stale one — the dup-row merge
+/// residue that shipped three times before this guard.
+fn duplicate_wo_nums(rows: &[(String, String)]) -> Vec<String> {
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for (num, _) in rows {
+        *counts.entry(num.as_str()).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .filter(|&(_, c)| c > 1)
+        .map(|(n, _)| n.to_string())
+        .collect()
+}
+
 #[test]
 fn wo_status_headers_match_readme_index() {
     // WO 38.13: WO file `## Status` headers must agree with the README index
@@ -716,6 +732,15 @@ fn wo_status_headers_match_readme_index() {
     assert!(
         !index_rows.is_empty(),
         "no WO index rows parsed — table format drifted?"
+    );
+
+    // WO 48.30: the BTreeMap fold below keeps only the LAST status per
+    // number, so a duplicate index row would silently hide the other.
+    let dups = duplicate_wo_nums(&index_rows);
+    assert!(
+        dups.is_empty(),
+        "duplicate WO rows in docs/workorders/README.md index: {dups:?} — \
+         the status fold would silently keep only the last row"
     );
 
     let index_status: std::collections::BTreeMap<String, String> =
@@ -772,4 +797,20 @@ fn wo_status_headers_match_readme_index() {
             failures.join("\n")
         );
     }
+}
+
+#[test]
+fn wo_index_duplicate_rows_are_detected() {
+    // WO 48.30: two index rows for one WO number previously folded
+    // silently into the status BTreeMap (last row wins), hiding the
+    // stale row. Inject the historic failure shape and require the
+    // detector to flag exactly it.
+    let dup = "| 48.30 | [A](48.30-a.md) | Done (`abc123`) |\n\
+               | 48.30 | [A](48.30-a.md) | In Progress |\n";
+    let rows = parse_wo_index_table(dup);
+    assert_eq!(duplicate_wo_nums(&rows), vec!["48.30".to_string()]);
+
+    let clean = "| 48.30 | [A](48.30-a.md) | Done |\n| 48.31 | [B](48.31-b.md) | Planned |\n";
+    let rows = parse_wo_index_table(clean);
+    assert!(duplicate_wo_nums(&rows).is_empty());
 }

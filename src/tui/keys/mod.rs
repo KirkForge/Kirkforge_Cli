@@ -2102,7 +2102,6 @@ mod tests {
         assert_eq!(char_index_for_line_col(input, 1, 10), 4);
     }
 
-<<<<<<< HEAD
     #[test]
     fn prime_overlay_cold_data_trips_sessions_and_jobs_flags() {
         use crate::tui::app::ActiveTab;
@@ -2125,8 +2124,8 @@ mod tests {
         // Cold Jobs entry still trips jobs_dirty (pre-existing behavior).
         prime_overlay_cold_data(&mut state, ActiveTab::Jobs);
         assert!(state.session.jobs_dirty);
-||||||| b5a64a0b
-=======
+    }
+
     /// WO 48.4 P2: the picker's advertised k/j nav used to drop the modal —
     /// `handle_session_picker_keys` took the picker and only returned it to
     /// `None` on non-commit keys, so the first nav key closed the overlay
@@ -2215,7 +2214,6 @@ mod tests {
             state.session.session_picker.is_none(),
             "Esc must close the picker"
         );
->>>>>>> wo/wo48.4
     }
 
     #[tokio::test]

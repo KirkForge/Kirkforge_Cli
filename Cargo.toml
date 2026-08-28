@@ -310,6 +310,10 @@ e2e-tests = []
 # WO 28.16.
 # ponytail: meaningful capability + cost + binary-size surface; users opt in
 # explicitly. Default builds use PlaceholderTab (no Chrome).
+# ceiling: FROZEN (WO 47.11) — keep default-off, invest nothing beyond
+# security fixes. Unfreeze only if Claude-compat computer-use demand
+# materializes; delete only as a dedicated cross-cutting WO (the wire format
+# + config surface spans ~21 files, not just this feature).
 computer_use = ["dep:headless_chrome"]
 # seccomp: Linux seccomp-bpf syscall filter for bash subprocesses (WO 30.4).
 # Applied in the pre_exec hook alongside landlock + rlimits. Confines the

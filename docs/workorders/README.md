@@ -147,14 +147,9 @@ Only the two most recent series are kept live.
 | 48.28 | [Event::Paste bypasses every modal gate — inserts into hidden input under picker/help/approval](48.28-paste-bypasses-modals.md) | Done |
 | 48.29 | [CJK estimate misses Hangul; ruby \' escape gap re-enables the 48.13 corruption class](48.29-cjk-hangul-and-ruby-escape.md) | Done |
 | 48.30 | [Drift test can't detect duplicate WO rows; h2 RUSTSEC-2026-0258 untracked](48.30-drift-uniqueness-and-h2.md) | Done |
-| 48.31 | [call_id on the streaming event protocol — concurrent same-type tools interleave with no identity](48.31-call-id-streaming-protocol.md) | Planned |
+| 48.31 | [call_id on the streaming event protocol — concurrent same-type tools interleave with no identity](48.31-call-id-streaming-protocol.md) | Done |
 | 48.32 | [Workflow agent steps spawn with cancel: None — Esc/job timeout fires but the subagent keeps running and spending tokens](48.32-workflow-agent-cancellation.md) | Done |
-| 48.33 | [read_file scans to EOF even for offset=100000,limit=20 — O(file) cost for an O(window) request](48.33-read-file-windowed-read.md) | Planned |
-| 48.34 | [max_turns unbounded + glob walker not cancel-aware — model-controlled resource without ceilings](48.34-resource-bound-bundle.md) | Planned |
-| 48.35 | [untrusted_content delimiter is breakable (closing tag in content, truncation cuts the tag) — document as mitigation, harden the wrap](48.35-untrusted-delimiter-honesty.md) | Planned |
-| 48.36 | [Job IDs are max+1 from a directory scan — two clients pick the same ID, logical overwrite](48.36-job-id-generation-race.md) | Planned |
-| 48.31 | [call_id missing from the streaming event protocol — parallel same-name PTY streams mix cards (WO-10-era fix)](48.31-call-id-streaming-protocol.md) | Done |
 | 48.33 | [read_file scans to EOF even for offset=100000,limit=20 — O(file) cost for an O(window) request](48.33-read-file-windowed-read.md) | Done |
 | 48.34 | [max_turns unbounded + glob walker not cancel-aware — model-controlled resource without ceilings](48.34-resource-bound-bundle.md) | Done |
-| 48.35 | [untrusted_content delimiter breakable (payload closing tag, truncation cut) — document as mitigation, harden the wrap](48.35-untrusted-delimiter-honesty.md) | Done |
-| 48.36 | [job-id generation race: read-max-plus-one mints duplicate ids — two clients overwrite each other logically](48.36-job-id-generation-race.md) | Done |
+| 48.35 | [untrusted_content delimiter is breakable (closing tag in content, truncation cuts the tag) — document as mitigation, harden the wrap](48.35-untrusted-delimiter-honesty.md) | Done |
+| 48.36 | [Job IDs are max+1 from a directory scan — two clients pick the same ID, logical overwrite](48.36-job-id-generation-race.md) | Done |

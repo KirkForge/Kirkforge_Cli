@@ -567,6 +567,7 @@ mod tests {
             super::super::executor::TurnEvent::ToolStart {
                 name: "write_file".to_string(),
                 args: serde_json::json!({}),
+                call_id: String::new(),
             },
             super::super::executor::TurnEvent::CostStats {
                 prompt_tokens: 200,
@@ -577,6 +578,7 @@ mod tests {
             super::super::executor::TurnEvent::ToolStart {
                 name: "bash".to_string(),
                 args: serde_json::json!({}),
+                call_id: String::new(),
             },
         ];
         let result = collect_turn_metrics(&events, 3.2, &task, dir.path(), None, None);
@@ -755,14 +757,17 @@ mod tests {
             super::super::executor::TurnEvent::ToolStart {
                 name: "bash".to_string(),
                 args: serde_json::json!({}),
+                call_id: String::new(),
             },
             super::super::executor::TurnEvent::ToolStart {
                 name: "write_file".to_string(),
                 args: serde_json::json!({}),
+                call_id: String::new(),
             },
             super::super::executor::TurnEvent::ToolStart {
                 name: "edit_file".to_string(),
                 args: serde_json::json!({}),
+                call_id: String::new(),
             },
         ];
         let result = collect_turn_metrics(&events, 2.5, &task, dir.path(), None, None);
@@ -899,6 +904,7 @@ mod tests {
                 task_name: "b".to_string(),
                 difficulty: Difficulty::Easy,
                 success: true,
+                call_id: String::new(),
                 tokens_in: 200,
                 tokens_out: 100,
                 duration_secs: 2.0,

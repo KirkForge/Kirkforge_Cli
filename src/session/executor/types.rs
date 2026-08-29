@@ -80,11 +80,18 @@ pub enum TurnEvent {
     ToolStart {
         name: String,
         args: serde_json::Value,
+        /// Model-assigned tool-call id (`ToolInvocation.id`, WO 48.31).
+        /// Empty on events synthesized without an invocation — consumers
+        /// fall back to name-based pairing for those.
+        call_id: String,
     },
     ToolResult {
         name: String,
         output: String,
         success: bool,
+        /// Matches the `ToolStart` call_id for this call (WO 48.31);
+        /// empty falls back to name-based placeholder pairing.
+        call_id: String,
     },
     Error(String),
     Verification {
@@ -156,7 +163,13 @@ pub enum TurnEvent {
     /// Emitted incrementally while the command executes so the TUI can
     /// stream it into the tool-result card. The full output is still
     /// delivered once via `ToolResult` when the command finishes.
-    BashPartialOutput(String),
+    /// `call_id` routes the chunk to the right card when parallel bash
+    /// calls stream concurrently (WO 48.31); empty = legacy
+    /// last-streaming-card routing.
+    BashPartialOutput {
+        call_id: String,
+        text: String,
+    },
 
     /// Emitted after a post-turn auto-extraction stored facts in the
     /// memory store. `count` is the total number of facts now in the

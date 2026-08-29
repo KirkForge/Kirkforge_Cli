@@ -153,3 +153,4 @@ Only the two most recent series are kept live.
 | 48.34 | [max_turns unbounded + glob walker not cancel-aware — model-controlled resource without ceilings](48.34-resource-bound-bundle.md) | Planned |
 | 48.35 | [untrusted_content delimiter is breakable (closing tag in content, truncation cuts the tag) — document as mitigation, harden the wrap](48.35-untrusted-delimiter-honesty.md) | Planned |
 | 48.36 | [Job IDs are max+1 from a directory scan — two clients pick the same ID, logical overwrite](48.36-job-id-generation-race.md) | Planned |
+| 48.31 | [call_id missing from the streaming event protocol — parallel same-name PTY streams mix cards (WO-10-era fix)](48.31-call-id-streaming-protocol.md) | Done |

@@ -155,7 +155,7 @@ async fn tool_call_dispatch_validates_params_and_routes() {
     let rejected = events.iter().any(|e| {
         matches!(
             e,
-            TurnEvent::ToolResult { name, output, success: false }
+            TurnEvent::ToolResult { name, output, success: false, .. }
                 if name == "echo" && output.contains("Invalid arguments")
         )
     });

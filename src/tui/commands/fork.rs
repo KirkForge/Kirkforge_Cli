@@ -180,6 +180,9 @@ pub async fn resume_conversation_log(
     state.generation.thinking_buffer.clear();
     state.approval.pending_approval = None;
     state.conversation.expanded_tools.clear();
+    // Old-session card registrations are meaningless against the new
+    // message list (WO 48.31).
+    state.conversation.streaming_tool_index.clear();
     // The message list was just swapped to a different session's
     // history. Render-cache slots are keyed on (idx, version); the
     // new entries have version=0 and the slots still hold the prior

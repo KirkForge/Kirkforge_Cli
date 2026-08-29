@@ -227,11 +227,13 @@ fn tool_call_card_render() {
         TurnEvent::ToolStart {
             name: "bash".into(),
             args: serde_json::json!({"command": "echo hi"}),
+            call_id: String::new(),
         },
         TurnEvent::ToolResult {
             name: "bash".into(),
             output: "hi\n".into(),
             success: true,
+            call_id: String::new(),
         },
     ]);
 
@@ -263,11 +265,13 @@ fn tool_call_grouping() {
             TurnEvent::ToolStart {
                 name: "bash".into(),
                 args: serde_json::json!({"command": format!("echo {i}")}),
+                call_id: String::new(),
             },
             TurnEvent::ToolResult {
                 name: "bash".into(),
                 output: format!("{i}\n"),
                 success: true,
+                call_id: String::new(),
             },
         ]);
     }
@@ -296,11 +300,13 @@ fn tool_call_grouping() {
         TurnEvent::ToolStart {
             name: "grep".into(),
             args: serde_json::json!({"pattern": "x"}),
+            call_id: String::new(),
         },
         TurnEvent::ToolResult {
             name: "grep".into(),
             output: "match\n".into(),
             success: true,
+            call_id: String::new(),
         },
     ]);
     let rendered2 = h2.render();
@@ -323,11 +329,13 @@ fn tool_call_grouping() {
             TurnEvent::ToolStart {
                 name: "bash".into(),
                 args: serde_json::json!({"command": format!("echo {i}")}),
+                call_id: String::new(),
             },
             TurnEvent::ToolResult {
                 name: "bash".into(),
                 output: format!("out{i}\n"),
                 success: true,
+                call_id: String::new(),
             },
         ]);
     }

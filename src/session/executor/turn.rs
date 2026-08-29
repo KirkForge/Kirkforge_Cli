@@ -58,13 +58,24 @@ impl Drop for PostTurnHookGuard {
 // one slot twice (WO 46.35).
 fn fill_recorded_tool_result(
     tool_calls: &mut [crate::session::replay::RecordedToolCall],
+    call_id: &str,
     name: &str,
     output: &str,
 ) {
-    let idx = tool_calls
-        .iter()
-        .rposition(|tc| tc.tool == name && tc.result.is_empty())
-        .or_else(|| tool_calls.iter().rposition(|tc| tc.tool == name));
+    // WO 48.31: pair by call_id first — exact even for parallel
+    // same-name calls. Empty call_id (old traces / synthetic events)
+    // keeps the WO 46.35 positional name pairing.
+    let idx = if !call_id.is_empty() {
+        tool_calls.iter().position(|tc| tc.call_id == call_id)
+    } else {
+        None
+    }
+    .or_else(|| {
+        tool_calls
+            .iter()
+            .rposition(|tc| tc.tool == name && tc.result.is_empty())
+            .or_else(|| tool_calls.iter().rposition(|tc| tc.tool == name))
+    });
     if let Some(i) = idx {
         tool_calls[i].result = output.to_string();
     }
@@ -236,13 +247,18 @@ impl Executor {
                         tokens_out += *completion_tokens as u64;
                         cost_usd += turn_cost;
                     }
-                    TurnEvent::ToolStart { name, args } => {
+                    TurnEvent::ToolStart {
+                        name,
+                        args,
+                        call_id,
+                    } => {
                         // We don't have the result or duration yet at
                         // ToolStart time, so record with placeholder
                         // values. ToolResult carries the detail.
                         tool_calls.push(crate::session::replay::RecordedToolCall {
                             tool: name.clone(),
                             args: args.clone(),
+                            call_id: call_id.clone(),
                             result: String::new(),
                             duration_ms: 0,
                         });
@@ -251,11 +267,13 @@ impl Executor {
                         name,
                         output,
                         success: _,
+                        call_id,
                     } => {
                         // Fill in the result of the matching tool call
                         // (WO 46.35: prefer the newest unfilled slot so
-                        // parallel same-name calls each keep their output).
-                        fill_recorded_tool_result(&mut tool_calls, name, output);
+                        // parallel same-name calls each keep their output;
+                        // WO 48.31: exact call_id pairing when present).
+                        fill_recorded_tool_result(&mut tool_calls, call_id, name, output);
                     }
                     TurnEvent::Token(s) => {
                         model_response.push_str(s);
@@ -474,6 +492,7 @@ impl Executor {
                                 name: skipped.name.clone(),
                                 output: msg.clone(),
                                 success: false,
+                                call_id: skipped.id.clone(),
                             }
                         );
                         self.conversation
@@ -644,6 +663,7 @@ impl Executor {
                                     name: tc.name.clone(),
                                     output: denied.clone(),
                                     success: false,
+                                    call_id: tc.id.clone(),
                                 }
                             );
                             self.conversation
@@ -695,6 +715,7 @@ impl Executor {
                             name: tc.name.clone(),
                             output: denied.clone(),
                             success: false,
+                            call_id: tc.id.clone(),
                         }
                     );
                     self.conversation
@@ -1258,6 +1279,7 @@ impl Executor {
                     name: tc.name.clone(),
                     output: result.clone(),
                     success: false,
+                    call_id: tc.id.clone(),
                 }
             );
             self.conversation
@@ -1283,6 +1305,7 @@ mod fill_recorded_tool_result_tests {
         RecordedToolCall {
             tool: tool.into(),
             args: serde_json::json!({}),
+            call_id: String::new(),
             result: String::new(),
             duration_ms: 0,
         }
@@ -1295,8 +1318,8 @@ mod fill_recorded_tool_result_tests {
     #[test]
     fn parallel_same_name_calls_each_keep_their_output() {
         let mut calls = vec![call("bash"), call("bash")];
-        fill_recorded_tool_result(&mut calls, "bash", "out-1");
-        fill_recorded_tool_result(&mut calls, "bash", "out-2");
+        fill_recorded_tool_result(&mut calls, "", "bash", "out-1");
+        fill_recorded_tool_result(&mut calls, "", "bash", "out-2");
         assert_eq!(calls[1].result, "out-1");
         assert_eq!(calls[0].result, "out-2");
     }
@@ -1304,7 +1327,7 @@ mod fill_recorded_tool_result_tests {
     #[test]
     fn fills_only_the_matching_name() {
         let mut calls = vec![call("grep"), call("edit_file")];
-        fill_recorded_tool_result(&mut calls, "edit_file", "edited");
+        fill_recorded_tool_result(&mut calls, "", "edit_file", "edited");
         assert_eq!(calls[0].result, "");
         assert_eq!(calls[1].result, "edited");
     }
@@ -1315,8 +1338,21 @@ mod fill_recorded_tool_result_tests {
     #[test]
     fn duplicate_result_overwrites_newest() {
         let mut calls = vec![call("bash")];
-        fill_recorded_tool_result(&mut calls, "bash", "first");
-        fill_recorded_tool_result(&mut calls, "bash", "second");
+        fill_recorded_tool_result(&mut calls, "", "bash", "first");
+        fill_recorded_tool_result(&mut calls, "", "bash", "second");
         assert_eq!(calls[0].result, "second");
+    }
+
+    // WO 48.31: with call ids the pairing is exact — out-of-order
+    // results land in their own slot regardless of arrival position.
+    #[test]
+    fn call_id_pairs_exact_slot_regardless_of_order() {
+        let mut calls = vec![call("bash"), call("bash")];
+        calls[0].call_id = "id-1".into();
+        calls[1].call_id = "id-2".into();
+        fill_recorded_tool_result(&mut calls, "id-2", "bash", "out-2");
+        fill_recorded_tool_result(&mut calls, "id-1", "bash", "out-1");
+        assert_eq!(calls[0].result, "out-1");
+        assert_eq!(calls[1].result, "out-2");
     }
 }

@@ -40,7 +40,7 @@ pub(super) fn emit_turn_events(
     // need to key by id. The previous implementation emitted
     // `tool_calls: vec![]` regardless of reality (GPT 5.5 #13);
     // this fixes it.
-    let mut in_flight: Option<(String, serde_json::Value, std::time::Instant)> = None;
+    let mut in_flight: Option<(String, serde_json::Value, std::time::Instant, String)> = None;
 
     for event in events {
         match event {
@@ -63,9 +63,18 @@ pub(super) fn emit_turn_events(
                     print_json_line(&line);
                 }
             }
-            session::executor::TurnEvent::ToolStart { name, args } => {
+            session::executor::TurnEvent::ToolStart {
+                name,
+                args,
+                call_id,
+            } => {
                 if output == kf_code::shared::OutputFormat::StreamJson {
-                    let line = serde_json::json!({"type": "tool_start", "name": name});
+                    let mut line = serde_json::json!({"type": "tool_start", "name": name});
+                    // Additive (WO 48.31): consumers can pair start/result
+                    // by the model-assigned call id; old readers ignore it.
+                    if !call_id.is_empty() {
+                        line["call_id"] = serde_json::Value::String(call_id.clone());
+                    }
                     print_json_line(&line);
                 }
                 // Arm the in-flight timer for the matching ToolResult.
@@ -74,19 +83,28 @@ pub(super) fn emit_turn_events(
                 // executor's dispatch order, but defensive), the older
                 // record is dropped — better than accumulating stale
                 // timers.
-                in_flight = Some((name.clone(), args.clone(), std::time::Instant::now()));
+                in_flight = Some((
+                    name.clone(),
+                    args.clone(),
+                    std::time::Instant::now(),
+                    call_id.clone(),
+                ));
             }
             session::executor::TurnEvent::ToolResult {
                 name,
                 output: result,
                 success,
+                call_id,
             } => {
                 if output == kf_code::shared::OutputFormat::StreamJson {
-                    let line = serde_json::json!({
+                    let mut line = serde_json::json!({
                         "type": "tool_result",
                         "name": name,
                         "content": result,
                     });
+                    if !call_id.is_empty() {
+                        line["call_id"] = serde_json::Value::String(call_id.clone());
+                    }
                     print_json_line(&line);
                 } else if output == kf_code::shared::OutputFormat::Text {
                     // Keep non-interactive output compact: one line per tool,
@@ -99,17 +117,31 @@ pub(super) fn emit_turn_events(
                     }
                 }
                 // Fold the result into a ToolCallRecord. If we have a
-                // matching in-flight timer, use its name/args/duration;
-                // otherwise synthesise an empty-args, zero-duration record
-                // so orphaned ToolResult events still appear in the JSON
+                // matching in-flight timer, use its name/args/duration
+                // — preferring the one whose call_id matches (WO 48.31,
+                // exact even for parallel same-name calls); otherwise
+                // synthesise an empty-args, zero-duration record so
+                // orphaned ToolResult events still appear in the JSON
                 // summary instead of disappearing.
                 let (record_name, record_args, duration_ms) =
-                    if let Some((start_name, start_args, start_time)) = in_flight.take() {
-                        (
-                            start_name,
-                            start_args,
-                            start_time.elapsed().as_millis() as u64,
-                        )
+                    if let Some((start_name, start_args, start_time, start_call_id)) =
+                        in_flight.take()
+                    {
+                        if !call_id.is_empty()
+                            && !start_call_id.is_empty()
+                            && start_call_id != *call_id
+                        {
+                            // Result for a different call than the armed
+                            // timer: keep the armed timer's args/name only
+                            // if the ids agree; fall back to this event.
+                            (name.clone(), serde_json::json!({}), 0)
+                        } else {
+                            (
+                                start_name,
+                                start_args,
+                                start_time.elapsed().as_millis() as u64,
+                            )
+                        }
                     } else {
                         (name.clone(), serde_json::json!({}), 0)
                     };
@@ -293,7 +325,7 @@ pub(super) fn emit_turn_events(
                     print_json_line(&line);
                 }
             }
-            session::executor::TurnEvent::BashPartialOutput(chunk) => {
+            session::executor::TurnEvent::BashPartialOutput { text: chunk, .. } => {
                 // Non-interactive mode has no tool-result card to stream
                 // into; the full output arrives via `ToolResult`. Swallow
                 // the partial chunks silently.
@@ -440,6 +472,7 @@ mod tests {
                 name: "bash".into(),
                 output: "hello".into(),
                 success: true,
+                call_id: String::new(),
             }],
             OutputFormat::Json,
             &mut 0,
@@ -469,11 +502,13 @@ mod tests {
                 TurnEvent::ToolStart {
                     name: "grep".into(),
                     args: serde_json::json!({"pattern": "foo"}),
+                    call_id: "call-grep-1".into(),
                 },
                 TurnEvent::ToolResult {
                     name: "grep".into(),
                     output: "1 hit".into(),
                     success: true,
+                    call_id: "call-grep-1".into(),
                 },
             ],
             OutputFormat::Json,

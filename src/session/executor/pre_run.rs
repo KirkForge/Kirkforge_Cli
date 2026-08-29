@@ -63,6 +63,7 @@ impl Executor {
                             tc.name
                         ),
                         success: false,
+                        call_id: tc.id.clone(),
                     }],
                     message: format!(
                         "📐 Plan mode blocked {}: only read-only discovery tools are allowed until you type /implement.",
@@ -79,6 +80,7 @@ impl Executor {
                     name: tc.name.clone(),
                     output: err.clone(),
                     success: false,
+                    call_id: tc.id.clone(),
                 }],
                 message: err,
             });
@@ -165,6 +167,7 @@ impl Executor {
                     name: tc.name.clone(),
                     output: reason.clone(),
                     success: false,
+                    call_id: tc.id.clone(),
                 }],
                 message: reason,
             });
@@ -180,6 +183,7 @@ impl Executor {
                             name: tc.name.clone(),
                             output: msg.clone(),
                             success: false,
+                            call_id: tc.id.clone(),
                         }],
                         message: msg,
                     });
@@ -193,6 +197,7 @@ impl Executor {
                     name: tc.name.clone(),
                     output: denied.clone(),
                     success: false,
+                    call_id: tc.id.clone(),
                 }],
                 message: denied,
             });
@@ -204,6 +209,7 @@ impl Executor {
                     name: tc.name.clone(),
                     output: denied.clone(),
                     success: false,
+                    call_id: tc.id.clone(),
                 }],
                 message: denied,
             });
@@ -231,6 +237,7 @@ impl Executor {
                         name: tc.name.clone(),
                         output: denied.clone(),
                         success: false,
+                        call_id: tc.id.clone(),
                     }],
                     message: denied,
                 });
@@ -257,6 +264,7 @@ impl Executor {
                         name: tc.name.clone(),
                         output: format!("🔒 Access denied: {msg}"),
                         success: false,
+                        call_id: tc.id.clone(),
                     }],
                     message: format!("🔒 Access denied: {msg}"),
                 });
@@ -294,6 +302,7 @@ impl Executor {
                             name: tc.name.clone(),
                             output: format!("🔒 Access denied: {msg}"),
                             success: false,
+                            call_id: tc.id.clone(),
                         }],
                         message: format!("🔒 Access denied: {msg}"),
                     });
@@ -336,6 +345,7 @@ impl Executor {
                     name: tc.name.clone(),
                     output: denied.clone(),
                     success: false,
+                    call_id: tc.id.clone(),
                 }],
                 message: denied,
             });

@@ -4,6 +4,29 @@
 
 ## Shipped (closed this session)
 
+- **WO 48.31 (2026-08-29, branch `wo48.31`, not merged)**: the streaming
+  event protocol carries `call_id` — `TurnEvent::ToolStart`/`ToolResult`
+  gained the field, `BashPartialOutput(String)` became
+  `BashPartialOutput { call_id, text }`. All emitters (dispatch 4, turn 4,
+  pre_run 10, outcome 7) stamp `ToolInvocation.id`; `ToolContext` threads
+  it into `run_with_pty` so PTY chunks are stamped at the forwarding site.
+  TUI routes via `ConversationState.streaming_tool_index`
+  (HashMap<call_id, msg index>, rebased on mid-deque removal + prune,
+  cleared on TurnComplete/clear/compaction/fork); empty call_id keeps the
+  legacy name-based fallback. Replay `RecordedToolCall` gained
+  `#[serde(default)] call_id` (old traces parse; pairing call_id-first).
+  stream-json tool lines carry `call_id` additively. 6 new tests incl. the
+  exact failure scenario (interleaved same-name PTY streams, no card
+  mixing). FAST GATES ONLY per owner directive: workspace check
+  --all-targets + --features pty, clippy -p kf-code -D warnings, targeted
+  suites (tui::events 53, executor::tests 111, replay 34, selftest 35,
+  turn_events 6, fill 4), fmt — all green; full suite + Windows cross owed
+  to CI before merge. detect_changes: 63 changed symbols across 19 files,
+  all on the protocol surface (rated critical by breadth; expected for a
+  protocol change). Scope creep disclosed: tools/mod.rs + tools/bash.rs
+  (ToolContext.call_id) because the PTY call site is where the id must
+  reach pty.rs.
+  [48.31](docs/workorders/48.31-call-id-streaming-protocol.md)
 - **WO 48.12 (2026-08-28, branch `wo48.12`, not merged)**: js/ts minify no
   longer corrupts regex literals — `minify_js_like`
   (`src/shared/minify/lang.rs`) truncated `/https?:\/\//` at the first

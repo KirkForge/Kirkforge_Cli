@@ -1191,3 +1191,25 @@
   impact on the enclosing public entry (`minify_content_by_ext`) reports the
   hub's CRITICAL fan-out, which is breadth, not change risk, for scanner-only
   edits. detect_changes with the `worktree` param works from the main index.
+## WO 48.31 session (2026-08-29, worktree wo48.31)
+
+- Scope creep: `src/tools/mod.rs` (ToolContext + `call_id: String`) and
+  `src/tools/bash.rs` (PTY call site passes `ctx.call_id`) — outside the WO
+  file list but required: pty.rs only sees the TurnEvent channel, and the
+  call id is only known where the invocation lives (run_prepared_call).
+  Wrapping at the forwarding site = one param, no channel-type change.
+- Script-assisted edits on repetitive literals are fast but dangerous:
+  a brace-depth block scanner mis-inserted `call_id: String::new()` into a
+  `PendingApproval` literal and a match PATTERN (invalid). Always re-grep
+  inserted lines for non-TurnEvent contexts + compile immediately after.
+- ToolResult finalization lands the completed card at COMPLETION position
+  (placeholder leaves the deque, result appends at back) — document order
+  of finalized cards is completion order, not start order. Test asserting
+  start order was wrong; existing WO 46.35 tests correctly assert by set.
+- `TurnOutcome` is `#[serde(rename_all = "snake_case")]` — raw trace
+  fixtures must use `"success"`, not `"Success"`.
+- The worktree builds share nothing (per-worktree target/), so 4+ sibling
+  WO builds in parallel make cargo check ~10+ min; batch gates, run once.
+- Default workspace check does NOT typecheck `#[cfg(feature = "pty")]`
+  code (pty is default-off) — a changed pty.rs needs an explicit
+  `cargo check -p kf-code --features pty` or it breaks silently later.

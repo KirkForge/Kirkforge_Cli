@@ -181,9 +181,33 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // the head is stale context (WO 38.11).
             trim_thinking_buffer_tail(&mut state.generation.thinking_buffer);
         }
-        TurnEvent::ToolStart { name, args: _ } => {
+        TurnEvent::ToolStart {
+            name,
+            args: _,
+            call_id,
+        } => {
             state.generation.is_generating = false; // turn ended (tool call)
             state.generation.turn_tool_calls += 1;
+            // WO 48.31: if chunks for this call_id already created a
+            // card (they raced ahead of ToolStart), keep it — pushing a
+            // second would strand the first as a ghost spinner.
+            if !call_id.is_empty() {
+                if let Some(&idx) = state.conversation.streaming_tool_index.get(&call_id) {
+                    if state
+                        .conversation
+                        .messages
+                        .get(idx)
+                        .is_some_and(|m| m.role == "tool")
+                    {
+                        if let Some(m) = state.conversation.messages.get_mut(idx) {
+                            m.streaming = true;
+                            m.bump_version();
+                        }
+                        state.mark_dirty();
+                        return;
+                    }
+                }
+            }
             // The placeholder is a streaming card: the tool is in-flight
             // and PTY chunks may append to it before ToolResult finalizes
             // (WO 44.38). Marking it streaming lets BashPartialOutput's
@@ -191,8 +215,20 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             let mut entry = ConversationEntry::new("tool", format!("🔧 {name} ..."));
             entry.streaming = true;
             state.conversation.messages.push_back(entry);
+            // WO 48.31: register the card under its call_id so PTY
+            // chunks and the final ToolResult route exactly — parallel
+            // same-name calls keep separate cards.
+            if !call_id.is_empty() {
+                let idx = state.conversation.messages.len() - 1;
+                state.conversation.streaming_tool_index.insert(call_id, idx);
+            }
         }
-        TurnEvent::ToolResult { name, output, .. } => {
+        TurnEvent::ToolResult {
+            name,
+            output,
+            call_id,
+            ..
+        } => {
             // Tool outputs are stored FULL in a sidecar and shown
             // as a one-line summary by default. Ctrl+T toggles
             // collapse; per-index expansion is in state.conversation.expanded_tools.
@@ -200,9 +236,30 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             let summary =
                 format!("🔧 {name} (done) — {lines} lines, {bytes} bytes [Enter or Tab to expand]");
             // Avoid two entries per tool call: replace this tool's
-            // placeholder card (see `remove_tool_placeholder` — parallel
-            // batches make "just check back()" corrupt, WO 46.35).
-            remove_tool_placeholder(&mut state.conversation.messages, &name);
+            // placeholder card. With a call_id (WO 48.31) the pairing
+            // is exact; the legacy name-based path (see
+            // `remove_tool_placeholder` — parallel batches make "just
+            // check back()" corrupt, WO 46.35) remains for events with
+            // an empty call_id (old replay traces).
+            if call_id.is_empty() {
+                remove_tool_placeholder(&mut state.conversation.messages, &name);
+            } else if let Some(idx) = state.conversation.streaming_tool_index.remove(&call_id) {
+                // Remove the placeholder at its registered index —
+                // only if it is still a streaming tool card (a prior
+                // removal may have shifted or replaced it).
+                let is_streaming_card = state
+                    .conversation
+                    .messages
+                    .get(idx)
+                    .is_some_and(|m| m.role == "tool" && m.streaming);
+                if is_streaming_card {
+                    state.conversation.messages.remove(idx);
+                    rebase_streaming_indexes(&mut state.conversation.streaming_tool_index, idx);
+                } else {
+                    // Stale index (defensive): fall back to name matching.
+                    remove_tool_placeholder(&mut state.conversation.messages, &name);
+                }
+            }
             state
                 .conversation
                 .messages
@@ -388,6 +445,9 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             ));
             state.conversation.messages = rebuilt;
             state.conversation.expanded_tools.clear();
+            // Card registrations pointed into the pre-compaction list
+            // (WO 48.31) — drop them with the old indexes.
+            state.conversation.streaming_tool_index.clear();
             // The render cache is keyed on (idx, entry.version). The
             // rebuild above replaced every entry with a fresh
             // `ConversationEntry` (version=0); cache slots still hold
@@ -455,24 +515,56 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             state.generation.continuation = Some((round, max));
             state.mark_dirty();
         }
-        TurnEvent::BashPartialOutput(chunk) => {
-            // Stream PTY output into a streaming tool card. With WO 44.38
-            // ToolStart fires at dispatch time, so a streaming card should
-            // already exist. But defense in depth: if the last tool entry
-            // is NOT streaming (completed card, or no tool entry yet),
-            // push a fresh streaming card so chunks always land somewhere
-            // sane instead of corrupting a completed card or being dropped.
-            let needs_fresh = match state.conversation.messages.back() {
-                Some(last) => last.role != "tool" || !last.streaming,
-                None => true,
+        TurnEvent::BashPartialOutput { call_id, text } => {
+            // Stream PTY output into a streaming tool card. With a
+            // call_id (WO 48.31) the chunk routes to the exact card
+            // registered by that call's ToolStart — two parallel bash
+            // streams never interleave into one card. Without one
+            // (old traces / defense in depth), fall back to the last
+            // streaming tool card, pushing a fresh one if the back
+            // entry is not a streaming tool card, so chunks always
+            // land somewhere sane instead of corrupting a completed
+            // card or being dropped.
+            let target_idx: usize = if !call_id.is_empty() {
+                match state.conversation.streaming_tool_index.get(&call_id) {
+                    Some(&idx)
+                        if state
+                            .conversation
+                            .messages
+                            .get(idx)
+                            .is_some_and(|m| m.role == "tool") =>
+                    {
+                        idx
+                    }
+                    // Unknown call_id (chunks raced ahead of ToolStart,
+                    // or an old client): create a card and register it
+                    // so subsequent chunks for this call_id coalesce.
+                    _ => {
+                        let mut entry = ConversationEntry::new("tool", "🔧 bash …");
+                        entry.streaming = true;
+                        state.conversation.messages.push_back(entry);
+                        let idx = state.conversation.messages.len() - 1;
+                        state
+                            .conversation
+                            .streaming_tool_index
+                            .insert(call_id.clone(), idx);
+                        idx
+                    }
+                }
+            } else {
+                let needs_fresh = match state.conversation.messages.back() {
+                    Some(last) => last.role != "tool" || !last.streaming,
+                    None => true,
+                };
+                if needs_fresh {
+                    state
+                        .conversation
+                        .messages
+                        .push_back(ConversationEntry::new("tool", "🔧 bash …"));
+                }
+                state.conversation.messages.len() - 1
             };
-            if needs_fresh {
-                state
-                    .conversation
-                    .messages
-                    .push_back(ConversationEntry::new("tool", "🔧 bash …"));
-            }
-            if let Some(last) = state.conversation.messages.back_mut() {
+            if let Some(last) = state.conversation.messages.get_mut(target_idx) {
                 last.streaming = true;
                 // Bound the streaming card: a `watch`/`top`/long
                 // ping balloons `content` and the render path
@@ -483,7 +575,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                 // full output still lands in `tool_output` when
                 // `ToolResult` finalizes the entry (WO 38.11).
                 const PTY_TAIL_BYTES: usize = 64 * 1024;
-                last.content.push_str(&chunk);
+                last.content.push_str(&text);
                 if last.content.len() > PTY_TAIL_BYTES {
                     let total = last.content.len();
                     let mut start = total - PTY_TAIL_BYTES;
@@ -525,6 +617,27 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
                     msg.bump_version();
                 }
             }
+            // Cancelled calls never sent a ToolResult — drop their
+            // card registrations so stale ids can't redirect later
+            // chunks (their cards stopped streaming above; a fresh
+            // ToolStart re-registers under a new model-assigned id).
+            state.conversation.streaming_tool_index.clear();
+        }
+    }
+}
+
+/// Decrement every streaming-tool index above `removed_idx` after a
+/// mid-deque removal shifted later entries down one slot (WO 48.31).
+/// Entries pointing at `removed_idx` itself are dropped — their card
+/// is gone (their call finalized).
+fn rebase_streaming_indexes(
+    map: &mut std::collections::HashMap<String, usize>,
+    removed_idx: usize,
+) {
+    map.retain(|_, idx| *idx != removed_idx);
+    for idx in map.values_mut() {
+        if *idx > removed_idx {
+            *idx -= 1;
         }
     }
 }
@@ -544,9 +657,10 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
 /// header entirely, so if no named card exists, take the back card
 /// when it is still streaming (the pre-46.35 behavior).
 ///
-/// ponytail: TurnEvent carries no call id, so same-name parallel calls
-/// pair by position (newest first) — visually equivalent, but the
-/// true fix needs a call_id threaded through ToolStart/ToolResult.
+/// ponytail: legacy path for events with no call id (WO 48.31 added
+/// exact call_id pairing above) — same-name parallel calls pair by
+/// position (newest first), visually equivalent but subject to the
+/// mixing the call_id index fixes.
 fn remove_tool_placeholder(messages: &mut VecDeque<ConversationEntry>, name: &str) {
     let prefix = format!("🔧 {name} ");
     let idx = messages
@@ -685,6 +799,15 @@ fn prune_display_messages(state: &mut AppState) {
         .collapsed_messages
         .iter()
         .filter_map(|&i| remap(i))
+        .collect();
+    // Streaming tool cards follow the same remap; a card pruned off the
+    // front drops its entry so the call_id can never point at a
+    // stranger's card (WO 48.31).
+    state.conversation.streaming_tool_index = state
+        .conversation
+        .streaming_tool_index
+        .iter()
+        .filter_map(|(k, &i)| remap(i).map(|j| (k.clone(), j)))
         .collect();
     state.conversation.expanded_tools = state
         .conversation
@@ -839,6 +962,7 @@ mod tests {
             TurnEvent::ToolStart {
                 name: "bash".into(),
                 args: serde_json::json!({"command": "ls"}),
+                call_id: String::new(),
             },
         );
         dispatch_turn_event(
@@ -847,6 +971,7 @@ mod tests {
                 name: "bash".into(),
                 output: "file.txt".into(),
                 success: true,
+                call_id: String::new(),
             },
         );
         // The model emits more text after the tool result — this must
@@ -882,6 +1007,7 @@ mod tests {
             TurnEvent::ToolStart {
                 name: "bash".into(),
                 args: serde_json::json!({"command": "ls"}),
+                call_id: String::new(),
             },
         );
         dispatch_turn_event(
@@ -890,6 +1016,7 @@ mod tests {
                 name: "bash".into(),
                 output: "ok".into(),
                 success: true,
+                call_id: String::new(),
             },
         );
         // Turn 1 ends — TurnComplete clears streaming on all assistant entries.
@@ -939,6 +1066,7 @@ mod tests {
             TurnEvent::ToolStart {
                 name: "bash".into(),
                 args: serde_json::json!({"cmd": "ls"}),
+                call_id: String::new(),
             },
         );
         assert!(!s.generation.is_generating);
@@ -965,10 +1093,23 @@ mod tests {
             TurnEvent::ToolStart {
                 name: "bash".into(),
                 args: serde_json::json!({"cmd": "top"}),
+                call_id: String::new(),
             },
         );
-        dispatch_turn_event(&mut s, TurnEvent::BashPartialOutput("PID  USER".into()));
-        dispatch_turn_event(&mut s, TurnEvent::BashPartialOutput("\n  1 root".into()));
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput {
+                call_id: String::new(),
+                text: "PID  USER".into(),
+            },
+        );
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput {
+                call_id: String::new(),
+                text: "\n  1 root".into(),
+            },
+        );
 
         assert_eq!(s.conversation.messages.len(), 1);
         let entry = &s.conversation.messages[0];
@@ -985,6 +1126,7 @@ mod tests {
                 name: "bash".into(),
                 output: "final".into(),
                 success: true,
+                call_id: String::new(),
             },
         );
         assert_eq!(s.conversation.messages.len(), 1);
@@ -999,7 +1141,13 @@ mod tests {
         // pre-44.38 executor), the TUI must push a fresh streaming card
         // instead of dropping the chunks.
         let mut s2 = app_state();
-        dispatch_turn_event(&mut s2, TurnEvent::BashPartialOutput("early chunk".into()));
+        dispatch_turn_event(
+            &mut s2,
+            TurnEvent::BashPartialOutput {
+                call_id: String::new(),
+                text: "early chunk".into(),
+            },
+        );
         assert_eq!(s2.conversation.messages.len(), 1);
         assert_eq!(s2.conversation.messages[0].role, "tool");
         assert!(s2.conversation.messages[0].streaming);
@@ -1018,6 +1166,7 @@ mod tests {
             TurnEvent::ToolStart {
                 name: "grep".into(),
                 args: serde_json::json!({"pattern": "foo"}),
+                call_id: String::new(),
             },
         );
         dispatch_turn_event(
@@ -1026,6 +1175,7 @@ mod tests {
                 name: "grep".into(),
                 output: "1 hit".into(),
                 success: true,
+                call_id: String::new(),
             },
         );
         assert_eq!(s.conversation.messages.len(), 1);
@@ -1036,7 +1186,10 @@ mod tests {
         // a completed card from a prior batch). Must not touch the grep card.
         dispatch_turn_event(
             &mut s,
-            TurnEvent::BashPartialOutput("chunk for bash".into()),
+            TurnEvent::BashPartialOutput {
+                call_id: String::new(),
+                text: "chunk for bash".into(),
+            },
         );
 
         // The completed card is untouched.
@@ -1063,6 +1216,7 @@ mod tests {
             TurnEvent::ToolStart {
                 name: "edit_file".into(),
                 args: serde_json::json!({"path": "a.rs"}),
+                call_id: String::new(),
             },
         );
         dispatch_turn_event(
@@ -1070,6 +1224,7 @@ mod tests {
             TurnEvent::ToolStart {
                 name: "bash".into(),
                 args: serde_json::json!({"cmd": "ls"}),
+                call_id: String::new(),
             },
         );
 
@@ -1080,6 +1235,7 @@ mod tests {
                 name: "edit_file".into(),
                 output: "ok".into(),
                 success: true,
+                call_id: String::new(),
             },
         );
         assert_eq!(
@@ -1105,6 +1261,7 @@ mod tests {
                 name: "bash".into(),
                 output: "ran".into(),
                 success: true,
+                call_id: String::new(),
             },
         );
         assert_eq!(
@@ -1132,6 +1289,7 @@ mod tests {
                 TurnEvent::ToolStart {
                     name: "read_file".into(),
                     args: serde_json::json!({ "path": path }),
+                    call_id: String::new(),
                 },
             );
         }
@@ -1141,6 +1299,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "one".into(),
                 success: true,
+                call_id: String::new(),
             },
         );
         dispatch_turn_event(
@@ -1149,6 +1308,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "two".into(),
                 success: true,
+                call_id: String::new(),
             },
         );
         assert_eq!(
@@ -1169,6 +1329,208 @@ mod tests {
         assert!(outs.contains(&Some("one")) && outs.contains(&Some("two")));
     }
 
+    /// WO 48.31: the exact WO-10-era failure scenario — two parallel
+    /// bash calls streaming PTY chunks concurrently. Chunks carry a
+    /// call_id; each call's chunks land ONLY in its own card, never
+    /// in the sibling's, no matter how they interleave.
+    #[test]
+    fn concurrent_same_name_pty_streams_route_to_separate_cards() {
+        let mut s = app_state();
+        for (id, cmd) in [("call-a", "watch ps"), ("call-b", "tail -f log")] {
+            dispatch_turn_event(
+                &mut s,
+                TurnEvent::ToolStart {
+                    name: "bash".into(),
+                    args: serde_json::json!({ "command": cmd }),
+                    call_id: id.into(),
+                },
+            );
+        }
+        assert_eq!(s.conversation.messages.len(), 2);
+        assert_eq!(s.conversation.streaming_tool_index.len(), 2);
+
+        // Interleaved chunks — a1, b1, b2, a2 — the exact mixing order
+        // that corrupted the single last-streaming-card path.
+        for (id, text) in [
+            ("call-a", "A-line-1\n"),
+            ("call-b", "B-line-1\n"),
+            ("call-b", "B-line-2\n"),
+            ("call-a", "A-line-2\n"),
+        ] {
+            dispatch_turn_event(
+                &mut s,
+                TurnEvent::BashPartialOutput {
+                    call_id: id.into(),
+                    text: text.into(),
+                },
+            );
+        }
+
+        let a = &s.conversation.messages[0];
+        let b = &s.conversation.messages[1];
+        assert!(a.content.contains("A-line-1") && a.content.contains("A-line-2"));
+        assert!(b.content.contains("B-line-1") && b.content.contains("B-line-2"));
+        assert!(
+            !a.content.contains("B-line"),
+            "call-a's card must not contain call-b's chunks: {}",
+            a.content
+        );
+        assert!(
+            !b.content.contains("A-line"),
+            "call-b's card must not contain call-a's chunks: {}",
+            b.content
+        );
+
+        // Out-of-order finalization: call-b finishes first. Its own
+        // placeholder (index 1) is removed — call-a's registration must
+        // re-base to the shifted index and still finalize correctly.
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: "b done".into(),
+                success: true,
+                call_id: "call-b".into(),
+            },
+        );
+        assert_eq!(s.conversation.messages.len(), 2);
+        assert!(s.conversation.messages[0].streaming, "call-a still open");
+        assert_eq!(
+            s.conversation.messages[1].tool_output.as_deref(),
+            Some("b done")
+        );
+        assert_eq!(s.conversation.streaming_tool_index.len(), 1);
+
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput {
+                call_id: "call-a".into(),
+                text: "A-line-3\n".into(),
+            },
+        );
+        assert!(
+            s.conversation.messages[0].content.contains("A-line-3"),
+            "post-rebase chunk must still reach call-a's card"
+        );
+
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: "a done".into(),
+                success: true,
+                call_id: "call-a".into(),
+            },
+        );
+        assert_eq!(s.conversation.messages.len(), 2);
+        assert!(
+            s.conversation.streaming_tool_index.is_empty(),
+            "all registrations removed after finalize"
+        );
+        let outs: Vec<_> = s
+            .conversation
+            .messages
+            .iter()
+            .map(|m| m.tool_output.as_deref())
+            .collect();
+        assert!(outs.contains(&Some("a done")) && outs.contains(&Some("b done")));
+    }
+
+    /// WO 48.31: parallel same-name batch pairs each ToolResult with
+    /// its OWN placeholder by call_id — results arriving in the
+    /// opposite order to the starts still land on the right card.
+    #[test]
+    fn call_id_tool_results_pair_with_own_placeholder() {
+        let mut s = app_state();
+        for (id, path) in [("id-1", "x.rs"), ("id-2", "y.rs")] {
+            dispatch_turn_event(
+                &mut s,
+                TurnEvent::ToolStart {
+                    name: "read_file".into(),
+                    args: serde_json::json!({ "path": path }),
+                    call_id: id.into(),
+                },
+            );
+        }
+        // Reverse-order results: id-2 finishes first.
+        for (id, out) in [("id-2", "contents-of-y"), ("id-1", "contents-of-x")] {
+            dispatch_turn_event(
+                &mut s,
+                TurnEvent::ToolResult {
+                    name: "read_file".into(),
+                    output: out.into(),
+                    success: true,
+                    call_id: id.into(),
+                },
+            );
+        }
+        assert_eq!(s.conversation.messages.len(), 2);
+        assert!(s.conversation.messages.iter().all(|m| !m.streaming));
+        // Cards finalize in completion order (y finished first — its
+        // placeholder left the deque first); each output pairs with its
+        // own call, no ghost placeholders, no crossed outputs.
+        assert_eq!(
+            s.conversation.messages[0].tool_output.as_deref(),
+            Some("contents-of-y")
+        );
+        assert_eq!(
+            s.conversation.messages[1].tool_output.as_deref(),
+            Some("contents-of-x")
+        );
+    }
+
+    /// WO 48.31 back-compat: a chunk with an UNKNOWN call_id (raced
+    /// ahead of ToolStart) creates and registers a card — later chunks
+    /// for the same id coalesce into it instead of stacking cards.
+    #[test]
+    fn unknown_call_id_chunk_creates_and_registers_card() {
+        let mut s = app_state();
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput {
+                call_id: "call-x".into(),
+                text: "first ".into(),
+            },
+        );
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput {
+                call_id: "call-x".into(),
+                text: "second".into(),
+            },
+        );
+        assert_eq!(s.conversation.messages.len(), 1, "both chunks coalesce");
+        assert!(s.conversation.messages[0].content.contains("first second"));
+        assert_eq!(s.conversation.streaming_tool_index.len(), 1);
+
+        // The late ToolStart for the same id keeps the existing card
+        // (re-registers the same index) — no duplicate.
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({ "command": "x" }),
+                call_id: "call-x".into(),
+            },
+        );
+        assert_eq!(s.conversation.messages.len(), 1);
+
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: "done".into(),
+                success: true,
+                call_id: "call-x".into(),
+            },
+        );
+        assert_eq!(s.conversation.messages.len(), 1);
+        assert_eq!(
+            s.conversation.messages[0].tool_output.as_deref(),
+            Some("done")
+        );
+    }
+
     /// `ToolResult` is the v1.1 contract: full output goes into
     /// the sidecar, the visible `content` is a one-line summary
     /// with the byte/line count. This is what makes Ctrl+T flood
@@ -1183,6 +1545,7 @@ mod tests {
                 name: "bash".into(),
                 output: full.clone(),
                 success: true,
+                call_id: String::new(),
             },
         );
         assert_eq!(s.conversation.messages.len(), 1);
@@ -1324,12 +1687,19 @@ mod tests {
             TurnEvent::ToolStart {
                 name: "bash".into(),
                 args: serde_json::json!({"cmd": "top"}),
+                call_id: String::new(),
             },
         );
         // Push 100 KiB of output — well over the 64 KiB cap.
         let chunk = "y".repeat(1024);
         for _ in 0..100 {
-            dispatch_turn_event(&mut s, TurnEvent::BashPartialOutput(chunk.clone()));
+            dispatch_turn_event(
+                &mut s,
+                TurnEvent::BashPartialOutput {
+                    call_id: String::new(),
+                    text: chunk.clone(),
+                },
+            );
         }
         let entry = &s.conversation.messages[0];
         assert!(entry.streaming, "entry must stay streaming");
@@ -2216,7 +2586,13 @@ mod tests {
 
         // Drive the handler: append a chunk that takes content over the
         // cap. We push the whole content as one chunk for the test.
-        dispatch_turn_event(&mut s, TurnEvent::BashPartialOutput(content));
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput {
+                call_id: String::new(),
+                text: content,
+            },
+        );
 
         // Did not panic. The tool message is now the bounded tail form.
         let last = s.conversation.messages.back().expect("tool msg present");

@@ -255,6 +255,14 @@ pub struct ConversationState {
     /// Collapsed messages show only the header + an expand hint. Default
     /// is expanded for every message.
     pub collapsed_messages: HashSet<usize>,
+    // ── Streaming tool-card routing (WO 48.31) ─────────────────────
+    /// call_id → index of that call's streaming placeholder card.
+    /// `ToolStart` inserts; `BashPartialOutput` routes by call_id so
+    /// parallel same-name calls never mix; `ToolResult` finalizes and
+    /// removes its entry. Indexes are absolute positions in `messages`
+    /// and are re-based whenever an entry is removed mid-deque or the
+    /// display list is pruned.
+    pub streaming_tool_index: std::collections::HashMap<String, usize>,
     // ── Code-block copy cycle (P3) ────────────────────────────────
     /// `Ctrl+Shift+B` cycles through the code blocks of the most
     /// recent assistant message. This counter tracks which block is
@@ -284,6 +292,7 @@ impl Default for ConversationState {
             chat_render_cache: ChatRenderCache::default(),
             last_content_width: 0,
             collapsed_messages: HashSet::new(),
+            streaming_tool_index: std::collections::HashMap::new(),
             code_block_copy_index: 0,
             completion_suggestions: Vec::new(),
         }

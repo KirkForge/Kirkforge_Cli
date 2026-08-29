@@ -26,6 +26,94 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 48.1 — `minify_python` stripped `#` inside string literals (URL
+  fragments, `"#fff"` colors), corrupting source on read and on the disk
+  write-back chain; the scanner is now string/escape-aware.
+  [48.1](docs/workorders/48.1-minify-python-string-corruption.md)
+- WO 48.5 — MCP `tools/call` results with `isError: true` are no longer
+  classified as Success: the outcome remaps to `Failure(Execution)`, so
+  metrics, audit, and the doom-loop breaker see server-side tool failures.
+  [48.5](docs/workorders/48.5-mcp-iserror-ignored.md)
+- WO 48.6 — `set_json_mode(false)` now clears `response_format` on all six
+  adapters, so a `/model` or reload hot-toggle stops sending
+  `response_format: json_object` / `"format": json` forever.
+  [48.6](docs/workorders/48.6-json-mode-toggle-never-clears.md)
+- WO 48.7 — the tee dangerous-path gate skips flag tokens (`-a`,
+  `--append`): `tee -a /etc/passwd` no longer bypasses the check.
+  [48.7](docs/workorders/48.7-tee-append-gate-bypass.md)
+- WO 48.8 — the minify VFS cache read is gated on `!preserve_tests`, so
+  the safe (stem-injection) variant can no longer be served a test-stripped
+  entry cached by the plain variant.
+  [48.8](docs/workorders/48.8-minify-cache-ignores-preserve-tests.md)
+- WO 48.11 — `minify_shell` tracks open heredocs (quoted/unquoted, `<<-`):
+  heredoc body lines starting `#` are data and survive the read + disk
+  write-back chain.
+  [48.11](docs/workorders/48.11-minify-shell-heredoc-corruption.md)
+- WO 48.13 — ruby minifier rewritten as a stateful scanner: heredoc queues
+  (`<<~`/`<<-`/quoted), %-literal tracking, string-aware `#` stripping.
+  [48.13](docs/workorders/48.13-minify-ruby-heredoc-and-comment-blindness.md)
+- WO 48.14 — the startup session picker gates on a hoisted `can_run_tui`
+  predicate: headless runs no longer crash (ENXIO os error 6), and `-p`
+  one-shots / piped stdout / `TERM=dumb` no longer pop the full-screen
+  modal. [48.14](docs/workorders/48.14-startup-picker-launches-where-tui-impossible.md)
+- WO 48.15 — body-produced `AccessDenied` is distinguished from gate
+  denials (`gate_denied` flag), so file-tool body failures reach metrics,
+  post-tool hooks, the doom-loop observer, and the budget slice again.
+  [48.15](docs/workorders/48.15-collect-batch-denial-classification.md)
+- WO 48.18 — `reload_config` re-pushes `set_response_format` after
+  `set_json_mode` (construction order), so a hot-reload with
+  `json_mode=false` no longer deletes a live configured `json_schema`.
+  [48.18](docs/workorders/48.18-reload-config-response-format-regression.md)
+- WO 48.19 — `normalize_for_safety` truncates at `#` only at word start
+  (mid-word `#` no longer blinds the redirect/tee/deny gates), and the
+  permission deny-glob compare lowercases the pattern.
+  [48.19](docs/workorders/48.19-normalize-hash-and-case-gaps.md)
+- WO 48.20 — every non-nav key is consumed while the session-picker modal
+  is open (48.4 fixed k/j only): chars no longer leak into the hidden
+  input buffer, F-keys no longer switch tabs under the modal.
+  [48.20](docs/workorders/48.20-picker-non-nav-key-leak.md)
+- WO 48.21 — the `count_tokens` no-budget fallback is CJK-aware (1 token
+  per CJK char instead of bytes/4), so the context-fit truncation ladder
+  no longer under-fires by 25-50% on code/CJK in minimal builds.
+  [48.21](docs/workorders/48.21-count-tokens-minimal-underestimate.md)
+- WO 48.22 — P0: the nightly subprocess-lifecycle nextest filter used
+  exact `test(=bare_name)` and matched zero tests since WO 45.59; the
+  substring filter actually selects the two `#[ignore]`d timeout tests.
+  [48.22](docs/workorders/48.22-nightly-subprocess-filter-matches-zero.md)
+- WO 48.23 — TECHNICAL.md "13 satellite crates" → 10 (post-47.4 fold
+  self-contradiction).
+  [48.23](docs/workorders/48.23-technical-crate-count-contradiction.md)
+- WO 48.24 — no-default-features test compilation + clippy: skills.rs
+  `unused_mut`, the dead `apply_budget_slice` wrapper, and redundant
+  placeholder rebinds cfg-gated for the minimal build (48.21 follow-up).
+  [48.24](docs/workorders/48.24-no-default-features-tests-and-clippy.md)
+- WO 48.25 — shell + ruby heredoc scanners resume after the quoted
+  delimiter's closing quote, so a second same-line opener
+  (`diff <(cat <<'A') <(cat <<'B')`) is tracked instead of blinded.
+  [48.25](docs/workorders/48.25-heredoc-quote-resume-blinding.md)
+- WO 48.26 — `fallback_c_like` no longer splits `::` (`std::cout`,
+  `HashMap::new()` round-trip on the disk write-back chain); single-colon
+  spacing normalized. [48.26](docs/workorders/48.26-fallback-c-like-colon-corruption.md)
+- WO 48.27 — edit_file's whitespace-normalizing fuzzy fallback runs the
+  same `block_edits` + `diff_review` guards as the exact path: whitespace
+  drift no longer defeats `--block-edits`/`--harden`.
+  [48.27](docs/workorders/48.27-edit-file-fuzzy-fork-guards.md)
+- WO 48.29 — token fallback counts Hangul one-per-char, and the ruby
+  scanner honors `\'` escapes (re-closing the 48.13 corruption class).
+  [48.29](docs/workorders/48.29-cjk-hangul-and-ruby-escape.md)
+- WO 48.30 — `wo_status_headers_match_readme_index` now fails on
+  duplicate WO index rows; h2 lockfile bumped 0.4.15 → 0.4.19
+  (RUSTSEC-2026-0258). [48.30](docs/workorders/48.30-drift-uniqueness-and-h2.md)
+- WO 48.32 — workflow agent steps cascade the runner's cancel token into
+  the subagent (`bridged_task_cancel`): Esc / job timeout now stops the
+  subagent LLM loop, not just bash/tool steps.
+  [48.32](docs/workorders/48.32-workflow-agent-cancellation.md)
+- WO 48.33 — read_file windowed reads (offset>0) stop scanning once the
+  window fills: a deep window costs O(offset+limit) reads instead of
+  O(file). [48.33](docs/workorders/48.33-read-file-windowed-read.md)
+- WO 48.36 — `generate_job_id` reserves ids by atomic `create_dir`: two
+  concurrent clients can no longer mint the same job id.
+  [48.36](docs/workorders/48.36-job-id-generation-race.md)
 - WO 48.28 — bracketed paste bypassed every modal gate: `Event::Paste`
   inserted into the hidden input buffer under the session picker, help
   overlay, approval dialogs, doom banner, and command palette. Both paste
@@ -273,6 +361,63 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 47.1 — table-driven verifier registration: the 14 per-verifier
+  `struct XV; impl Verifier; register` blocks collapse into one data
+  table. [47.1](docs/workorders/47.1-table-driven-verifiers.md)
+- WO 47.2 — generic env-override loader: every Config field is
+  env-overridable via the `KF_CODE_<FIELD>` prefix rule (one serde
+  overlay replaces the 91 hand-parsed KF_* vars across the
+  hand-enumerated layers; net −~700 production lines).
+  [47.2](docs/workorders/47.2-generic-env-loader.md)
+- WO 47.3 — deleted the dead JWT/JWKS half of kf-rbac (jwt.rs, 462 lines
+  + its tests); the live RBAC core (daemon authz) stays.
+  [47.3](docs/workorders/47.3-delete-kf-rbac.md)
+- WO 47.15 — secret-env scrub applied to the 3 missed spawn sites: docker
+  bash, shell hooks, verifier formatter.
+  [47.15](docs/workorders/47.15-secret-env-scrub-three-missed-spawn-sites.md)
+- WO 47.17 — workflow `template` argument no longer loads arbitrary
+  workflow JSON via path traversal (bare-filename resolution from the
+  templates dir). [47.17](docs/workorders/47.17-workflow-template-path-traversal.md)
+- WO 47.18 — the bash tool's foreground branch runs the command-safety
+  gate before any execution path (direct callers can no longer bypass
+  pre_run). [47.18](docs/workorders/47.18-bash-foreground-gate-in-tool.md)
+- WO 47.19 — verifier `apply_text_fix` checks `symlink_swap_denied`
+  before its write (TOCTOU on the auto-fix path), and VerifierBus locks
+  poison-safely inside catch_unwind.
+  [47.19](docs/workorders/47.19-verifier-apply-text-fix-symlink-tocou.md)
+- WO 47.22 — edit_file fuzzy fallback no longer eats the trailing newline
+  of the last matched line on multi-line matches.
+  [47.22](docs/workorders/47.22-edit-file-fuzzy-newline-corruption.md)
+- WO 47.23 — panic=abort vs catch_unwind contract reconciled as
+  honest-doc only: guards kept (load-bearing in dev/test builds), release
+  contract documented. [47.23](docs/workorders/47.23-panic-abort-vs-catch-unwind-contract.md)
+- WO 47.24 — glob walk early-stops once `max_matches` is filled and
+  pre-guards `base_dir`. [47.24](docs/workorders/47.24-glob-early-stop-and-base-dir-guard.md)
+- WO 47.25 — workflow `condition` shell spawns run through the same
+  landlock/sandbox preparation as the foreground bash tool (was
+  unsandboxed deny-list only).
+  [47.25](docs/workorders/47.25-workflow-condition-landlock-bypass.md)
+- WO 47.30 — jobd shutdown/reload reaches both Notify waiters
+  (`notify_waiters` on the socket path) and the `run_bash_job`
+  double-completion race is closed.
+  [47.30](docs/workorders/47.30-jobd-shutdown-and-double-completion.md)
+- WO 47.32 — docker bash path: both container streams drain through the
+  output cap, and timeout-vs-signal exit codes are no longer conflated.
+  [47.32](docs/workorders/47.32-docker-output-caps-and-signals.md)
+- WO 47.33 — web/read hardening bundle: IPv6 unspecified-address SSRF
+  guard, DNS-pin fail-closed, read_file streaming, computer_use SSRF
+  gate, scan_files cap. [47.33](docs/workorders/47.33-web-and-read-hardening-bundle.md)
+- WO 47.34 — write_file re-verifies the anchored target immediately
+  before rename (parent-dir TOCTOU), and the permission glob matcher is a
+  linear NFA (no catastrophic backtracking).
+  [47.34](docs/workorders/47.34-write-file-tocou-and-glob-matcher.md)
+- WO 47.36 — mutex-poison + expect hygiene batch: poison-abort sites
+  unwrap via `into_inner()`, lib unwrap gate added, test EnvGuard fixes.
+  [47.36](docs/workorders/47.36-mutex-poison-and-expect-hygiene.md)
+- WO 47.37 — test-theater batch: e2e scenarios pin their named behavior
+  on the wire log + exit status, bench TOMLs gain `requires_model`,
+  tarpaulin nightly verify added.
+  [47.37](docs/workorders/47.37-test-theater-batch.md)
 - WO 47.20 — response cache key + async disk tier: `CacheKey` hashed
   only (model, messages, tools, response_format), so a request with
   different generation config (seed, max_tokens, extended_thinking,

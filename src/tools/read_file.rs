@@ -94,6 +94,9 @@ impl Tool for ReadFile {
         let mut total_bytes = 0usize;
         let mut selected_lines: Vec<String> = Vec::new();
         let mut whole = String::new();
+        // Set when an offset>0 window filled and we stopped before EOF:
+        // the true line total past the window is unknown (WO 48.33).
+        let mut early_stop = false;
         loop {
             buf.clear();
             match reader.read_until(b'\n', &mut buf) {
@@ -132,6 +135,19 @@ impl Tool for ReadFile {
                         selected_lines.push(body.to_string());
                     }
                     raw_total += 1;
+                    // Window filled: the only thing a further scan buys an
+                    // offset>0 read is the true line total, which the "N+"
+                    // header and truncated=true below honestly disclose as
+                    // unknown (WO 48.33). offset=0 keeps the full scan —
+                    // the whole-file display and exact pagination header
+                    // need raw_total there.
+                    if offset > 0 && !selected_lines.is_empty() && selected_lines.len() >= limit {
+                        // ponytail: truncated overclaims when the window
+                        // ends exactly at EOF (EOF unverified); one extra
+                        // read_until would disambiguate — not worth the branch.
+                        early_stop = true;
+                        break;
+                    }
                 }
                 Err(e) => {
                     return ToolOutcome::Failure(ToolError::Internal {
@@ -155,7 +171,8 @@ impl Tool for ReadFile {
 
         let end = std::cmp::min(offset.saturating_add(limit), raw_total);
         let selected_raw = selected_lines.join("\n");
-        let truncated = end < raw_total;
+        // early_stop implies EOF wasn't reached, so more lines may follow.
+        let truncated = early_stop || end < raw_total;
 
         // Apply minification to the selected slice only, so offset/limit
         // refer to the original file lines. Whole-file reads still show
@@ -225,11 +242,14 @@ impl Tool for ReadFile {
             }
         } else {
             let header = format!(
-                "{} (showing lines {}-{} of {})",
+                "{} (showing lines {}-{} of {}{})",
                 path.display(),
                 offset + 1,
                 end,
-                raw_total
+                raw_total,
+                // "+" marks an early-stopped scan: the file continues
+                // past `raw_total`, true total unscanned (WO 48.33).
+                if early_stop { "+" } else { "" }
             );
             let body = if minify && self.minify_write_side {
                 let lang = crate::shared::minify::lang_name_for_ext(
@@ -643,8 +663,11 @@ mod tests {
                 content, truncated, ..
             } => {
                 assert!(truncated, "expected truncated=true");
+                // WO 48.33: an offset>0 window that fills stops scanning,
+                // so the total is disclosed as a lower bound ("5+"), not
+                // the exact file length.
                 assert!(
-                    content.contains("showing lines 3-5 of 10"),
+                    content.contains("showing lines 3-5 of 5+"),
                     "got: {content}"
                 );
                 assert!(content.contains("line 2"));
@@ -764,14 +787,59 @@ mod tests {
                 content, truncated, ..
             } => {
                 assert!(truncated, "window at 4990..4995 of 5000 is truncated");
+                // WO 48.33: the scan stops once the window fills — the
+                // total past the window is unscanned, disclosed as "4995+".
                 assert!(
-                    content.contains("showing lines 4991-4995 of 5000"),
+                    content.contains("showing lines 4991-4995 of 4995+"),
                     "got: {content}"
                 );
                 assert!(content.contains("line 4990"));
                 assert!(content.contains("line 4994"));
                 assert!(!content.contains("line 4989"));
                 assert!(!content.contains("line 4995"));
+            }
+            other => panic!("expected FileContent, got {other:?}"),
+        }
+    }
+
+    /// WO 48.33: a deep offset into a large file must stop scanning once
+    /// the window fills — O(window), not O(file). The "N+" total proves
+    /// the early stop (a full scan would know the exact 80000); the body
+    /// proves the right lines were selected.
+    #[tokio::test]
+    async fn deep_offset_large_file_stops_at_window() {
+        let tmp = std::env::temp_dir().join(format!(
+            "kf_code_read_file_early_stop_{}.txt",
+            std::process::id()
+        ));
+        let mut source = String::new();
+        for i in 0..80_000 {
+            source.push_str(&format!("line {i}\n"));
+        }
+        std::fs::write(&tmp, &source).unwrap();
+        let tool = ReadFile::new(PathGuard::default(), false, 4096);
+        let outcome = tool
+            .run(
+                &ToolContext::new(),
+                json!({ "path": tmp.to_string_lossy(), "offset": 70_000, "limit": 10 }),
+            )
+            .await;
+        std::fs::remove_file(&tmp).ok();
+        match outcome {
+            ToolOutcome::FileContent {
+                content, truncated, ..
+            } => {
+                assert!(truncated, "unverified tail must report truncated");
+                // A full scan would report the exact 80000; "100010-style
+                // +" (here 70010+) proves the scan stopped at the window.
+                assert!(
+                    content.contains("showing lines 70001-70010 of 70010+"),
+                    "got: {content}"
+                );
+                assert!(content.contains("line 70000"));
+                assert!(content.contains("line 70009"));
+                assert!(!content.contains("line 69999"));
+                assert!(!content.contains("line 70010\n"));
             }
             other => panic!("expected FileContent, got {other:?}"),
         }

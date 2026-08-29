@@ -1191,3 +1191,16 @@
   impact on the enclosing public entry (`minify_content_by_ext`) reports the
   hub's CRITICAL fan-out, which is breadth, not change risk, for scanner-only
   edits. detect_changes with the `worktree` param works from the main index.
+
+## WO 48.32 session (2026-08-29, branch wo/wo48.32)
+
+- The workflow→TaskSpawner cancel bridge mirrors task_tool.rs's foreground
+  path exactly: derive `TaskCancel{flag, token}` + `cascade_parent_cancel`
+  + `done.notify_waiters()` after the await. The cascade fn was private to
+  `tools::task`; one `pub(crate)` widened it — no new abstraction needed.
+- `run_task_error_return_still_cleans_temp_dir` (task_spawner tests) flaked
+  once under parallel cold-build load (real-time retry backoff + shared temp
+  namespace scan); 3 consecutive green reruns. Not related to a 1-word
+  visibility change — pre-existing wall-clock sensitivity, watch under load.
+- Cold-worktree `cargo check -p kf-code --lib` alone is ~15 min under
+  parallel WO load; `cargo test` codegen adds more. Budget 40-min timeouts.

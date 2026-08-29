@@ -42,7 +42,7 @@ pub(crate) fn next_unique_id() -> u64 {
 /// nested handle's flag + token so the child stops cooperatively instead
 /// of outliving its parent. The second select arm retires the watcher
 /// when the nested task finishes normally, so watchers don't pile up.
-fn cascade_parent_cancel(
+pub(crate) fn cascade_parent_cancel(
     parent: CancellationToken,
     child: TaskCancel,
     done: Arc<tokio::sync::Notify>,

@@ -261,6 +261,14 @@
   Doom banner deliberately ungated (safety UI, WO 43.31); line-mode
   `/carryover show|clear` ungated (parity follow-up if wanted).
   [47.13](docs/workorders/47.13-tui-command-diet.md)
+- **Needs WO (found by 2026-08-29 docs audit)**: the TUI enable-hint
+  teaches a config form that never parses — `slash_commands.rs:92` +
+  `commands/jobs.rs:15` tell users to write `[display]
+  extra_commands = [...]`, but DisplayConfig is serde-flattened so only
+  the top-level `extra_commands` key parses (config.toml.example now
+  documents the correct form). Remaining: either accept the nested table
+  or fix the two hint strings; no test covers the TOML path (tests set
+  the field programmatically).
 - **WO 47.14 (1-of-N consumers)**: plugin verifiers are bus-only
   (PluginVerifierAdapter + dual registration deleted); the remaining
   `Verifier`→`BusVerifier` migration (steps 1-5: handler, correction

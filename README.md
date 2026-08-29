@@ -35,7 +35,7 @@ Type a message    # start coding
 - Runs tests, commits, and manages git
 - Works with Claude, GPT, Ollama, and any OpenAI-compatible model
 
-Benchmarked on 30 coding tasks — see [docs/TECHNICAL.md](docs/TECHNICAL.md#benchmarks).
+Benchmarked on 30 coding tasks — see [docs/TECHNICAL.md](docs/TECHNICAL.md#benchmarks-kirk-bench).
 
 ## Links
 

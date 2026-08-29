@@ -4,6 +4,24 @@
 
 ## Shipped (closed this session)
 
+- **WO 48.35 (2026-08-29, branch `wo/wo48.35`, not merged)**: the 47.35
+  untrusted_content wrap hardened + documented as mitigation, not trust
+  boundary. (1) `wrap_untrusted` (web_fetch.rs) neutralizes payload-borne
+  literal `</untrusted_content>` (`<\/...>`); new `unwrap_untrusted`
+  inverse. (2) The central cap `truncate_tool_output`
+  (executor/helpers/mod.rs — the truncation site; NOT the wrap helper,
+  which has no config access) drops the closing tag when the cut would
+  slice it and ends the region `...\n[truncated]` (house marker) — no
+  more unterminated regions; generic path byte-identical, FileContent
+  sets truncated. (3) system.hbs + TECHNICAL.md state plainly:
+  permissions/sandbox/approval are the authoritative boundary; goldens
+  re-captured (template 9/9). FAST GATES ONLY per owner directive:
+  workspace check --all-targets, clippy -p kf-code -D warnings, fmt,
+  web_fetch 72/72, read_file 18/18, helpers truncate 12/12. Full suite +
+  Windows cross gate owed to CI before merge. gitnexus impact:
+  truncate_tool_output HIGH position risk (central), change is a
+  wrapped-only branch.
+  [48.35](docs/workorders/48.35-untrusted-delimiter-honesty.md)
 - **WO 48.12 (2026-08-28, branch `wo48.12`, not merged)**: js/ts minify no
   longer corrupts regex literals — `minify_js_like`
   (`src/shared/minify/lang.rs`) truncated `/https?:\/\//` at the first

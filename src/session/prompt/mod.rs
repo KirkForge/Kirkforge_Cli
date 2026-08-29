@@ -35,7 +35,8 @@ pub(crate) fn count_tokens(s: &str) -> usize {
 // ponytail: heuristic, not BPE — non-CJK bytes/4, one token per CJK char
 // (a CJK char is 3 UTF-8 bytes, so flat bytes/4 credited it 0.75 and
 // under-estimated CJK/code content 25-50%, making the truncation ladder
-// under-fire into provider context-overflow — WO 48.21). Ceiling: ~±20%
+// under-fire into provider context-overflow — WO 48.21; Hangul syllables +
+// jamo added for the same reason — WO 48.29). Ceiling: ~±20%
 // on mixed-script text and CJK ext-B+ (4-byte) chars count via bytes only;
 // upgrade path: ship the BPE table in minimal builds if the drift bites.
 #[cfg(not(feature = "budget"))]
@@ -44,7 +45,8 @@ fn fallback_estimate_tokens(s: &str) -> usize {
     let mut other_bytes = 0usize;
     for c in s.chars() {
         let n = c as u32;
-        if matches!(n, 0x2E80..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF) {
+        if matches!(n, 0x1100..=0x11FF | 0x2E80..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
+        {
             cjk += 1;
         } else {
             other_bytes += c.len_utf8();
@@ -2187,6 +2189,25 @@ mod tests {
     fn count_tokens_fallback_mixed_bumps_cjk_only() {
         let s = format!("{}{}", "code code code ", "漢".repeat(10)); // 15 ASCII bytes + 10 CJK
         assert_eq!(count_tokens(&s), 15 / 4 + 10);
+    }
+
+    // WO 48.29: Hangul is 3 UTF-8 bytes like CJK — flat bytes/4 had the same
+    // 25% under-credit for Korean as 48.21 fixed for Chinese/Japanese.
+    #[cfg(not(feature = "budget"))]
+    #[test]
+    fn count_tokens_fallback_hangul_counts_one_per_char() {
+        let s = "한글테스트".repeat(20); // 100 Hangul syllables (0xAC00..), 300 bytes
+        assert!(
+            count_tokens(&s) >= 100,
+            "Hangul under-estimated: {}",
+            count_tokens(&s)
+        );
+        let jamo = "\u{1100}\u{1101}".repeat(50); // 100 jamo (0x1100..)
+        assert!(
+            count_tokens(&jamo) >= 100,
+            "jamo under-estimated: {}",
+            count_tokens(&jamo)
+        );
     }
 
     #[test]

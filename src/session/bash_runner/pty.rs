@@ -53,9 +53,15 @@ pub fn run_with_pty(
     // matters (needs raw libc, a new dep).
     let mut killer = child.clone_killer();
     std::thread::spawn(move || {
-        if kill_rx.recv().is_ok() {
-            let _ = killer.kill();
-        }
+        // WO 48.49: fail closed. Channel-close (sender dropped without a
+        // send — the executor's tokio::time::timeout drops the whole tool
+        // future, so bash.rs's explicit send arms never run) is as fatal
+        // as a kill request: no supervisor remains. The old `is_ok()` arm
+        // exited quietly and orphaned the child. Normal completion drops
+        // the sender too; the kill then HUPs an already-reaped pid (ESRCH,
+        // ignored — unix ProcessSignaller is a bare libc::kill).
+        let _ = kill_rx.recv();
+        let _ = killer.kill();
     });
 
     let mut reader = pair.master.try_clone_reader()?;
@@ -92,4 +98,37 @@ pub fn run_with_pty(
         stdout: String::from_utf8_lossy(&stdout_buf).to_string(),
         exit_code,
     })
+}
+
+#[cfg(all(test, unix, feature = "pty"))]
+mod tests {
+    use super::*;
+
+    // WO 48.49: the watcher fails closed — dropping the kill sender
+    // without a send (executor aborts the tool future) must still kill
+    // the child. The child touches a marker only after a sleep long
+    // enough that a prompt kill beats it; a fail-open watcher (the old
+    // `recv().is_ok()` arm) lets the marker appear.
+    #[test]
+    fn pty_sender_drop_without_send_kills_child() {
+        let tmp = std::env::temp_dir();
+        let marker = tmp.join(format!("kf_code_pty_fail_closed_{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let cmd = format!("sleep 3 && touch {}", marker.to_string_lossy());
+        let (kill_tx, kill_rx) = std::sync::mpsc::channel::<()>();
+        let run =
+            std::thread::spawn(move || run_with_pty(&cmd, &tmp, 80, 24, None, "test", kill_rx));
+        // Let the child spawn, then drop the sender WITHOUT sending —
+        // the executor-abort teardown path under test.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        drop(kill_tx);
+        // The kill ends the pty read (WO 48.42), so the run rejoins; a
+        // hung join here would itself indicate the kill never landed.
+        let _ = run.join().expect("pty run panicked");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        assert!(
+            !marker.exists(),
+            "child survived a sender-drop-without-send: watcher failed open"
+        );
+    }
 }

@@ -4,7 +4,7 @@
 
 ## Shipped (closed this session)
 
-- **WO 48.31 (2026-08-29, branch `wo48.31`, not merged)**: the streaming
+- **WO 48.31 (2026-08-29, merged at `357ac36e` in the final wave)**: the streaming
   event protocol carries `call_id` — `TurnEvent::ToolStart`/`ToolResult`
   gained the field, `BashPartialOutput(String)` became
   `BashPartialOutput { call_id, text }`. All emitters (dispatch 4, turn 4,
@@ -20,14 +20,15 @@
   mixing). FAST GATES ONLY per owner directive: workspace check
   --all-targets + --features pty, clippy -p kf-code -D warnings, targeted
   suites (tui::events 53, executor::tests 111, replay 34, selftest 35,
-  turn_events 6, fill 4), fmt — all green; full suite + Windows cross owed
-  to CI before merge. detect_changes: 63 changed symbols across 19 files,
+  turn_events 6, fill 4), fmt — all green; full suite + Windows cross
+  verified green in CI (merge run `33238035710`). detect_changes: 63 changed
+  symbols across 19 files,
   all on the protocol surface (rated critical by breadth; expected for a
   protocol change). Scope creep disclosed: tools/mod.rs + tools/bash.rs
   (ToolContext.call_id) because the PTY call site is where the id must
   reach pty.rs.
   [48.31](docs/workorders/48.31-call-id-streaming-protocol.md)
-- **WO 48.34 (2026-08-29, branch `wo/wo48.34`, not merged)**: two
+- **WO 48.34 (2026-08-29, merged at `357ac36e` in the final wave)**: two
   model-controlled resources gained bounds/ownership. (1) `task`'s
   model-supplied `max_turns` is now clamped at the tool layer to new
   `ToolConfig.max_subagent_turns` (default 32, pub const
@@ -38,15 +39,16 @@
   an `Arc<AtomicBool>` the walk loops check per entry (glob walk
   extracted to `walk_glob_matches` for direct testability). Note: the
   48.30–48.36 WO files exist only on main (46baabc2) — this branch
-  carried none of them; the 48.34 file + README row were added here, so
+  carried none of them; the   48.34 file + README row were added here, so
   the integration merge will see file/README conflicts for 48.34
   (keep the Done version) and rows for 48.30–48.33/35/36 arriving from
   main. FAST GATES ONLY per WO: workspace check --all-targets, clippy -p
   kf-code -D warnings, targeted tests (task_tool 24/24, glob 15/15,
   grep 34/34, shared::config 9/9, session::config 105/105), fmt — all
-  green. Full suite + Windows cross gate owed to CI before merge.
+  green. Full suite + Windows cross gate verified green in CI (merge run
+  `33238035710`).
   [48.34](docs/workorders/48.34-resource-bound-bundle.md)
-- **WO 48.35 (2026-08-29, branch `wo/wo48.35`, not merged)**: the 47.35
+- **WO 48.35 (2026-08-29, merged at `357ac36e` in the final wave)**: the 47.35
   untrusted_content wrap hardened + documented as mitigation, not trust
   boundary. (1) `wrap_untrusted` (web_fetch.rs) neutralizes payload-borne
   literal `</untrusted_content>` (`<\/...>`); new `unwrap_untrusted`
@@ -60,11 +62,12 @@
   re-captured (template 9/9). FAST GATES ONLY per owner directive:
   workspace check --all-targets, clippy -p kf-code -D warnings, fmt,
   web_fetch 72/72, read_file 18/18, helpers truncate 12/12. Full suite +
-  Windows cross gate owed to CI before merge. gitnexus impact:
+  Windows cross gate verified green in CI (merge run `33238035710`).
+  gitnexus impact:
   truncate_tool_output HIGH position risk (central), change is a
   wrapped-only branch.
   [48.35](docs/workorders/48.35-untrusted-delimiter-honesty.md)
-- **WO 48.12 (2026-08-28, branch `wo48.12`, not merged)**: js/ts minify no
+- **WO 48.12 (2026-08-28, merged)**: js/ts minify no
   longer corrupts regex literals — `minify_js_like`
   (`src/shared/minify/lang.rs`) truncated `/https?:\/\//` at the first
   unescaped-looking `//`, eating the newline (disk write-back chain).
@@ -80,7 +83,7 @@
   directive: minify tests 76/76, clippy -p kf-code -D warnings, workspace
   check --all-targets, fmt — all green. gitnexus impact (dev index): LOW.
   [48.12](docs/workorders/48.12-minify-js-regex-literal-corruption.md)
-- **WO 48.16 (2026-08-28, branch `wo48.16`, not merged)**: failed reads no
+- **WO 48.16 (2026-08-28, merged)**: failed reads no
   longer satisfy the read-before-edit gate. Both `mark_read` sites —
   dispatch `spawn_batch` (intra-batch) and turn `record_tool_result`
   (cross-batch/direct) — now gate on `tool_outcome_success`, so a
@@ -91,9 +94,10 @@
   success-path test both green. FAST GATES ONLY per owner directive:
   workspace check --all-targets, clippy -p kf-code -D warnings,
   session::executor::tests 104/104, shared::access 69/69, fmt — all
-  green. Full suite + Windows cross gate owed to CI before merge.
+  green. Full suite + Windows cross gate verified green in CI (merge run
+  `33238035710`).
   [48.16](docs/workorders/48.16-mark-read-on-failed-read.md)
-- **WO 48.17 (2026-08-28, branch `wo48.17`, not merged)**: `notebook_edit`
+- **WO 48.17 (2026-08-28, merged)**: `notebook_edit`
   brought inside the file-tool pipeline — added to the pre_run file-tool
   list (Phase-1 `check_write` + resolved-path substitution into pre-tool
   hook args), Phase-2.5 sequential deferral (with the symlink-swap walk),
@@ -111,7 +115,7 @@
   fmt, dispatch 22/22 + hooks 46/46 + notebook_edit 21/21; detect_changes
   low, 2 symbols).
   [48.17](docs/workorders/48.17-notebook-edit-outside-file-tool-pipeline.md)
-- **WO 48.9 (2026-08-28, branch `wo48.9`, not merged)**: `--no-default-features`
+- **WO 48.9 (2026-08-28, merged)**: `--no-default-features`
   build fixed — 3 un-gated `kf_budget_core::estimate_tokens` refs (ADR-0017
   documents the minimal build as supported). cfg gate now lives in ONE choke
   point: `prompt::count_tokens` body (`budget` on → BPE, off → `s.len() / 4`
@@ -123,7 +127,7 @@
   DEFERRED: CI job for the no-default-features combo (~10-line new job block,
   not the allowed 3-line add; see Pending).
   [48.9](docs/workorders/48.9-no-default-features-broken.md)
-- **WO 48.10 (2026-08-28, branch `wo48.10`, not merged)**: Windows
+- **WO 48.10 (2026-08-28, merged)**: Windows
   daemon-stub `try_list_recent`/`try_resolve_recent`/`try_resolve_id`
   (`src/daemon/client.rs` `windows_imp`) now serve the on-disk session
   index instead of `Ok(None)` — the same platform-neutral
@@ -151,7 +155,7 @@
   per owner directive (check --workspace --all-targets, clippy -p kf-code,
   session::hooks + dispatch tests, fmt, adr_xref_drift).
   [48.2](docs/workorders/48.2-pre-tool-hook-double-run.md)
-- **WO 48.3 (2026-08-28, branch `wo/wo48.3`, not merged)**: fixed the WO
+- **WO 48.3 (2026-08-28, merged)**: fixed the WO
   47.12 regression where the Sessions tab permanently showed "No recent
   sessions" in the default daemon-less config. The three tab-switch sites
   in `src/tui/keys/mod.rs` primed Jobs cold-start but never tripped
@@ -160,8 +164,8 @@
   and the draw loop's existing `refresh_sessions` handler populates the
   picker via the on-disk session-index fallback. Startup picker path was
   already correct. FAST GATES ONLY per owner directive (check/clippy/
-  targeted tests/fmt green; full suite + Windows cross gate owed before
-  any merge — see CI/branch state).
+  targeted tests/fmt green; full suite + Windows cross verified green in
+  CI — merge run `33238035710`).
   [48.3](docs/workorders/48.3-sessions-tab-empty-without-daemon.md)
 - **WO 48.4 (2026-08-28)**: daemon `ThreadsChanged` pushes no longer open
   the full-screen "Resume a recent session" modal at every TUI startup.
@@ -192,6 +196,19 @@
   precedent. Gates: each family targeted 2× green + combined ci-fast
   filter green, fmt clean, `cargo check -p kf-code --lib` clean.
   FAST GATES ONLY per owner directive — full suites not run this session.
+- **WO 48 series COMPLETE** (36 workorders, 36/36 `Status: Done`). Final
+  wave (48.29, 48.30, 48.31, 48.32, 48.33, 48.34, 48.35, 48.36) merged at
+  `357ac36e` (2026-08-29); earlier 48.x waves shipped through the campaign
+  (48.2-48.4, 48.9, 48.10, 48.12, 48.16-48.18, 48.20, 48.21, 48.23-48.28).
+  One-liners in CHANGELOG; full detail in `docs/workorders/48.*`.
+  Highlights — 48.1/48.11/48.13/48.25/48.26/48.29 minify scanner wave
+  (python/shell/ruby string+heredoc awareness, `::` round-trip); 48.5 MCP
+  isError remap; 48.6/48.18 json_mode/response_format toggle pair; 48.14
+  `can_run_tui` startup-picker gate; 48.15 gate-vs-body denial
+  classification; 48.22 nightly subprocess filter (P0); 48.27 edit_file
+  fuzzy-fork guards; 48.31 call_id streaming protocol; 48.32 workflow
+  agent cancellation; 48.33 read_file windowed reads; 48.36 job ID
+  reservation.
 - **WO 47 series COMPLETE** (37 workorders: 36 Done + 47.8 owner-skipped,
   see Pending). Final wave (47.6, 47.7, 47.9-47.14) merged at `c3a1eaf2`;
   earlier 47.x waves shipped through the campaign. One-liners in
@@ -260,16 +277,12 @@
   — a pre-created symlink makes appends follow it. Remaining: add
   `O_NOFOLLOW` on Unix + decide the Windows path.
   [46.24](docs/workorders/46.24-predictable-tmp-filenames-toctou.md)
-- **WO 44.44 item 4**: `run_bash_stuck_step_times_out` is
-  `#[cfg(unix)]` — on Windows the test future deadlocks past its own
-  inner timeout (msys sh + kill_on_drop orphan grandchildren; fix = Job
-  Objects). Un-gate the test when 44.44 lands.
 - **WO 43.26 DEFERRED**: `dispatch.rs:185` holds `Mutex<VerifierBus>`
   while calling sync `verify()` (up to 5s on a tokio worker). Fix
   requires a contract change (async `BusVerifier` or `spawn_blocking`
   per verifier inside `VerifierBus::run`); AGENTS.md §7 forbids the
   trait unification in one pass. No separate WO yet.
-- **kf-lsp PDEATHSIG gap**: `crates/kf-lsp/src/lib.rs:1059` has its own
+- **kf-lsp PDEATHSIG gap**: `crates/kf-lsp/src/lib.rs:1094` has its own
   `setup_process_group` duplicate without the PDEATHSIG call. Remaining:
   one prctl line or dedupe onto the session helper.
 - **WO 43.1 (deferred tail)**: migrate openai_compat / anthropic /
@@ -329,15 +342,19 @@ coverage.
 
 ## CI / branch state
 
-- **main == dev == origin/main == origin/dev at `c3a1eaf2`** (2026-08-28).
-- **CI GREEN**: GitHub run `33141778511` (CI (merge), branch main, head
-  `c3a1eaf2`, 2026-08-28T04:25:39Z) — the WO 47 final-wave merge commit.
+- **main == dev == origin/main == origin/dev at `357ac36e`** (2026-08-29).
+- **CI GREEN**: GitHub run `33238035710` (CI (merge), branch main, head
+  `357ac36e`, 2026-08-29T06:15:31Z, success) — the WO 48 final-wave merge
+  commit. Full gates (test-full matrix + Windows cross) ran green in CI.
 - Branch flow (NON-NEGOTIABLE, AGENTS.md task 7): push to dev → watch CI
   green (`gh run watch --exit-status`) → only then main. Never both at
   once; never main first.
-- Worktrees: 3 (main checkout, dev-integration, user's external); remote
-  branches just `dev` + `main`.
-- This session (flake stabilization + docs truth pass) ran FAST GATES
-  ONLY per owner directive: `cargo fmt --check`, `cargo check -p kf-code
-  --lib`, each flake family 2× targeted, combined ci-fast filter run. A
-  full gate run is owed before the next push.
+- Worktrees: 9 — main checkout, dev-integration, six stale merged WO
+  worktrees (`.worktrees/wo48.25`-`wo48.30`, prunable via
+  `git worktree remove`), user's external (detached). Remote branches
+  just `dev` + `main`.
+- This session (docs truth pass) is docs-only; the flake-stabilization
+  session before it ran FAST GATES ONLY per owner directive (`cargo fmt
+  --check`, `cargo check -p kf-code --lib`, each flake family 2×
+  targeted, combined ci-fast filter run) — its owed full gate run was
+  covered by CI merge run `33238035710` on the final-wave push.

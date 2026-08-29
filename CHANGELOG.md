@@ -8,6 +8,12 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- Docs pass (2026-08-29 audit, ADRs+workorders+scripts) — 9 surgical ADR
+  amendments (076 fold paths, 028 bus-only plugin verifiers, 017 pins,
+  043 empty default bus, 065/067 llvm-cov gate, 074 timeouts+nightly 7,
+  070 ledger closures, 073 residual table); workorders README census
+  36/three-series/placement/47.7 title/451 archive; 48.24 Done section;
+  ci-local.sh header truth (comments only); test-doctor.md dead links.
 - Docs pass (2026-08-29 audit) — TECHNICAL.md: 10 stale claims fixed
   (test counts ~5,100, eight direct crate deps incl. kf-rbac, 8-event
   hook set, /plugins approve, CONFIG_FIELD_COUNT=109 + generic env

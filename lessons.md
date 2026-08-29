@@ -1290,3 +1290,21 @@
 - `session.worktree_enabled` ref in the pipeline section (TECHNICAL.md
   ~1466) was stale post-45.37 but un-flagged by the audit — fixed as a
   verified extra; scope note: same class as the config-example fix.
+
+## Docs-fix session 2026-08-29 (ADRs+workorders+scripts audit)
+
+- ADR amendments are append-only `## Amendment (date)` blocks: the drift
+  test reads Status headers + predicate blocks, body text is free — so a
+  surgical amendment never needs an index touch. Verified 7/7 green
+  after every chunk.
+- The audit's file:line claims all verified against code before editing
+  (default_verifier_bus deprecated-empty at bus.rs:320, env contract
+  KF_VERIFIER_NAME/KF_CHANGED_FILES, nightly 7 jobs incl.
+  subprocess-lifecycle+mutants, nextest 30s/60s/300s per WO 40.3).
+  Trust-but-verify held: zero claims wrong.
+- Parallel docs-fix agents commit to main between my chunks — always
+  `git log` before writing CHANGELOG (b4005382 backfill + 5715c1c2 state
+  pass landed mid-session) and re-read the file head before editing.
+- `tests/sweep4_probe_test.rs` sits untracked on the main checkout
+  (prior sweep residue, not mine) — disclosed, not deleted: never remove
+  another session's uncommitted work.

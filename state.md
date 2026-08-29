@@ -4,6 +4,25 @@
 
 ## Shipped (closed this session)
 
+- **WO 48.34 (2026-08-29, branch `wo/wo48.34`, not merged)**: two
+  model-controlled resources gained bounds/ownership. (1) `task`'s
+  model-supplied `max_turns` is now clamped at the tool layer to new
+  `ToolConfig.max_subagent_turns` (default 32, pub const
+  `DEFAULT_MAX_SUBAGENT_TURNS`, merge-clamped 1–1024); threaded via
+  `ToolContextBuilder` → `Task::with_config` (4th param);
+  `CONFIG_FIELD_COUNT` 108 → 109. (2) glob/grep-fallback
+  `spawn_blocking` walkers are cancel-aware: the cancel select arms flip
+  an `Arc<AtomicBool>` the walk loops check per entry (glob walk
+  extracted to `walk_glob_matches` for direct testability). Note: the
+  48.30–48.36 WO files exist only on main (46baabc2) — this branch
+  carried none of them; the 48.34 file + README row were added here, so
+  the integration merge will see file/README conflicts for 48.34
+  (keep the Done version) and rows for 48.30–48.33/35/36 arriving from
+  main. FAST GATES ONLY per WO: workspace check --all-targets, clippy -p
+  kf-code -D warnings, targeted tests (task_tool 24/24, glob 15/15,
+  grep 34/34, shared::config 9/9, session::config 105/105), fmt — all
+  green. Full suite + Windows cross gate owed to CI before merge.
+  [48.34](docs/workorders/48.34-resource-bound-bundle.md)
 - **WO 48.12 (2026-08-28, branch `wo48.12`, not merged)**: js/ts minify no
   longer corrupts regex literals — `minify_js_like`
   (`src/shared/minify/lang.rs`) truncated `/https?:\/\//` at the first

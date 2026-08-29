@@ -651,6 +651,11 @@ concurrently; additional tasks either queue or are rejected depending on
 message suggesting `task_output` or increasing `max_background_tasks`. Env
 override: `KF_CODE_TASK_CONCURRENCY_MODE`.
 
+`ToolConfig.max_subagent_turns` (default 32, clamped 1–1024) is the ceiling
+the `task` tool applies to the model-supplied `max_turns` argument (WO 48.34)
+— a runaway value cannot reach the subagent executor loop. Env override:
+`KF_CODE_MAX_SUBAGENT_TURNS`.
+
 Each background task is tracked with a derived `TaskStatus`
 (`Pending | Running | Completed | Cancelled | Failed | TimedOut`) plus
 `TaskMetadata` (model, persona, ≤100-char prompt summary, started_at,

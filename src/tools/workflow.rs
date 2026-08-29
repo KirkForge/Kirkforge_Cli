@@ -438,10 +438,30 @@ pub struct TaskSpawnerStepRunner {
     pub dry_run: bool,
 }
 
+// WO 48.32: derive the TaskCancel pair for a workflow agent step, cascaded
+// from the runner's token — Esc / a job timeout fires the runner token and
+// now stops the subagent LLM loop (flag between turns, token in-flight)
+// the same way bash/tool steps already honour it. Same bridge as the
+// foreground `task` tool (task_tool.rs); `done` retires the watcher when
+// the step finishes normally so watchers don't pile up per step.
+fn bridged_task_cancel(
+    parent: &CancellationToken,
+) -> (crate::tools::task::TaskCancel, Arc<tokio::sync::Notify>) {
+    let cancel = crate::tools::task::TaskCancel {
+        flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        token: CancellationToken::new(),
+    };
+    let done = Arc::new(tokio::sync::Notify::new());
+    crate::tools::task::cascade_parent_cancel(parent.clone(), cancel.clone(), done.clone());
+    (cancel, done)
+}
+
 #[async_trait::async_trait]
 impl StepRunner for TaskSpawnerStepRunner {
     async fn run_step(&self, name: &str, prompt: &str, persona: &str) -> Result<String> {
-        self.spawner
+        let (cancel, done) = bridged_task_cancel(&self.cancel_token);
+        let result = self
+            .spawner
             .run_task(crate::tools::task::TaskRequest {
                 // WO 35.1: callers own the persona preamble — run_task is
                 // verbatim now.
@@ -449,11 +469,13 @@ impl StepRunner for TaskSpawnerStepRunner {
                 persona: persona.to_string(),
                 model: None,
                 max_turns: 1,
-                cancel: None,
+                cancel: Some(cancel),
                 owner: None,
             })
             .await
-            .map_err(|e| anyhow::anyhow!("step '{name}' failed: {e}"))
+            .map_err(|e| anyhow::anyhow!("step '{name}' failed: {e}"));
+        done.notify_waiters();
+        result
     }
 
     async fn run_bash(&self, name: &str, command: &str) -> Result<String> {
@@ -590,6 +612,7 @@ impl StepRunner for TaskSpawnerStepRunner {
             let handle = tokio::spawn(async move {
                 match req.kind {
                     kf_workflow::StepKind::Agent => {
+                        let (cancel, done) = bridged_task_cancel(&cancel_token);
                         let result = spawner
                             .run_task(crate::tools::task::TaskRequest {
                                 prompt: crate::tools::task::build_task_prompt(
@@ -599,11 +622,13 @@ impl StepRunner for TaskSpawnerStepRunner {
                                 persona: req.persona,
                                 model: None,
                                 max_turns: 1,
-                                cancel: None,
+                                cancel: Some(cancel),
                                 owner: None,
                             })
                             .await
-                            .map_err(|e| anyhow::anyhow!("step '{}' failed: {e}", req.name))?;
+                            .map_err(|e| anyhow::anyhow!("step '{}' failed: {e}", req.name));
+                        done.notify_waiters();
+                        let result = result?;
                         Ok::<(String, String), anyhow::Error>((req.name, result))
                     }
                     kf_workflow::StepKind::Bash => {
@@ -1202,5 +1227,127 @@ mod tests {
             dry_run: false,
         };
         assert!(runner.eval_condition("true").await);
+    }
+
+    /// Records the TaskCancel pair each run_task received (`None` when the
+    /// request was uncancellable) and, when present, waits for the child
+    /// token to fire — that wait is the WO 48.32 assertion surface: with
+    /// the bridge missing the spawner returns instantly and the pair
+    /// asserts in the tests below fail instead.
+    struct CancelProbeSpawner {
+        observed: Arc<StdMutex<Vec<Option<crate::tools::task::TaskCancel>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TaskSpawner for CancelProbeSpawner {
+        async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+            let Some(cancel) = request.cancel else {
+                self.observed.lock().unwrap().push(None);
+                return Ok("uncancellable".into());
+            };
+            tokio::time::timeout(Duration::from_secs(5), cancel.token.cancelled())
+                .await
+                .map_err(|_| "child cancel token never fired".to_string())?;
+            self.observed.lock().unwrap().push(Some(cancel));
+            Err("cancelled".into())
+        }
+    }
+
+    fn assert_cancelled_pair(observed: &StdMutex<Vec<Option<crate::tools::task::TaskCancel>>>) {
+        let observed = observed.lock().unwrap();
+        let pair = observed[0]
+            .as_ref()
+            .expect("agent step must pass a TaskCancel, not None");
+        assert!(pair.token.is_cancelled());
+        assert!(pair.flag.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    // WO 48.32: an agent step must receive a TaskCancel bridged from the
+    // runner's token — a fired runner token (Esc / job timeout) cancels
+    // the subagent. Pre-fix: cancel: None, the LLM loop kept spending.
+    #[tokio::test]
+    async fn agent_step_receives_cancelled_task_cancel_when_runner_token_fires() {
+        let observed: Arc<StdMutex<Vec<Option<crate::tools::task::TaskCancel>>>> =
+            Arc::new(StdMutex::new(Vec::new()));
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(CancelProbeSpawner {
+            observed: observed.clone(),
+        });
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let runner = TaskSpawnerStepRunner {
+            spawner,
+            toolset: None,
+            deny_list: DenyList::default(),
+            path_guard: PathGuard::default(),
+            bash_sandbox_workdir: false,
+            sandbox_config: SandboxConfig::default(),
+            landlock_extra_paths: Vec::new(),
+            cancel_token: cancel,
+            dry_run: false,
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            runner.run_step("s", "work", "explore"),
+        )
+        .await;
+        let err = match result {
+            Ok(Err(e)) => e,
+            Ok(Ok(_)) => panic!("agent step must fail once cancelled, not succeed"),
+            Err(_) => panic!("run_step hung past 10s — runner token not bridged"),
+        };
+        assert!(
+            err.to_string().contains("cancelled"),
+            "error must name the cancellation, got: {err}"
+        );
+        assert_cancelled_pair(&observed);
+    }
+
+    // WO 48.32: the run_batch agent arm gets the same bridge as run_step.
+    #[tokio::test]
+    async fn batch_agent_step_receives_cancelled_task_cancel_when_runner_token_fires() {
+        let observed: Arc<StdMutex<Vec<Option<crate::tools::task::TaskCancel>>>> =
+            Arc::new(StdMutex::new(Vec::new()));
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(CancelProbeSpawner {
+            observed: observed.clone(),
+        });
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let runner = TaskSpawnerStepRunner {
+            spawner,
+            toolset: None,
+            deny_list: DenyList::default(),
+            path_guard: PathGuard::default(),
+            bash_sandbox_workdir: false,
+            sandbox_config: SandboxConfig::default(),
+            landlock_extra_paths: Vec::new(),
+            cancel_token: cancel,
+            dry_run: false,
+        };
+        let req = kf_workflow::StepRequest {
+            name: "s".into(),
+            kind: kf_workflow::StepKind::Agent,
+            prompt: "work".into(),
+            persona: "explore".into(),
+            command: String::new(),
+            tool_name: String::new(),
+            tool_arguments: serde_json::Value::Null,
+            with_critique: false,
+        };
+        let result =
+            tokio::time::timeout(Duration::from_secs(10), runner.run_batch(vec![req])).await;
+        let err = match result {
+            Ok(Err(e)) => e,
+            Ok(Ok(_)) => panic!("agent batch step must fail once cancelled, not succeed"),
+            Err(_) => panic!("run_batch hung past 10s — runner token not bridged"),
+        };
+        let batch = err
+            .downcast_ref::<kf_workflow::BatchErrors>()
+            .expect("batch failure must carry BatchErrors");
+        assert!(
+            batch.failures[0].1.to_string().contains("cancelled"),
+            "step error must name the cancellation, got: {}",
+            batch.failures[0].1
+        );
+        assert_cancelled_pair(&observed);
     }
 }

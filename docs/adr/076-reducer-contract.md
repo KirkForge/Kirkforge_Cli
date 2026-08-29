@@ -16,14 +16,16 @@ affects-crates: []
 
 ## Context
 
-`DelegationResult.packet` (type `kf_routing::correction::ReducedStatePacket`)
+`DelegationResult.packet` (type
+`kf_orchestrator::routing::correction::ReducedStatePacket`)
 has been `None` on every delegation since WO 29.7: `delegate.rs` and the mode
 finalizers hard-code `packet: None`, and three crate doc-lines call the
 reducer "NOT ported". The original was TS (`reducer.ts` +
 `orchestrator-verifiers.ts`), but **no TS source exists in this repo**
 (deleted in WO 29.9) — there is nothing to port. What does exist:
 
-- the full state vocabulary in `kf_routing::correction` (`Changes`,
+- the full state vocabulary in `kf_orchestrator::routing::correction`
+  (`Changes`,
   `GraphState`, `LintState`, `TypesState`, `SecurityState`, `Verification`,
   `OverallVerdict`, `VerifierPolicy`),
 - `kf_orchestrator::verifier::scan_files` producing `SecurityFinding`s
@@ -121,3 +123,12 @@ text); `compute_final_verdict` reads `verification.overall`.
 - The binary's `plugin_verify_workspace` deferral message ("reducer not
   ported") is now stale in its *reason* — the reducer exists — but the tool
   is still unwired to it; wiring it is follow-up work outside WO 37.2.
+
+## Amendment (2026-08-29) — crate paths post-47.4 fold
+
+WO 47.4 folded the `kf-routing` crate into `kf-orchestrator`. The two
+crate paths cited above were renamed in place: the packet type and the
+state vocabulary now live at
+`kf_orchestrator::routing::correction`
+(`crates/kf-orchestrator/src/routing/correction.rs`). Path rename only —
+no contract change.

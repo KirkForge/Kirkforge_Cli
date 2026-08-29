@@ -272,3 +272,26 @@ CI's `target/` directory is cached between runs:
 
 The cache is keyed on the toolchain pin and the `Cargo.lock`
 hash. A change to either invalidates the cache.
+
+## Amendment (2026-08-29) — pin and enforcement updates
+
+The original body above records the 2026-06 MVP spec. Several pins have
+moved since; the current state:
+
+- **Toolchain**: `rust-toolchain.toml` pins `1.88.0` with components
+  `["rustfmt", "clippy"]` — no `rust-src` (the `1.85.0` + `rust-src`
+  block above is historical).
+- **Drift tests**: `tests/build_spec_drift.rs` was merged into
+  `crates/kf-budget-core/tests/state_spec_drift.rs` — the three
+  citations above now resolve there.
+- **Retired claims**: the `plugin3` binary and its `self-check`
+  subcommand no longer exist; no workflow or script enforces the 8 MB
+  size budget or the 5-minute compile budget (both were aspirational by
+  the time of the 074 CI reset); `[profile.ci]` is absent from the root
+  `Cargo.toml`; the README's Building block shows the kf-code commands,
+  not the four plugin3 entry points listed above.
+- **Minimal build**: `cargo check/test --workspace
+  --no-default-features` is green again (WO 48.9 fixed three un-gated
+  `kf_budget_core` refs; WO 48.24 fixed the remaining clippy errors and
+  cfg-gated the budget/stratum integration tests) — the
+  supported-minimal-build claim of this ADR holds at HEAD.

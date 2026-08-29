@@ -35,3 +35,17 @@ Build `src/session/verifier/bus.rs` with:
 
 - **Positive:** Unified verifier interface — the executor queries all verifiers in one call. Easy to add new `BusVerifier` implementations (LSP, custom) without touching the event bus. Structured `VerdictEntry` type enables richer feedback to the model.
 - **Negative:** The sync `BusVerifier::verify()` wraps async verifier functions via `block_in_place`, which requires a multi-threaded runtime. The bus runs after every file-modifying tool call, adding latency. The existing event-driven `Verifier` system and the new `BusVerifier` coexist — they're not unified yet (that's a future migration step).
+
+## Amendment (2026-08-29) — built-in adapters removed, bus starts empty
+
+Decision #5 no longer describes production: the `SecurityBusVerifier`
+and `GitBusVerifier` adapters were deleted, and `default_verifier_bus()`
+returns an **empty** bus (it is `#[deprecated]` — use
+`VerifierBus::new()` directly; pinned by the
+`default_verifier_bus_is_empty` test in `bus.rs`). Built-in verifier
+coverage moved to the surviving paths progressively — the event-driven
+`Verifier` slots, the `TsOrchestratorBridgeVerifier` security wrapper,
+and (WO 47.14) plugin verifiers registering exclusively into the bus via
+`register_plugin_verifiers_into_bus`. The `block_in_place` mechanism the
+original Negative consequence describes is gone from `verifier/`; that
+consequence is retired with the adapters that caused it.

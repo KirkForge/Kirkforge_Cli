@@ -239,3 +239,21 @@ authoritative: built-in verifiers register directly, plugin verifiers
 register via `register_plugin_verifiers_into_bus`, and the security scan
 registers via the `TsOrchestratorBridgeVerifier` wrapper (now a misnomer —
 it no longer bridges to TS).
+
+## Amendment (2026-08-29, WO 47.14) — plugin verifiers bus-only, adapter deleted
+
+The ponytail section's final claim ("The Node SDK plugin (`kf-plugin`)
+still runs its TS-based verifiers through the legacy event-driven
+`Verifier` trait path (`PluginVerifierAdapter`), which is retained for
+backward compatibility") is retired: `PluginVerifierAdapter` is
+**deleted** (WO 47.14). Plugin-declared verifiers register exclusively
+into the `VerifierBus` via `register_plugin_verifiers_into_bus` —
+`BusVerifier` is the surviving trait of the unification, and until the
+deletion plugin verifiers were dual-registered and ran twice per
+file-modifying tool call. The subprocess env contract changed with it:
+verifier scripts now receive `KF_VERIFIER_NAME` +
+`KF_CHANGED_FILES` (newline-separated); the deleted adapter's
+`KF_EVENT_KIND`/`KF_EVENT_JSON` vars are gone (restoring event
+visibility requires extending `VerifyContext`, tracked in WO 47.14
+remaining work). Live reload re-runs the registration while keeping the
+rest of the bus intact.

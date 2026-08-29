@@ -12,6 +12,9 @@ why, and the gate evidence.
   "..."/'...' literals no longer lose `#`-leading body lines or collapse
   blank body lines on the write-back chain (WO 48.37, 6 tests).
   [48.37](docs/workorders/48.37-minify-cross-line-quote-state.md)
+- fix(minify): fallback_c_like now tracks backticks — Go raw strings and JS
+  template literals round-trip byte-identical on envelope write-back
+  (WO 48.38)
 - Docs pass (2026-08-29 audit, ADRs+workorders+scripts) — 9 surgical ADR
   amendments (076 fold paths, 028 bus-only plugin verifiers, 017 pins,
   043 empty default bus, 065/067 llvm-cov gate, 074 timeouts+nightly 7,

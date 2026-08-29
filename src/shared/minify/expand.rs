@@ -266,8 +266,13 @@ fn fallback_c_like(code: &str) -> String {
             }
         }
 
-        // String / char literal protection
-        if !in_string && (ch == '"' || ch == '\'') {
+        // String / char literal protection. Backticks too (WO 48.38): Go
+        // raw strings and JS template literals — same delimiter set the
+        // minifier uses (minify_js_like), so both halves of the round-trip
+        // agree on where the literal ends. ceiling: `${}` interpolation is
+        // treated as literal text — conservative-correct for round-trip
+        // fidelity, code inside interpolation stays un-reindented.
+        if !in_string && (ch == '"' || ch == '\'' || ch == '`') {
             in_string = true;
             string_char = ch;
             out.push(ch);
@@ -597,5 +602,44 @@ mod tests {
         let expanded = expand_minified(Path::new("x.cpp"), &wrapped);
         assert_eq!(expanded, format!("\n{src}"));
         assert!(!expanded.contains(": :"));
+    }
+
+    #[test]
+    fn fallback_go_raw_string_round_trips() {
+        // WO 48.38: Go raw strings carry braces/semicolons/newlines that the
+        // punctuation arms must not touch (minifier emits them verbatim).
+        // (`:=` itself is off-limits here — the ':' arm pads it (pre-existing,
+        // cosmetic, out of scope); these cases use var-decls instead.)
+        let cases = [
+            "var s = `a{b;c}`\n",
+            "var s = `line1\nline2;{x}`\n",
+            "if s == `}` {\nreturn\n}\n",
+        ];
+        for src in cases {
+            let minified = crate::shared::minify::lang::minify_content_by_ext(src, "go", false);
+            assert_eq!(
+                fallback_expand(&minified, "go"),
+                src,
+                "raw string corruption for {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fallback_js_template_literal_round_trips() {
+        // WO 48.38: JS template literals — `${}` interpolation treated as
+        // literal text (conservative; matches the minifier's scanner).
+        let src = "const t = `a;b{c}`;\n";
+        let minified = crate::shared::minify::lang::minify_content_by_ext(src, "js", false);
+        assert_eq!(fallback_expand(&minified, "js"), src);
+    }
+
+    #[test]
+    fn fallback_backtick_literal_does_not_leak_protection() {
+        // Code after a backtick literal still gets normal re-indentation.
+        let expanded = fallback_c_like("f();let s=`a;b`;g();");
+        assert!(expanded.contains("`a;b`"));
+        assert!(expanded.contains("f();\n"));
+        assert!(expanded.contains("g();\n"));
     }
 }

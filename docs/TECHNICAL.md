@@ -429,7 +429,15 @@ and fork-swap (`resume_conversation_log`) — so the panel never serves
 stale lines at re-indexed positions. The `thinking_buffer` is bounded
 to a 32 KiB tail budget (`trim_thinking_buffer_tail`); the render path
 joins + re-wraps only the tail each frame. Streaming PTY tool cards
-are capped to a 64 KiB tail with a byte-count marker. Chat scroll
+are capped to a 64 KiB tail with a byte-count marker. Tool streaming
+events carry the model-assigned call id (WO 48.31): `ToolStart`/
+`ToolResult`/`BashPartialOutput` all include `call_id`
+(`ToolInvocation.id`), and the TUI routes chunks + placeholder
+finalization through `ConversationState.streaming_tool_index`
+(call_id → message index, rebased on mid-deque removal and prune) so
+parallel same-name bash calls never mix cards. Events with an empty
+`call_id` (old replay traces, synthetic results) fall back to the
+pre-48.31 name-based pairing. Chat scroll
 offset is clamped to `u16::MAX` (`ponytail:` ceiling — ratatui 0.30's
 `Paragraph::scroll` takes u16). The doom-loop banner captures keys
 above the approval dialog when unacknowledged, matching its z-order.

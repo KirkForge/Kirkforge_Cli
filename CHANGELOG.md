@@ -25,6 +25,13 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 48.31 — the streaming event protocol now carries the model-assigned
+  `call_id`: `ToolStart`/`ToolResult`/`BashPartialOutput` stamp it, the
+  TUI routes PTY chunks + placeholder finalization by it
+  (`streaming_tool_index`), and replay pairs traces by it first —
+  parallel same-name bash calls no longer mix cards. Empty call_id
+  (old traces) keeps the name-based fallback.
+  [48.31](docs/workorders/48.31-call-id-streaming-protocol.md)
 - WO 48.12 — js/ts minifier corrupted regex literals containing `//`
   (`/https?:\/\//` truncated at the first unescaped-looking `//`, eating
   the newline) on the disk write-back chain. `minify_js_like` and the

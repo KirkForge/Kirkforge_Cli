@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Local CI gate — runs the same checks as .github/workflows/ci-merge.yml.
+# Local CI gate — mirrors .github/workflows/ci-merge.yml plus local-only
+# extras (Windows cross-compile clippy, dispatch no-throw gate); it does
+# NOT run ci-merge's `static` checks (conflict markers, TOML schema,
+# artifact consistency).
 #
 # Usage:
 #   scripts/ci-local.sh           # run all checks
-#   scripts/ci-local.sh quick     # run fmt + test + clippy (skip release build and audit)
-#   scripts/ci-local.sh full      # quick + release + audit + adr_xref_drift + tarpaulin + llvm-cov regression gate
+#   scripts/ci-local.sh quick     # fmt + tests + clippy + Windows cross-clippy + dispatch gate (skip release build and audit)
+#   scripts/ci-local.sh full      # quick + release + audit + adr_xref_drift + e2e suite + tarpaulin + llvm-cov regression gate
 #
-# Exit code: non-zero on first failure.
+# Exit code: non-zero if ANY step failed. All steps always run — failures
+# accumulate in failures[] and are summarized at the end (WO 46.25/47.31).
 
 set -euo pipefail
 
@@ -45,8 +49,9 @@ run_step() {
     fi
 }
 
-# Coverage threshold enforcement (local mirror of the CI gate; thresholds
-# match .github/workflows ci.yml). A separate function so run_step can
+# Coverage threshold enforcement (local-only mirror; ci.yml was deleted in
+# the ADR-074 CI split and this gate now lives inline here — see the note
+# at the tarpaulin step below). A separate function so run_step can
 # record its failure in failures[] instead of a bare `exit 1` that
 # bypasses the summary (WO 47.31).
 enforce_coverage_thresholds() {

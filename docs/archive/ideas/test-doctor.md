@@ -3,7 +3,7 @@
 - **Status:** Proposal
 - **Date:** 2026-07-21
 - **Author:** kirk
-- **See also:** [ADR-0029](../adr/0029-test-partitioning.md), [ADR-0016](../adr/0016-test-strategy.md)
+- **See also:** [ADR-0029](../../adr/0029-test-partitioning.md), [ADR-0016](../../adr/0016-test-strategy.md)
 
 ## Motivation
 
@@ -174,6 +174,6 @@ compiled in.
 2. Apply the immediate CI wins to `.github/workflows/ci.yml`
    (tarpaulin `--lib`, `--test --lib` on PRs, nextest install).
 3. Record the partitioning decision in
-   [ADR-0029](../adr/0029-test-partitioning.md).
+    [ADR-0029](../../adr/0029-test-partitioning.md).
 4. Once the prototype is exercised on a few real PRs, promote it to a
    workspace member and wire `scripts/test-doctor.sh` into CI.

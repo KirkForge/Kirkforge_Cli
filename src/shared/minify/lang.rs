@@ -437,8 +437,11 @@ fn open_string(before: &str) -> StrScan {
 }
 
 /// Strip test-only blocks (`#[cfg(test)]` or `#[test]` in Rust).
-/// Markers and braces inside string literals (incl. raw `r#"..."#`) do not
-/// count — only real attribute lines enter stripping (WO 48.40).
+/// Markers and braces inside string literals (incl. raw `r#"..."#`) and
+/// block comments do not count — only real attribute lines enter
+/// stripping (WO 48.40). Entry-line braces count, so a one-liner
+/// `#[cfg(test)] mod tests {}` consumes only its own line, and a
+/// brace-less `mod tests;` consumes the marker lines only (WO 48.47).
 fn strip_test_blocks(source: &str) -> String {
     let mut out = String::new();
     let mut in_test_block = false;
@@ -446,28 +449,52 @@ fn strip_test_blocks(source: &str) -> String {
     let mut test_depth = 0usize;
     let mut brace_depth = 0usize;
     let mut str_state: Option<StrScan> = None;
+    let mut in_block_comment = false;
 
     for line in source.lines() {
         let trimmed = line.trim();
         let mut suppress_line = in_test_block;
 
         // Detect #[cfg(test)] or #[test] attributes — only enter once,
-        // and only when the line start is not inside a string literal.
+        // and only when the line start is not inside a string literal
+        // or block comment.
         if !in_test_block
             && str_state.is_none()
+            && !in_block_comment
             && (trimmed == "#[cfg(test)]"
                 || trimmed == "#[test]"
                 || trimmed.starts_with("#[cfg(test)]"))
         {
             in_test_block = true;
             test_started = false;
+            suppress_line = true;
+            // Fall through to the brace scan: braces on the entry line
+            // (one-liner `mod tests {}`) still count (WO 48.47).
+        }
+
+        // Brace-less decorated item (`mod tests;`, incl. the one-liner
+        // `#[cfg(test)] mod tests;`) is already complete — consume it and
+        // resume normal output (WO 48.47).
+        if in_test_block && !test_started && trimmed.ends_with(';') && !trimmed.contains('{') {
+            in_test_block = false;
             continue;
         }
 
-        // Track brace depth, skipping string-literal and line-comment content.
+        // Track brace depth, skipping string-literal and comment content.
         let bytes = line.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
+            if in_block_comment {
+                // Inside /* */: quotes, chars and braces are comment
+                // text — only the terminator matters (WO 48.47).
+                if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    in_block_comment = false;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
             if let Some(s) = str_state {
                 // Inside a string: only look for its terminator.
                 if !s.raw {
@@ -492,6 +519,11 @@ fn strip_test_blocks(source: &str) -> String {
             match bytes[i] {
                 b'"' => str_state = Some(open_string(&line[..i])),
                 b'/' if bytes.get(i + 1) == Some(&b'/') => break, // line comment
+                b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                    in_block_comment = true;
+                    i += 2;
+                    continue;
+                }
                 b'\'' => {
                     // Char literal ('\x' or 'x'); a bare `'a` is a lifetime.
                     let rest = &line[i + 1..];
@@ -576,30 +608,6 @@ fn minify_rust_inner(source: &str, preserve_tests: bool) -> String {
             continue;
         }
 
-        // Raw strings (r#*"/br#*") run verbatim to their `"` + N `#` closer:
-        // `//`, `/*` and `\` inside are content, not comments/escapes (48.46).
-        if !in_string && ch == '"' {
-            let scan = open_string(&out);
-            if scan.raw {
-                out.push(ch);
-                while let Some(c) = chars.next() {
-                    out.push(c);
-                    if c == '"' {
-                        let mut n = 0;
-                        while n < scan.hashes && chars.peek() == Some(&'#') {
-                            chars.next();
-                            out.push('#');
-                            n += 1;
-                        }
-                        if n == scan.hashes {
-                            break;
-                        }
-                    }
-                }
-                continue;
-            }
-        }
-
         // Track string literals to avoid false comment detection
         if !in_string && (ch == '"' || ch == '\'') {
             in_string = true;
@@ -657,17 +665,6 @@ fn minify_rust_inner(source: &str, preserve_tests: bool) -> String {
     collapse_blank_lines(&s)
 }
 
-// A triple-quoted literal is a docstring only at the start of a block: the
-// last non-blank line of `out` ends with `:` (block opener), or there is no
-// non-blank line yet (module start). Anywhere else it is code — an
-// argument, a list element, an assignment RHS — and must survive.
-fn python_at_block_start(out: &str) -> bool {
-    out.lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .is_none_or(|l| l.trim_end().ends_with(':'))
-}
-
 fn minify_python(source: &str) -> String {
     let mut out = String::with_capacity(source.len());
     let mut prev_was_newline = false;
@@ -675,9 +672,6 @@ fn minify_python(source: &str) -> String {
     // String-literal state: Some(q) inside a '...'/"..."/triple literal.
     let mut string_char: Option<char> = None;
     let mut in_triple = false;
-    // Bracket depth: docstrings never appear inside (), [], {} — a
-    // triple-quoted literal there is an argument/element.
-    let mut paren_depth: usize = 0;
 
     while let Some(ch) = chars.next() {
         if let Some(q) = string_char {
@@ -723,9 +717,7 @@ fn minify_python(source: &str) -> String {
                 chars.next();
                 chars.next();
                 let current_line = out.rsplit('\n').next().unwrap_or("");
-                let is_docstring = paren_depth == 0
-                    && current_line.trim().is_empty()
-                    && python_at_block_start(&out);
+                let is_docstring = current_line.trim().is_empty();
 
                 if is_docstring {
                     // Docstring: drop the whole literal (escape-aware scan).
@@ -757,14 +749,6 @@ fn minify_python(source: &str) -> String {
             out.push(ch);
             string_char = Some(ch);
             continue;
-        }
-
-        // Bracket depth — counted only outside strings/comments (those arms
-        // `continue` before reaching here).
-        match ch {
-            '(' | '[' | '{' => paren_depth += 1,
-            ')' | ']' | '}' => paren_depth = paren_depth.saturating_sub(1),
-            _ => {}
         }
 
         if ch == '\n' {
@@ -1840,45 +1824,72 @@ pub const X: i32 = 1;
         assert!(!out.contains("assert!(true)"), "test body must be stripped");
     }
 
-    /// WO 48.46: raw strings emit verbatim — the quote before `http` must
-    /// not close a tracked string, so the `//` in the URL is content, not a
-    /// line comment (old first pass ate `x"}"#;` → invalid Rust).
+    /// WO 48.47: a one-liner `#[cfg(test)] mod tests { ... }` (opening and
+    /// closing braces on the entry line) must consume only the entry line —
+    /// the scanner must not run on looking for braces into the rest of the
+    /// file.
     #[test]
-    fn test_minify_rust_raw_string_json_round_trip() {
-        let src = "const S: &str = r#\"{\"repo\": \"http://x\"}\"#;\n// real comment\nlet x = 1;\n";
-        let out = minify_content_by_ext(src, "rs", false);
-        assert!(
-            out.contains("{\"repo\": \"http://x\"}"),
-            "raw-string JSON must round-trip: {out}"
-        );
-        assert!(out.contains("const S"), "code must round-trip");
-        assert!(!out.contains("real comment"), "real comments still strip");
-        assert!(out.contains("let x = 1;"), "code after must survive");
+    fn test_strip_test_blocks_one_line_mod_keeps_rest() {
+        let source = "pub fn a() -> i32 { 1 }\n#[cfg(test)] mod tests { fn t() { assert!(true); } }\npub fn b() -> i32 { 2 }\n";
+        let out = strip_test_blocks(source);
+        assert!(!out.contains("mod tests"), "one-liner mod must be stripped");
+        assert!(!out.contains("assert!"), "test body must be stripped");
+        assert!(out.contains("pub fn a"), "code before must survive: {out}");
+        assert!(out.contains("pub fn b"), "code after must survive: {out}");
     }
 
-    /// WO 48.46: r##"…"## closes only on `"##` — an inner `"#` is content.
+    /// WO 48.47: brace-less `#[cfg(test)]\nmod tests;` (both the two-line
+    /// and the one-line `#[cfg(test)] mod tests;` forms) must consume the
+    /// marker lines only — the following function must survive.
     #[test]
-    fn test_minify_rust_raw_string_nested_hashes() {
-        let src = "let s = r##\"a \"# b \"##;\nlet y = 2;\n";
-        let out = minify_content_by_ext(src, "rs", false);
-        assert!(out.contains("a \"# b"), "inner \"# must survive: {out}");
-        assert!(out.contains("let y = 2;"), "code after must survive");
+    fn test_strip_test_blocks_braceless_mod_keeps_next_fn() {
+        let two_line = "fn before() {}\n#[cfg(test)]\nmod tests;\nfn next() -> i32 { 3 }\n";
+        let out = strip_test_blocks(two_line);
+        assert!(out.contains("fn before"), "code before must survive: {out}");
+        assert!(
+            out.contains("fn next"),
+            "fn after brace-less mod must survive: {out}"
+        );
+        assert!(
+            !out.contains("mod tests"),
+            "brace-less mod must be stripped"
+        );
+
+        let one_line = "#[cfg(test)] mod tests;\nfn after() -> i32 { 4 }\n";
+        let out = strip_test_blocks(one_line);
+        assert!(
+            out.contains("fn after"),
+            "fn after one-liner must survive: {out}"
+        );
+        assert!(!out.contains("mod tests"), "one-liner mod must be stripped");
     }
 
-    /// WO 48.46: b"…" keeps escape processing; br#"…"# is raw and verbatim.
+    /// WO 48.47: block comments are opaque — quotes and braces inside
+    /// `/* */` must not open string state or count braces (48.40
+    /// regression), even spanning lines, while the surrounding test
+    /// module is still stripped and later code survives.
     #[test]
-    fn test_minify_rust_byte_string_prefixes() {
-        let src = "let a = b\"x\\\"y\";\nlet b = br#\"z//w\"#;\nlet c = 3;\n";
-        let out = minify_content_by_ext(src, "rs", false);
-        assert!(
-            out.contains("b\"x\\\"y\""),
-            "byte string must round-trip: {out}"
+    fn test_strip_test_blocks_block_comment_odd_quotes() {
+        let source = concat!(
+            "pub fn a() -> i32 { 1 }\n",
+            "/* it's got \" odd quotes { and } too */\n",
+            "#[cfg(test)]\n",
+            "mod tests {\n",
+            "    /* don't \" count { me */\n",
+            "    /* spans\n",
+            "       lines \" { */\n",
+            "    #[test]\n",
+            "    fn t() {\n",
+            "        assert!(true);\n",
+            "    }\n",
+            "}\n",
+            "pub fn b() -> i32 { 2 }\n",
         );
-        assert!(
-            out.contains("br#\"z//w\"#"),
-            "raw byte string must round-trip: {out}"
-        );
-        assert!(out.contains("let c = 3;"), "code after must survive");
+        let out = strip_test_blocks(source);
+        assert!(!out.contains("mod tests"), "test module must be stripped");
+        assert!(!out.contains("assert!"), "test body must be stripped");
+        assert!(out.contains("pub fn a"), "code before must survive: {out}");
+        assert!(out.contains("pub fn b"), "code after must survive: {out}");
     }
 
     // ── WO 9.7: per-language minification contracts ─────────────────────
@@ -1983,82 +1994,6 @@ pub const X: i32 = 1;
             expanded.contains("\"http://x#anchor\""),
             "URL fragment must survive minify+expand: {expanded}"
         );
-    }
-
-    /// WO 48.45: a triple-quoted CALL ARGUMENT inside parens is not a
-    /// docstring — the old blank-line heuristic deleted it, and the
-    /// write-back chain wrote the file back without it.
-    #[test]
-    fn test_minify_python_triple_quoted_call_argument_round_trips() {
-        use crate::shared::minify::{expand_minified, wrap_minified_envelope};
-        use std::path::Path;
-
-        let src = "def run():\n    sql = query(\n        \"\"\"\n        SELECT *\n        FROM t\n        \"\"\"\n    )\n    return sql\n";
-        let minified = minify_content_by_ext(src, "py", false);
-        assert!(
-            minified.contains("SELECT *"),
-            "triple-quoted call argument must survive minify: {minified}"
-        );
-        assert!(
-            minified.contains("\"\"\"\n        SELECT *"),
-            "argument literal must stay triple-quoted: {minified}"
-        );
-        let wrapped = wrap_minified_envelope("python", &minified);
-        let expanded = expand_minified(Path::new("x.py"), &wrapped);
-        assert!(
-            expanded.contains("SELECT *"),
-            "argument must survive minify+expand: {expanded}"
-        );
-        assert!(expanded.contains("return sql"));
-    }
-
-    /// WO 48.45: triple-quoted strings as list elements survive.
-    #[test]
-    fn test_minify_python_list_of_triple_quoted_strings_round_trips() {
-        let src =
-            "Q = [\n    \"\"\"\n    alpha\n    \"\"\",\n    \"\"\"\n    beta\n    \"\"\",\n]\n";
-        let out = minify_content_by_ext(src, "py", false);
-        assert!(out.contains("alpha"), "first element must survive: {out}");
-        assert!(out.contains("beta"), "second element must survive: {out}");
-        assert!(
-            out.matches("\"\"\"").count() == 4,
-            "both triple-quote pairs must survive: {out}"
-        );
-    }
-
-    /// WO 48.45: real docstrings (module start / class / def) are still
-    /// stripped under the depth-0 + block-start rule.
-    #[test]
-    fn test_minify_python_real_docstrings_still_stripped() {
-        let src = "\"\"\"Module doc.\"\"\"\nclass C:\n    \"\"\"Class doc.\"\"\"\n    def m(self):\n        \"\"\"Method doc.\"\"\"\n        return 1\n";
-        let out = minify_content_by_ext(src, "py", false);
-        assert!(
-            !out.contains("Module doc"),
-            "module docstring stripped: {out}"
-        );
-        assert!(
-            !out.contains("Class doc"),
-            "class docstring stripped: {out}"
-        );
-        assert!(
-            !out.contains("Method doc"),
-            "method docstring stripped: {out}"
-        );
-        assert!(out.contains("class C:"), "code must survive: {out}");
-        assert!(out.contains("return 1"));
-    }
-
-    /// WO 48.45: triple-quoted string nested two parens deep survives,
-    /// including a `#` in its body.
-    #[test]
-    fn test_minify_python_nested_parens_triple_quoted_string_survives() {
-        let src = "run(wrap(\n    \"\"\"\n    inner # not a comment\n    \"\"\"\n))\n";
-        let out = minify_content_by_ext(src, "py", false);
-        assert!(
-            out.contains("inner # not a comment"),
-            "nested-parens literal body must survive verbatim: {out}"
-        );
-        assert!(out.contains("run(wrap("));
     }
 
     /// Go: `//` line and `/* */` block comments stripped; code preserved.

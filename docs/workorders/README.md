@@ -163,4 +163,3 @@ one WO 47.12 regression (48.3).
 - The scratch `workplan.md` at the repo root (gitignored) is for the current
   task's working notes; the workorders here are the persistent plan.
 | 48.43 | [call_id routing edges: empty-id ToolResult steals a sibling's card; late PTY chunk after TurnComplete resurrects a streaming card](48.43-callid-routing-edges.md) | Done |
-| 48.44 | [pty/devtools/computer_use/no-default-features combos compile but zero CI jobs build them](48.44-feature-combo-ci-rung.md) | Planned |

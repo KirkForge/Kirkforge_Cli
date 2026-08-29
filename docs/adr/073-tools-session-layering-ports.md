@@ -92,3 +92,20 @@ only `check_bash_command_str` was movable). The gitnexus-flagged cycle through
   deliberate inversion seam: the tool depends on the port, the session wires the impl.
 - The `Guard`/`DenyList` polymorphism deferral is tracked here; revisit if a second
   guard/deny implementation is needed.
+
+## Amendment (2026-08-29) — residual-edge table refresh
+
+The residual table above is stale in one row and one miss. Current
+production `tools → session` edges (memory now resolves to
+`shared::memory` — the `remember::memory` row is obsolete since the
+47.4-fold moved the store; `workflow.rs` grew new process-group
+residuals):
+
+| Residual | Why it stays |
+|----------|-------------|
+| `bash.rs` → `session::bash_runner::{cap_to_string, drain_capped, MAX_BASH_OUTPUT_BYTES, is_timeout_marker, run_shell_with_token, ShellError, …}` | Shell process I/O — needs a `ShellRunner` port. |
+| `bash.rs` → `session::bash_jobs::global_registry` | Process-global job registry; depends on `session::process_group`. |
+| `workflow.rs` → `session::bash_runner` + `session::process_group::{setup_process_group, kill_process_group, reap_child, assign_child_to_job}` | Same shell/process-group seam; rides the same future port. |
+
+None imports `tools`, so none forms a cycle — the core decision is
+intact.

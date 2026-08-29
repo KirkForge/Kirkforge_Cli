@@ -112,3 +112,13 @@ Documented above. The decision is recorded; no further action needed.
 - No silent deferrals remain.
 - ADR-070 is the single source of truth for the OpenAI-compat default decision
   and all deferred items.
+
+## Amendment (2026-08-29) — deferral ledger closures
+
+- **R2 (structured output): SHIPPED** — [ADR-071](./071-structured-output.md)
+  landed the `ResponseFormat` design (`src/shared/mod.rs`, adapters'
+  `set_response_format`/`effective_response_format`) the same month; the
+  "Remaining" list above is historical.
+- **R6 (keychain stub): RESOLVED** — no `keyring` dependency remains
+  anywhere in the workspace; the assessment completed with "nothing to
+  remove".

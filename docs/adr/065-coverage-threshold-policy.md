@@ -118,3 +118,14 @@ percentage.
   local tarpaulin run (7892) because CI and local builds can resolve a
   different set of feature-gated lines. The CI number is authoritative
   for setting the threshold; local tarpaulin is used only to find gaps.
+
+## Amendment (2026-08-29) — gate now llvm-cov per-crate; tarpaulin local-only
+
+"What the gate enforces" above describes the deleted pre-split
+`.github/workflows/ci.yml` `coverage` job. Since the ADR-074 CI reset,
+CI enforces coverage with **cargo-llvm-cov per-crate floors** via
+`scripts/check-cov-regression.sh` against `docs/coverage-baseline.md`
+(the nightly `coverage` job); the tarpaulin prefix gate
+(68.5/76.0/75.0) survives only as a local mirror in
+`scripts/ci-local.sh full`. The threshold-setting and headroom policy of
+this ADR carry over unchanged to the per-crate floors.

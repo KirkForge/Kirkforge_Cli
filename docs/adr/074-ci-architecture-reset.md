@@ -153,3 +153,15 @@ coverage  ·  ollama  ·  e2e-exhaustive  ·  audit  ·  release-build (linux+wi
 - **Release compile validation is decoupled from Windows test validation.**
   The Windows merge job tests; the nightly `release-build` job validates the
   release profile compiles.
+
+## Amendment (2026-08-29) — timeout retune + nightly job growth
+
+Two numeric drifts since this ADR landed:
+
+- **Timeouts (WO 40.3)**: the slow-timeouts cited above were retuned —
+  `ci-fast` 60s → **30s**, `ci-full` 120s → **60s**, `e2e` 600s →
+  **300s** (`integration` 120s and `nightly` 600s are as listed).
+  `.config/nextest.toml` remains the single source of truth.
+- **Nightly jobs (5 → 7)**: `subprocess-lifecycle` (WO 48.22 — the two
+  `#[ignore]`d timeout/reap tests) and `mutants` (informational
+  mutation-testing report) were added to the five listed above.

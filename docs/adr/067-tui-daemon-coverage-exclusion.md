@@ -62,3 +62,14 @@ least one of:
   integration tests, not unit tests.
 - If a tarpaulin-compatible terminal harness becomes available, this
   ADR should be revisited.
+
+## Amendment (2026-08-29) — gate mechanism update
+
+The decision text's mechanism references ("the `--lib` tarpaulin run,
+which is the CI gate … run by the `quality` job") predate the ADR-074
+CI reset: the `quality` job was split away and the CI coverage gate is
+now **llvm-cov per-crate** (`scripts/check-cov-regression.sh` vs
+`docs/coverage-baseline.md`, nightly `coverage` job); tarpaulin survives
+only in `scripts/ci-local.sh full` as a local mirror. The exclusion
+rationale itself is unchanged — the llvm-cov baseline already excludes
+`src/tui`/`src/daemon` paths, and the manual test plan stands.

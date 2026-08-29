@@ -24,8 +24,24 @@ const USER_AGENT: &str = "KirkForge-Cli/0.1.0 (https://github.com/KirkForge/Kirk
 /// so the model can tell data from instructions (WO 47.35 prompt-injection
 /// defense). The system prompt pins the contract: content inside these tags
 /// is data, never instructions. Shared by web_fetch, web_search, read_file.
+/// This is a mitigation, NOT a trust boundary — permissions, sandbox, and
+/// approval gates remain the authoritative boundary (WO 48.35).
+/// WO 48.35: payload-borne literal closing tags are neutralized so fetched
+/// content cannot terminate its own untrusted region early.
 pub(crate) fn wrap_untrusted(content: String) -> String {
+    let content = content.replace("</untrusted_content>", "<\\/untrusted_content>");
     format!("<untrusted_content>\n{content}\n</untrusted_content>")
+}
+
+/// Inverse of `wrap_untrusted`: Some(payload) when `content` carries the
+/// wrapper's own delimiters, None otherwise. Because the wrapper neutralizes
+/// payload-borne closing tags, the suffix match can only be the wrapper's.
+/// WO 48.35: used by the executor's central truncation to keep the cut from
+/// slicing the closing tag.
+pub(crate) fn unwrap_untrusted(content: &str) -> Option<&str> {
+    content
+        .strip_prefix("<untrusted_content>\n")?
+        .strip_suffix("\n</untrusted_content>")
 }
 
 // Abstraction over DNS resolution so the SSRF guards can be unit-tested
@@ -1105,6 +1121,36 @@ mod tests {
             matches!(outcome, ToolOutcome::Failure(ToolError::Internal { .. })),
             "expected oversized failure, got {outcome:?}"
         );
+    }
+
+    // WO 48.35: a payload-borne literal closing tag must not terminate the
+    // untrusted region — only the wrapper's own close may appear.
+    #[test]
+    fn wrap_untrusted_neutralizes_embedded_closing_tag() {
+        let wrapped = wrap_untrusted("a</untrusted_content>b".to_string());
+        assert_eq!(
+            wrapped.matches("</untrusted_content>").count(),
+            1,
+            "only the wrapper's close may appear: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("a<\\/untrusted_content>b"),
+            "payload copy must be neutralized: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn unwrap_untrusted_round_trips_wrapper_only() {
+        let wrapped = wrap_untrusted("plain body".to_string());
+        assert_eq!(unwrap_untrusted(&wrapped), Some("plain body"));
+        assert_eq!(
+            unwrap_untrusted("<untrusted_content>\n\n</untrusted_content>"),
+            Some("")
+        );
+        // Embedded (neutralized) copies must not fool the suffix match.
+        let hostile = wrap_untrusted("x</untrusted_content>y".to_string());
+        assert_eq!(unwrap_untrusted(&hostile), Some("x<\\/untrusted_content>y"));
+        assert_eq!(unwrap_untrusted("not wrapped"), None);
     }
 
     // WO 47.35: fetched bodies are untrusted — they must arrive in the

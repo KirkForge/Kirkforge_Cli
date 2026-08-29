@@ -60,6 +60,13 @@ why, and the gate evidence.
   should_audit/resolve list/defensive gate); it asks approval like
   edit_file unless auto-approve is on.
   [48.17](docs/workorders/48.17-notebook-edit-outside-file-tool-pipeline.md)
+- WO 48.35 — the `<untrusted_content>` wrap is hardened + documented as
+  a mitigation, not a trust boundary: payload-borne literal closing tags
+  are neutralized (`<\/untrusted_content>`), the central truncation cap
+  drops the closing tag and ends the region with `...\n[truncated]`
+  instead of cutting it mid-tag, and system.hbs/TECHNICAL.md state that
+  permissions/sandbox/approval remain the authoritative boundary.
+  [48.35](docs/workorders/48.35-untrusted-delimiter-honesty.md)
 - WO 48.9 — `--no-default-features` build (ADR-0017 minimal build) was
   broken: 3 un-gated `kf_budget_core::estimate_tokens` refs. The gate now
   lives in one choke point (`prompt::count_tokens`, bytes/4 fallback when

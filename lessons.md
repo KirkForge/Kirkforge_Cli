@@ -1246,3 +1246,28 @@
 - `cargo check -p kf-code --lib` cold in a fresh worktree: ~2m20s; chained
   `cargo test` invocations each recompile — budget 10+ min for the first
   test run, run suites separately with generous timeouts.
+## WO 48.35 session (2026-08-29, worktree wo48.35)
+
+- Cold-worktree builds are brutal under parallel-session load (load 34-40
+  on 8 cores; 12 worktrees building simultaneously). A cold
+  `cargo check -p kf-code --lib` ran >10 min without finishing. Fix:
+  `CARGO_TARGET_DIR=<main-checkout>/target` — external deps hash-identical
+  (warm cache hit), path crates recompile per-worktree (coexisting
+  hashes). 4m23s instead of never. Use this for every gate command in a
+  contended worktree session.
+- The 48.35 truncation seam: the wrap helper does NOT know the cap
+  (tools have no config access; WO 47.33 moved caps to the executor on
+  purpose). The clean seam is `truncate_tool_output`
+  (executor/helpers/mod.rs) — detect the wrap via the new
+  `unwrap_untrusted` inverse, cut the payload, drop the closing tag,
+  end `...\n[truncated]` (marker already house style via audit.rs).
+- `...[truncated]` vs `[output truncated to N chars]`: two house markers
+  exist; audit.rs uses the short one. WO 48.35 spec named the short one.
+- WO files for wave-3 (48.30+) exist in the MAIN checkout but not on
+  wave-2 worktree branches — a WO file "missing" in a worktree is not an
+  error; recreate it from the main checkout copy (same filename keeps
+  both-added merges trivial).
+- Golden re-capture for tag-free literal insertions into system.hbs:
+  apply the identical text edit to both HANDLEBARS_REF_* constants; the
+  golden tests enforce byte-equality so drift is caught, no manual
+  handlebars render needed (same derivation WO 47.35 used).

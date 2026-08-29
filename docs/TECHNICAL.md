@@ -312,6 +312,21 @@ paths) plus `--no-network` (`unshare(CLONE_NEWNET)`, blocks exfiltration).
  command head; compound commands require every clause to match) or be
  denied. An allowlist is the only blocklist-shape that isn't theater.
 
+**Untrusted-content delimiters (WO 47.35, honesty + hardening WO 48.35):**
+`web_fetch`, `web_search`, and `read_file` wrap their textual output in
+`<untrusted_content>` / `</untrusted_content>` tags (shared
+`wrap_untrusted` in `src/tools/web_fetch.rs`), and the system prompt pins
+a data-not-instructions rule. This is a prompt-injection **mitigation**,
+not a trust boundary — permissions, the sandbox stack (landlock /
+`--no-network` / Docker), and approval gates remain the authoritative
+boundary. Hardening (WO 48.35): payload-borne literal closing tags are
+neutralized (`<\/untrusted_content>`) so fetched content cannot terminate
+its own untrusted region, and when the central `truncate_tool_output`
+cap (`tools.max_tool_result_chars`) would cut the closing tag, the tag is
+dropped and the region ends with `...\n[truncated]` instead — an
+unterminated region is always the executor's cut, never content forging
+an early or missing close.
+
 **WO 38.1 chokepoint hardening:** three classification holes and one env leak
 are closed at the shared chokepoints. (1) `is_read_only_bash`
 (`executor/helpers`) rejects any command with an embedded `\n`/`\r` — a

@@ -1179,3 +1179,15 @@
   enforces `deny_list.is_path_denied` — the helpers arm is a
   pre-approval duplicate, so notebook_edit deny-list coverage is already
   closed via the pre_run listing. No edit needed.
+
+## WO 48.25 session (2026-08-29, branch wo/wo48.25)
+
+- Worktrees created from pre-sweep commits don't carry the WO file/README row
+  for their own task — copy both from the main checkout, then flip Status.
+- Under parallel WO load (3+ simultaneous cold worktree builds), a plain
+  `cargo test` can blow a 20-min timeout with zero output. Run gates via
+  nohup + log file and poll; incremental artifacts survive the kills.
+- The gitnexus index doesn't cover private fns like `shell_heredoc_opens`;
+  impact on the enclosing public entry (`minify_content_by_ext`) reports the
+  hub's CRITICAL fan-out, which is breadth, not change risk, for scanner-only
+  edits. detect_changes with the `worktree` param works from the main index.

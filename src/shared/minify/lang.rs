@@ -2041,7 +2041,6 @@ pub const X: i32 = 1;
         );
     }
 
-<<<<<<< HEAD
     // ── WO 48.25: quoted-delimiter resume doesn't blind the scanner ────
 
     /// WO 48.25: two quoted heredoc openers on one line — the scanner used
@@ -2067,8 +2066,9 @@ pub const X: i32 = 1;
         assert_eq!(
             out, src,
             "both quoted heredoc bodies must round-trip verbatim: {out}"
-||||||| e90d0007
-=======
+        );
+    }
+
     /// WO 48.29: `\'` inside a single-quoted ruby string is an escaped quote,
     /// not a closer. Pre-fix, the scanner closed the literal early, the next
     /// `'` opened a phantom string, the real `<<~EOS` marker was swallowed,
@@ -2107,7 +2107,6 @@ pub const X: i32 = 1;
         assert!(
             expanded.contains("# not a comment"),
             "\\' heredoc body must survive minify+expand: {expanded}"
->>>>>>> wo/wo48.29
         );
     }
 }

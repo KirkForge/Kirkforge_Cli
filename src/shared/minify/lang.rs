@@ -437,8 +437,11 @@ fn open_string(before: &str) -> StrScan {
 }
 
 /// Strip test-only blocks (`#[cfg(test)]` or `#[test]` in Rust).
-/// Markers and braces inside string literals (incl. raw `r#"..."#`) do not
-/// count — only real attribute lines enter stripping (WO 48.40).
+/// Markers and braces inside string literals (incl. raw `r#"..."#`) and
+/// block comments do not count — only real attribute lines enter
+/// stripping (WO 48.40). Entry-line braces count, so a one-liner
+/// `#[cfg(test)] mod tests {}` consumes only its own line, and a
+/// brace-less `mod tests;` consumes the marker lines only (WO 48.47).
 fn strip_test_blocks(source: &str) -> String {
     let mut out = String::new();
     let mut in_test_block = false;
@@ -446,28 +449,52 @@ fn strip_test_blocks(source: &str) -> String {
     let mut test_depth = 0usize;
     let mut brace_depth = 0usize;
     let mut str_state: Option<StrScan> = None;
+    let mut in_block_comment = false;
 
     for line in source.lines() {
         let trimmed = line.trim();
         let mut suppress_line = in_test_block;
 
         // Detect #[cfg(test)] or #[test] attributes — only enter once,
-        // and only when the line start is not inside a string literal.
+        // and only when the line start is not inside a string literal
+        // or block comment.
         if !in_test_block
             && str_state.is_none()
+            && !in_block_comment
             && (trimmed == "#[cfg(test)]"
                 || trimmed == "#[test]"
                 || trimmed.starts_with("#[cfg(test)]"))
         {
             in_test_block = true;
             test_started = false;
+            suppress_line = true;
+            // Fall through to the brace scan: braces on the entry line
+            // (one-liner `mod tests {}`) still count (WO 48.47).
+        }
+
+        // Brace-less decorated item (`mod tests;`, incl. the one-liner
+        // `#[cfg(test)] mod tests;`) is already complete — consume it and
+        // resume normal output (WO 48.47).
+        if in_test_block && !test_started && trimmed.ends_with(';') && !trimmed.contains('{') {
+            in_test_block = false;
             continue;
         }
 
-        // Track brace depth, skipping string-literal and line-comment content.
+        // Track brace depth, skipping string-literal and comment content.
         let bytes = line.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
+            if in_block_comment {
+                // Inside /* */: quotes, chars and braces are comment
+                // text — only the terminator matters (WO 48.47).
+                if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    in_block_comment = false;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
             if let Some(s) = str_state {
                 // Inside a string: only look for its terminator.
                 if !s.raw {
@@ -492,6 +519,11 @@ fn strip_test_blocks(source: &str) -> String {
             match bytes[i] {
                 b'"' => str_state = Some(open_string(&line[..i])),
                 b'/' if bytes.get(i + 1) == Some(&b'/') => break, // line comment
+                b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                    in_block_comment = true;
+                    i += 2;
+                    continue;
+                }
                 b'\'' => {
                     // Char literal ('\x' or 'x'); a bare `'a` is a lifetime.
                     let rest = &line[i + 1..];
@@ -1790,6 +1822,74 @@ pub const X: i32 = 1;
             "real test module must be stripped"
         );
         assert!(!out.contains("assert!(true)"), "test body must be stripped");
+    }
+
+    /// WO 48.47: a one-liner `#[cfg(test)] mod tests { ... }` (opening and
+    /// closing braces on the entry line) must consume only the entry line —
+    /// the scanner must not run on looking for braces into the rest of the
+    /// file.
+    #[test]
+    fn test_strip_test_blocks_one_line_mod_keeps_rest() {
+        let source = "pub fn a() -> i32 { 1 }\n#[cfg(test)] mod tests { fn t() { assert!(true); } }\npub fn b() -> i32 { 2 }\n";
+        let out = strip_test_blocks(source);
+        assert!(!out.contains("mod tests"), "one-liner mod must be stripped");
+        assert!(!out.contains("assert!"), "test body must be stripped");
+        assert!(out.contains("pub fn a"), "code before must survive: {out}");
+        assert!(out.contains("pub fn b"), "code after must survive: {out}");
+    }
+
+    /// WO 48.47: brace-less `#[cfg(test)]\nmod tests;` (both the two-line
+    /// and the one-line `#[cfg(test)] mod tests;` forms) must consume the
+    /// marker lines only — the following function must survive.
+    #[test]
+    fn test_strip_test_blocks_braceless_mod_keeps_next_fn() {
+        let two_line = "fn before() {}\n#[cfg(test)]\nmod tests;\nfn next() -> i32 { 3 }\n";
+        let out = strip_test_blocks(two_line);
+        assert!(out.contains("fn before"), "code before must survive: {out}");
+        assert!(
+            out.contains("fn next"),
+            "fn after brace-less mod must survive: {out}"
+        );
+        assert!(
+            !out.contains("mod tests"),
+            "brace-less mod must be stripped"
+        );
+
+        let one_line = "#[cfg(test)] mod tests;\nfn after() -> i32 { 4 }\n";
+        let out = strip_test_blocks(one_line);
+        assert!(
+            out.contains("fn after"),
+            "fn after one-liner must survive: {out}"
+        );
+        assert!(!out.contains("mod tests"), "one-liner mod must be stripped");
+    }
+
+    /// WO 48.47: block comments are opaque — quotes and braces inside
+    /// `/* */` must not open string state or count braces (48.40
+    /// regression), even spanning lines, while the surrounding test
+    /// module is still stripped and later code survives.
+    #[test]
+    fn test_strip_test_blocks_block_comment_odd_quotes() {
+        let source = concat!(
+            "pub fn a() -> i32 { 1 }\n",
+            "/* it's got \" odd quotes { and } too */\n",
+            "#[cfg(test)]\n",
+            "mod tests {\n",
+            "    /* don't \" count { me */\n",
+            "    /* spans\n",
+            "       lines \" { */\n",
+            "    #[test]\n",
+            "    fn t() {\n",
+            "        assert!(true);\n",
+            "    }\n",
+            "}\n",
+            "pub fn b() -> i32 { 2 }\n",
+        );
+        let out = strip_test_blocks(source);
+        assert!(!out.contains("mod tests"), "test module must be stripped");
+        assert!(!out.contains("assert!"), "test body must be stripped");
+        assert!(out.contains("pub fn a"), "code before must survive: {out}");
+        assert!(out.contains("pub fn b"), "code after must survive: {out}");
     }
 
     // ── WO 9.7: per-language minification contracts ─────────────────────

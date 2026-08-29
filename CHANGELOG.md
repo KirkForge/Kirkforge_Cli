@@ -8,6 +8,10 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- minify: VFS cache key is nanos-granular (`as_nanos()` instead of
+  `.as_secs()`) — a same-second rewrite after an edit (edit_file envelope
+  round-trip race) no longer serves the stale pre-edit minified view.
+  [48.48](docs/workorders/48.48-minify-cache-nanos.md)
 - TUI call_id routing edges: an empty-call_id ToolResult (old-trace path)
   can no longer steal an id-registered sibling's streaming card (legacy
   name-matching skips registered placeholders + rebases the map), and a

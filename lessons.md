@@ -1393,3 +1393,13 @@
 - `find` on `enumerate().rev()`: the predicate takes `&Item` (so `*i` on the
   `&usize` is right INSIDE the closure) but the returned `Option<Item>` is by
   value (so `.map(|(i, _)| i)` — no deref). E0614 catches the mixup.
+- WO 48.48 session: (1) Parallel WO agents (48.45/46/49/50) building
+  simultaneously pushed load average to ~26 — a foreground cargo with a
+  10-min timeout looks hung but is just starved. Run gates via nohup +
+  log-file polling; also check `readlink /proc/<pid>/cwd` BEFORE killing
+  "zombie" cargos — several were sibling worktrees' legitimate builds.
+  (2) Deterministic same-second-mtime tests: pin mtimes with
+  `File::set_modified` 500ms apart (same whole second) instead of sleeping —
+  distinguishes a secs-key (stale hit) from a nanos-key (fresh) with zero
+  flake; ext4/tmpfs preserve ns resolution (daemon tests' "rounds to whole
+  seconds" caveat is FAT-class filesystems).

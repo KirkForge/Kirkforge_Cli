@@ -1308,3 +1308,20 @@
 - `tests/sweep4_probe_test.rs` sits untracked on the main checkout
   (prior sweep residue, not mine) — disclosed, not deleted: never remove
   another session's uncommitted work.
+
+## Session 2026-08-29 — WO 48.38 (expand.rs backtick arm)
+- Round-trip fidelity rule: fallback_c_like (expander) and minify_js_like
+  (minifier) must share the SAME literal-delimiter set. They drifted on
+  backticks — Go raw strings / JS template literals got re-punctuated on
+  write-back. When touching one scanner, diff its state machine against
+  the other.
+- Pre-existing, out of scope: fallback ':' arm pads Go's `:=` (`s := x` →
+  `s : = x`). Candidate follow-up WO; the 48.26 pinned tests make blind
+  colon-arm edits risky.
+- Fallback drops leading indentation after `{`+newline (whitespace arm
+  skips when prev_was_newline) — write round-trip tests flat, or expect
+  to fix indentation handling first.
+- Sibling worktrees build concurrently: 3 parallel rustc jobs (1.5 GB RSS
+  each) turned a 5-min test build into 25+ min. Poll `ps` for foreign
+  cargo/rustc before assuming a hang; a killed shell leaves its cargo
+  running — wait for it (artifacts cache), then rerun.

@@ -4,9 +4,9 @@ This directory contains numbered workorders that define scoped tasks for
 KirkForge-Cli. Each workorder lists the problem, root cause, files to touch,
 approach, gate, and done condition.
 
-Completed series 6-45 (450 workorders) are archived in
+Completed series 6-45 (451 workorders) are archived in
 [docs/archive/workorders/](../archive/workorders/) — index in that directory's README.
-Only the two most recent series are kept live.
+Only the three most recent series are kept live.
 
 ## Active series
 
@@ -71,7 +71,7 @@ Only the two most recent series are kept live.
 | 47.4 | [Fold kf-routing + kf-memory-store into kf-orchestrator (0 direct src/ refs)](47.4-fold-routing-memory-crates.md) | Done |
 | 47.5 | [Feature-gate bench + testdoctor out of the default binary (~5K lines)](47.5-devtools-out-of-binary.md) | Done |
 | 47.6 | [Six live compression layers → two (stratum modes should map to 2 pipelines)](47.6-compression-layers-6-to-2.md) | Done |
-| 47.7 | [# WO 47.6 — MCP transport trait (every op exists 3×: enum + stdio_* + http)](47.7-mcp-transport-trait.md) | Done |
+| 47.7 | [MCP transport trait (every op exists 3×: enum + stdio_* + http)](47.7-mcp-transport-trait.md) | Done |
 | 47.8 | [Wire or delete the 9 fuzz targets (100% unwired dead weight)](47.8-wire-or-delete-fuzz-targets.md) | Planned |
 | 47.9 | [Archive the completed workorder corpus (490 files, 45.6K lines = 74% of docs)](47.9-archive-workorder-corpus.md) | Done |
 
@@ -103,19 +103,11 @@ Only the two most recent series are kept live.
 | 47.36 | [Mutex-poison + expect hygiene batch + lib unwrap gate + test EnvGuard fixes](47.36-mutex-poison-and-expect-hygiene.md) | Done |
 | 47.37 | [Test-theater batch: e2e scenarios accept any outcome + bench TOMLs missing requires_model + tarpaulin nightly verify](47.37-test-theater-batch.md) | Done |
 
-## Conventions
-
-- Each workorder is a single markdown file named `<number>-<slug>.md`.
-- Status is one of: Planned, In Progress, Done, Superseded.
-- The gate must match AGENTS.md §4 (fmt --check, check, clippy, test).
-- When a workorder is done, update its Status to "Done" and note the commit SHA.
-- When a workorder is superseded, update its Status and link to the replacement.
-- The scratch `workplan.md` at the repo root (gitignored) is for the current
-  task's working notes; the workorders here are the persistent plan.
-
 ### Series 48 — Post-WO-47 baseline audit findings
 
-10 workorders from the fresh-area baseline audit (2026-08-28). 0 P0 / 4 P1 / 6 P2 — includes one WO 47.12 regression.
+36 workorders from the 2026-08-28/29 baseline + sweep audits (10 baseline,
+13 sweep-3 additions, 13 final-wave additions). Includes one P0 (48.22) and
+one WO 47.12 regression (48.3).
 
 | 48.1 | [minify_python strips # inside string literals — corrupts source on read AND on disk](48.1-minify-python-string-corruption.md) | Done |
 | 48.2 | [Pre-tool hooks run twice per file-tool call — second run is post-mutation (WO 43.30 tail)](48.2-pre-tool-hook-double-run.md) | Done |
@@ -153,3 +145,13 @@ Only the two most recent series are kept live.
 | 48.34 | [max_turns unbounded + glob walker not cancel-aware — model-controlled resource without ceilings](48.34-resource-bound-bundle.md) | Done |
 | 48.35 | [untrusted_content delimiter is breakable (closing tag in content, truncation cuts the tag) — document as mitigation, harden the wrap](48.35-untrusted-delimiter-honesty.md) | Done |
 | 48.36 | [Job IDs are max+1 from a directory scan — two clients pick the same ID, logical overwrite](48.36-job-id-generation-race.md) | Done |
+
+## Conventions
+
+- Each workorder is a single markdown file named `<number>-<slug>.md`.
+- Status is one of: Planned, In Progress, Done, Superseded.
+- The gate must match AGENTS.md §4 (fmt --check, check, clippy, test).
+- When a workorder is done, update its Status to "Done" and note the commit SHA.
+- When a workorder is superseded, update its Status and link to the replacement.
+- The scratch `workplan.md` at the repo root (gitignored) is for the current
+  task's working notes; the workorders here are the persistent plan.

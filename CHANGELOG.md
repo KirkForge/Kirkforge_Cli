@@ -21,6 +21,10 @@ why, and the gate evidence.
   following `else:` into an IndentationError, and multi-line string
   interiors pass through verbatim; round-trips byte-identical.
   [48.39](docs/workorders/48.39-expand-python-except-swallow.md)
+- Fixed glob/grep walker cancel flag never flipping on tool timeout or
+  JoinHandle abort — a `WalkerCancel` drop guard (glob.rs, shared with the
+  grep fallback) now stops the detached blocking walker on every teardown
+  path, not just the token-cancel select arm. [48.41](docs/workorders/48.41-walker-flag-drop-guard.md)
 - Docs pass (2026-08-29 audit, ADRs+workorders+scripts) — 9 surgical ADR
   amendments (076 fold paths, 028 bus-only plugin verifiers, 017 pins,
   043 empty default bus, 065/067 llvm-cov gate, 074 timeouts+nightly 7,

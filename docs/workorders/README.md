@@ -147,3 +147,4 @@ Only the two most recent series are kept live.
 | 48.28 | [Event::Paste bypasses every modal gate — inserts into hidden input under picker/help/approval](48.28-paste-bypasses-modals.md) | Planned |
 | 48.29 | [CJK estimate misses Hangul; ruby \' escape gap re-enables the 48.13 corruption class](48.29-cjk-hangul-and-ruby-escape.md) | Planned |
 | 48.30 | [Drift test can't detect duplicate WO rows; h2 RUSTSEC-2026-0258 untracked](48.30-drift-uniqueness-and-h2.md) | Planned |
+| 48.25 | [Heredoc scanners resume ON the closing quote — second opener on same line invisible (shell + ruby)](48.25-heredoc-quote-resume-blinding.md) | Done |

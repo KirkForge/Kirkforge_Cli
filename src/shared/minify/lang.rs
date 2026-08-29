@@ -1038,6 +1038,11 @@ fn ruby_scan_code(line: &str, heredocs: &mut Vec<(bool, String)>, pct: &mut Opti
                 }
                 if j > start {
                     heredocs.push((indent_tolerant, chars[start..j].iter().collect()));
+                    // Same as shell: resume after the closing quote so a
+                    // later opener on the same line stays visible (WO 48.25).
+                    if quoted && matches!(chars.get(j), Some('\'') | Some('"')) {
+                        j += 1;
+                    }
                     i = j;
                     continue;
                 }
@@ -1183,6 +1188,12 @@ fn shell_heredoc_opens(line: &str, open: &mut Vec<(bool, String)>) {
                 }
                 if j > start {
                     open.push((tab_tolerant, chars[start..j].iter().collect()));
+                }
+                // Resume AFTER the closing quote, not ON it — re-reading it
+                // as an opening quote blinds the scanner to later openers on
+                // the same line (`diff <(cat <<'A') <(cat <<'B')`, WO 48.25).
+                if quoted && matches!(chars.get(j), Some('\'') | Some('"')) {
+                    j += 1;
                 }
                 i = j;
                 continue;
@@ -2022,6 +2033,34 @@ pub const X: i32 = 1;
         assert!(
             expanded.contains("a # b"),
             "%q # must survive minify+expand: {expanded}"
+        );
+    }
+
+    // ── WO 48.25: quoted-delimiter resume doesn't blind the scanner ────
+
+    /// WO 48.25: two quoted heredoc openers on one line — the scanner used
+    /// to resume ON A's closing quote, re-read it as an opening quote, and
+    /// lose B entirely, so B's body got comment-stripped (disk write-back
+    /// deleted the `#` lines). Both bodies must round-trip byte-identical.
+    #[test]
+    fn test_minify_shell_two_quoted_heredocs_one_line_round_trip() {
+        let src = "diff <(cat <<'A') <(cat <<'B')\n# body a\nA\n# body b\nB\necho done\n";
+        let out = minify_content_by_ext(src, "sh", false);
+        assert_eq!(
+            out, src,
+            "both quoted heredoc bodies must round-trip verbatim: {out}"
+        );
+    }
+
+    /// WO 48.25: ruby twin — `foo(<<'A', <<'B')` must open both heredocs;
+    /// B used to be invisible for the same closing-quote-resume reason.
+    #[test]
+    fn test_minify_ruby_two_quoted_heredocs_one_line_round_trip() {
+        let src = "foo(<<'A', <<'B')\n# body a\nA\n# body b\nB\nputs :done\n";
+        let out = minify_content_by_ext(src, "rb", false);
+        assert_eq!(
+            out, src,
+            "both quoted heredoc bodies must round-trip verbatim: {out}"
         );
     }
 }

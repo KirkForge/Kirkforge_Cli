@@ -155,3 +155,11 @@ one WO 47.12 regression (48.3).
 - When a workorder is superseded, update its Status and link to the replacement.
 - The scratch `workplan.md` at the repo root (gitignored) is for the current
   task's working notes; the workorders here are the persistent plan.
+| 48.37 | [minify shell/ruby have no cross-line quote state — multi-line string contents deleted on write-back](48.37-minify-cross-line-quote-state.md) | Planned |
+| 48.38 | [fallback_c_like missing backtick arm — Go raw strings / JS template literals corrupted on write-back](48.38-expand-backtick-arm.md) | Planned |
+| 48.39 | [fallback_python except-swallow + pass/else misindent + multi-line-string interior trims](48.39-expand-python-except-swallow.md) | Planned |
+| 48.40 | [strip_test_blocks string-blind — column-0 #[cfg(test)] inside r#-strings deletes content](48.40-strip-test-blocks-string-blind.md) | Planned |
+| 48.41 | [Walker cancel flag only set on one of three teardown paths — timeout/abort leaves walkers scanning](48.41-walker-flag-drop-guard.md) | Planned |
+| 48.42 | [--features pty: run_with_pty is a sync call in the async tool body — no timeout, no Esc abort, wedged turn](48.42-pty-blocking-call.md) | Planned |
+| 48.43 | [call_id routing edges: empty-id ToolResult steals a sibling's card; late PTY chunk after TurnComplete resurrects a streaming card](48.43-callid-routing-edges.md) | Planned |
+| 48.44 | [pty/devtools/computer_use/no-default-features combos compile but zero CI jobs build them](48.44-feature-combo-ci-rung.md) | Planned |

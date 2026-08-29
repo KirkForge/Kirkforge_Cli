@@ -190,6 +190,41 @@ jobs:
       - name: Run e2e suite
         run: cargo nextest run --profile e2e --features e2e-tests --no-fail-fast --locked
 
+  # Feature-combo compile rung (WO 48.44): pty / devtools / computer_use /
+  # no-default-features are supported build configurations (ADR-0017 pins
+  # --no-default-features; Cargo.toml documents each opt-in feature) but no
+  # PR/merge CI job compiles them, so the class rots silently — WO 48.31
+  # shipped an E0560 in the devtools-gated bench tests that zero jobs could
+  # catch, and WO 48.9's no-default-features fix came with a deferred (never
+  # landed) CI job. One cargo check per combo, nightly: drift is observed
+  # without gating PRs on builds nobody ships by default.
+  feature-combos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly-feature-combos
+
+      - name: Check --features pty
+        run: cargo check --workspace --all-targets --locked --features pty
+
+      - name: Check --features devtools
+        run: cargo check --workspace --all-targets --locked --features devtools
+
+      - name: Check --features devtools,computer_use
+        run: cargo check --workspace --all-targets --locked --features devtools,computer_use
+
+      - name: Check --no-default-features
+        run: cargo check --workspace --all-targets --locked --no-default-features
+
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10

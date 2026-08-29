@@ -905,7 +905,6 @@ mod tests {
                 task_name: "b".to_string(),
                 difficulty: Difficulty::Easy,
                 success: true,
-                call_id: String::new(),
                 tokens_in: 200,
                 tokens_out: 100,
                 duration_secs: 2.0,

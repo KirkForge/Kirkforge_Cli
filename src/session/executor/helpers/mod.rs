@@ -210,13 +210,38 @@ pub(crate) fn is_read_only_bash(cmd: &str) -> bool {
     true
 }
 
+// WO 48.35: cutting wrapped untrusted content mid-closing-tag would leave
+// an unterminated untrusted region trailing into later trusted context.
+// When such content exceeds the cap, cut the payload, DROP the closing
+// tag, and end with an explicit [truncated] marker (house style —
+// audit.rs uses the same marker). Some only when `content` is wrapped
+// AND over cap; the generic path below is unchanged for everything else.
+fn truncate_wrapped_untrusted(content: &str, max_chars: usize) -> Option<String> {
+    if content.len() <= max_chars {
+        return None;
+    }
+    let payload = crate::tools::web_fetch::unwrap_untrusted(content)?;
+    let mut boundary = payload
+        .len()
+        .min(max_chars.saturating_sub("<untrusted_content>\n".len()));
+    while boundary > 0 && !payload.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    Some(format!(
+        "<untrusted_content>\n{}...\n[truncated]",
+        &payload[..boundary]
+    ))
+}
+
 pub(crate) fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> ToolOutcome {
     if max_chars == 0 {
         return outcome;
     }
     match outcome {
         ToolOutcome::Success { content } => {
-            if content.len() > max_chars {
+            if let Some(cut) = truncate_wrapped_untrusted(&content, max_chars) {
+                ToolOutcome::Success { content: cut }
+            } else if content.len() > max_chars {
                 let mut boundary = max_chars;
                 while !content.is_char_boundary(boundary) {
                     boundary -= 1;
@@ -236,7 +261,13 @@ pub(crate) fn truncate_tool_output(outcome: ToolOutcome, max_chars: usize) -> To
             content,
             truncated,
         } => {
-            if content.len() > max_chars {
+            if let Some(cut) = truncate_wrapped_untrusted(&content, max_chars) {
+                ToolOutcome::FileContent {
+                    path,
+                    content: cut,
+                    truncated: true,
+                }
+            } else if content.len() > max_chars {
                 let mut boundary = max_chars;
                 while !content.is_char_boundary(boundary) {
                     boundary -= 1;
@@ -1103,6 +1134,64 @@ mod tests {
                 assert_eq!(total, 1, "short grep should stay as GrepMatches");
             }
             other => panic!("expected unmodified GrepMatches, got {other:?}"),
+        }
+    }
+
+    // WO 48.35: wrapped untrusted content over the cap must not be cut
+    // mid-closing-tag (that would leave an unterminated untrusted region) —
+    // drop the tag and end with [truncated].
+    #[test]
+    fn truncate_tool_output_wrapped_success_drops_closing_tag() {
+        let outcome = ToolOutcome::Success {
+            content: crate::tools::web_fetch::wrap_untrusted("x".repeat(600)),
+        };
+        let out = truncate_tool_output(outcome, 500);
+        match out {
+            ToolOutcome::Success { content } => {
+                assert!(content.starts_with("<untrusted_content>\n"), "{content}");
+                assert!(content.ends_with("...\n[truncated]"), "{content}");
+                assert!(
+                    !content.contains("</untrusted_content>"),
+                    "no closing tag may survive the cut: {content}"
+                );
+                assert!(content.matches('x').count() >= 400, "{content}");
+            }
+            other => panic!("expected truncated Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_tool_output_wrapped_file_content_sets_truncated_flag() {
+        let outcome = ToolOutcome::FileContent {
+            path: std::path::PathBuf::from("/tmp/x.txt"),
+            content: crate::tools::web_fetch::wrap_untrusted("y".repeat(300)),
+            truncated: false,
+        };
+        let out = truncate_tool_output(outcome, 200);
+        match out {
+            ToolOutcome::FileContent {
+                content, truncated, ..
+            } => {
+                assert!(truncated, "central cut must set the flag");
+                assert!(content.ends_with("...\n[truncated]"), "{content}");
+                assert!(!content.contains("</untrusted_content>"), "{content}");
+            }
+            other => panic!("expected truncated FileContent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_tool_output_wrapped_under_cap_stays_verbatim() {
+        let content = crate::tools::web_fetch::wrap_untrusted("short body".to_string());
+        let out = truncate_tool_output(
+            ToolOutcome::Success {
+                content: content.clone(),
+            },
+            1000,
+        );
+        match out {
+            ToolOutcome::Success { content: kept } => assert_eq!(kept, content),
+            other => panic!("expected verbatim Success, got {other:?}"),
         }
     }
 

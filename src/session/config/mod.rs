@@ -1309,13 +1309,14 @@ mod tests {
 
         // ── 1. Total struct-level fields ──────────────────────────
         // ModelConfig=34 (33 direct + subagent_provider sub-struct handle),
-        // SecurityConfig=22, ToolConfig=35, SessionConfig=8,
-        // DisplayConfig=8 → 108 total pub fields.
+        // SecurityConfig=22, ToolConfig=36, SessionConfig=8,
+        // DisplayConfig=8 → 109 total pub fields.
         // (WO 45.37: SessionConfig 9 → 8 — worktree_enabled +
         // auto_apply_patch replaced by artifact_policy enum.)
         // (WO 47.13: DisplayConfig 7 → 8 — added extra_commands.)
+        // (WO 48.34: ToolConfig 35 → 36 — added max_subagent_turns.)
         assert_eq!(
-            CONFIG_FIELD_COUNT, 108,
+            CONFIG_FIELD_COUNT, 109,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 

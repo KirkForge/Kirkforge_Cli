@@ -356,7 +356,7 @@ async fn taskmanager_cancel_midflight_bash_exits_cooperatively() {
     .await;
 
     let manager = Arc::new(Mutex::new(TaskManager::new()));
-    let task_tool = Task::with_config(manager.clone(), 4, TaskConcurrencyMode::Queue);
+    let task_tool = Task::with_config(manager.clone(), 4, TaskConcurrencyMode::Queue, 32);
     let spawner = Arc::new(InProcessTaskSpawner::new(
         config,
         MODEL.to_string(),

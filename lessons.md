@@ -1226,3 +1226,23 @@
   visibility change — pre-existing wall-clock sensitivity, watch under load.
 - Cold-worktree `cargo check -p kf-code --lib` alone is ~15 min under
   parallel WO load; `cargo test` codegen adds more. Budget 40-min timeouts.
+## WO 48.34 session (2026-08-29, worktree wo48.34)
+
+- The 48.30–48.36 WO files were committed to main (46baabc2) AFTER this
+  worktree's branch was cut — the WO file the task told me to read did not
+  exist in the worktree. Brought the 48.34 file + README row into the branch;
+  integration merge will conflict with main's Planned versions (keep Done).
+  Check `git log -- <wo file>` in BOTH trees before assuming a missing WO is
+  a filing error.
+- Cancel-aware walker contract is testable deterministically WITHOUT racing a
+  token: extract the walk into a fn taking `&AtomicBool`, pre-set the flag,
+  and compare against an unset-flag control run over the same dir. A
+  flag-ignoring walker fails the 0-vs-N assertion; no sleeps, no flakes.
+- `assert_eq!(mutex.lock().unwrap(), &Some(x))` does not compile (MutexGuard
+  vs &Option). Deref: `*guard`. Cost me a full lib-test compile cycle.
+- New pub const in `shared/config/tools.rs` is NOT reachable as
+  `crate::shared::config::CONST` — the mod re-exports types individually
+  (`pub use tools::ToolConfig`). Add the const to the `pub use`.
+- `cargo check -p kf-code --lib` cold in a fresh worktree: ~2m20s; chained
+  `cargo test` invocations each recompile — budget 10+ min for the first
+  test run, run suites separately with generous timeouts.

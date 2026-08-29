@@ -53,6 +53,16 @@ fn default_task_concurrency_mode() -> String {
     "queue".to_string()
 }
 
+/// WO 48.34: ceiling for the `task` tool's model-supplied `max_turns`.
+/// Generous default — a legit subagent rarely needs more; a runaway
+/// model value (u64::MAX) must not reach the executor loop. The tool
+/// layer clamps against this.
+pub const DEFAULT_MAX_SUBAGENT_TURNS: usize = 32;
+
+fn default_max_subagent_turns() -> usize {
+    DEFAULT_MAX_SUBAGENT_TURNS
+}
+
 fn default_reject_on_excess_plugin_trust() -> bool {
     true
 }
@@ -146,6 +156,8 @@ pub struct ToolConfig {
     pub max_background_tasks: usize,
     #[serde(default = "default_task_concurrency_mode")]
     pub task_concurrency_mode: String,
+    #[serde(default = "default_max_subagent_turns")]
+    pub max_subagent_turns: usize,
     #[serde(default = "default_max_plugin_trust")]
     pub max_plugin_trust: kf_plugin_host::TrustTier,
     #[serde(default = "default_reject_on_excess_plugin_trust")]
@@ -234,6 +246,7 @@ impl Default for ToolConfig {
             max_concurrent_scheduled_jobs: default_max_concurrent_scheduled_jobs(),
             max_background_tasks: default_max_background_tasks(),
             task_concurrency_mode: default_task_concurrency_mode(),
+            max_subagent_turns: default_max_subagent_turns(),
             max_plugin_trust: default_max_plugin_trust(),
             reject_on_excess_plugin_trust: default_reject_on_excess_plugin_trust(),
             plugin_signature_validation: true,
@@ -276,6 +289,10 @@ mod tests {
         assert_eq!(cfg.tool_timeout_secs, Some(120));
         assert_eq!(cfg.doom_loop_max_hits, 1);
         assert_eq!(cfg.doom_loop_action, "auto_plan");
+        assert_eq!(
+            cfg.max_subagent_turns, 32,
+            "WO 48.34: model-supplied max_turns ceiling defaults to 32"
+        );
         assert!(
             !cfg.allow_sampling_unattended,
             "sampling must default to approval-gated (deny in headless)"

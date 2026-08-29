@@ -4,6 +4,8 @@ use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
 #[cfg(test)]
 use std::process::Command;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 /// Maximum file size in bytes we'll attempt to read for grep (10 MB).
 const MAX_GREP_FILE_SIZE: u64 = 10 * 1024 * 1024;
@@ -251,6 +253,9 @@ fn fallback_search_blocking(
     max_matches: usize,
     use_literal: bool,
     path_guard: &PathGuard,
+    // WO 48.34: checked per directory entry so a cancel stops the
+    // blocking-pool walk at the next entry instead of at tree completion.
+    cancel: &AtomicBool,
 ) -> ToolOutcome {
     let use_regex = !use_literal;
 
@@ -276,6 +281,9 @@ fn fallback_search_blocking(
                 .build();
 
             for entry in walker.flatten() {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
                 if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
                     continue;
                 }
@@ -364,6 +372,9 @@ fn fallback_search_blocking(
             .build();
 
         for entry in walker.flatten() {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
             if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
                 continue;
             }
@@ -519,13 +530,14 @@ impl Tool for Grep {
 
         // Fallback walk + reads are blocking fs ops — offload to the pool.
         // WO 46.8: race the blocking walk against the cancel token so a
-        // user/turn cancel returns promptly with `Cancelled`. The
-        // blocking-pool thread keeps running to completion (spawn_blocking
-        // can't be killed), but the tool returns immediately and the
-        // leaked thread is bounded by the walk finishing on its own (no
-        // subprocess to leak — the only leak class the rg path had).
+        // user/turn cancel returns promptly with `Cancelled`. WO 48.34: the
+        // cancel arm now also flips `cancel_flag`, which the fallback walker
+        // checks per entry — the blocking-pool thread stops at the next
+        // entry instead of walking (and reading) the whole tree.
         let path_guard = self.path_guard.clone();
         let path = path.to_string();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let walk_cancel = cancel_flag.clone();
         let walk = tokio::task::spawn_blocking(move || {
             fallback_search_blocking(
                 &pattern,
@@ -534,11 +546,15 @@ impl Tool for Grep {
                 max_matches,
                 use_literal,
                 &path_guard,
+                &walk_cancel,
             )
         });
         let outcome = tokio::select! {
             biased;
-            _ = ctx.token.cancelled() => ToolOutcome::Failure(ToolError::Cancelled),
+            _ = ctx.token.cancelled() => {
+                cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                ToolOutcome::Failure(ToolError::Cancelled)
+            }
             res = walk => res.unwrap_or_else(|e| ToolOutcome::Failure(ToolError::Internal {
                 message: format!("grep blocking task failed: {e}"),
             })),
@@ -1178,6 +1194,36 @@ mod tests {
             }
             other => panic!("expected GrepMatches, got {other:?}"),
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WO 48.34: a set cancel flag must stop the fallback walk before any
+    /// match is collected. The control run (flag unset) over the same dir
+    /// finds the needle, so "no matches" proves the loop checked the flag.
+    #[test]
+    fn fallback_search_cancel_flag_stops_walk() {
+        let dir = std::env::temp_dir().join("kf_code_grep_cancel_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "needle here\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "needle there\n").unwrap();
+        let guard = PathGuard::default();
+        let path = dir.to_string_lossy().to_string();
+
+        let cancel = AtomicBool::new(true);
+        let outcome = fallback_search_blocking("needle", &path, 2, 50, true, &guard, &cancel);
+        assert!(
+            matches!(outcome, ToolOutcome::Success { ref content } if content.contains("No matches")),
+            "pre-set cancel flag must stop the walk before collecting, got {outcome:?}"
+        );
+
+        let cancel = AtomicBool::new(false);
+        let outcome = fallback_search_blocking("needle", &path, 2, 50, true, &guard, &cancel);
+        assert!(
+            matches!(outcome, ToolOutcome::GrepMatches { total, .. } if total == 2),
+            "control run without the flag matches both files, got {outcome:?}"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

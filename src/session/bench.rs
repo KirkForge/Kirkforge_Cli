@@ -186,6 +186,7 @@ fn build_bench_toolset(sandbox_path: &Path) -> super::toolset::CompositeToolset 
         block_edits: false,
         max_background_tasks: 4,
         task_concurrency_mode: crate::tools::task::TaskConcurrencyMode::Queue,
+        max_subagent_turns: 32,
     };
     let tools = crate::tools::all_tools(&ctx);
 

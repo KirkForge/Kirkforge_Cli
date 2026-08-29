@@ -355,6 +355,7 @@ impl InProcessTaskSpawner {
             },
             block_edits: cfg.security.sandbox.block_edits,
             max_background_tasks: cfg.tools.max_background_tasks,
+            max_subagent_turns: cfg.tools.max_subagent_turns,
             task_concurrency_mode: cfg
                 .tools
                 .task_concurrency_mode

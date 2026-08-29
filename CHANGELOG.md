@@ -8,6 +8,7 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- WO 48.34 — `task` max_turns clamped to new `tools.max_subagent_turns` ceiling (default 32); glob + grep fallback walkers stop at the next entry on cancel instead of walking the tree to completion. [48.34](docs/workorders/48.34-resource-bound-bundle.md)
 - WO 47.5 — bench + testdoctor gated behind default-off `devtools` feature; the release binary compiles neither. [47.5](docs/workorders/47.5-devtools-out-of-binary.md)
 
 ### Changed

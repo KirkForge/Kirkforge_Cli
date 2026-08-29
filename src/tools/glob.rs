@@ -2,7 +2,9 @@ use crate::shared::access::{GuardVerdict, PathGuard};
 use crate::shared::{ToolDef, ToolError, ToolOutcome};
 use crate::tools::{Tool, ToolContext};
 use globset::{Glob as GlobPattern, GlobSet, GlobSetBuilder};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 pub struct Glob {
     path_guard: PathGuard,
@@ -12,6 +14,61 @@ impl Glob {
     pub fn new(path_guard: PathGuard) -> Self {
         Self { path_guard }
     }
+}
+
+// WO 48.34: the walk body, extracted so the cancel contract is testable
+// without racing a real token. `cancel` is checked per directory entry —
+// when the tool's select arm loses to `ctx.token.cancelled()` it flips
+// the flag, and the blocking-pool thread stops at the next entry instead
+// of walking the whole tree to completion.
+fn walk_glob_matches(
+    walk_base: &Path,
+    glob_set: &GlobSet,
+    max_matches: usize,
+    path_guard: &PathGuard,
+    cancel: &AtomicBool,
+) -> (Vec<String>, bool) {
+    let mut out = Vec::new();
+    let mut capped = false;
+    let walker = ignore::WalkBuilder::new(walk_base)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .build();
+
+    for entry in walker.flatten() {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            continue;
+        }
+
+        // Per-file traversal guard: the walker may have followed a
+        // symlink from inside the base_dir to outside it, or the file
+        // may sit on a denied path. `check_traversal` is the
+        // lightweight deny-list + symlink + sandbox check (no
+        // size/binary gate, because we are only listing paths).
+        if let GuardVerdict::Denied(_) = path_guard.check_traversal(entry_path) {
+            continue;
+        }
+
+        // Relative path matching
+        let rel = entry_path.strip_prefix(walk_base).unwrap_or(entry_path);
+        if glob_set.is_match(rel) {
+            out.push(rel.to_string_lossy().to_string());
+            // WO 47.24: stop the walk once the cap is collected —
+            // buffering every match and truncating afterward walks
+            // (and buffers) the whole tree for {"max_matches":1}.
+            // Dropping the walker here ends the traversal.
+            if out.len() >= max_matches {
+                capped = true;
+                break;
+            }
+        }
+    }
+    (out, capped)
 }
 
 #[async_trait::async_trait]
@@ -94,58 +151,31 @@ impl Tool for Glob {
         // `base_path` is cloned so the original remains for the result header.
         //
         // WO 46.8: race the blocking walk against `ctx.token.cancelled()` so
-        // a user/turn cancel returns promptly with `Cancelled`. The
-        // blocking-pool thread keeps walking to completion (spawn_blocking
-        // can't be killed), but the tool returns immediately and the leaked
-        // thread is bounded by the walk finishing on its own (no subprocess to
-        // leak). WO 47.24: the walk now stops at `max_matches`, so that
-        // residual run is bounded by the cap, not the tree size.
+        // a user/turn cancel returns promptly with `Cancelled`. WO 48.34: the
+        // cancel arm now also flips `cancel_flag`, which the walker checks
+        // per entry — the blocking-pool thread stops at the next entry
+        // instead of walking to completion (previously the residual run was
+        // bounded only by the cap or the tree size).
         // Pattern: `plugin_tools/wrapper.rs:324` (`Finish::Cancelled`).
         let path_guard = self.path_guard.clone();
         let walk_base = base_path.clone();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let walk_cancel = cancel_flag.clone();
         let walk = tokio::task::spawn_blocking(move || {
-            let mut out = Vec::new();
-            let mut capped = false;
-            let walker = ignore::WalkBuilder::new(&walk_base)
-                .git_ignore(true)
-                .git_global(true)
-                .git_exclude(true)
-                .build();
-
-            for entry in walker.flatten() {
-                let entry_path = entry.path();
-                if entry_path.is_dir() {
-                    continue;
-                }
-
-                // Per-file traversal guard: the walker may have followed a
-                // symlink from inside the base_dir to outside it, or the file
-                // may sit on a denied path. `check_traversal` is the
-                // lightweight deny-list + symlink + sandbox check (no
-                // size/binary gate, because we are only listing paths).
-                if let GuardVerdict::Denied(_) = path_guard.check_traversal(entry_path) {
-                    continue;
-                }
-
-                // Relative path matching
-                let rel = entry_path.strip_prefix(&walk_base).unwrap_or(entry_path);
-                if glob_set.is_match(rel) {
-                    out.push(rel.to_string_lossy().to_string());
-                    // WO 47.24: stop the walk once the cap is collected —
-                    // buffering every match and truncating afterward walks
-                    // (and buffers) the whole tree for {"max_matches":1}.
-                    // Dropping the walker here ends the traversal.
-                    if out.len() >= max_matches {
-                        capped = true;
-                        break;
-                    }
-                }
-            }
-            (out, capped)
+            walk_glob_matches(
+                &walk_base,
+                &glob_set,
+                max_matches,
+                &path_guard,
+                &walk_cancel,
+            )
         });
         let (mut matches, truncated) = tokio::select! {
             biased;
-            _ = ctx.token.cancelled() => return ToolOutcome::Failure(ToolError::Cancelled),
+            _ = ctx.token.cancelled() => {
+                cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                return ToolOutcome::Failure(ToolError::Cancelled);
+            }
             res = walk => res.unwrap_or_default(),
         };
 
@@ -176,6 +206,63 @@ impl Tool for Glob {
 mod tests {
     use super::*;
     use crate::tools::ToolContext;
+
+    // WO 48.34: a set cancel flag must stop the walk before the first
+    // match is pushed. The control run (flag unset) over the same dir
+    // returns all files, so 0 matches proves the loop checked the flag —
+    // a walker that ignored it would return all 5.
+    #[test]
+    fn walk_glob_matches_cancel_flag_stops_walk() {
+        let dir = std::env::temp_dir().join("kf_code_glob_cancel_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..5 {
+            std::fs::write(dir.join(format!("file{i}.txt")), "x").unwrap();
+        }
+        let glob_set = GlobSetBuilder::new()
+            .add(GlobPattern::new("*.txt").unwrap())
+            .build()
+            .unwrap();
+        let guard = PathGuard::default();
+
+        let cancel = AtomicBool::new(true);
+        let (out, capped) = walk_glob_matches(&dir, &glob_set, 1000, &guard, &cancel);
+        assert!(
+            out.is_empty() && !capped,
+            "pre-set cancel flag must stop the walk with no matches, got {out:?}"
+        );
+
+        let cancel = AtomicBool::new(false);
+        let (out, _) = walk_glob_matches(&dir, &glob_set, 1000, &guard, &cancel);
+        assert_eq!(out.len(), 5, "control run without the flag matches all");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // WO 48.34: run() with an already-cancelled token returns Cancelled
+    // and flips the flag the walker observes (biased select → the cancel
+    // arm wins before the walk starts).
+    #[tokio::test]
+    async fn glob_cancelled_token_returns_cancelled() {
+        let dir = std::env::temp_dir().join("kf_code_glob_cancel_run_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+
+        let glob = Glob::new(PathGuard::default());
+        let ctx = ToolContext::default();
+        ctx.token.cancel();
+        let args = serde_json::json!({
+            "pattern": "*.txt",
+            "base_dir": dir.to_string_lossy(),
+        });
+        let outcome = glob.run(&ctx, args).await;
+        assert!(
+            matches!(outcome, ToolOutcome::Failure(ToolError::Cancelled)),
+            "expected Cancelled, got {outcome:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[tokio::test]
     async fn glob_stops_at_max_matches_and_reports_at_least() {

@@ -8,7 +8,7 @@ pub use display::DisplayConfig;
 pub use model::ModelConfig;
 pub use security::SecurityConfig;
 pub use session::{ArtifactPolicy, SessionConfig};
-pub use tools::ToolConfig;
+pub use tools::{ToolConfig, DEFAULT_MAX_SUBAGENT_TURNS};
 
 use serde::{Deserialize, Serialize};
 
@@ -51,7 +51,8 @@ use serde::{Deserialize, Serialize};
 //           (2 bools) with SessionConfig.artifact_policy (1 enum):
 //           108 → 107.
 // WO 47.13: bumped 107 → 108 (added DisplayConfig.extra_commands).
-pub const CONFIG_FIELD_COUNT: usize = 108;
+// WO 48.34: bumped 108 → 109 (added ToolConfig.max_subagent_turns).
+pub const CONFIG_FIELD_COUNT: usize = 109;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

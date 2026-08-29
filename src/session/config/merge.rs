@@ -140,6 +140,7 @@ fn normalize(cfg: &mut Config) {
     cfg.tools.max_continuation_rounds = cfg.tools.max_continuation_rounds.clamp(0, 50);
     cfg.tools.max_concurrent_scheduled_jobs = cfg.tools.max_concurrent_scheduled_jobs.max(1);
     cfg.tools.max_background_tasks = cfg.tools.max_background_tasks.clamp(1, 64);
+    cfg.tools.max_subagent_turns = cfg.tools.max_subagent_turns.clamp(1, 1024);
     cfg.model.max_tokens = cfg.model.max_tokens.max(1);
     cfg.model.budget_tokens = cfg.model.budget_tokens.max(1);
     if let Some(t) = cfg.tools.tool_timeout_secs {
@@ -477,15 +478,40 @@ mod tests {
         let mut cfg = Config::default();
         assert_eq!(cfg.tools.max_background_tasks, 4);
         assert_eq!(cfg.tools.task_concurrency_mode, "queue");
+        assert_eq!(cfg.tools.max_subagent_turns, 32);
         let table: toml::Table = r#"
             max_background_tasks = 8
             task_concurrency_mode = "reject"
+            max_subagent_turns = 64
         "#
         .parse()
         .unwrap();
         merge_toml_into_config(&mut cfg, table);
         assert_eq!(cfg.tools.max_background_tasks, 8);
         assert_eq!(cfg.tools.task_concurrency_mode, "reject");
+        assert_eq!(cfg.tools.max_subagent_turns, 64);
+    }
+
+    #[test]
+    fn test_merge_toml_max_subagent_turns_clamps_to_range() {
+        let mut cfg = Config::default();
+        let table: toml::Table = r#"
+            max_subagent_turns = 0
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(cfg.tools.max_subagent_turns, 1, "0 should be clamped to 1");
+        let table: toml::Table = r#"
+            max_subagent_turns = 999999
+        "#
+        .parse()
+        .unwrap();
+        merge_toml_into_config(&mut cfg, table);
+        assert_eq!(
+            cfg.tools.max_subagent_turns, 1024,
+            "the ceiling itself is bounded at 1024"
+        );
     }
 
     #[test]

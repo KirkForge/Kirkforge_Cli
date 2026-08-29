@@ -1237,9 +1237,11 @@ async fn dispatch_kb_events<'a>(
         match ev {
             Event::Key(key) => dispatch_one(state, key, key_ctx).await?,
             Event::Paste(content) => {
-                state.apply_paste(&content);
-                state.ui.paste_flash = PASTE_FLASH_TICKS;
-                state.mark_dirty();
+                if !modal_captures_keys(state) {
+                    state.apply_paste(&content);
+                    state.ui.paste_flash = PASTE_FLASH_TICKS;
+                    state.mark_dirty();
+                }
             }
             Event::Mouse(mouse) => handle_mouse_event(state, mouse),
             Event::Resize(_w, _h) => state.mark_dirty(),
@@ -1251,9 +1253,11 @@ async fn dispatch_kb_events<'a>(
         match ev {
             Event::Key(key) => dispatch_one(state, key, key_ctx).await?,
             Event::Paste(content) => {
-                state.apply_paste(&content);
-                state.ui.paste_flash = PASTE_FLASH_TICKS;
-                state.mark_dirty();
+                if !modal_captures_keys(state) {
+                    state.apply_paste(&content);
+                    state.ui.paste_flash = PASTE_FLASH_TICKS;
+                    state.mark_dirty();
+                }
             }
             Event::Mouse(mouse) => handle_mouse_event(state, mouse),
             Event::Resize(_w, _h) => state.mark_dirty(),
@@ -1261,6 +1265,20 @@ async fn dispatch_kb_events<'a>(
         }
     }
     Ok(())
+}
+
+// WO 48.28: every modal that consume-all-gates KeyEvents (the 48.20
+// standard). Paste must respect the same set — it used to insert into
+// the hidden input buffer under the picker/help overlay/approval
+// dialogs. Slash menu, file completer and search mode are NOT here:
+// typing flows into the input there, so paste may too.
+fn modal_captures_keys(state: &AppState) -> bool {
+    doom_banner_is_active(state)
+        || state.approval.pending_bang.is_some()
+        || state.approval.pending_approval.is_some()
+        || state.ui.help_overlay_visible
+        || state.session.session_picker.is_some()
+        || state.ui.command_palette_visible
 }
 
 #[cfg(unix)]
@@ -2154,5 +2172,106 @@ mod tests {
         assert!(!state.generation.test_in_progress);
         assert_eq!(state.conversation.messages.len(), 2);
         assert_eq!(state.conversation.messages[1].role, "system");
+    }
+
+    /// WO 48.28: Event::Paste used to bypass every modal gate — the
+    /// paste arms called `apply_paste` unconditionally, inserting into
+    /// the hidden input buffer under the session picker (and every
+    /// other consume-all modal: help overlay, approval dialogs, doom
+    /// banner, command palette). Drives the real
+    /// `dispatch_kb_events` router, not just the predicate.
+    #[tokio::test]
+    async fn paste_while_modal_open_does_not_reach_input() {
+        use crate::session::session_index::SessionEntry;
+        use crate::tui::components::session_picker::SessionPicker;
+
+        let (kb_tx, mut kb_rx) = mpsc::unbounded_channel::<Event>();
+        let _ = kb_tx; // receiver only; the paste rides the `first` slot
+
+        let (input_tx, _input_rx) = mpsc::unbounded_channel();
+        let (cancel_tx, _cancel_rx) = mpsc::unbounded_channel();
+        let (resume_tx, _resume_rx) = mpsc::unbounded_channel::<ConversationLog>();
+        let (compact_tx, _compact_rx) = mpsc::unbounded_channel();
+        let (model_tx, _model_rx) = mpsc::unbounded_channel();
+        let (undo_tx, _undo_rx) = mpsc::unbounded_channel();
+        let (config_tx, _config_rx) = mpsc::unbounded_channel();
+        let (plan_tx, _plan_rx) = mpsc::unbounded_channel();
+        let (persona_tx, _persona_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::channel::<crate::session::executor::TurnEvent>(10_000);
+        let (plugin_reload_tx, _plugin_reload_rx) =
+            mpsc::unbounded_channel::<kf_plugin_host::PluginRegistry>();
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel::<crate::tui::commands::BgCmdDone>();
+        let ctx = keys::HandleInputContext {
+            input_tx: &input_tx,
+            cancel_tx: &cancel_tx,
+            resume_tx: &resume_tx,
+            compact_tx: &compact_tx,
+            model_tx: &model_tx,
+            undo_tx: &undo_tx,
+            config_tx: &config_tx,
+            plan_tx: &plan_tx,
+            persona_tx: &persona_tx,
+            event_tx: &event_tx,
+            plugin_reload_tx: &plugin_reload_tx,
+            bg_tx: &bg_tx,
+        };
+
+        // Picker modal open: the paste must be swallowed whole.
+        let mut state = test_state();
+        state.session.session_picker = Some(SessionPicker::new(vec![SessionEntry {
+            id: "s1".into(),
+            path: "/tmp/wo48-28-1.conv.ndjson".into(),
+            started_at: "2026-08-29T10:00:00Z".into(),
+            message_count: 1,
+            size_bytes: 1,
+        }]));
+        dispatch_kb_events(
+            &mut state,
+            &ctx,
+            Some(Event::Paste("leaked".into())),
+            &mut kb_rx,
+        )
+        .await
+        .unwrap();
+        assert!(
+            state.conversation.input.is_empty(),
+            "paste must not reach the input buffer while the picker is open"
+        );
+        assert_eq!(state.conversation.cursor_position, 0);
+        assert_eq!(
+            state.ui.paste_flash, 0,
+            "no paste flash for a swallowed paste"
+        );
+
+        // Same for the help overlay (consume-all standard).
+        state.session.session_picker = None;
+        state.ui.help_overlay_visible = true;
+        dispatch_kb_events(
+            &mut state,
+            &ctx,
+            Some(Event::Paste("leaked".into())),
+            &mut kb_rx,
+        )
+        .await
+        .unwrap();
+        assert!(
+            state.conversation.input.is_empty(),
+            "paste must not reach the input buffer while the help overlay is up"
+        );
+
+        // No modal: the same event lands in the buffer (gate proves
+        // the negative, this proves it didn't break normal paste).
+        state.ui.help_overlay_visible = false;
+        dispatch_kb_events(
+            &mut state,
+            &ctx,
+            Some(Event::Paste("pasted".into())),
+            &mut kb_rx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.conversation.input, "pasted");
+        assert_eq!(state.conversation.cursor_position, "pasted".chars().count());
+        assert_eq!(state.ui.paste_flash, PASTE_FLASH_TICKS);
     }
 }

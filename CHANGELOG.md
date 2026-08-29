@@ -25,6 +25,12 @@ why, and the gate evidence.
 
 ### Fixed
 
+- WO 48.28 — bracketed paste bypassed every modal gate: `Event::Paste`
+  inserted into the hidden input buffer under the session picker, help
+  overlay, approval dialogs, doom banner, and command palette. Both paste
+  arms in `dispatch_kb_events` now gate on the same consume-all modal set
+  as KeyEvents (the 48.20 standard).
+  [48.28](docs/workorders/48.28-paste-bypasses-modals.md)
 - WO 48.12 — js/ts minifier corrupted regex literals containing `//`
   (`/https?:\/\//` truncated at the first unescaped-looking `//`, eating
   the newline) on the disk write-back chain. `minify_js_like` and the

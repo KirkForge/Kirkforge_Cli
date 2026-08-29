@@ -145,6 +145,7 @@ one WO 47.12 regression (48.3).
 | 48.34 | [max_turns unbounded + glob walker not cancel-aware — model-controlled resource without ceilings](48.34-resource-bound-bundle.md) | Done |
 | 48.35 | [untrusted_content delimiter is breakable (closing tag in content, truncation cuts the tag) — document as mitigation, harden the wrap](48.35-untrusted-delimiter-honesty.md) | Done |
 | 48.36 | [Job IDs are max+1 from a directory scan — two clients pick the same ID, logical overwrite](48.36-job-id-generation-race.md) | Done |
+| 48.40 | [strip_test_blocks string-blind — column-0 #[cfg(test)] inside r#-strings deletes content](48.40-strip-test-blocks-string-blind.md) | Done |
 
 ## Conventions
 

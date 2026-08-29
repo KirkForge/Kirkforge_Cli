@@ -152,6 +152,7 @@ one WO 47.12 regression (48.3).
 | 48.41 | [Walker cancel flag only set on one of three teardown paths — timeout/abort leaves walkers scanning](48.41-walker-flag-drop-guard.md) | Done |
 | 48.42 | [PTY bash call is fully blocking — no timeout, no Esc cancel, child never killed](48.42-pty-blocking-call.md) | Done |
 | 48.44 | [Feature combos (pty/devtools/computer_use/no-default-features) compile in zero CI jobs — nightly rung; devtools was already red](48.44-feature-combo-ci-rung.md) | Done |
+| 48.45 | [python docstring heuristic strips triple-quoted ARGUMENTS inside parens — call/list literals deleted on write-back](48.45-minify-python-docstring-args.md) | Done |
 
 ## Conventions
 

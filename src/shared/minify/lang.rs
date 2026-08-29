@@ -633,6 +633,17 @@ fn minify_rust_inner(source: &str, preserve_tests: bool) -> String {
     collapse_blank_lines(&s)
 }
 
+// A triple-quoted literal is a docstring only at the start of a block: the
+// last non-blank line of `out` ends with `:` (block opener), or there is no
+// non-blank line yet (module start). Anywhere else it is code — an
+// argument, a list element, an assignment RHS — and must survive.
+fn python_at_block_start(out: &str) -> bool {
+    out.lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .is_none_or(|l| l.trim_end().ends_with(':'))
+}
+
 fn minify_python(source: &str) -> String {
     let mut out = String::with_capacity(source.len());
     let mut prev_was_newline = false;
@@ -640,6 +651,9 @@ fn minify_python(source: &str) -> String {
     // String-literal state: Some(q) inside a '...'/"..."/triple literal.
     let mut string_char: Option<char> = None;
     let mut in_triple = false;
+    // Bracket depth: docstrings never appear inside (), [], {} — a
+    // triple-quoted literal there is an argument/element.
+    let mut paren_depth: usize = 0;
 
     while let Some(ch) = chars.next() {
         if let Some(q) = string_char {
@@ -685,7 +699,9 @@ fn minify_python(source: &str) -> String {
                 chars.next();
                 chars.next();
                 let current_line = out.rsplit('\n').next().unwrap_or("");
-                let is_docstring = current_line.trim().is_empty();
+                let is_docstring = paren_depth == 0
+                    && current_line.trim().is_empty()
+                    && python_at_block_start(&out);
 
                 if is_docstring {
                     // Docstring: drop the whole literal (escape-aware scan).
@@ -717,6 +733,14 @@ fn minify_python(source: &str) -> String {
             out.push(ch);
             string_char = Some(ch);
             continue;
+        }
+
+        // Bracket depth — counted only outside strings/comments (those arms
+        // `continue` before reaching here).
+        match ch {
+            '(' | '[' | '{' => paren_depth += 1,
+            ')' | ']' | '}' => paren_depth = paren_depth.saturating_sub(1),
+            _ => {}
         }
 
         if ch == '\n' {
@@ -1894,6 +1918,82 @@ pub const X: i32 = 1;
             expanded.contains("\"http://x#anchor\""),
             "URL fragment must survive minify+expand: {expanded}"
         );
+    }
+
+    /// WO 48.45: a triple-quoted CALL ARGUMENT inside parens is not a
+    /// docstring — the old blank-line heuristic deleted it, and the
+    /// write-back chain wrote the file back without it.
+    #[test]
+    fn test_minify_python_triple_quoted_call_argument_round_trips() {
+        use crate::shared::minify::{expand_minified, wrap_minified_envelope};
+        use std::path::Path;
+
+        let src = "def run():\n    sql = query(\n        \"\"\"\n        SELECT *\n        FROM t\n        \"\"\"\n    )\n    return sql\n";
+        let minified = minify_content_by_ext(src, "py", false);
+        assert!(
+            minified.contains("SELECT *"),
+            "triple-quoted call argument must survive minify: {minified}"
+        );
+        assert!(
+            minified.contains("\"\"\"\n        SELECT *"),
+            "argument literal must stay triple-quoted: {minified}"
+        );
+        let wrapped = wrap_minified_envelope("python", &minified);
+        let expanded = expand_minified(Path::new("x.py"), &wrapped);
+        assert!(
+            expanded.contains("SELECT *"),
+            "argument must survive minify+expand: {expanded}"
+        );
+        assert!(expanded.contains("return sql"));
+    }
+
+    /// WO 48.45: triple-quoted strings as list elements survive.
+    #[test]
+    fn test_minify_python_list_of_triple_quoted_strings_round_trips() {
+        let src =
+            "Q = [\n    \"\"\"\n    alpha\n    \"\"\",\n    \"\"\"\n    beta\n    \"\"\",\n]\n";
+        let out = minify_content_by_ext(src, "py", false);
+        assert!(out.contains("alpha"), "first element must survive: {out}");
+        assert!(out.contains("beta"), "second element must survive: {out}");
+        assert!(
+            out.matches("\"\"\"").count() == 4,
+            "both triple-quote pairs must survive: {out}"
+        );
+    }
+
+    /// WO 48.45: real docstrings (module start / class / def) are still
+    /// stripped under the depth-0 + block-start rule.
+    #[test]
+    fn test_minify_python_real_docstrings_still_stripped() {
+        let src = "\"\"\"Module doc.\"\"\"\nclass C:\n    \"\"\"Class doc.\"\"\"\n    def m(self):\n        \"\"\"Method doc.\"\"\"\n        return 1\n";
+        let out = minify_content_by_ext(src, "py", false);
+        assert!(
+            !out.contains("Module doc"),
+            "module docstring stripped: {out}"
+        );
+        assert!(
+            !out.contains("Class doc"),
+            "class docstring stripped: {out}"
+        );
+        assert!(
+            !out.contains("Method doc"),
+            "method docstring stripped: {out}"
+        );
+        assert!(out.contains("class C:"), "code must survive: {out}");
+        assert!(out.contains("return 1"));
+    }
+
+    /// WO 48.45: triple-quoted string nested two parens deep survives,
+    /// including a `#` in its body.
+    #[test]
+    fn test_minify_python_nested_parens_triple_quoted_string_survives() {
+        let src = "run(wrap(\n    \"\"\"\n    inner # not a comment\n    \"\"\"\n))\n";
+        let out = minify_content_by_ext(src, "py", false);
+        assert!(
+            out.contains("inner # not a comment"),
+            "nested-parens literal body must survive verbatim: {out}"
+        );
+        assert!(out.contains("run(wrap("));
     }
 
     /// Go: `//` line and `/* */` block comments stripped; code preserved.

@@ -947,19 +947,24 @@ fn ruby_block_marker(line: &str, marker: &str) -> bool {
 /// Scan one ruby code line left to right for scanner state: pending
 /// heredoc delimiters (`<<~ID`, `<<-ID`, `<<ID`, `<<'ID'`, `<<"ID"`,
 /// queued FIFO like the shell path) and %-literals left open at EOL.
-/// Single-line '...'/"..." quotes shield their contents, and the first
-/// `#` outside any literal ends the scan — the rest is a comment tail
-/// and can't open anything.
+/// '...'/"..." quotes shield their contents, and the first `#` outside
+/// any literal ends the scan — the rest is a comment tail and can't
+/// open anything. Quote state is the caller's: a literal left open at
+/// EOL stays open across lines (WO 48.37).
 // ponytail: `x <<y` (shift with no space) and `%` after other operators
 // read as heredoc/literal openings — over-opening only skips stripping,
 // it never deletes literal content (48.11's safe-direction trade-off).
-fn ruby_scan_code(line: &str, heredocs: &mut Vec<(bool, String)>, pct: &mut Option<PctOpen>) {
+fn ruby_scan_code(
+    line: &str,
+    heredocs: &mut Vec<(bool, String)>,
+    pct: &mut Option<PctOpen>,
+    quote: &mut Option<char>,
+) {
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
-    let mut quote: Option<char> = None;
     while i < chars.len() {
         let c = chars[i];
-        if let Some(q) = quote {
+        if let Some(q) = *quote {
             // Ruby honors \' and \\ inside single quotes too — skip the
             // backslash pair in either quote style so an escaped quote can't
             // close the literal early and swallow a real heredoc marker
@@ -970,7 +975,7 @@ fn ruby_scan_code(line: &str, heredocs: &mut Vec<(bool, String)>, pct: &mut Opti
                 continue;
             }
             if c == q {
-                quote = None;
+                *quote = None;
             }
             i += 1;
             continue;
@@ -993,7 +998,7 @@ fn ruby_scan_code(line: &str, heredocs: &mut Vec<(bool, String)>, pct: &mut Opti
             continue;
         }
         match c {
-            '\'' | '"' => quote = Some(c),
+            '\'' | '"' => *quote = Some(c),
             '#' => return,
             '%' if i == 0 || matches!(chars[i - 1], ' ' | '\t' | '=' | '(' | '[' | '{' | ',') => {
                 // `%` at term position: optional type letters, then the
@@ -1065,12 +1070,15 @@ fn minify_ruby(source: &str) -> String {
     let mut open_heredocs: Vec<(bool, String)> = Vec::new();
     // %-literal spanning lines.
     let mut pct: Option<PctOpen> = None;
+    // "..."/'...' literal spanning lines (WO 48.37).
+    let mut quote: Option<char> = None;
     // Inside a =begin/=end block comment.
     let mut in_block = false;
 
     for line in source.lines() {
         // Heredoc body: verbatim (no comment strip, no blank collapse)
-        // until the terminator line.
+        // until the terminator line. A quote opener inside a heredoc body
+        // is heredoc content — bodies are never scanned for quotes.
         if let Some(&(indent_tolerant, ref delim)) = open_heredocs.first() {
             let candidate = if indent_tolerant { line.trim() } else { line };
             if candidate == delim.as_str() {
@@ -1086,7 +1094,21 @@ fn minify_ruby(source: &str) -> String {
         // (and the remainder can then open a heredoc, ruby-wise the string
         // is part of the same logical line).
         if pct.is_some() {
-            ruby_scan_code(line, &mut open_heredocs, &mut pct);
+            ruby_scan_code(line, &mut open_heredocs, &mut pct, &mut quote);
+            out.push_str(line);
+            out.push('\n');
+            prev_blank = false;
+            continue;
+        }
+
+        // Multi-line string continuation: verbatim (no comment strip, no
+        // blank collapse) until the closing quote. The scan advances quote
+        // state so the post-close remainder can still open heredocs/%;
+        // a heredoc opener inside the string is string content.
+        // ponytail: an unterminated literal keeps the rest of the file
+        // verbatim — safe direction (nothing stripped), same as <<$VAR.
+        if quote.is_some() {
+            ruby_scan_code(line, &mut open_heredocs, &mut pct, &mut quote);
             out.push_str(line);
             out.push('\n');
             prev_blank = false;
@@ -1114,7 +1136,7 @@ fn minify_ruby(source: &str) -> String {
             continue;
         }
 
-        ruby_scan_code(line, &mut open_heredocs, &mut pct);
+        ruby_scan_code(line, &mut open_heredocs, &mut pct, &mut quote);
 
         if trimmed.is_empty() {
             if prev_blank {
@@ -1136,27 +1158,28 @@ fn minify_ruby(source: &str) -> String {
 /// `<<'DELIM'`, `<<"DELIM"`), quote-aware. `<<<` here-strings and `#`
 /// comment tails don't count. Found delimiters are queued (tab_tolerant,
 /// delimiter) — FIFO, matching bash's read order for `<<A <<B` on one line.
+/// Quote state is the caller's: a literal left open at EOL stays open
+/// across lines (WO 48.37).
 // ponytail: `<<$VAR` dynamic delimiters never terminate statically, so the
 // rest of the file stays "in heredoc" — safe direction (nothing stripped).
-fn shell_heredoc_opens(line: &str, open: &mut Vec<(bool, String)>) {
+fn shell_heredoc_opens(line: &str, open: &mut Vec<(bool, String)>, quote: &mut Option<char>) {
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
-    let mut quote: Option<char> = None;
     while i < chars.len() {
         let c = chars[i];
-        if let Some(q) = quote {
+        if let Some(q) = *quote {
             if c == '\\' && q == '"' && i + 1 < chars.len() {
                 i += 2;
                 continue;
             }
             if c == q {
-                quote = None;
+                *quote = None;
             }
             i += 1;
             continue;
         }
         match c {
-            '\'' | '"' => quote = Some(c),
+            '\'' | '"' => *quote = Some(c),
             '#' => {
                 // Only a word-start `#` starts a comment (bash rule);
                 // `a#b<<EOF` still opens a heredoc.
@@ -1214,10 +1237,13 @@ fn minify_shell(source: &str) -> String {
     let mut prev_blank = false;
     // Open heredocs, oldest first: (tab-tolerant terminator, delimiter).
     let mut open_heredocs: Vec<(bool, String)> = Vec::new();
+    // "..."/'...' literal spanning lines (WO 48.37).
+    let mut quote: Option<char> = None;
 
     for line in source.lines() {
         // Heredoc body: verbatim (no comment strip, no blank collapse)
-        // until the terminator line.
+        // until the terminator line. A quote opener inside a heredoc body
+        // is heredoc content — bodies are never scanned for quotes.
         if let Some(&(tab_tolerant, ref delim)) = open_heredocs.first() {
             let candidate = if tab_tolerant {
                 line.trim_start_matches('\t')
@@ -1233,11 +1259,25 @@ fn minify_shell(source: &str) -> String {
             continue;
         }
 
+        // Multi-line string continuation: verbatim (no comment strip, no
+        // blank collapse) until the closing quote. The scan advances quote
+        // state so the post-close remainder can still open heredocs; a
+        // heredoc opener inside the string is string content.
+        // ponytail: an unterminated literal keeps the rest of the file
+        // verbatim — safe direction (nothing stripped), same as <<$VAR.
+        if quote.is_some() {
+            shell_heredoc_opens(line, &mut open_heredocs, &mut quote);
+            out.push_str(line);
+            out.push('\n');
+            prev_blank = false;
+            continue;
+        }
+
         let trimmed = line.trim();
         if trimmed.starts_with('#') && !trimmed.starts_with("#!") {
             continue; // strip comments but keep shebang
         }
-        shell_heredoc_opens(line, &mut open_heredocs);
+        shell_heredoc_opens(line, &mut open_heredocs, &mut quote);
 
         if trimmed.is_empty() {
             if prev_blank {
@@ -2107,6 +2147,135 @@ pub const X: i32 = 1;
         assert!(
             expanded.contains("# not a comment"),
             "\\' heredoc body must survive minify+expand: {expanded}"
+        );
+    }
+
+    // ── WO 48.37: cross-line quote state (sh/rb) ──────────────────────
+
+    /// WO 48.37: a multi-line shell string carries quote state across
+    /// lines — `#`-leading body lines are string content, not comments,
+    /// and blank body lines don't collapse. Pre-fix the `#` line was
+    /// stripped (content deleted on the write-back chain).
+    #[test]
+    fn test_minify_shell_multiline_string_hash_lines_round_trip() {
+        let src = "msg=\"first\n# not a comment\n\n\nthird\"\n# real comment\necho \"$msg\"\n";
+        let out = minify_content_by_ext(src, "sh", false);
+        assert_eq!(
+            out, "msg=\"first\n# not a comment\n\n\nthird\"\necho \"$msg\"\n",
+            "multi-line string body must round-trip verbatim: {out}"
+        );
+
+        // Single-quote twin.
+        let src = "var='a\n# hash line\nb'\necho \"$var\"\n";
+        let out = minify_content_by_ext(src, "sh", false);
+        assert_eq!(
+            out, src,
+            "single-quoted multi-line string must round-trip verbatim: {out}"
+        );
+
+        // Round trip: the write-back chain can't delete the body either.
+        use crate::shared::minify::{expand_minified, wrap_minified_envelope};
+        use std::path::Path;
+        let minified = minify_content_by_ext(src, "sh", false);
+        let wrapped = wrap_minified_envelope("shell", &minified);
+        let expanded = expand_minified(Path::new("x.sh"), &wrapped);
+        assert!(
+            expanded.contains("# hash line"),
+            "multi-line string # line must survive minify+expand: {expanded}"
+        );
+    }
+
+    /// WO 48.37: a heredoc opener inside a multi-line string is string
+    /// content — pre-fix the continuation line opened a phantom heredoc
+    /// that swallowed the rest of the file (a real comment survived).
+    #[test]
+    fn test_minify_shell_heredoc_inside_string_is_content() {
+        let src = "msg=\"intro\ncat <<EOF\nbody\"\n# real comment\necho end\n";
+        let out = minify_content_by_ext(src, "sh", false);
+        assert!(
+            !out.contains("real comment"),
+            "comment after the string must be stripped (no phantom heredoc): {out}"
+        );
+        assert!(
+            out.contains("cat <<EOF"),
+            "heredoc-looking line inside the string is string content: {out}"
+        );
+        assert!(
+            out.contains("body\""),
+            "string close line must survive: {out}"
+        );
+        assert!(out.contains("echo end"));
+    }
+
+    /// WO 48.37: a string opener inside a heredoc body is heredoc
+    /// content — the new cross-line quote state must not leak into
+    /// heredoc bodies (regression guard).
+    #[test]
+    fn test_minify_shell_string_inside_heredoc_body_is_content() {
+        let src =
+            "cat <<'EOF'\nhas \" and ' openers\n# body hash\nEOF\n# real comment\necho done\n";
+        let out = minify_content_by_ext(src, "sh", false);
+        assert_eq!(
+            out, "cat <<'EOF'\nhas \" and ' openers\n# body hash\nEOF\necho done\n",
+            "heredoc body with quote chars must round-trip, comments after stripped: {out}"
+        );
+    }
+
+    /// WO 48.37 (rb): a multi-line ruby string carries quote state —
+    /// `#`-leading body lines survive and blank body lines don't collapse.
+    #[test]
+    fn test_minify_ruby_multiline_string_hash_lines_round_trip() {
+        let src = "msg = \"first\n# not a comment\n\n\nthird\"\n# real comment\nputs msg\n";
+        let out = minify_content_by_ext(src, "rb", false);
+        assert_eq!(
+            out, "msg = \"first\n# not a comment\n\n\nthird\"\nputs msg\n",
+            "multi-line ruby string body must round-trip verbatim: {out}"
+        );
+
+        // Round trip: the write-back chain can't delete the body either.
+        use crate::shared::minify::{expand_minified, wrap_minified_envelope};
+        use std::path::Path;
+        let minified = minify_content_by_ext(src, "rb", false);
+        let wrapped = wrap_minified_envelope("ruby", &minified);
+        let expanded = expand_minified(Path::new("x.rb"), &wrapped);
+        assert!(
+            expanded.contains("# not a comment"),
+            "multi-line string # line must survive minify+expand: {expanded}"
+        );
+    }
+
+    /// WO 48.37 (rb): a heredoc opener inside a multi-line string is
+    /// string content — pre-fix the continuation line opened a phantom
+    /// heredoc that swallowed the rest of the file.
+    #[test]
+    fn test_minify_ruby_heredoc_inside_string_is_content() {
+        let src = "text = \"intro\ndocs <<~EOS\nhere\"\n# real comment\nputs text\n";
+        let out = minify_content_by_ext(src, "rb", false);
+        assert!(
+            !out.contains("real comment"),
+            "comment after the string must be stripped (no phantom heredoc): {out}"
+        );
+        assert!(
+            out.contains("docs <<~EOS"),
+            "heredoc-looking line inside the string is string content: {out}"
+        );
+        assert!(
+            out.contains("here\""),
+            "string close line must survive: {out}"
+        );
+        assert!(out.contains("puts text"));
+    }
+
+    /// WO 48.37 (rb): a string opener inside a heredoc body is heredoc
+    /// content — the cross-line quote state must not leak into heredoc
+    /// bodies (regression guard).
+    #[test]
+    fn test_minify_ruby_string_inside_heredoc_body_is_content() {
+        let src = "sql = <<~SQL\n  has \" and ' openers\n  body\nSQL\n# real comment\nputs sql\n";
+        let out = minify_content_by_ext(src, "rb", false);
+        assert_eq!(
+            out, "sql = <<~SQL\n  has \" and ' openers\n  body\nSQL\nputs sql\n",
+            "heredoc body with quote chars must round-trip, comments after stripped: {out}"
         );
     }
 }

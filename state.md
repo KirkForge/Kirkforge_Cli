@@ -4,6 +4,27 @@
 
 ## Shipped (closed this session)
 
+- **WO 48.37 (2026-08-29, branch `wo/wo48.37`, NOT merged)**: sh/rb
+  minify scanners carry cross-line quote state — `minify_shell` /
+  `minify_ruby` hoisted the per-line `quote: Option<char>` out of
+  `shell_heredoc_opens` / `ruby_scan_code` (now `&mut Option<char>`
+  params) and gained a string-continuation line branch mirroring the
+  heredoc/pct verbatim branches: quote open at line start → line is
+  string content, emitted verbatim (no comment strip, no blank
+  collapse), scan advances quote state so the post-close remainder can
+  still open heredocs/%. Mutually exclusive with heredoc (heredoc body
+  branch first, never scans quotes; scan skips `<`/`%` while quote
+  open). Fixes multi-line literal body `#` lines being deleted +
+  phantom-heredoc swallowing on the read→envelope→write-back chain
+  (48.11's unshipped "outside strings" half). 6 tests incl. byte-exact
+  round-trips + minify→envelope→expand. FAST GATES ONLY per WO:
+  workspace check --all-targets, clippy -p kf-code -D warnings, fmt,
+  shared::minify 98/98 — all green (one transient non-scanner test
+  failure in 1 of 8 runs, 7/8 fully green — see lessons). gitnexus
+  impact: LOW both symbols. Note: WO 48.37 file + README row were added
+  on this branch (they exist on main 0f0a90c0) — integration merge will
+  conflict, keep the Done version.
+  [48.37](docs/workorders/48.37-minify-cross-line-quote-state.md)
 - **WO 48.31 (2026-08-29, merged at `357ac36e` in the final wave)**: the streaming
   event protocol carries `call_id` — `TurnEvent::ToolStart`/`ToolResult`
   gained the field, `BashPartialOutput(String)` became

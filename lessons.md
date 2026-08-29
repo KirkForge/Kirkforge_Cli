@@ -1308,3 +1308,27 @@
 - `tests/sweep4_probe_test.rs` sits untracked on the main checkout
   (prior sweep residue, not mine) — disclosed, not deleted: never remove
   another session's uncommitted work.
+
+## WO 48.37 session 2026-08-29 (cross-line quote state, worktree wo48.37)
+
+- The 48.37 WO file existed only on main (0f0a90c0 sweep commit), not on
+  the wo/wo48.37 branch — same shape as the 48.34 note in state.md.
+  Check `git log --all -- <wo-path>` before assuming a dispatched WO file
+  is on your branch; copy from the main checkout and expect integration
+  conflicts (keep the Done version).
+- Worktree cold builds dominate the time budget: `cargo check -p kf-code
+  --lib` 10.5 min, first `cargo test` dev-profile build >15 min (killed,
+  resumed). Budget 20-30 min gates in fresh worktrees; run the failing
+  thing first, full gates after.
+- One-off test flake observed: shared::minify suite failed exactly one
+  non-scanner test in exactly one of eight runs (post-fmt first run;
+  7/8 fully green, my 6 new pure-function tests green in every run incl.
+  the failing one). Candidates: cache tests (global caches + parallel
+  threads) or expand_rust_envelope_invokes_rustfmt (subprocess). Did not
+  reproduce; if it recurs, stabilize like the 2026-08-28 flake families
+  before touching assertions.
+- Design note that made the fix small: heredoc/pct verbatim branches
+  already existed, so string-continuation is a fourth branch of the same
+  shape — the only real work was hoisting `quote` from a scan-local to a
+  caller param. Scan-fn param order convention: (line, heredocs, pct,
+  quote).

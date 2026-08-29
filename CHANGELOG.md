@@ -8,6 +8,10 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- minify: sh/rb scanners carry quote state across lines — multi-line
+  "..."/'...' literals no longer lose `#`-leading body lines or collapse
+  blank body lines on the write-back chain (WO 48.37, 6 tests).
+  [48.37](docs/workorders/48.37-minify-cross-line-quote-state.md)
 - Docs pass (2026-08-29 audit, ADRs+workorders+scripts) — 9 surgical ADR
   amendments (076 fold paths, 028 bus-only plugin verifiers, 017 pins,
   043 empty default bus, 065/067 llvm-cov gate, 074 timeouts+nightly 7,

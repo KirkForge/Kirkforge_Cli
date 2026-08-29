@@ -106,7 +106,7 @@ where
 }
 
 /// Thread-safe VFS minification cache (LRU).
-static VFS_CACHE: LazyLock<Mutex<LruCache<(PathBuf, u64), String>>> =
+static VFS_CACHE: LazyLock<Mutex<LruCache<(PathBuf, u128), String>>> =
     LazyLock::new(|| Mutex::new(LruCache::new(CACHE_CAPACITY)));
 
 /// Minify source code for a given language.
@@ -128,12 +128,14 @@ pub fn minify_source_safe(path: &Path, content: &str) -> String {
 }
 
 fn minify_source_impl(path: &Path, content: &str, preserve_tests: bool) -> String {
-    // Check cache first (only for files that actually exist on disk)
+    // Check cache first (only for files that actually exist on disk).
+    // Key is nanos-granular: a same-second rewrite must miss the cache
+    // (WO 48.48 edit_file envelope round-trip race).
     let mtime = match std::fs::metadata(path)
         .ok()
         .and_then(|m| m.modified().ok())
         .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos())
     {
         Some(m) => m,
         None => {
@@ -491,6 +493,47 @@ mod tests {
         assert!(
             safe.contains("#[cfg(test)]"),
             "safe variant must not get the test-stripped cached entry"
+        );
+
+        remove_test_file(&tmp);
+    }
+
+    /// A rewrite within the same second must not be served the stale
+    /// pre-edit cache entry (WO 48.48). Mtimes are pinned via
+    /// `set_modified` so the race is deterministic — no fs timing needed.
+    #[test]
+    fn test_same_second_rewrite_serves_fresh_content() {
+        clear_minify_cache();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "kf_code_minify_nanos_test_{}.py",
+            std::process::id()
+        ));
+        remove_test_file(&tmp);
+
+        // Same whole second, 500ms apart — identical under the old
+        // as_secs() key, distinct under as_nanos().
+        let base = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_100);
+
+        std::fs::write(&tmp, "x = 1  # v1").unwrap();
+        let f = std::fs::OpenOptions::new().write(true).open(&tmp).unwrap();
+        f.set_modified(base).unwrap();
+        drop(f);
+
+        let first = minify_source(&tmp, "x = 1  # v1");
+        assert!(!first.contains("v1"), "comment must be stripped");
+        assert!(cache_contains(&tmp), "first minify populates the cache");
+
+        std::fs::write(&tmp, "x = 2  # v2").unwrap();
+        let f = std::fs::OpenOptions::new().write(true).open(&tmp).unwrap();
+        f.set_modified(base + std::time::Duration::from_millis(500))
+            .unwrap();
+        drop(f);
+
+        let second = minify_source(&tmp, "x = 2  # v2");
+        assert!(
+            second.contains("x = 2") && !second.contains("v2"),
+            "same-second rewrite must get a fresh minify, not the stale entry (got: {second:?})"
         );
 
         remove_test_file(&tmp);

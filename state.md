@@ -4,6 +4,17 @@
 
 ## Shipped (closed this session)
 
+- **WO 48.48 (2026-08-29, branch `wo48.48`, NOT merged)**: minify VFS cache
+  key nanos-granular — `minify_source_impl` (src/shared/minify/mod.rs) keys on
+  `duration_since(UNIX_EPOCH).as_nanos()` (u128) instead of `.as_secs()`; a
+  same-second rewrite after an edit no longer serves the stale pre-edit
+  minified view (edit_file envelope round-trip race). Key stays in-memory
+  (path, mtime) shape; no persistence touchpoints. Regression test
+  `test_same_second_rewrite_serves_fresh_content` pins mtimes via
+  `set_modified` 500ms apart in the same second — deterministic, no fs
+  timing. Fast gates green: workspace check --all-targets, clippy -p kf-code
+  -D warnings, fmt, shared::minify 109/109.
+  [48.48](docs/workorders/48.48-minify-cache-nanos.md)
 - **WO 48.37 (2026-08-29, branch `wo/wo48.37`, NOT merged)**: sh/rb
   minify scanners carry cross-line quote state — `minify_shell` /
   `minify_ruby` hoisted the per-line `quote: Option<char>` out of

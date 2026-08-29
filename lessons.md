@@ -1271,3 +1271,22 @@
   apply the identical text edit to both HANDLEBARS_REF_* constants; the
   golden tests enforce byte-equality so drift is caught, no manual
   handlebars render needed (same derivation WO 47.35 used).
+
+## Session 2026-08-29 (docs-fix agent: TECHNICAL.md/config example/README)
+
+- Concurrent multi-agent commits on main are live: two ADR/state/CHANGELOG
+  agents committed interleaved with my four commits, and my `git add
+  CHANGELOG.md` swept one agent's uncommitted archive-link repoint into
+  3f6e929d. Content was audit-correct; left as-is, disclosed. Lesson:
+  in shared checkouts, `git diff -- <file>` the exact file BEFORE `git add`
+  to catch foreign in-flight edits.
+- Audit spec vs code: every count in the 2026-08-29 TECHNICAL audit table
+  verified exact (109 fields, 8 KNOWN_EVENTS, 4,110/1,005 tests, 37
+  submodules, 10 kf-* deps 6+4). One spec deviation: drift guard asserts
+  FOUR things (const, KEY_MAP, env literals, serde field count) — the
+  audit said 3; documented the real four.
+- minify subsystem is bigger than the audit's "~1,900 lines" (3,245 wc);
+  omitted the line count rather than re-derive non-test lines.
+- `session.worktree_enabled` ref in the pipeline section (TECHNICAL.md
+  ~1466) was stale post-45.37 but un-flagged by the audit — fixed as a
+  verified extra; scope note: same class as the config-example fix.

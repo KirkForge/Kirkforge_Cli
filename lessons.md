@@ -1308,3 +1308,21 @@
 - `tests/sweep4_probe_test.rs` sits untracked on the main checkout
   (prior sweep residue, not mine) — disclosed, not deleted: never remove
   another session's uncommitted work.
+
+## Session 2026-08-29 (WO 48.39: fallback_python block tracking)
+
+- The old fallback_python bug family came from one design error: guessing
+  Python block depth from statement names while TRIMMING AWAY the input's
+  leading whitespace — the only authoritative signal (minify_python
+  preserves indentation verbatim; only the model's edits collapse it).
+  Width-stack + opener-arming covers both input shapes; the "dedent token"
+  heuristic is unrecoverable garbage, don't re-add it.
+- `chars.clone().nth(1) == Some(&q)` type-errors: nth returns Option<char>,
+  compare with Some(q) not Some(&q) (the minifier sites compare against a
+  `char` param, copy sites carefully).
+- Worktree cold builds: first `cargo check -p kf-code --lib` ~4 min, test
+  link + clippy --all-targets ~9 min, workspace check ~5 min. Budget ~20 min
+  for the full fast-gate set; run each with ≥15 min timeout or the shell
+  kills it mid-compile and leaves a cargo lock wait.
+- WO file + README row for 48.39 did not exist on this branch (same as the
+  48.34 precedent — worker creates both); adr_xref_drift green after adding.

@@ -148,6 +148,7 @@ one WO 47.12 regression (48.3).
 | 48.37 | [minify shell/ruby have no cross-line quote state — multi-line string contents deleted on write-back](48.37-minify-cross-line-quote-state.md) | Done |
 | 48.38 | [fallback_c_like has no backtick arm — re-expansion corrupts Go raw strings / JS template literals](48.38-expand-backtick-arm.md) | Done |
 | 48.39 | [fallback_python swallows code after except blocks; lone pass over-dedents (IndentationError); multi-line string interiors trimmed](48.39-expand-python-except-swallow.md) | Done |
+| 48.40 | [strip_test_blocks string-blind — column-0 #[cfg(test)] inside r#-strings deletes content](48.40-strip-test-blocks-string-blind.md) | Done |
 
 ## Conventions
 

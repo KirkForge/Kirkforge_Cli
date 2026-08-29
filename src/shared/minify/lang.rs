@@ -413,20 +413,48 @@ pub fn minify_content_by_ext(content: &str, ext: &str, preserve_tests: bool) -> 
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
+// String-literal state carried across lines while scanning Rust source
+// (WO 48.40). Only `"` literals span lines; `'` chars are single-line.
+#[derive(Clone, Copy)]
+struct StrScan {
+    raw: bool,
+    hashes: usize,
+}
+
+// Classify the string opening at a `"` from the bytes before it:
+// `r#*"` opens a raw string closed by `"` plus that many `#`.
+fn open_string(before: &str) -> StrScan {
+    let b = before.as_bytes();
+    let mut j = b.len();
+    while j > 0 && b[j - 1] == b'#' {
+        j -= 1;
+    }
+    let raw = j > 0 && b[j - 1] == b'r';
+    StrScan {
+        raw,
+        hashes: if raw { b.len() - j } else { 0 },
+    }
+}
+
 /// Strip test-only blocks (`#[cfg(test)]` or `#[test]` in Rust).
+/// Markers and braces inside string literals (incl. raw `r#"..."#`) do not
+/// count — only real attribute lines enter stripping (WO 48.40).
 fn strip_test_blocks(source: &str) -> String {
     let mut out = String::new();
     let mut in_test_block = false;
     let mut test_started = false;
     let mut test_depth = 0usize;
     let mut brace_depth = 0usize;
+    let mut str_state: Option<StrScan> = None;
 
     for line in source.lines() {
         let trimmed = line.trim();
         let mut suppress_line = in_test_block;
 
-        // Detect #[cfg(test)] or #[test] attributes — only enter once
+        // Detect #[cfg(test)] or #[test] attributes — only enter once,
+        // and only when the line start is not inside a string literal.
         if !in_test_block
+            && str_state.is_none()
             && (trimmed == "#[cfg(test)]"
                 || trimmed == "#[test]"
                 || trimmed.starts_with("#[cfg(test)]"))
@@ -436,10 +464,49 @@ fn strip_test_blocks(source: &str) -> String {
             continue;
         }
 
-        // Track brace depth
-        for ch in line.chars() {
-            match ch {
-                '{' => {
+        // Track brace depth, skipping string-literal and line-comment content.
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if let Some(s) = str_state {
+                // Inside a string: only look for its terminator.
+                if !s.raw {
+                    if bytes[i] == b'\\' {
+                        i += 1; // escaped char — never a terminator
+                    } else if bytes[i] == b'"' {
+                        str_state = None;
+                    }
+                } else if bytes[i] == b'"' {
+                    let mut n = 0;
+                    while n < s.hashes && bytes.get(i + 1 + n) == Some(&b'#') {
+                        n += 1;
+                    }
+                    if n == s.hashes {
+                        i += 1 + s.hashes;
+                        str_state = None;
+                    }
+                }
+                i += 1;
+                continue;
+            }
+            match bytes[i] {
+                b'"' => str_state = Some(open_string(&line[..i])),
+                b'/' if bytes.get(i + 1) == Some(&b'/') => break, // line comment
+                b'\'' => {
+                    // Char literal ('\x' or 'x'); a bare `'a` is a lifetime.
+                    let rest = &line[i + 1..];
+                    let rb = rest.as_bytes();
+                    let n = if rb.first() == Some(&b'\\') && rb.get(2) == Some(&b'\'') {
+                        4
+                    } else if rb.first() != Some(&b'\\') && rb.get(1) == Some(&b'\'') {
+                        3
+                    } else {
+                        1
+                    };
+                    i += n;
+                    continue;
+                }
+                b'{' => {
                     brace_depth += 1;
                     // Capture depth after the opening brace of the test block
                     if in_test_block && !test_started {
@@ -447,7 +514,7 @@ fn strip_test_blocks(source: &str) -> String {
                         test_started = true;
                     }
                 }
-                '}' => {
+                b'}' => {
                     brace_depth = brace_depth.saturating_sub(1);
                     if in_test_block && test_started && brace_depth < test_depth {
                         in_test_block = false;
@@ -457,6 +524,7 @@ fn strip_test_blocks(source: &str) -> String {
                 }
                 _ => {}
             }
+            i += 1;
         }
 
         if suppress_line {
@@ -1667,6 +1735,61 @@ pub const X: i32 = 1;
         assert!(!out.contains("helper"));
         assert!(!out.contains("demo"));
         assert!(out.contains("pub const X"));
+    }
+
+    /// WO 48.40: a column-0 `#[cfg(test)]` line inside a raw string is
+    /// string content, not a marker — it must survive, and real test
+    /// blocks after it must still be stripped.
+    #[test]
+    fn test_strip_test_blocks_marker_in_raw_string_survives() {
+        let source = "fn docs() -> &'static str {\n    r#\"\n#[cfg(test)]\nmod fake {}\n\"#\n}\n\n#[cfg(test)]\nmod real_tests {\n    #[test]\n    fn t() {}\n}\n";
+        let out = strip_test_blocks(source);
+        assert!(
+            out.contains("#[cfg(test)]\nmod fake {}"),
+            "marker inside raw string must survive: {out}"
+        );
+        assert!(
+            out.contains("fn docs()"),
+            "fn around the string must survive"
+        );
+        assert!(
+            !out.contains("real_tests"),
+            "real test module must still be stripped"
+        );
+    }
+
+    /// WO 48.40: `"""` is an empty string plus an opening quote — a marker
+    /// line between them is string content and must survive.
+    #[test]
+    fn test_strip_test_blocks_marker_in_triple_quote_survives() {
+        let source = "fn docs() {\n    let s = \"\"\"\n#[cfg(test)]\n\"\"\";\n}\n";
+        let out = strip_test_blocks(source);
+        assert!(
+            out.contains("#[cfg(test)]"),
+            "marker inside triple-quote run must survive: {out}"
+        );
+        assert!(
+            out.contains("fn docs()"),
+            "fn around the string must survive"
+        );
+    }
+
+    /// WO 48.40 round trip: minified Rust keeps a raw string containing the
+    /// marker line while stripping a real test module (preserve_tests=false).
+    #[test]
+    fn test_minify_rust_raw_string_marker_round_trip() {
+        let src = "pub fn docs() -> &'static str {\n    r#\"\n#[cfg(test)]\nexample marker in docs\n\"#\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n        assert!(true);\n    }\n}\n";
+        let out = minify_content_by_ext(src, "rs", false);
+        assert!(
+            out.contains("#[cfg(test)]\nexample marker in docs"),
+            "raw-string marker must round-trip: {out}"
+        );
+        assert!(out.contains("pub fn docs()"), "code must round-trip");
+        assert!(
+            !out.contains("mod tests"),
+            "real test module must be stripped"
+        );
+        assert!(!out.contains("assert!(true)"), "test body must be stripped");
     }
 
     // ── WO 9.7: per-language minification contracts ─────────────────────

@@ -163,3 +163,10 @@ one WO 47.12 regression (48.3).
 - The scratch `workplan.md` at the repo root (gitignored) is for the current
   task's working notes; the workorders here are the persistent plan.
 | 48.43 | [call_id routing edges: empty-id ToolResult steals a sibling's card; late PTY chunk after TurnComplete resurrects a streaming card](48.43-callid-routing-edges.md) | Done |
+| 48.45 | [Python docstring heuristic drops triple-quoted ARGUMENTS inside parens — f("""...""") loses the argument on write-back](48.45-minify-python-docstring-args.md) | Planned |
+| 48.46 | [minify_rust_inner raw-string blind — r#"..."# with // or quotes inside corrupts on write-back](48.46-minify-rust-raw-strings.md) | Planned |
+| 48.47 | [strip_test_blocks exit needs a brace pair after entry — one-liner test mod empties the rest of the file; brace-less mod deletes the next fn](48.47-strip-test-blocks-exit-logic.md) | Planned |
+| 48.48 | [Minify VFS cache keyed on mtime.as_secs() — same-second rewrite serves the stale pre-edit view](48.48-minify-cache-nanos.md) | Planned |
+| 48.49 | [PTY kill channel fails OPEN on sender-drop — timeout/abort orphans the child (the 48.41 class, channel edition)](48.49-pty-kill-fail-open.md) | Planned |
+| 48.50 | [fallback_python width stack is byte-based — tabs+spaces mixing re-nests into IndentationError on write-back](48.50-expand-python-column-width.md) | Planned |
+| 48.51 | [Docs+CI gaps from 48.44: nightly job inventory stale in TECHNICAL/ADR-074; pty tests compiled but never executed](48.51-nightly-docs-and-pty-tests.md) | Planned |

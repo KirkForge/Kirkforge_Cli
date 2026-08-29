@@ -175,3 +175,4 @@ one WO 47.12 regression (48.3).
 | 48.50 | [fallback_python width stack is byte-based — tabs+spaces mixing re-nests into IndentationError on write-back](48.50-expand-python-column-width.md) | Planned |
 | 48.51 | [Docs+CI gaps from 48.44: nightly job inventory stale in TECHNICAL/ADR-074; pty tests compiled but never executed](48.51-nightly-docs-and-pty-tests.md) | Planned |
 | 48.46 | [minify_rust_inner raw-string-blind — `//` inside r#"…"# comment-strips content → invalid Rust](48.46-minify-rust-raw-strings.md) | Done |
+| 48.51 | [Nightly job inventory stale in TECHNICAL/ADR-074; pty tests compiled but never executed in CI](48.51-nightly-docs-and-pty-tests.md) | Done |

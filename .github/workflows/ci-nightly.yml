@@ -213,8 +213,20 @@ jobs:
         with:
           key: nightly-feature-combos
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
       - name: Check --features pty
         run: cargo check --workspace --all-targets --locked --features pty
+
+      # WO 48.51: check-only compiles the pty tests but never runs them —
+      # the WO 48.42 regression tests (pre-cancelled token, structured
+      # timeout) would rot green. Substring `bash::` selects the
+      # tools::bash module (31 tests, ~7s; verified locally WO 48.51).
+      - name: Test --features pty (bash module incl. 48.42 regressions)
+        run: cargo nextest run --locked -p kf-code --lib --features pty 'bash::'
 
       - name: Check --features devtools
         run: cargo check --workspace --all-targets --locked --features devtools

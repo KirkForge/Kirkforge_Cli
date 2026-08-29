@@ -1991,7 +1991,7 @@ files:
 |---|---|---|---|
 | `.github/workflows/ci-pr.yml` | `pull_request` | `static`, `changes` (path-aware, WO 33.6), `clippy` (`--lib --bins`), `fast-tests` (nextest `ci-fast`), `dead-refs`, `adr-xref` | <5 min PR gate, fail-fast + concurrency cancellation |
 | `.github/workflows/ci-merge.yml` | `push` to `main`/`dev` | `static` → parallel `{clippy` (`--all-targets`), `full-tests` (nextest `ci-full`), `windows` (nextest `ci-full`), `e2e` (nextest `e2e`, `--features e2e-tests`)}` | pre-merge gate; no Ollama, no coverage (both nightly-only per ADR-074) |
-| `.github/workflows/ci-nightly.yml` | `schedule` + `workflow_dispatch` | `coverage` (full llvm-cov + `check-cov-regression.sh`), `ollama` (live model integration), `audit`, `release-build` matrix | nightly depth + slow jobs that don't belong on PRs |
+| `.github/workflows/ci-nightly.yml` | `schedule` + `workflow_dispatch` | `coverage` (full llvm-cov + `check-cov-regression.sh`), `ollama` (live model integration), `subprocess-lifecycle` (ignored timeout tests, WO 45.59/48.22), `e2e-exhaustive`, `feature-combos` (opt-in feature compile rung + pty test execution, WO 48.44/48.51), `audit`, `mutants` (informational), `release-build` matrix | nightly depth + slow jobs that don't belong on PRs |
 
 The `static` job (renamed from `fmt` in ADR-074) runs conflict-marker
 detection, TOML schema validation, `scripts/check-artifact-consistency.sh`

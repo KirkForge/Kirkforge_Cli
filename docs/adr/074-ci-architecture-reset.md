@@ -165,3 +165,5 @@ Two numeric drifts since this ADR landed:
 - **Nightly jobs (5 → 7)**: `subprocess-lifecycle` (WO 48.22 — the two
   `#[ignore]`d timeout/reap tests) and `mutants` (informational
   mutation-testing report) were added to the five listed above.
+- Correction (WO 48.51): the count is now **8** — `feature-combos`
+  (WO 48.44) was added after this amendment was written.

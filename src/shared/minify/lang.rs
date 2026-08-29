@@ -960,7 +960,12 @@ fn ruby_scan_code(line: &str, heredocs: &mut Vec<(bool, String)>, pct: &mut Opti
     while i < chars.len() {
         let c = chars[i];
         if let Some(q) = quote {
-            if c == '\\' && q == '"' && i + 1 < chars.len() {
+            // Ruby honors \' and \\ inside single quotes too — skip the
+            // backslash pair in either quote style so an escaped quote can't
+            // close the literal early and swallow a real heredoc marker
+            // (WO 48.29). Skipping \x in single quotes is end-equivalent:
+            // only \' and \\ can move the closing quote.
+            if c == '\\' && i + 1 < chars.len() {
                 i += 2;
                 continue;
             }
@@ -2036,6 +2041,7 @@ pub const X: i32 = 1;
         );
     }
 
+<<<<<<< HEAD
     // ── WO 48.25: quoted-delimiter resume doesn't blind the scanner ────
 
     /// WO 48.25: two quoted heredoc openers on one line — the scanner used
@@ -2061,6 +2067,47 @@ pub const X: i32 = 1;
         assert_eq!(
             out, src,
             "both quoted heredoc bodies must round-trip verbatim: {out}"
+||||||| e90d0007
+=======
+    /// WO 48.29: `\'` inside a single-quoted ruby string is an escaped quote,
+    /// not a closer. Pre-fix, the scanner closed the literal early, the next
+    /// `'` opened a phantom string, the real `<<~EOS` marker was swallowed,
+    /// and heredoc-body `#` lines were comment-stripped — the 48.13
+    /// corruption class. `\\` escapes the same way.
+    #[test]
+    fn test_minify_ruby_escaped_quote_keeps_heredoc_open() {
+        let src = "note = 'it\\'s fine' <<~EOS\n  # not a comment\n  body\nEOS\n# real comment\nputs note\n";
+        let out = minify_content_by_ext(src, "rb", false);
+        assert!(
+            out.contains("# not a comment"),
+            "heredoc body after \\' must survive: {out}"
+        );
+        assert!(out.contains("body"), "heredoc body must survive: {out}");
+        assert!(out.contains("EOS"), "terminator must survive: {out}");
+        assert!(
+            !out.contains("real comment"),
+            "comments outside must still be stripped: {out}"
+        );
+        assert!(out.contains("puts note"));
+
+        // `\\` before the closer: string ends at the LAST quote, heredoc opens.
+        let backslash = "s = 'a\\\\' <<~EOS\n  # keep\nEOS\n";
+        let out = minify_content_by_ext(backslash, "rb", false);
+        assert!(
+            out.contains("# keep"),
+            "\\\\ must not close the literal early: {out}"
+        );
+
+        // Round trip: the write-back chain can't delete the body either.
+        use crate::shared::minify::{expand_minified, wrap_minified_envelope};
+        use std::path::Path;
+        let minified = minify_content_by_ext(src, "rb", false);
+        let wrapped = wrap_minified_envelope("ruby", &minified);
+        let expanded = expand_minified(Path::new("x.rb"), &wrapped);
+        assert!(
+            expanded.contains("# not a comment"),
+            "\\' heredoc body must survive minify+expand: {expanded}"
+>>>>>>> wo/wo48.29
         );
     }
 }

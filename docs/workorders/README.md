@@ -157,3 +157,4 @@ Only the two most recent series are kept live.
 | 48.33 | [read_file scans to EOF even for offset=100000,limit=20 — O(file) cost for an O(window) request](48.33-read-file-windowed-read.md) | Done |
 | 48.34 | [max_turns unbounded + glob walker not cancel-aware — model-controlled resource without ceilings](48.34-resource-bound-bundle.md) | Done |
 | 48.35 | [untrusted_content delimiter breakable (payload closing tag, truncation cut) — document as mitigation, harden the wrap](48.35-untrusted-delimiter-honesty.md) | Done |
+| 48.36 | [job-id generation race: read-max-plus-one mints duplicate ids — two clients overwrite each other logically](48.36-job-id-generation-race.md) | Done |

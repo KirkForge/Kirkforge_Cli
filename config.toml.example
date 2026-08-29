@@ -71,6 +71,11 @@
 #   "reject" — return a Failure immediately with a hint to use task_output
 # task_concurrency_mode = "queue"
 
+# Ceiling the `task` tool applies to the model-supplied max_turns argument
+# (WO 48.34) — a runaway value cannot reach the subagent executor loop.
+# Clamped to 1–1024. Default: 32.
+# max_subagent_turns = 32
+
 # ---------------------------------------------------------------------------
 # Computer-use browser tool ([computer_use] table — SecurityConfig is flattened
 # into the top level, so the table is [computer_use], not [security.computer_use])
@@ -450,19 +455,41 @@
 # mouse_enabled = true
 
 # ---------------------------------------------------------------------------
-# Subagent worktree isolation (WO 35.2)
+# Opt-in extra commands (WO 47.13)
 # ---------------------------------------------------------------------------
+#
+# Low-traffic TUI commands are disabled unless their key is listed here
+# (default empty = all off; live via /reload). DisplayConfig is flattened
+# into the top level, so this is a TOP-LEVEL key — the `[display]
+# extra_commands = [...]` form the TUI's enable-hint message prints does
+# NOT parse (known issue, needs a WO); write it top-level as below.
+# Recognized keys:
+#   "gh"            — /gh
+#   "route"         — /route
+#   "metrics"       — /metrics
+#   "carryover"     — /carryover (display command only)
+#   "personas"      — /plan, /explore, /coder
+#   "jobs-schedule" — the /jobs cron surface (schedule, scheduled,
+#                     run-now, logs); background-bash /jobs stays always-on
+#   "mentions"      — @-mention expansion + completion
+# extra_commands = ["gh", "jobs-schedule"]
 
-# When true, a `coder` subagent spawned by the `task` tool gets its own
-# `git worktree` (branched from the parent sandbox when that is itself a
-# worktree, else the process CWD). The cloned config's `sandbox_dir` is
-# pointed at the worktree before `access_from_config`, so the path guard,
-# landlock extra paths, and the subagent executor's guard tower all center
-# on the worktree. Before the worktree is dropped, uncommitted edits are
-# captured with `git diff HEAD` and returned as an appliable patch appended
-# to the task summary. Default: false (subagents share the parent
-# workspace). Env: KF_CODE_WORKTREE_ENABLED.
-# [session]
+# ---------------------------------------------------------------------------
+# Subagent artifact policy (WO 35.2 / WO 45.37)
+# ---------------------------------------------------------------------------
+#
+# How coder-subagent changes reach the parent workspace. SessionConfig is
+# flattened into the top level, so artifact_policy is a TOP-LEVEL key —
+# a `[session]` table form is silently ignored. When the policy selects
+# worktree isolation, the coder subagent gets its own `git worktree`
+# (branched from the parent sandbox when that is itself a worktree, else
+# the process CWD). The cloned config's `sandbox_dir` is pointed at the
+# worktree before `access_from_config`, so the path guard, landlock extra
+# paths, and the subagent executor's guard tower all center on the
+# worktree. Before the worktree is dropped, uncommitted edits are
+# captured with `git diff HEAD` and returned as an appliable patch
+# appended to the task summary.
+#
 # artifact_policy = "direct_write"
 # WO 45.37: typed artifact policy replacing the worktree_enabled +
 # auto_apply_patch bool pair. Three variants:
@@ -474,9 +501,9 @@
 #                    On conflict/dirty-tree the error is surfaced (not silent
 #                    loss). The user still must `git commit` manually —
 #                    there is no auto-commit variant.
-# Legacy configs using `worktree_enabled` + `auto_apply_patch` are still
-# accepted: `true`/`false` → `patch_only`, `true`/`true` → `auto_apply`,
-# `false`/`_` → `direct_write`.
+# Legacy configs using top-level `worktree_enabled` + `auto_apply_patch`
+# are still accepted: `true`/`false` → `patch_only`, `true`/`true` →
+# `auto_apply`, `false`/`_` → `direct_write`.
 
 # ---------------------------------------------------------------------------
 # Workspace plugin sources
@@ -510,6 +537,14 @@
 # compatibility layer" for the agent file format (frontmatter name /
 # description / tools / model + body = system prompt).
 # plugin_trust_workspace = false
+#
+# Content-hash consent ledger (WO 45.61 / WO 46.13, default ON): a signed
+# plugin must ALSO be ledger-approved with a matching `bundle_hash`
+# (covering manifest + command scripts) before it loads. The manifest-only
+# signature does not cover the scripts the manifest points to; the ledger
+# does. Approve pending bundles with `/plugins approve <n>`. Set to false
+# to opt out of the ledger layer.
+# plugin_consent_ledger = true
 #
 # [plugin_sources]
 # my-custom-plugin = "path/to/plugin-dir"

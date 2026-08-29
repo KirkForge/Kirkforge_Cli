@@ -60,7 +60,7 @@ Decision tree:
 - Each subtask: clear scope (files), a gate (command), a done-condition.
 
 ## 3. Self-improving loop
-- At session end, write `lessons.md` (gitignored) with: what you learned about this codebase (conventions, gotchas, patterns), what you tried that didn't work and why, what you'd do differently next time.
+- At session end, write `lessons.md` (tracked, append-only — see §7) with: what you learned about this codebase (conventions, gotchas, patterns), what you tried that didn't work and why, what you'd do differently next time.
 - Update `state.md` (tracked) with: what changed this session, what's pending, what's blocked.
 - Lessons from `lessons.md` that are permanent conventions get folded into this `AGENTS.md` file — so the next worker reads them automatically.
 

@@ -188,6 +188,20 @@ The largest module (~37 submodules). It owns:
 - **Bench** (`bench.rs`): headless session executor for benchmark tasks.
 - **Replay** (`replay.rs`): execution replay for debugging (ADR-039).
 
+### Streaming tool-call protocol (`call_id`, WO 48.31)
+
+Parallel same-name tool calls need disambiguation on the event stream, so
+the executor stamps every streaming tool event with the model-assigned
+call id (`ToolInvocation.id`): `TurnEvent::ToolStart`, `ToolResult`, and
+`BashPartialOutput` all carry a `call_id` field
+(`executor/types.rs`). The TUI routes chunks and placeholder
+finalization through `ConversationState.streaming_tool_index` — a
+call_id → message-index map, rebased on mid-deque removal and prune — so
+parallel bash calls never mix cards. Events with an empty `call_id` (old
+replay traces, synthetic results without an invocation) fall back to the
+pre-48.31 name-based pairing; protocol consumers should treat empty as
+"pair by name."
+
 ### `adapters/` — provider abstraction
 
 One file per provider plus shared body builders and retry logic. The
@@ -284,6 +298,19 @@ their capability flags in `ToolContextBuilder`. (`atomic_write` and
 so the agent loop and bench harness can invoke workflows via tool calls,
 reusing the same in-process `TaskSpawner` as the `task` tool. Plugin tools are
 registered alongside these at runtime.
+
+**Windowed reads (WO 48.33):** a `read_file` call with `offset > 0` and a
+`limit` stops scanning once the window is filled — the file is streamed
+line by line and only the `[offset, offset+limit)` window is held, so a
+multi-GB file read with a small window no longer sits in memory in full.
+The true line total past a filled window is reported as unknown
+(`N+` display); `offset = 0` keeps the full scan.
+
+**Cancel-aware fallback walkers (WO 48.34):** when the tree-sitter /
+ripgrep fast paths are unavailable and `glob`/`grep` fall back to their
+own directory walks, the walk body checks the tool's cancel flag per
+directory entry and returns `Cancelled` promptly instead of walking to
+completion — Esc during a large fallback search stops within one entry.
 
 The `bash` tool has three isolation layers: Docker execution mode
 (`--docker`, ADR-036) for full container isolation, lightweight rlimit
@@ -447,14 +474,9 @@ stale lines at re-indexed positions. The `thinking_buffer` is bounded
 to a 32 KiB tail budget (`trim_thinking_buffer_tail`); the render path
 joins + re-wraps only the tail each frame. Streaming PTY tool cards
 are capped to a 64 KiB tail with a byte-count marker. Tool streaming
-events carry the model-assigned call id (WO 48.31): `ToolStart`/
-`ToolResult`/`BashPartialOutput` all include `call_id`
-(`ToolInvocation.id`), and the TUI routes chunks + placeholder
-finalization through `ConversationState.streaming_tool_index`
-(call_id → message index, rebased on mid-deque removal and prune) so
-parallel same-name bash calls never mix cards. Events with an empty
-`call_id` (old replay traces, synthetic results) fall back to the
-pre-48.31 name-based pairing. Chat scroll
+events route by `call_id` (see
+[Streaming tool-call protocol](#streaming-tool-call-protocol-call_id-wo-4831)
+above). Chat scroll
 offset is clamped to `u16::MAX` (`ponytail:` ceiling — ratatui 0.30's
 `Paragraph::scroll` takes u16). The doom-loop banner captures keys
 above the approval dialog when unacknowledged, matching its z-order.
@@ -609,7 +631,11 @@ discovered agents so the model knows which persona names are valid.
 `Config` (decomposed into 5 `#[serde(flatten)]` sub-structs: `ModelConfig`,
 `SecurityConfig`, `ToolConfig`, `SessionConfig`, `DisplayConfig`), `Message`,
 `Role`, `StreamEvent`, `ToolDef`, `ToolOutcome`, `ModelInfo`, `ContentPart`,
-metrics, backoff, permissions, minify, audit, event_bus. The audit log records
+metrics, backoff, permissions, minify (see
+[Prompt-time minification](#prompt-time-minification) below), audit,
+event_bus. The `emit!` / `send_or_warn!` macros (`shared/mod.rs`, WO 47.10)
+are the convention that replaces `let _ = tx.send(...)`: a dropped receiver
+logs a warning instead of silently swallowing the event. The audit log records
 destructive tool calls (`AuditEntry::Tool`) and hook denials / fail-open
 failures (`AuditEntry::Hook`, WO 11.6 / ADR-061) as append-only NDJSON
 with a `"kind"` tag. WO 29.4 added the tamper-evident hash-chained audit
@@ -735,6 +761,37 @@ skipping malformed files. The `/tasks` slash command surfaces this
 read-only history (id, status, persona, duration, truncated summary).
 Phase 2 (`/jobs` integration + transcript links) and Phase 3 (full
 `AgentRun` object) are deferred — tracked in WO 41.5.
+
+### Prompt-time minification
+
+`src/shared/minify/` (`mod`/`lang`/`expand`) is the prompt-time source
+minifier (ADR-053): `read_file` auto-minifies any file above
+`minify_above_bytes` (default 4096) — comments stripped, blank lines
+collapsed, ~30-50% token savings on source — and wraps the result in a
+`<minified lang="...">` envelope when `minify_write_side` is on, so
+`write_file`/`edit_file` expand it back to readable source before writing
+(`expand.rs` uses rustfmt/prettier/deno when installed, with a
+punctuation-aware fallback reflow). Two engines:
+
+- **AST path** (`minify_with_map`): tree-sitter parse with byte-position
+  maps, so envelope edits land surgically at the original offsets
+  (WO 17.4). Languages: Rust, Go, Python, TS/TSX, JS/JSX, Bash/Sh/Zsh
+  (the `Lang` enum in the minifier, distinct from the context-index
+  language set).
+- **Char-scan path** (`minify_content_by_ext`, what `minify_source`
+  uses): per-extension scanners covering rs, py, js/jsx/ts/tsx, go,
+  c/h/cpp/hpp/cc, java, rb, sh/bash/zsh, md. Hardened across
+  WO 48.1/48.11/48.12/48.13/48.25/48.26/48.29: string-literal-aware
+  comment stripping (a `#`/`//` inside a string is data), JS
+  regex-literal awareness (`prev_opens_regex`, line-bail on misdetect),
+  and Ruby/Shell heredoc body preservation (`<<~ID`/`<<-ID`/`<<ID`,
+  quoted delimiters, same-line openers).
+
+A (path, mtime)-keyed 200-entry LRU VFS cache (`VFS_CACHE`) memoizes
+plain minification; the `preserve_tests` variant (`minify_source_safe`,
+used for top-file context the model has already seen) bypasses the cache
+in both directions so test-stripped output is never served for a
+safe-mode read (WO 48.8).
 
 ### Permissions
 
@@ -1457,6 +1514,12 @@ Workflows reuse the `task` tool's in-process spawner, so they run as orchestrate
 subagent personas within a single session. Workflows are invoked two ways: the
 TUI `/workflow run` slash command, and the `workflow_run` tool (WO 9.1) which
 lets the agent loop and bench harness run a named template via a tool call.
+Agent steps cancel with the workflow (WO 48.32): `bridged_task_cancel`
+(`src/tools/workflow.rs`) cascades the runner's `CancellationToken` into the
+agent step's `TaskRequest` cancel pair (flag + token + Notify-done watcher)
+via the same `cascade_parent_cancel` bridge as the foreground `task` tool —
+Esc or a job timeout now stops the subagent's LLM loop, not just its
+bash/tool steps.
 
 ### Scout→coder→reviewer pipeline (WO 32.5; pipeline semantics WO 35.1; WO 41.1 rename + patch application)
 
@@ -1605,7 +1668,11 @@ Linux, resolved via `directories::ProjectDirs`; overridable via
 - `tasks/<id>.json` — subagent task summaries (WO 41.5 Phase 1;
   `PersistedTask` serde struct).
 - `jobs/<id>/` — scheduled job store (`job.json` + `runs/` per job;
-  atomic write + rename).
+  atomic write + rename). Job ids are minted by reservation
+  (`generate_job_id`, WO 48.36): the id directory is claimed with an
+  atomic `create_dir` (`AlreadyExists` = taken, retry), so two concurrent
+  callers can never mint the same id and `JobStore::save` reuses the
+  reserved dir.
 - `jobs/bg-exits.ndjson` — background bash exit summary (WO 43.10);
   one NDJSON line per still-Running job appended on session teardown so
   `--resume` can report "these jobs died with the session".

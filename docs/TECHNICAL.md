@@ -50,13 +50,14 @@ kf-code (root bin)          ← the CLI the user runs
 └── docs/adr/                  ← 94 Architecture Decision Records
 ```
 
- The workspace has ~5,000 test functions (~3,950 under `src/`,
- ~1,010 under `crates/`). The `crates/` `#[test]` count is pinned by
+ The workspace has ~5,100 test functions (~4,110 under `src/`,
+ ~1,005 under `crates/`). The `crates/` `#[test]` count is pinned by
  the `readme_drift` test (`crates/kf-budget-core/README.md` State table).
 
 ### Compiled-in vs satellite
 
-The root `kf-code` binary directly depends on seven crates:
+The root `kf-code` binary directly depends on eight crates in a default
+build (plus two more behind `devtools`):
 
 | Crate | Role |
 |---|---|
@@ -64,20 +65,20 @@ The root `kf-code` binary directly depends on seven crates:
 | `kf-context-index` | Tree-sitter indexing and graph retrieval |
 | `kf-workflow` | JSON workflow engine (reuses the `task` tool's spawner) |
 | `kf-lsp` | LSP client pool |
+| `kf-orchestrator` | Delegation/decompose/correction pipeline; `ModelClient` impl + security verifier (WO 35.6) |
+| `kf-rbac` | Daemon bearer-token authz (WO 43.6, `KF_CODE_DAEMON_ROLE`); RBAC 4 roles × 16 perms, timing-safe API-key auth |
 | `kf-bench` | Benchmark task types, loader, verifier, report writers (devtools-gated, WO 47.5) |
 | `kf-testdoctor` | Test-coverage diagnostics behind `kf-code doctor` (devtools-gated, WO 47.5; own `kf-testdoctor` bin builds always) |
-| `kf-orchestrator` | Delegation/decompose/correction pipeline; `ModelClient` impl + security verifier (WO 35.6) |
 
- The remaining crates are **satellites**: they build as support
- libraries. `kf-compress-core` and `kf-budget-core` compile in behind the
+ The remaining crates are **satellites**: they compile in behind Cargo
+ features. `kf-compress-core` and `kf-budget-core` build behind the
  `stratum` / `budget` features (ADR-046/047); the feature-off path
  registers no Stratum/Budget tools or hooks (no shell fallback exists —
- the former shell-plugin trees were deleted in WO 29.9). `kf-rbac` is a
- foundation library (WO 29.5 port) with no shell fallback — it exists
- only as Rust. (WO 47.4 folded `kf-routing` + `kf-memory-store into
- `kf-orchestrator` as the `routing`/`memory` modules, and
- `kf-plugin-sdk` into `kf-plugin-host` as the `sdk` module, removing
- three workspace members with single consumers.)
+ the former shell-plugin trees were deleted in WO 29.9). (WO 47.4 folded
+ `kf-routing` + `kf-memory-store` into `kf-orchestrator` as the
+ `routing`/`memory` modules, and `kf-plugin-sdk` into `kf-plugin-host`
+ as the `sdk` module, removing three workspace members with single
+ consumers.)
 
 **Release-binary cost of the orchestrator chain (WO 36.1, 2026-08-19).**
 Measured in one worktree (`cargo build --release -p kf-code`, packaged
@@ -119,7 +120,7 @@ The binary's source is organized into eight top-level modules:
 
 ### `session/` — the agent loop
 
-The largest module (~30 submodules). It owns:
+The largest module (~37 submodules). It owns:
 
 - **Executor** (`executor/`): the turn loop. Dispatches tool calls (serial or
   parallel batches per ADR-0020), collects stream events, emits plan-reason
@@ -169,7 +170,8 @@ The largest module (~30 submodules). It owns:
   the config and prints "restart to apply" (ADR-056, WO 11.0).
 - **Hooks** (`hooks.rs`): fires plugin hooks on lifecycle events
   (`session-start`, `post-turn`, `pre-tool-bash`, `post-tool-bash`,
-  `post-tool-write_file`, `pre-compact`). Folded plugins register
+  `post-tool-write_file`, `pre-compact`, `post-compact`). Folded plugins
+  register
   `InProcessHook` handlers that run in-process with full `HookContext`
   (including tool result content). External plugins use shell scripts.
   Pre-tool hooks gate exactly once per call, in the Phase-1 pre-gate with
@@ -639,20 +641,18 @@ variants, any other TS-shape kind flows through `BusEventKind::Other`
 (WO 45.10 — closes the one untyped event surface; `as_str()` preserves
 the TS wire shape for the `artifact.*` bridge).
 
-**Config surface count (WO 45.41 audit):** the `Config` tree exposes
-**139 distinct config surfaces**, not the ~400 an external reviewer
-estimated — 107 struct fields across the 5 sub-structs
-(`CONFIG_FIELD_COUNT` at `src/shared/config/mod.rs:49`), 96 env-var
-overrides (91 `KF_CODE_*` + 5 provider API keys,
-`src/session/config/env_overrides.rs`), and 62 CLI flags across all
-subcommands (23 on `run`), with ~64 of the env vars shadowing a struct
-field (so they are one knob with two access paths, not two knobs). The
-count is enforced by `config_field_count_drift_guard`
-(`src/session/config/mod.rs:1222`), which asserts four invariants stay
-in sync: the `CONFIG_FIELD_COUNT` const, the serde-serialized field
-count, the `merge_toml_into_config` key count, and the
-`apply_env_overrides` env-var count. Adding a config field without
-updating all four sites fails the test.
+**Config surface count:** the `Config` tree exposes **109 struct fields**
+across the 5 sub-structs (`CONFIG_FIELD_COUNT` at `src/shared/config/mod.rs`,
+bumped 108 → 109 by WO 48.34). Since WO 47.2 every field is env-overridable
+by prefix rule (`KF_CODE_<FIELD>` → field, value coerced via the serialized
+type guide), with irregular names in `KEY_MAP`
+(`src/session/config/env_overrides.rs`) and 3 validated post-block vars —
+the enumerated env-var inventory the old count described no longer exists.
+The count is enforced by `config_field_count_drift_guard`
+(`src/session/config/mod.rs`), which asserts the `CONFIG_FIELD_COUNT`
+const, `KEY_MAP` path integrity, that every env-var literal in the loader
+is accounted for, and that the const matches the serde-serialized field
+count. Adding a config field without updating the const fails the test.
 
 `ToolConfig.max_continuation_rounds` (default 5, clamped 0–50) caps how many
 times the turn loop will continue after `FinishReason::Length`. When the cap
@@ -1207,8 +1207,9 @@ kebab-case `name`; valid semver `version`; `api_version` is `v1`;
 capability-specific constraints (tool/hook `command` must be a
 relative path, skill `trigger` must start with `/`, hook `event`
 must be in the canonical set `session-start` / `pre-turn` /
-`post-turn` / `pre-tool-bash` / `post-tool-bash` / `pre-compact` /
-`post-compact`, verifier `name` non-empty, tool `schema` is a JSON
+`post-turn` / `pre-tool-bash` / `post-tool-bash` /
+`post-tool-write_file` / `pre-compact` / `post-compact`, verifier
+`name` non-empty, tool `schema` is a JSON
 object with a valid optional `type` field); and no duplicate skill
 triggers / tool names / verifier names within a single manifest.
 
@@ -1240,7 +1241,8 @@ and layers on top of signature verification (WO 45.61 / WO 46.13).
 
 Runtime toggles: `enabled_plugins` (Vec) and `plugin_sources` (HashMap) in
 `ToolConfig`. The `/plugins` TUI command set: `list`, `enable`, `disable`,
-`toggle`, `reload`, `trust`, `sources`, `add`, `remove`, `setup`.
+`toggle`, `reload`, `trust`, `approve`, `sources`, `add`, `remove`, `setup`
+(`approve <n>` records consent-ledger approval for a pending bundle).
 
 ### Tool integration strategy: MCP-first
 
@@ -1439,7 +1441,7 @@ references to "use Read" map to the native tool name.
 - **Hooks phase 3** (WO 39.4): the Claude hook stdin-JSON contract and
   generic pre/post-tool events are not yet implemented. This is the
   lowest-frequency artifact class and is tracked in
-  [39.4](docs/archive/workorders/39.4-claude-compat-phase3.md). Skills, commands,
+  [39.4](archive/workorders/39.4-claude-compat-phase3.md). Skills, commands,
   agents, and `.mcp.json` all ship; hooks do not.
 
 ---
@@ -1463,7 +1465,8 @@ lets the agent loop and bench harness run a named template via a tool call.
 name misled) runs three subagents as a real pipeline, not a fan-out: the
 Scout (`explore` persona, read-only) completes first and its context
 summary is injected into the Coder's prompt; the Coder (`coder` persona,
-write, own worktree when `session.worktree_enabled` per WO 35.2) returns a
+write, own worktree when `artifact_policy` is `patch_only`/`auto_apply`
+per WO 35.2 / WO 45.37) returns a
 change summary plus an appliable diff patch, which is injected into the
 Reviewer's prompt; the Reviewer (`plan` persona, read-only) critiques the
 Coder's actual changes (not the task blurb) and ends with "## Review
@@ -2058,6 +2061,9 @@ The root `Cargo.toml` exposes these features:
   dev-tool lines and the subcommands do not exist. Opt in via
   `--features devtools`. `kf-testdoctor` also has its own standalone bin
   (`cargo run -p kf-testdoctor -- …`) that builds without this feature.
+- `e2e-tests` (non-default) — gates the binary-spawn e2e suite
+  (`tests/e2e/`); CI runs it in a dedicated job with
+  `--features e2e-tests` (WO 28.10).
 - `otel` (non-default) — OpenTelemetry span/metric export.
 
  Three plugins are feature-gated compiled-in modules, served as direct Rust

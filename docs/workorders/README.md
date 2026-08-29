@@ -155,6 +155,7 @@ one WO 47.12 regression (48.3).
 | 48.45 | [python docstring heuristic strips triple-quoted ARGUMENTS inside parens — call/list literals deleted on write-back](48.45-minify-python-docstring-args.md) | Done |
 | 48.47 | [strip_test_blocks exit logic — one-liner test mod empties the file; brace-less mod deletes the next fn; odd-quoted block comments break brace counting](48.47-strip-test-blocks-exit-logic.md) | Done |
 | 48.49 | [PTY kill channel fails OPEN on sender-drop — timeout/abort orphans the child (the 48.41 class, channel edition)](48.49-pty-kill-fail-open.md) | Done |
+| 48.50 | [fallback_python width stack is byte-based — tabs+spaces mixing re-nests into IndentationError on write-back](48.50-expand-python-column-width.md) | Done |
 
 ## Conventions
 

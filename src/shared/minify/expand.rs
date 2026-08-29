@@ -455,7 +455,7 @@ fn fallback_python(code: &str) -> String {
             out.push('\n');
             continue;
         }
-        let width = raw_line.len() - stripped.len();
+        let width = indent_cols(raw_line);
         let next_triple = py_triple_state(stripped, None);
         // End-trim only when the line doesn't continue a triple literal —
         // trailing spaces inside a string body are content.
@@ -510,6 +510,22 @@ fn fallback_python(code: &str) -> String {
     }
 
     normalize_trailing_newline(&out)
+}
+
+// Column width of a line's leading indent: a tab advances to the next
+// multiple of 8, other whitespace counts one column. Byte offsets rank a
+// one-byte tab below 2-8 spaces even though both render wider — mixed
+// tabs+spaces input then mis-nests (WO 48.50).
+fn indent_cols(line: &str) -> usize {
+    let mut cols = 0;
+    for c in line.chars() {
+        match c {
+            '\t' => cols += 8 - cols % 8,
+            c if c.is_whitespace() => cols += 1,
+            _ => break,
+        }
+    }
+    cols
 }
 
 // First identifier-ish word of a Python line ("" when it starts with
@@ -688,6 +704,33 @@ mod tests {
         assert_eq!(
             fallback_python(flat),
             "def f():\n    if a:\n        pass\n    else:\n        return 1\n"
+        );
+    }
+
+    #[test]
+    fn fallback_python_mixed_tabs_spaces_renests_correctly() {
+        // WO 48.50: byte-width comparison ranked one tab (1 byte, 8
+        // columns) below 2-8 spaces, so `else:` at 8 spaces re-nested
+        // inside the 2-tab block instead of closing it (IndentationError
+        // on write-back). Output is 4-space normalized; structure must
+        // match the input's tab-stop column structure.
+        let src = "if a:\n\tif b:\n\t\tpass\n        else:\n                x = 1\n\treturn\n";
+        let minified = crate::shared::minify::lang::minify_content_by_ext(src, "py", false);
+        assert_eq!(
+            fallback_expand(&minified, "py"),
+            "if a:\n    if b:\n        pass\n    else:\n        x = 1\n    return\n"
+        );
+    }
+
+    #[test]
+    fn fallback_python_pure_tabs_control_renests_correctly() {
+        // Control: pure tabs are relatively monotone in bytes too — this
+        // worked pre-48.50 and must stay green.
+        let src = "def f():\n\tif a:\n\t\tpass\n\treturn\n";
+        let minified = crate::shared::minify::lang::minify_content_by_ext(src, "py", false);
+        assert_eq!(
+            fallback_expand(&minified, "py"),
+            "def f():\n    if a:\n        pass\n    return\n"
         );
     }
 

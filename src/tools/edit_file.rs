@@ -326,6 +326,21 @@ impl Tool for EditFile {
                     new_content.push_str(&content[byte_start + span_orig_len..]);
 
                     let diff = render_diff(&content, &new_content);
+
+                    // Fuzzy writes pass the same guards as exact-match
+                    // writes (WO 48.27).
+                    if let Some(denied) = write_denied(
+                        self.block_edits,
+                        ctx,
+                        &path,
+                        &content,
+                        &new_content,
+                        &old,
+                        &diff,
+                    ) {
+                        return denied;
+                    }
+
                     tracing::info!(tool = "edit_file", duration_ms = start.elapsed().as_millis(), path = %path.display(), "file tool completed");
                     return match crate::tools::atomic_write::atomic_write(&path, &new_content) {
                         Ok(_) => {
@@ -394,26 +409,16 @@ impl Tool for EditFile {
         };
         let diff = render_diff(&content, &new_content);
 
-        if ctx.diff_review {
-            if let Some(msg) = review_diff(&path, &content, &new_content, &old) {
-                return ToolOutcome::Failure(ToolError::Execution {
-                    message: msg,
-                    exit_code: None,
-                    stderr: String::new(),
-                });
-            }
-        }
-
-        if self.block_edits && !ctx.dry_run {
-            return ToolOutcome::Failure(ToolError::Execution {
-                message: format!(
-                    "BLOCK_EDITS: edit to {} is blocked (--harden mode). Diff:\n{}",
-                    path.display(),
-                    diff
-                ),
-                exit_code: None,
-                stderr: String::new(),
-            });
+        if let Some(denied) = write_denied(
+            self.block_edits,
+            ctx,
+            &path,
+            &content,
+            &new_content,
+            &old,
+            &diff,
+        ) {
+            return denied;
         }
 
         match crate::tools::atomic_write::atomic_write(&path, &new_content) {
@@ -465,6 +470,45 @@ fn snapshot_for_undo(
             "undo stack mutex poisoned: {e}; edit will not be undoable"
         )),
     }
+}
+
+// Write guards every edit_file write path must pass (WO 48.27):
+// diff review (empty diff / wrong deletion ratio) and the --harden
+// write-deny. These used to sit only on the exact-match tail, so the
+// whitespace-normalizing fuzzy fallback wrote to disk unreviewed and
+// unconditionally — whitespace drift defeated --harden.
+fn write_denied(
+    block_edits: bool,
+    ctx: &ToolContext,
+    path: &std::path::Path,
+    content: &str,
+    new_content: &str,
+    old_string: &str,
+    diff: &str,
+) -> Option<ToolOutcome> {
+    if ctx.diff_review {
+        if let Some(msg) = review_diff(path, content, new_content, old_string) {
+            return Some(ToolOutcome::Failure(ToolError::Execution {
+                message: msg,
+                exit_code: None,
+                stderr: String::new(),
+            }));
+        }
+    }
+
+    if block_edits && !ctx.dry_run {
+        return Some(ToolOutcome::Failure(ToolError::Execution {
+            message: format!(
+                "BLOCK_EDITS: edit to {} is blocked (--harden mode). Diff:\n{}",
+                path.display(),
+                diff
+            ),
+            exit_code: None,
+            stderr: String::new(),
+        }));
+    }
+
+    None
 }
 
 fn review_diff(path: &std::path::Path, old: &str, new: &str, old_string: &str) -> Option<String> {
@@ -2032,6 +2076,83 @@ mod tests {
         assert!(
             matches!(result, ToolOutcome::FileEdit { .. }),
             "empty diff should be applied when diff_review=false, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fuzzy_edit_blocked_under_block_edits() {
+        // WO 48.27: the whitespace-normalizing fuzzy fallback used to
+        // write to disk without the block_edits (--harden) deny that
+        // guarded the exact-match path. old_string (2 trailing spaces)
+        // is not an exact substring of the file (3 trailing spaces), so
+        // only the fuzzy fork can match — and it must still be denied.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "x\nabc   \ny\n").unwrap();
+
+        let tool = EditFile::new(
+            None,
+            crate::shared::access::PathGuard::default(),
+            false,
+            true, // block_edits (--harden)
+        );
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "abc  \n",
+            "new_string": "zzz",
+        });
+        let result = tool.run(&ctx, args).await;
+        match &result {
+            ToolOutcome::Failure(ToolError::Execution { message, .. }) => assert!(
+                message.contains("BLOCK_EDITS"),
+                "expected BLOCK_EDITS denial, got {result:?}"
+            ),
+            other => panic!("expected BLOCK_EDITS failure, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "x\nabc   \ny\n",
+            "file must be unchanged under --harden"
+        );
+    }
+
+    #[tokio::test]
+    async fn fuzzy_edit_empty_diff_rejected_by_diff_review() {
+        // WO 48.27: diff review must also guard the fuzzy fallback. The
+        // empty-diff branch is the reachable rejection on this path; the
+        // deletion-ratio branch cannot trigger here because the fuzzy
+        // span is derived from old_string (deletions ≈ old_string lines,
+        // ratio ≈ 1). new_string reproduces the original span
+        // byte-for-byte, so the fuzzy edit is a no-op the review rejects.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "x\nabc   \ny\n").unwrap();
+
+        let tool = EditFile::new(
+            None,
+            crate::shared::access::PathGuard::default(),
+            false,
+            false,
+        );
+        let ctx = ToolContext::new();
+        let args = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "old_string": "abc  \n",
+            "new_string": "abc   ",
+        });
+        let result = tool.run(&ctx, args).await;
+        match &result {
+            ToolOutcome::Failure(ToolError::Execution { message, .. }) => assert!(
+                message.contains("DIFF_REVIEW"),
+                "expected DIFF_REVIEW rejection, got {result:?}"
+            ),
+            other => panic!("expected DIFF_REVIEW failure, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "x\nabc   \ny\n",
+            "file must be unchanged after empty-diff rejection"
         );
     }
 }

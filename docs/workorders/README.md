@@ -149,3 +149,4 @@ Only the two most recent series are kept live.
 | 48.30 | [Drift test can't detect duplicate WO rows; h2 RUSTSEC-2026-0258 untracked](48.30-drift-uniqueness-and-h2.md) | Planned |
 | 48.25 | [Heredoc scanners resume ON the closing quote — second opener on same line invisible (shell + ruby)](48.25-heredoc-quote-resume-blinding.md) | Done |
 | 48.26 | [fallback_c_like inserts a space after every colon — std::cout becomes std: : cout on disk write-back](48.26-fallback-c-like-colon-corruption.md) | Done |
+| 48.27 | [edit_file fuzzy fork bypasses block_edits AND diff_review — whitespace drift defeats --harden](48.27-edit-file-fuzzy-fork-guards.md) | Done |

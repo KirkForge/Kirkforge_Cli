@@ -15,6 +15,12 @@ why, and the gate evidence.
 - fix(minify): fallback_c_like now tracks backticks — Go raw strings and JS
   template literals round-trip byte-identical on envelope write-back
   (WO 48.38)
+- fallback_python (minify envelope write-back): re-indent heuristic replaced
+  with block-structure tracking — code after except blocks is no longer
+  swallowed into the handler, lone `pass` no longer over-dedents the
+  following `else:` into an IndentationError, and multi-line string
+  interiors pass through verbatim; round-trips byte-identical.
+  [48.39](docs/workorders/48.39-expand-python-except-swallow.md)
 - Docs pass (2026-08-29 audit, ADRs+workorders+scripts) — 9 surgical ADR
   amendments (076 fold paths, 028 bus-only plugin verifiers, 017 pins,
   043 empty default bus, 065/067 llvm-cov gate, 074 timeouts+nightly 7,

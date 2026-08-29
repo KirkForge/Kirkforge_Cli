@@ -422,51 +422,146 @@ fn fallback_c_like(code: &str) -> String {
     normalize_trailing_newline(&out)
 }
 
-/// Simple Python pretty printer. Adds indentation based on trailing `:` and
-/// dedents on block-closing keywords.
+/// Simple Python pretty printer. Depth comes from block structure only:
+/// the input's own indentation pops levels (the minifier preserves it, so
+/// it is the authoritative dedent signal), block openers (`def`/`if`/`try`/
+/// ... lines ending in `:`) arm the next level for collapsed input, and
+/// continuation headers (else/elif/except/finally) close the previous
+/// sibling block. Statement names (return/pass/...) never change depth —
+/// guessing them is what swallowed code into except blocks and landed
+/// `else:` one level too shallow. Multi-line string interiors pass through
+/// verbatim.
 fn fallback_python(code: &str) -> String {
     let mut out = String::with_capacity(code.len() * 2);
-    let indent_unit = "    ";
-    let mut indent = 0usize;
+    // Leading-whitespace width of each open block level; depth is
+    // `stack.len() - 1`. Levels come from real indentation or, when the
+    // model collapsed it, from block openers.
+    // ponytail: widths compared relatively, output normalized to 4-space
+    // units — paren-aligned continuation lines get re-normalized; upgrade
+    // path is a real tokenizer.
+    let mut stack: Vec<usize> = vec![0];
+    let mut pending_open = false;
+    let mut triple: Option<char> = None;
 
     for raw_line in code.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() {
+        if triple.is_some() {
+            out.push_str(raw_line);
+            out.push('\n');
+            triple = py_triple_state(raw_line, triple);
+            continue;
+        }
+        let stripped = raw_line.trim_start();
+        if stripped.is_empty() {
             out.push('\n');
             continue;
         }
+        let width = raw_line.len() - stripped.len();
+        let next_triple = py_triple_state(stripped, None);
+        // End-trim only when the line doesn't continue a triple literal —
+        // trailing spaces inside a string body are content.
+        let line = if next_triple.is_some() {
+            stripped
+        } else {
+            stripped.trim_end()
+        };
 
-        // Dedent on block-ending keywords.
-        let dedent_kw = line.starts_with("else:")
-            || line.starts_with("elif ")
-            || line.starts_with("except")
-            || line.starts_with("finally:")
-            || line == "else:";
-        if dedent_kw && indent > 0 {
-            indent -= 1;
+        let word = py_first_word(line);
+        let is_header = matches!(word, "else" | "elif" | "except" | "finally");
+        let width_dedented = width < *stack.last().expect("initialized with one level");
+        while stack.len() > 1 && *stack.last().expect("initialized with one level") > width {
+            stack.pop();
+        }
+        if width > *stack.last().expect("initialized with one level") {
+            stack.push(width);
+        } else if pending_open {
+            // Collapsed body: the opener's level never materialized in the
+            // input's indentation — open a synthetic one at this width.
+            stack.push(width);
+        } else if is_header && !width_dedented && stack.len() > 1 {
+            // Header on un-dedented (collapsed) input closes the previous
+            // sibling block; on preserved input the width already dedented.
+            stack.pop();
         }
 
-        out.push_str(&indent_unit.repeat(indent));
+        for _ in 1..stack.len() {
+            out.push_str("    ");
+        }
         out.push_str(line);
         out.push('\n');
 
-        // Indent after a block opener.
-        if line.ends_with(':') {
-            indent += 1;
-        }
-        // Heuristic: simple statements that terminate a one-line block.
-        if indent > 0
-            && (line.starts_with("return ")
-                || line.starts_with("raise ")
-                || line == "pass"
-                || line == "break"
-                || line == "continue")
-        {
-            indent -= 1;
-        }
+        // `async` covers `async def`/`async for`/`async with`.
+        pending_open = matches!(
+            word,
+            "def"
+                | "if"
+                | "elif"
+                | "else"
+                | "for"
+                | "while"
+                | "try"
+                | "except"
+                | "finally"
+                | "with"
+                | "class"
+                | "async"
+        ) && line.ends_with(':')
+            && next_triple.is_none();
+        triple = next_triple;
     }
 
     normalize_trailing_newline(&out)
+}
+
+// First identifier-ish word of a Python line ("" when it starts with
+// punctuation).
+fn py_first_word(line: &str) -> &str {
+    let end = line
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(line.len());
+    &line[..end]
+}
+
+// Triple-quoted-string state after one line, starting from `triple` (the
+// quote char when the line begins inside a triple literal). Same idiom as
+// the minifier: escape-aware, `#` comments end scanning, single-quoted
+// literals never span lines (an unterminated one is invalid input — reset).
+fn py_triple_state(line: &str, mut triple: Option<char>) -> Option<char> {
+    let mut chars = line.chars().peekable();
+    let mut single: Option<char> = None;
+    while let Some(c) = chars.next() {
+        if let Some(q) = triple {
+            if c == '\\' {
+                chars.next();
+            } else if c == q && chars.peek() == Some(&q) && chars.clone().nth(1) == Some(q) {
+                chars.next();
+                chars.next();
+                triple = None;
+            }
+            continue;
+        }
+        if let Some(q) = single {
+            if c == '\\' {
+                chars.next();
+            } else if c == q {
+                single = None;
+            }
+            continue;
+        }
+        match c {
+            '#' => break,
+            '"' | '\'' => {
+                if chars.peek() == Some(&c) && chars.clone().nth(1) == Some(c) {
+                    chars.next();
+                    chars.next();
+                    triple = Some(c);
+                } else {
+                    single = Some(c);
+                }
+            }
+            _ => {}
+        }
+    }
+    triple
 }
 
 #[cfg(test)]
@@ -555,6 +650,45 @@ mod tests {
         let expanded = fallback_python(minified);
         assert!(expanded.contains("def f():"));
         assert!(expanded.contains("    pass"));
+    }
+
+    #[test]
+    fn fallback_python_try_except_else_round_trip_byte_identical() {
+        // WO 48.39: code after an except/else block was swallowed into it
+        // (nothing ever dedented back out of the handler body).
+        let src = "try:\n    f()\nexcept ValueError:\n    log(\"bad\")\nelse:\n    g()\nx = 1\n";
+        let minified = crate::shared::minify::lang::minify_content_by_ext(src, "py", false);
+        assert_eq!(fallback_expand(&minified, "py"), src);
+    }
+
+    #[test]
+    fn fallback_python_nested_blocks_pass_round_trip_byte_identical() {
+        // WO 48.39: a lone `pass` used to over-dedent, then `else:`
+        // pre-dedented again — the header landed one level too shallow
+        // (IndentationError on disk write-back).
+        let src = "def f():\n    for i in range(3):\n        if i:\n            pass\n        else:\n            continue\n    return 1\n";
+        let minified = crate::shared::minify::lang::minify_content_by_ext(src, "py", false);
+        assert_eq!(fallback_expand(&minified, "py"), src);
+    }
+
+    #[test]
+    fn fallback_python_multiline_string_round_trip_byte_identical() {
+        // WO 48.39: multi-line string interiors were trimmed and
+        // re-indented — string content corrupted on write-back.
+        let src = "def f():\n    s = \"\"\"\nhello\n  world\n\"\"\"\n    return s\n";
+        let minified = crate::shared::minify::lang::minify_content_by_ext(src, "py", false);
+        assert_eq!(fallback_expand(&minified, "py"), src);
+    }
+
+    #[test]
+    fn fallback_python_collapsed_input_reindents_from_block_structure() {
+        // The model edited in minified space and wrote flat code; block
+        // openers still arm levels, headers still close sibling blocks.
+        let flat = "def f():\nif a:\npass\nelse:\nreturn 1";
+        assert_eq!(
+            fallback_python(flat),
+            "def f():\n    if a:\n        pass\n    else:\n        return 1\n"
+        );
     }
 
     #[test]

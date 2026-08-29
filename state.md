@@ -25,6 +25,27 @@
   on this branch (they exist on main 0f0a90c0) — integration merge will
   conflict, keep the Done version.
   [48.37](docs/workorders/48.37-minify-cross-line-quote-state.md)
+- **WO 48.39 (2026-08-29, branch wo/wo48.39)**: `fallback_python`
+  (src/shared/minify/expand.rs) re-indent heuristic replaced with block
+  structure tracking. Statement-name guessing (return/pass/break/continue
+  decrementing depth + unconditional else/except pre-dedent) deleted: it
+  swallowed code after except blocks into the handler and double-dedented
+  headers after return/pass-ending blocks (IndentationError on disk via the
+  envelope write-back chain). Now: width stack of open levels from the
+  input's own indentation (the minifier preserves it — authoritative dedent
+  signal), block openers (def/if/elif/else/for/while/try/except/finally/
+  with/class/async, trailing `:` outside strings) arm levels for collapsed
+  input, continuation headers pop one extra level only when width didn't
+  dedent, triple-quoted string interiors verbatim (`py_triple_state`,
+  same idiom as the minifier). Round-trip tests byte-identical (try/except/
+  else, nested+pass, multi-line string, collapsed-input re-indent);
+  shared::minify 96/96. FAST GATES ONLY per owner directive: workspace
+  check --all-targets, clippy -p kf-code -D warnings, shared::minify
+  targeted, fmt, plus adr_xref_drift 7/7 (WO file + README row added here —
+  the 48.37-48.39 wave may see index conflicts at integration, keep the
+  numeric-order rows). gitnexus impact: LOW (2 direct callers, 0 processes);
+  detect_changes: low, expand.rs + docs only.
+  [48.39](docs/workorders/48.39-expand-python-except-swallow.md)
 - **WO 48.31 (2026-08-29, merged at `357ac36e` in the final wave)**: the streaming
   event protocol carries `call_id` — `TurnEvent::ToolStart`/`ToolResult`
   gained the field, `BashPartialOutput(String)` became

@@ -20,6 +20,9 @@ pub struct Task {
     bg_semaphore: Arc<tokio::sync::Semaphore>,
     concurrency_mode: TaskConcurrencyMode,
     max_bg: usize,
+    /// WO 48.34: ceiling applied to the model-supplied `max_turns` arg —
+    /// a runaway value (u64::MAX) must not reach the executor loop.
+    max_turns_ceiling: usize,
     /// Dynamic agent registry (WO 39.3). Used to (a) build the agent
     /// system-prompt preamble when `persona` names a discovered agent,
     /// and (b) list discovered agents in the tool description. An empty
@@ -35,6 +38,7 @@ impl Task {
             bg_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
             concurrency_mode: TaskConcurrencyMode::Queue,
             max_bg: 4,
+            max_turns_ceiling: crate::shared::config::DEFAULT_MAX_SUBAGENT_TURNS,
             agents: std::sync::Arc::new(crate::session::agents::AgentRegistry::new()),
         }
     }
@@ -45,6 +49,7 @@ impl Task {
             bg_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
             concurrency_mode: TaskConcurrencyMode::Queue,
             max_bg: 4,
+            max_turns_ceiling: crate::shared::config::DEFAULT_MAX_SUBAGENT_TURNS,
             agents: std::sync::Arc::new(crate::session::agents::AgentRegistry::new()),
         }
     }
@@ -53,6 +58,7 @@ impl Task {
         manager: Arc<Mutex<TaskManager>>,
         max_background_tasks: usize,
         concurrency_mode: TaskConcurrencyMode,
+        max_turns_ceiling: usize,
     ) -> Self {
         let permits = max_background_tasks.clamp(1, 64);
         // WO 39.3: share the global registry so the tool description and
@@ -65,6 +71,8 @@ impl Task {
             bg_semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
             concurrency_mode,
             max_bg: permits,
+            // max(1) so a zero ceiling can never invert the clamp below.
+            max_turns_ceiling: max_turns_ceiling.max(1),
             agents,
         }
     }
@@ -82,6 +90,7 @@ impl Task {
             bg_semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
             concurrency_mode,
             max_bg: permits,
+            max_turns_ceiling: crate::shared::config::DEFAULT_MAX_SUBAGENT_TURNS,
             agents,
         }
     }
@@ -133,7 +142,7 @@ impl Tool for Task {
                     "max_turns": {
                         "type": "integer",
                         "default": 1,
-                        "description": "Maximum number of model turns for this subagent (1 = single turn, higher = multi-turn dialog). The subagent loops until FinishReason::Stop or max_turns reached."
+                        "description": "Maximum number of model turns for this subagent (1 = single turn, higher = multi-turn dialog). The subagent loops until FinishReason::Stop or max_turns reached. Clamped to tools.max_subagent_turns (default 32)."
                     }
                 },
                 "required": ["prompt"]
@@ -168,7 +177,11 @@ impl Tool for Task {
             .get("max_turns")
             .and_then(|m| m.as_u64())
             .map(|m| (m as usize).max(1))
-            .unwrap_or(1);
+            .unwrap_or(1)
+            // WO 48.34: clamp the model-supplied ceiling at the tool
+            // layer — `.max(1)` above only floors it, so without this a
+            // runaway arg (u64::MAX) reaches the executor loop.
+            .min(self.max_turns_ceiling);
         // WO 35.1: apply the persona preamble here — run_task uses the
         // prompt verbatim. prompt_summary below stays the raw user prompt.
         // WO 39.3: when the persona names a discovered agent, the agent's
@@ -544,21 +557,103 @@ mod tests {
     #[test]
     fn task_with_config_clamps_semaphore_size() {
         let manager = Arc::new(Mutex::new(TaskManager::new()));
-        let task = Task::with_config(manager, 0, TaskConcurrencyMode::Queue);
+        let task = Task::with_config(manager, 0, TaskConcurrencyMode::Queue, 32);
         assert_eq!(task.max_bg, 1);
         let manager = Arc::new(Mutex::new(TaskManager::new()));
-        let task = Task::with_config(manager, 100, TaskConcurrencyMode::Queue);
+        let task = Task::with_config(manager, 100, TaskConcurrencyMode::Queue, 32);
         assert_eq!(task.max_bg, 64);
         let manager = Arc::new(Mutex::new(TaskManager::new()));
-        let task = Task::with_config(manager, 8, TaskConcurrencyMode::Reject);
+        let task = Task::with_config(manager, 8, TaskConcurrencyMode::Reject, 32);
         assert_eq!(task.max_bg, 8);
         assert_eq!(task.concurrency_mode, TaskConcurrencyMode::Reject);
+    }
+
+    // WO 48.34: a model-supplied max_turns must be clamped to the
+    // configured ceiling before it reaches the spawner — `.max(1)` alone
+    // only floors it. Below-ceiling values pass through untouched.
+    #[tokio::test]
+    async fn task_max_turns_clamped_to_configured_ceiling() {
+        struct Capture {
+            seen_turns: Arc<StdMutex<Option<usize>>>,
+        }
+        #[async_trait::async_trait]
+        impl TaskSpawner for Capture {
+            async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+                *self.seen_turns.lock().unwrap() = Some(request.max_turns);
+                Ok("ok".to_string())
+            }
+        }
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let task = Task::with_config(manager, 4, TaskConcurrencyMode::Queue, 32);
+        for (arg, expected) in [
+            (999_999usize, 32usize),
+            (u64::MAX as usize, 32),
+            (5, 5),
+            (1, 1),
+        ] {
+            let seen_turns = Arc::new(StdMutex::new(None));
+            let spawner: Arc<dyn TaskSpawner> = Arc::new(Capture {
+                seen_turns: seen_turns.clone(),
+            });
+            let ctx = ToolContext::with_spawner(spawner);
+            let outcome = task
+                .run(
+                    &ctx,
+                    serde_json::json!({"prompt": "do thing", "max_turns": arg}),
+                )
+                .await;
+            assert!(
+                matches!(outcome, ToolOutcome::Success { .. }),
+                "got {outcome:?}"
+            );
+            assert_eq!(
+                *seen_turns.lock().unwrap(),
+                Some(expected),
+                "max_turns={arg} must reach the spawner as {expected}"
+            );
+        }
+    }
+
+    // WO 48.34: the default constructors carry the 32 ceiling too.
+    #[tokio::test]
+    async fn task_default_ctors_clamp_max_turns() {
+        struct Capture {
+            seen_turns: Arc<StdMutex<Option<usize>>>,
+        }
+        #[async_trait::async_trait]
+        impl TaskSpawner for Capture {
+            async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+                *self.seen_turns.lock().unwrap() = Some(request.max_turns);
+                Ok("ok".to_string())
+            }
+        }
+        for tool in [
+            Task::new(),
+            Task::with_manager(Arc::new(Mutex::new(TaskManager::new()))),
+        ] {
+            let seen_turns = Arc::new(StdMutex::new(None));
+            let spawner: Arc<dyn TaskSpawner> = Arc::new(Capture {
+                seen_turns: seen_turns.clone(),
+            });
+            let ctx = ToolContext::with_spawner(spawner);
+            let outcome = tool
+                .run(
+                    &ctx,
+                    serde_json::json!({"prompt": "do thing", "max_turns": 999_999}),
+                )
+                .await;
+            assert!(matches!(outcome, ToolOutcome::Success { .. }));
+            assert_eq!(
+                *seen_turns.lock().unwrap(),
+                Some(crate::shared::config::DEFAULT_MAX_SUBAGENT_TURNS)
+            );
+        }
     }
 
     #[tokio::test]
     async fn task_reject_mode_returns_failure_when_semaphore_full() {
         let manager = Arc::new(Mutex::new(TaskManager::new()));
-        let task = Task::with_config(manager, 1, TaskConcurrencyMode::Reject);
+        let task = Task::with_config(manager, 1, TaskConcurrencyMode::Reject, 32);
         let started = Arc::new(tokio::sync::Notify::new());
         let spawner: Arc<dyn TaskSpawner> = Arc::new(BlockingSpawner {
             started: started.clone(),

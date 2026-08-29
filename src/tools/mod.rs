@@ -267,6 +267,7 @@ pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
         task_manager.clone(),
         ctx.max_background_tasks,
         ctx.task_concurrency_mode.clone(),
+        ctx.max_subagent_turns,
     )));
     registry.register(Arc::new(TaskOutput::new(task_manager)));
     let mut workflow = WorkflowTool::new(
@@ -364,6 +365,7 @@ mod tests {
             block_edits: false,
             max_background_tasks: 4,
             task_concurrency_mode: task::TaskConcurrencyMode::Queue,
+            max_subagent_turns: 32,
         };
         let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
@@ -419,6 +421,7 @@ mod tests {
             block_edits: false,
             max_background_tasks: 4,
             task_concurrency_mode: task::TaskConcurrencyMode::Queue,
+            max_subagent_turns: 32,
         };
         let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
@@ -456,6 +459,7 @@ mod tests {
             block_edits: false,
             max_background_tasks: 4,
             task_concurrency_mode: task::TaskConcurrencyMode::Queue,
+            max_subagent_turns: 32,
         };
         let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();

@@ -34,6 +34,9 @@ pub struct ToolContextBuilder {
     pub block_edits: bool,
     pub max_background_tasks: usize,
     pub task_concurrency_mode: TaskConcurrencyMode,
+    /// WO 48.34: ceiling for the `task` tool's model-supplied `max_turns`
+    /// (from `config.tools.max_subagent_turns`, default 32).
+    pub max_subagent_turns: usize,
 }
 
 /// A builder that collects tools and produces the final tool list.

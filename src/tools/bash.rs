@@ -439,15 +439,40 @@ impl Tool for Bash {
             if interactive {
                 use crate::shared::shell::run_with_pty;
                 let call_id = ctx.call_id.clone();
-                return match run_with_pty(
-                    &cmd,
-                    &workdir_path,
-                    80,
-                    24,
-                    ctx.event_tx.clone(),
-                    &call_id,
-                ) {
-                    Ok(pty_result) => {
+                // WO 48.42: run_with_pty blocks (pty read + child wait), so
+                // it must not run on the async path directly — spawn_blocking
+                // owns it, and the join is raced against the tool cancel
+                // token and the same `timeout` budget the non-PTY path
+                // gets. On cancel/timeout the kill channel orders the PTY's
+                // in-run watcher to kill the child; the blocking run then
+                // unblocks (its master read ends), reaps the child, and
+                // exits on its own.
+                let (kill_tx, kill_rx) = std::sync::mpsc::channel::<()>();
+                let pty_cmd = cmd.clone();
+                let pty_wd = workdir_path.clone();
+                let pty_events = ctx.event_tx.clone();
+                let handle = tokio::task::spawn_blocking(move || {
+                    run_with_pty(&pty_cmd, &pty_wd, 80, 24, pty_events, &call_id, kill_rx)
+                });
+                let mut timed_out = false;
+                let joined = tokio::select! {
+                    res = handle => Some(res),
+                    _ = ctx.token.cancelled() => {
+                        let _ = kill_tx.send(());
+                        None
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
+                        timed_out = true;
+                        let _ = kill_tx.send(());
+                        None
+                    }
+                };
+                return match joined {
+                    None if timed_out => ToolOutcome::Failure(ToolError::Timeout {
+                        after_secs: timeout_secs,
+                    }),
+                    None => ToolOutcome::Failure(ToolError::Cancelled),
+                    Some(Ok(Ok(pty_result))) => {
                         let code = pty_result.exit_code.unwrap_or(-1);
                         if code == 0 {
                             ToolOutcome::Success {
@@ -464,8 +489,11 @@ impl Tool for Bash {
                             })
                         }
                     }
-                    Err(e) => ToolOutcome::Failure(ToolError::Internal {
+                    Some(Ok(Err(e))) => ToolOutcome::Failure(ToolError::Internal {
                         message: format!("PTY allocation failed: {e}"),
+                    }),
+                    Some(Err(e)) => ToolOutcome::Failure(ToolError::Internal {
+                        message: format!("PTY task join failed: {e}"),
                     }),
                 };
             }
@@ -830,6 +858,79 @@ mod tests {
                 })
             ),
             "expected Timeout error, got {outcome:?}"
+        );
+    }
+
+    // WO 48.42: a PTY call under a pre-cancelled token must return
+    // Cancelled promptly — the pre-fix code blocked the async body on
+    // the PTY read forever (no select, no kill).
+    #[cfg(all(unix, feature = "pty"))]
+    #[tokio::test]
+    async fn bash_pty_pre_cancelled_token_returns_cancelled_promptly() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        ctx.token.cancel();
+        let args = serde_json::json!({
+            "command": "sleep 60",
+            "interactive": true,
+            "timeout": 120,
+        });
+        let start = std::time::Instant::now();
+        let outcome = tool.run(&ctx, args).await;
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "PTY call did not return promptly: {:?}",
+            start.elapsed()
+        );
+        assert!(
+            matches!(
+                outcome,
+                crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Cancelled)
+            ),
+            "expected Cancelled, got {outcome:?}"
+        );
+    }
+
+    // WO 48.42: the PTY path honors the tool timeout budget like the
+    // non-PTY path — a stuck interactive command surfaces as a
+    // structured Timeout, and the child is killed via the watcher.
+    #[cfg(all(unix, feature = "pty"))]
+    #[tokio::test]
+    async fn bash_pty_timeout_returns_structured_timeout() {
+        let tool = Bash::new(
+            DenyList::default(),
+            PathGuard::default(),
+            false,
+            None,
+            crate::shared::SandboxConfig::default(),
+        );
+        let ctx = crate::tools::ToolContext::new();
+        let args = serde_json::json!({
+            "command": "sleep 30",
+            "interactive": true,
+            "timeout": 1,
+        });
+        let start = std::time::Instant::now();
+        let outcome = tool.run(&ctx, args).await;
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "PTY timeout took too long: {:?}",
+            start.elapsed()
+        );
+        assert!(
+            matches!(
+                outcome,
+                crate::shared::ToolOutcome::Failure(crate::shared::ToolError::Timeout {
+                    after_secs: 1
+                })
+            ),
+            "expected Timeout, got {outcome:?}"
         );
     }
 

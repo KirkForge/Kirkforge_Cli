@@ -140,3 +140,4 @@ Only the two most recent series are kept live.
 | 48.21 | [count_tokens minimal-build off-arm (bytes/4) under-estimates 25-50% on code/CJK — feeds context-fit truncation ladder](48.21-count-tokens-minimal-underestimate.md) | Done |
 | 48.22 | [P0: nightly subprocess-lifecycle test(=bare_name) filter matches zero tests — the two timeout tests have NEVER run](48.22-nightly-subprocess-filter-matches-zero.md) | Done |
 | 48.23 | [TECHNICAL.md self-contradiction: 13 satellite crates vs 10 (post-47.4 fold)](48.23-technical-crate-count-contradiction.md) | Done |
+| 48.36 | [job-id generation race: read-max-plus-one mints duplicate ids — two clients overwrite each other logically](48.36-job-id-generation-race.md) | Done |

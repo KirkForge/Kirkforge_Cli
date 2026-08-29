@@ -166,25 +166,57 @@ impl RunStatus {
 
 /// Generate a stable, human-readable job id based on the current UTC date and
 /// the next available sequence number in the jobs directory.
+///
+/// WO 48.36: the id is *reserved* by atomically creating its directory
+/// (`create_dir` fails with `AlreadyExists` if taken). Two concurrent callers
+/// can therefore never mint the same id — the reserved dir IS the id, and
+/// `JobStore::save` reuses it instead of re-creating it.
 pub fn generate_job_id(jobs_dir: &Path) -> Result<String> {
     let date = Utc::now().format("%Y%m%d").to_string();
+    std::fs::create_dir_all(jobs_dir)
+        .with_context(|| format!("creating jobs directory {}", jobs_dir.display()))?;
     let mut max_seq: u32 = 0;
-    if jobs_dir.is_dir() {
-        for entry in std::fs::read_dir(jobs_dir)
-            .with_context(|| format!("reading jobs directory {}", jobs_dir.display()))?
-            .flatten()
-        {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let prefix = format!("job-{date}-");
-            if let Some(rest) = name.strip_prefix(&prefix) {
-                if let Ok(seq) = rest.parse::<u32>() {
-                    max_seq = max_seq.max(seq);
-                }
+    for entry in std::fs::read_dir(jobs_dir)
+        .with_context(|| format!("reading jobs directory {}", jobs_dir.display()))?
+        .flatten()
+    {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let prefix = format!("job-{date}-");
+        if let Some(rest) = name.strip_prefix(&prefix) {
+            if let Ok(seq) = rest.parse::<u32>() {
+                max_seq = max_seq.max(seq);
             }
         }
     }
-    Ok(format!("job-{date}-{:03}", max_seq + 1))
+    let start = max_seq + 1;
+    for seq in start..start.saturating_add(1000) {
+        let id = format!("job-{date}-{seq:03}");
+        match std::fs::create_dir(jobs_dir.join(&id)) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let perms = std::fs::Permissions::from_mode(0o700);
+                    std::fs::set_permissions(jobs_dir.join(&id), perms)
+                        .with_context(|| format!("setting permissions on {id}"))?;
+                }
+                return Ok(id);
+            }
+            // Another caller reserved this seq first — try the next one.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                anyhow::bail!(
+                    "reserving job directory {id} under {}: {e}",
+                    jobs_dir.display()
+                )
+            }
+        }
+    }
+    anyhow::bail!(
+        "no free job-id slot under {} after 1000 attempts",
+        jobs_dir.display()
+    )
 }
 
 /// Parse a user-supplied schedule expression.
@@ -448,6 +480,44 @@ mod tests {
             generate_job_id(&jobs_dir).unwrap(),
             format!("job-{date}-004")
         );
+    }
+
+    #[test]
+    fn generate_job_id_on_missing_dir_creates_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jobs_dir = tmp.path().join("jobs");
+        let id = generate_job_id(&jobs_dir).unwrap();
+        let date = Utc::now().format("%Y%m%d").to_string();
+        assert_eq!(id, format!("job-{date}-001"));
+        assert!(
+            jobs_dir.join(&id).is_dir(),
+            "reservation must create the dir"
+        );
+    }
+
+    /// WO 48.36: concurrent callers must get distinct ids. create_dir is the
+    /// atomic arbiter — whichever thread loses the race bumps its seq.
+    #[test]
+    fn generate_job_id_concurrent_calls_get_distinct_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jobs_dir = tmp.path().join("jobs");
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let dir = jobs_dir.clone();
+                std::thread::spawn(move || generate_job_id(&dir))
+            })
+            .collect();
+        let mut ids: Vec<String> = handles
+            .into_iter()
+            .map(|h| {
+                h.join()
+                    .expect("thread panicked")
+                    .expect("id generation failed")
+            })
+            .collect();
+        ids.sort();
+        let unique: std::collections::HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "duplicate ids minted: {ids:?}");
     }
 
     /// WO 45.1: `JobRunSummary.parent_run_id` is `None` by default and

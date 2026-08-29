@@ -114,6 +114,11 @@ pub struct ToolContext {
     /// and bash jobs carry the run_id of their root session. `None` in
     /// test / bench contexts that have no session.
     pub run_id: Option<String>,
+    /// Model-assigned tool-call id (WO 48.31) — stamps streaming
+    /// events (e.g. PTY `BashPartialOutput`) so parallel same-name
+    /// calls route to the right TUI card. Empty in contexts without
+    /// an invocation id.
+    pub call_id: String,
     /// Optional channel for streaming partial tool output (e.g. PTY
     /// output) to the TUI while a command runs. `None` in non-interactive
     /// or test contexts — tools must treat it as best-effort.
@@ -130,6 +135,7 @@ impl std::fmt::Debug for ToolContext {
             .field("tools", &self.tools.is_some())
             .field("task_owner", &self.task_owner)
             .field("run_id", &self.run_id)
+            .field("call_id", &self.call_id)
             .field("event_tx", &self.event_tx.is_some())
             .finish()
     }
@@ -145,6 +151,7 @@ impl ToolContext {
             tools: None,
             task_owner: None,
             run_id: None,
+            call_id: String::new(),
             event_tx: None,
         }
     }
@@ -161,6 +168,7 @@ impl ToolContext {
             tools: None,
             task_owner: None,
             run_id: None,
+            call_id: String::new(),
             event_tx: None,
         }
     }
@@ -175,6 +183,7 @@ impl ToolContext {
             tools: None,
             task_owner: None,
             run_id: None,
+            call_id: String::new(),
             event_tx: None,
         }
     }

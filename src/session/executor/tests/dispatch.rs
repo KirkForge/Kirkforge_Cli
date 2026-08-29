@@ -117,6 +117,63 @@ async fn test_tool_call_dispatch() {
     assert_eq!(tool_msgs[0].content, "echoed!");
 }
 
+/// WO 48.31: a parallel same-name batch stamps each event with its own
+/// model-assigned call id — ToolStart/ToolResult pairs are exact, so
+/// downstream consumers (TUI cards, replay traces) never confuse the
+/// two calls.
+#[tokio::test]
+async fn parallel_same_name_calls_stamp_their_own_call_ids() {
+    let tool = MockTool {
+        def: ToolDef {
+            name: "echo",
+            description: "echo a value",
+            parameters: serde_json::json!({"type": "object", "properties": {"val": {"type": "string"}}}),
+        },
+        captured_args: Arc::new(Mutex::new(None)),
+        outcome: ToolOutcome::Success {
+            content: "echoed!".into(),
+        },
+    };
+    let adapter = MockAdapter::new(
+        vec![
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-a".into(),
+                name: "echo".into(),
+                arguments: serde_json::json!({"val": "a"}),
+            }),
+            StreamEvent::ToolCall(ToolInvocation {
+                id: "call-b".into(),
+                name: "echo".into(),
+                arguments: serde_json::json!({"val": "b"}),
+            }),
+            StreamEvent::Done {
+                finish_reason: FinishReason::ToolCalls,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let mut exe =
+        make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
+    let events = exe
+        .run_turn_collecting("use echo twice", &approval_tx, never_cancelled())
+        .await
+        .unwrap();
+
+    for expected_id in ["call-a", "call-b"] {
+        assert!(
+            events.iter().any(|e| matches!(e, TurnEvent::ToolStart { call_id, name, .. } if call_id == expected_id && name == "echo")),
+            "ToolStart must carry the model id {expected_id}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, TurnEvent::ToolResult { call_id, name, .. } if call_id == expected_id && name == "echo")),
+            "ToolResult must carry the model id {expected_id}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_error_event_forwarded() {
     let adapter = MockAdapter::new(
@@ -894,7 +951,7 @@ async fn test_denied_edit_records_single_access_denied_result() {
         .filter(|e| {
             matches!(
                 e,
-                TurnEvent::ToolResult { name, output, success: false }
+                TurnEvent::ToolResult { name, output, success: false, .. }
                     if name == "edit_file" && output.contains("Access denied")
             )
         })
@@ -990,7 +1047,7 @@ async fn test_pre_tool_hook_deny_blocks_edit_file_before_mutation() {
     let denied = events.iter().any(|e| {
         matches!(
             e,
-            TurnEvent::ToolResult { name, output, success: false }
+            TurnEvent::ToolResult { name, output, success: false, .. }
                 if name == "edit_file" && output.contains("denied")
         )
     });
@@ -1135,7 +1192,7 @@ async fn body_denied_write_file_still_runs_post_tool_hook() {
         .filter(|e| {
             matches!(
                 e,
-                TurnEvent::ToolResult { name, output, success: false }
+                TurnEvent::ToolResult { name, output, success: false, .. }
                     if name == "write_file" && output.contains("denied")
             )
         })
@@ -1240,7 +1297,7 @@ async fn gate_denied_edit_file_skips_post_tool_hook() {
         .filter(|e| {
             matches!(
                 e,
-                TurnEvent::ToolResult { name, output, success: false }
+                TurnEvent::ToolResult { name, output, success: false, .. }
                     if name == "edit_file" && output.contains("Access denied")
             )
         })
@@ -1338,7 +1395,7 @@ async fn symlink_swap_blocks_edit_file_when_read_gate_allows() {
     let denied = events.iter().any(|e| {
         matches!(
             e,
-            TurnEvent::ToolResult { name, output, success: false }
+            TurnEvent::ToolResult { name, output, success: false, .. }
                 if name == "edit_file" && output.contains("symlink")
         )
     });
@@ -1436,7 +1493,7 @@ async fn symlink_swap_blocks_notebook_edit_when_read_gate_allows() {
     let denied = events.iter().any(|e| {
         matches!(
             e,
-            TurnEvent::ToolResult { name, output, success: false }
+            TurnEvent::ToolResult { name, output, success: false, .. }
                 if name == "notebook_edit" && output.contains("symlink")
         )
     });
@@ -1599,7 +1656,7 @@ async fn notebook_edit_cold_call_denied_by_read_gate() {
     let denied = events.iter().any(|e| {
         matches!(
             e,
-            TurnEvent::ToolResult { name, output, success: false }
+            TurnEvent::ToolResult { name, output, success: false, .. }
                 if name == "notebook_edit" && output.contains("Read-before-edit")
         )
     });
@@ -1685,7 +1742,7 @@ async fn symlink_swap_blocks_read_file_on_swapped_final_component() {
     let denied = events.iter().any(|e| {
         matches!(
             e,
-            TurnEvent::ToolResult { name, output, success: false }
+            TurnEvent::ToolResult { name, output, success: false, .. }
                 if name == "read_file" && output.contains("symlink")
         )
     });
@@ -1955,6 +2012,7 @@ async fn test_panicking_tool_yields_failure_internal() {
             name,
             output,
             success: false,
+            call_id: _,
         } if name == "boom" => Some(output),
         _ => None,
     });

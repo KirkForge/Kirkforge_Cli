@@ -477,6 +477,7 @@ pub(crate) async fn dispatch_slash_command(
     match cmd {
         "/clear" => {
             state.conversation.messages.clear();
+            state.conversation.streaming_tool_index.clear();
             state.generation.thinking_buffer.clear();
             state.search.matches.clear();
             state.search.match_idx = 0;

@@ -1157,7 +1157,7 @@ async fn test_plan_mode_newline_bypass_blocked() {
     let blocked = events.iter().any(|e| {
         matches!(
             e,
-            TurnEvent::ToolResult { name, output, success: false }
+            TurnEvent::ToolResult { name, output, success: false, .. }
                 if name == "bash" && output.contains("Plan mode blocked")
         )
     });

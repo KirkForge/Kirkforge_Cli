@@ -14,6 +14,7 @@ pub fn run_with_pty(
     cols: u16,
     rows: u16,
     event_tx: Option<tokio::sync::mpsc::Sender<crate::session::executor::TurnEvent>>,
+    call_id: &str,
 ) -> anyhow::Result<PtyResult> {
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
@@ -55,8 +56,12 @@ pub fn run_with_pty(
         if let Some(tx) = &event_tx {
             let text = String::from_utf8_lossy(&chunk[..n]).to_string();
             // Best-effort: a dropped receiver (TUI closed) must not fail
-            // the command.
-            let _ = tx.try_send(crate::session::executor::TurnEvent::BashPartialOutput(text));
+            // the command. call_id routes the chunk to this call's card
+            // (WO 48.31) — parallel bash streams stay separate.
+            let _ = tx.try_send(crate::session::executor::TurnEvent::BashPartialOutput {
+                call_id: call_id.to_string(),
+                text,
+            });
         }
     }
 

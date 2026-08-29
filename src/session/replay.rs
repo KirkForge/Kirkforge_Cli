@@ -26,6 +26,11 @@ pub struct RecordedMessage {
 pub struct RecordedToolCall {
     pub tool: String,
     pub args: serde_json::Value,
+    /// Model-assigned call id (WO 48.31) — pairs ToolResult with its
+    /// ToolStart slot exactly. `serde(default)` keeps traces recorded
+    /// before the field existed loadable (empty = pair by name).
+    #[serde(default)]
+    pub call_id: String,
     pub result: String,
     pub duration_ms: u64,
 }
@@ -401,6 +406,19 @@ pub fn render_turn_full(record: &TurnRecord) -> String {
 mod tests {
     use super::*;
 
+    /// WO 48.31 back-compat: traces recorded before `call_id` existed
+    /// deserialize with an empty call_id (serde default) — replay of an
+    /// old session still renders, pairing by tool name.
+    #[test]
+    fn old_trace_without_call_id_still_deserializes() {
+        let old_line = r#"{"turn":1,"run_id":"","timestamp":"2026-08-01T00:00:00Z","prompt_messages":[{"role":"user","content":"hi"}],"model_response":"ok","tool_calls":[{"tool":"bash","args":{"command":"ls"},"result":"files","duration_ms":12}],"outcome":"success","tokens_in":10,"tokens_out":5,"duration_ms":99}"#;
+        let record: TurnRecord = serde_json::from_str(old_line).unwrap();
+        assert_eq!(record.tool_calls.len(), 1);
+        assert_eq!(record.tool_calls[0].call_id, "");
+        assert_eq!(record.tool_calls[0].tool, "bash");
+        assert_eq!(record.tool_calls[0].result, "files");
+    }
+
     #[test]
     fn trace_recorder_open_and_record() {
         let dir = tempfile::tempdir().unwrap();
@@ -436,6 +454,7 @@ mod tests {
             tool_calls: vec![RecordedToolCall {
                 tool: "write_file".to_string(),
                 args: serde_json::json!({"path": "src/lib.rs"}),
+                call_id: String::new(),
                 result: "ok".to_string(),
                 duration_ms: 50,
             }],
@@ -557,6 +576,7 @@ mod tests {
             tool_calls: vec![RecordedToolCall {
                 tool: "write_file".to_string(),
                 args: serde_json::json!({"path": "src/lib.rs"}),
+                call_id: String::new(),
                 result: "ok".to_string(),
                 duration_ms: 120,
             }],
@@ -688,6 +708,7 @@ mod tests {
             tool_calls: vec![RecordedToolCall {
                 tool: "shell".to_string(),
                 args: serde_json::json!({"cmd": "echo hello", "cwd": "/tmp"}),
+                call_id: String::new(),
                 result: "hello\n".to_string(),
                 duration_ms: 42,
             }],

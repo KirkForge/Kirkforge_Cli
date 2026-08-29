@@ -355,6 +355,7 @@ impl Executor {
                 TurnEvent::ToolStart {
                     name: prep.invocation.name.clone(),
                     args: prep.invocation.arguments.clone(),
+                    call_id: prep.invocation.id.clone(),
                 }
             );
             if deterministic {
@@ -561,6 +562,7 @@ impl Executor {
                 TurnEvent::ToolStart {
                     name: name.clone(),
                     args: prep.invocation.arguments.clone(),
+                    call_id: prep.invocation.id.clone(),
                 }
             );
             let outcome = run_prepared_call(prep).await.map(|(_, o, ms)| (o, ms));
@@ -639,6 +641,7 @@ impl Executor {
                         name: tc.name.clone(),
                         output: err.clone(),
                         success: false,
+                        call_id: tc.id.clone(),
                     }
                 );
                 self.conversation
@@ -686,6 +689,7 @@ impl Executor {
                         name: tc.name.clone(),
                         output: message.clone(),
                         success: false,
+                        call_id: tc.id.clone(),
                     }
                 );
                 self.conversation
@@ -759,6 +763,9 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
         // WO 45.1: thread the canonical run id (the session id) so
         // spawned tasks and bash jobs carry it for replay/audit/cancel.
         run_id: prep.run_id.clone(),
+        // WO 48.31: stamp streaming events with the model-assigned
+        // call id so PTY chunks route to the right TUI card.
+        call_id: prep.invocation.id.clone(),
         event_tx: prep.event_tx,
     };
     let start = Instant::now();

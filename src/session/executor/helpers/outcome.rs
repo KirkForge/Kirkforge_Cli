@@ -42,6 +42,7 @@ pub(crate) async fn handle_tool_outcome(
                     name: tc.name.clone(),
                     output: content.clone(),
                     success: true,
+                    call_id: tc.id.clone(),
                 }
             );
             conversation
@@ -61,6 +62,7 @@ pub(crate) async fn handle_tool_outcome(
                     name: tc.name.clone(),
                     output: content.clone(),
                     success: true,
+                    call_id: tc.id.clone(),
                 }
             );
             conversation
@@ -84,6 +86,7 @@ pub(crate) async fn handle_tool_outcome(
                     name: tc.name.clone(),
                     output: diff.clone(),
                     success: true,
+                    call_id: tc.id.clone(),
                 }
             );
             conversation
@@ -109,6 +112,7 @@ pub(crate) async fn handle_tool_outcome(
                     name: tc.name.clone(),
                     output: output.clone(),
                     success: true,
+                    call_id: tc.id.clone(),
                 }
             );
             conversation
@@ -129,6 +133,7 @@ pub(crate) async fn handle_tool_outcome(
                     name: tc.name.clone(),
                     output: output.clone(),
                     success: false,
+                    call_id: tc.id.clone(),
                 }
             );
             conversation
@@ -166,6 +171,7 @@ pub(crate) async fn handle_tool_outcome(
                     name: tc.name.clone(),
                     output: output.clone(),
                     success: false,
+                    call_id: tc.id.clone(),
                 }
             );
             conversation
@@ -216,6 +222,7 @@ pub(crate) async fn handle_tool_outcome(
                     name: tc.name.clone(),
                     output: projection.clone(),
                     success: true,
+                    call_id: tc.id.clone(),
                 }
             );
             conversation

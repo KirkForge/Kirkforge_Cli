@@ -8,6 +8,12 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- TUI call_id routing edges: an empty-call_id ToolResult (old-trace path)
+  can no longer steal an id-registered sibling's streaming card (legacy
+  name-matching skips registered placeholders + rebases the map), and a
+  late BashPartialOutput after TurnComplete is dropped instead of
+  resurrecting a ghost streaming card (turn_finished boundary bit).
+  [48.43](docs/workorders/48.43-callid-routing-edges.md)
 - minify: sh/rb scanners carry quote state across lines — multi-line
   "..."/'...' literals no longer lose `#`-leading body lines or collapse
   blank body lines on the write-back chain (WO 48.37, 6 tests).

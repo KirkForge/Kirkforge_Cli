@@ -1365,3 +1365,31 @@
   kills it mid-compile and leaves a cargo lock wait.
 - WO file + README row for 48.39 did not exist on this branch (same as the
   48.34 precedent — worker creates both); adr_xref_drift green after adding.
+
+## WO 48.43 session (2026-08-29, worktree wo48.43)
+
+- The WO file + README row existed on origin/main but NOT on the worktree
+  branch (cut from an older base) — `git fetch && git reset --hard origin/dev`
+  pulled both in before any edit. Same class as the 48.34/48.39 precedent,
+  opposite direction (file existed ahead instead of missing).
+- `gitnexus detect_changes` is anchored to the MAIN checkout path — in a
+  worktree it returns "No changes detected" regardless of the diff. Rely on
+  `git diff --stat` + the pre-edit impact run; note "detect_changes N/A in
+  worktree" in the WO (48.42 set the precedent).
+- Design finding: "drop late PTY chunks" cannot be derived from existing
+  state — mid-turn "map empty + nothing streaming + chunk must CREATE" is
+  pinned by `bash_partial_output_after_completed_card_does_not_corrupt_it`
+  (WO 44.38) while post-TurnComplete the same observable state must DROP.
+  Identical state + different required behavior ⇒ a turn-boundary bit
+  (`turn_finished`) was unavoidable; a card-scan heuristic would have broken
+  two pinned 44.38 tests.
+- Proving regression tests reproduce the bug when tests + fix share a file:
+  `git stash` removes both. Instead sed-revert just the fix guards (3 one-line
+  condition flips), run the new tests red, restore from a cp backup. Cheap
+  and the red output doubles as gate evidence.
+- Sibling worktrees running full workspace checks spiked load to 61 and
+  stalled a 10-min test build. Retry with ≥15-20 min timeouts; the earlier
+  lessons row about cold-build budgets applies doubly under load.
+- `find` on `enumerate().rev()`: the predicate takes `&Item` (so `*i` on the
+  `&usize` is right INSIDE the closure) but the returned `Option<Item>` is by
+  value (so `.map(|(i, _)| i)` — no deref). E0614 catches the mixup.

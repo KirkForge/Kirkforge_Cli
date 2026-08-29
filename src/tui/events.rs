@@ -128,6 +128,9 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
     match ev {
         TurnEvent::Token(t) => {
             state.generation.is_generating = true;
+            // A new turn is running — late-chunk drop no longer
+            // applies (WO 48.43).
+            state.generation.turn_finished = false;
             // Append to the LAST ASSISTANT entry in the conversation,
             // even if tool entries were inserted after it. This prevents
             // tool calls from splitting the assistant's text into
@@ -172,6 +175,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             }
         }
         TurnEvent::Thinking(t) => {
+            state.generation.turn_finished = false;
             state.generation.thinking_buffer.push(t);
             // Bound the buffer: long reasoning-model sessions emit
             // thousands of chunks and the render path joins + re-wraps
@@ -188,6 +192,9 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
         } => {
             state.generation.is_generating = false; // turn ended (tool call)
             state.generation.turn_tool_calls += 1;
+            // A tool call means an executor turn is running — clear
+            // the turn boundary (WO 48.43).
+            state.generation.turn_finished = false;
             // WO 48.31: if chunks for this call_id already created a
             // card (they raced ahead of ToolStart), keep it — pushing a
             // second would strand the first as a ghost spinner.
@@ -236,30 +243,11 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             let summary =
                 format!("🔧 {name} (done) — {lines} lines, {bytes} bytes [Enter or Tab to expand]");
             // Avoid two entries per tool call: replace this tool's
-            // placeholder card. With a call_id (WO 48.31) the pairing
-            // is exact; the legacy name-based path (see
-            // `remove_tool_placeholder` — parallel batches make "just
-            // check back()" corrupt, WO 46.35) remains for events with
-            // an empty call_id (old replay traces).
-            if call_id.is_empty() {
-                remove_tool_placeholder(&mut state.conversation.messages, &name);
-            } else if let Some(idx) = state.conversation.streaming_tool_index.remove(&call_id) {
-                // Remove the placeholder at its registered index —
-                // only if it is still a streaming tool card (a prior
-                // removal may have shifted or replaced it).
-                let is_streaming_card = state
-                    .conversation
-                    .messages
-                    .get(idx)
-                    .is_some_and(|m| m.role == "tool" && m.streaming);
-                if is_streaming_card {
-                    state.conversation.messages.remove(idx);
-                    rebase_streaming_indexes(&mut state.conversation.streaming_tool_index, idx);
-                } else {
-                    // Stale index (defensive): fall back to name matching.
-                    remove_tool_placeholder(&mut state.conversation.messages, &name);
-                }
-            }
+            // placeholder card. Exact call_id pairing (WO 48.31); the
+            // legacy name-based path remains for events with an empty
+            // call_id (old replay traces) — guarded to never touch
+            // id-registered cards (WO 48.43).
+            finalize_streaming_placeholder(state, &name, &call_id);
             state
                 .conversation
                 .messages
@@ -516,83 +504,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             state.mark_dirty();
         }
         TurnEvent::BashPartialOutput { call_id, text } => {
-            // Stream PTY output into a streaming tool card. With a
-            // call_id (WO 48.31) the chunk routes to the exact card
-            // registered by that call's ToolStart — two parallel bash
-            // streams never interleave into one card. Without one
-            // (old traces / defense in depth), fall back to the last
-            // streaming tool card, pushing a fresh one if the back
-            // entry is not a streaming tool card, so chunks always
-            // land somewhere sane instead of corrupting a completed
-            // card or being dropped.
-            let target_idx: usize = if !call_id.is_empty() {
-                match state.conversation.streaming_tool_index.get(&call_id) {
-                    Some(&idx)
-                        if state
-                            .conversation
-                            .messages
-                            .get(idx)
-                            .is_some_and(|m| m.role == "tool") =>
-                    {
-                        idx
-                    }
-                    // Unknown call_id (chunks raced ahead of ToolStart,
-                    // or an old client): create a card and register it
-                    // so subsequent chunks for this call_id coalesce.
-                    _ => {
-                        let mut entry = ConversationEntry::new("tool", "🔧 bash …");
-                        entry.streaming = true;
-                        state.conversation.messages.push_back(entry);
-                        let idx = state.conversation.messages.len() - 1;
-                        state
-                            .conversation
-                            .streaming_tool_index
-                            .insert(call_id.clone(), idx);
-                        idx
-                    }
-                }
-            } else {
-                let needs_fresh = match state.conversation.messages.back() {
-                    Some(last) => last.role != "tool" || !last.streaming,
-                    None => true,
-                };
-                if needs_fresh {
-                    state
-                        .conversation
-                        .messages
-                        .push_back(ConversationEntry::new("tool", "🔧 bash …"));
-                }
-                state.conversation.messages.len() - 1
-            };
-            if let Some(last) = state.conversation.messages.get_mut(target_idx) {
-                last.streaming = true;
-                // Bound the streaming card: a `watch`/`top`/long
-                // ping balloons `content` and the render path
-                // re-wraps the whole string every frame. Keep the
-                // tail under 64 KiB and surface a byte-count
-                // marker so the user sees `… [N bytes total,
-                // showing last 64K]` instead of silent loss. The
-                // full output still lands in `tool_output` when
-                // `ToolResult` finalizes the entry (WO 38.11).
-                const PTY_TAIL_BYTES: usize = 64 * 1024;
-                last.content.push_str(&text);
-                if last.content.len() > PTY_TAIL_BYTES {
-                    let total = last.content.len();
-                    let mut start = total - PTY_TAIL_BYTES;
-                    // Walk back to a char boundary BEFORE slicing so a
-                    // multibyte char straddling the offset doesn't
-                    // panic (WO 43.25). The prior char_indices fixup
-                    // here was dead code — the slice panicked first.
-                    while !last.content.is_char_boundary(start) {
-                        start -= 1;
-                    }
-                    let tail = last.content[start..].to_string();
-                    last.content =
-                        format!("… [{total} bytes total, showing last {PTY_TAIL_BYTES}]\n{tail}");
-                }
-                last.bump_version();
-                state.mark_dirty();
-            }
+            apply_bash_partial_output(state, &call_id, &text);
         }
         TurnEvent::MemoryExtracted { count, turn } => {
             // Mirror into AppState so the status bar can render
@@ -622,7 +534,140 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             // chunks (their cards stopped streaming above; a fresh
             // ToolStart re-registers under a new model-assigned id).
             state.conversation.streaming_tool_index.clear();
+            // WO 48.43: mark the turn boundary so a LATE call_id'd
+            // chunk with no live registration drops instead of
+            // resurrecting a ghost streaming card.
+            state.generation.turn_finished = true;
         }
+    }
+}
+
+/// ToolResult's placeholder-pairing block, extracted from
+/// `dispatch_turn_event` (WO 48.43). Exact call_id pairing first; the
+/// legacy name-based path (see `remove_tool_placeholder`) remains for
+/// events with an empty call_id (old replay traces). Every removal
+/// re-bases the surviving map entries — skipping the rebase on the
+/// legacy path is what stranded orphaned placeholders (WO 48.43).
+fn finalize_streaming_placeholder(state: &mut AppState, name: &str, call_id: &str) {
+    if call_id.is_empty() {
+        if let Some(idx) = remove_tool_placeholder(
+            &mut state.conversation.messages,
+            name,
+            &state.conversation.streaming_tool_index,
+        ) {
+            rebase_streaming_indexes(&mut state.conversation.streaming_tool_index, idx);
+        }
+    } else if let Some(idx) = state.conversation.streaming_tool_index.remove(call_id) {
+        // Remove the placeholder at its registered index —
+        // only if it is still a streaming tool card (a prior
+        // removal may have shifted or replaced it).
+        let is_streaming_card = state
+            .conversation
+            .messages
+            .get(idx)
+            .is_some_and(|m| m.role == "tool" && m.streaming);
+        if is_streaming_card {
+            state.conversation.messages.remove(idx);
+            rebase_streaming_indexes(&mut state.conversation.streaming_tool_index, idx);
+        } else if let Some(fallback_idx) = remove_tool_placeholder(
+            &mut state.conversation.messages,
+            name,
+            &state.conversation.streaming_tool_index,
+        ) {
+            // Stale index (defensive): fall back to name matching.
+            rebase_streaming_indexes(&mut state.conversation.streaming_tool_index, fallback_idx);
+        }
+    }
+}
+
+/// Stream a PTY chunk into a streaming tool card, extracted from
+/// `dispatch_turn_event` (WO 48.43). With a call_id (WO 48.31) the
+/// chunk routes to the exact card registered by that call's ToolStart
+/// — two parallel bash streams never interleave into one card. Without
+/// one (old traces / defense in depth), fall back to the last
+/// streaming tool card, pushing a fresh one if the back entry is not a
+/// streaming tool card, so chunks always land somewhere sane instead
+/// of corrupting a completed card or being dropped — EXCEPT after
+/// TurnComplete: a call_id'd chunk with no live registration then is
+/// late turn residue and is dropped (WO 48.43), because resurrecting a
+/// streaming card nothing clears leaves a permanent ghost.
+fn apply_bash_partial_output(state: &mut AppState, call_id: &str, text: &str) {
+    let target_idx: Option<usize> = if !call_id.is_empty() {
+        match state.conversation.streaming_tool_index.get(call_id) {
+            Some(&idx)
+                if state
+                    .conversation
+                    .messages
+                    .get(idx)
+                    .is_some_and(|m| m.role == "tool") =>
+            {
+                Some(idx)
+            }
+            // Unknown call_id while a turn is running (chunks raced
+            // ahead of ToolStart, or an old client): create a card and
+            // register it so subsequent chunks for this call_id
+            // coalesce.
+            //
+            // ponytail: turn_finished is the only late guard — a
+            // straggler arriving after the NEXT turn's first event
+            // re-creates a card; per-id tombstones of finished
+            // call_ids are the upgrade path if that ever shows.
+            _ if !state.generation.turn_finished => {
+                let mut entry = ConversationEntry::new("tool", "🔧 bash …");
+                entry.streaming = true;
+                state.conversation.messages.push_back(entry);
+                let idx = state.conversation.messages.len() - 1;
+                state
+                    .conversation
+                    .streaming_tool_index
+                    .insert(call_id.to_string(), idx);
+                Some(idx)
+            }
+            // Late chunk after TurnComplete: no live map entry, no
+            // streaming card — noise, drop it.
+            _ => None,
+        }
+    } else {
+        let needs_fresh = match state.conversation.messages.back() {
+            Some(last) => last.role != "tool" || !last.streaming,
+            None => true,
+        };
+        if needs_fresh {
+            state
+                .conversation
+                .messages
+                .push_back(ConversationEntry::new("tool", "🔧 bash …"));
+        }
+        Some(state.conversation.messages.len() - 1)
+    };
+    if let Some(last) = target_idx.and_then(|idx| state.conversation.messages.get_mut(idx)) {
+        last.streaming = true;
+        // Bound the streaming card: a `watch`/`top`/long
+        // ping balloons `content` and the render path
+        // re-wraps the whole string every frame. Keep the
+        // tail under 64 KiB and surface a byte-count
+        // marker so the user sees `… [N bytes total,
+        // showing last 64K]` instead of silent loss. The
+        // full output still lands in `tool_output` when
+        // `ToolResult` finalizes the entry (WO 38.11).
+        const PTY_TAIL_BYTES: usize = 64 * 1024;
+        last.content.push_str(text);
+        if last.content.len() > PTY_TAIL_BYTES {
+            let total = last.content.len();
+            let mut start = total - PTY_TAIL_BYTES;
+            // Walk back to a char boundary BEFORE slicing so a
+            // multibyte char straddling the offset doesn't
+            // panic (WO 43.25). The prior char_indices fixup
+            // here was dead code — the slice panicked first.
+            while !last.content.is_char_boundary(start) {
+                start -= 1;
+            }
+            let tail = last.content[start..].to_string();
+            last.content =
+                format!("… [{total} bytes total, showing last {PTY_TAIL_BYTES}]\n{tail}");
+        }
+        last.bump_version();
+        state.mark_dirty();
     }
 }
 
@@ -643,7 +688,8 @@ fn rebase_streaming_indexes(
 }
 
 /// Remove this tool's streaming placeholder so `ToolResult` replaces
-/// it in place instead of stacking two entries per call.
+/// it in place instead of stacking two entries per call. Returns the
+/// removed index so the caller can re-base `streaming_tool_index`.
 ///
 /// Parallel tool batches push placeholders back-to-back (WO 46.35):
 /// matching only `back()` pops the WRONG card and strands the sibling
@@ -653,26 +699,51 @@ fn rebase_streaming_indexes(
 /// prefix survives PTY chunks appending to the card (including the
 /// defense-in-depth fresh-card form "🔧 bash …").
 ///
+/// Cards registered in `streaming_tool_index` are NEVER taken
+/// (WO 48.43): an id-registered card belongs to a specific in-flight
+/// call, so an empty-call_id (legacy) result must only pair with
+/// legacy placeholders — otherwise it steals a sibling's card and
+/// strands the id'd call's placeholder as an orphan.
+///
 /// Fallback: the PTY tail-budget rewrite (>64 KiB) strips the 🔧
 /// header entirely, so if no named card exists, take the back card
-/// when it is still streaming (the pre-46.35 behavior).
+/// when it is still streaming (the pre-46.35 behavior) — unless it is
+/// id-registered (same WO 48.43 guard).
 ///
 /// ponytail: legacy path for events with no call id (WO 48.31 added
 /// exact call_id pairing above) — same-name parallel calls pair by
 /// position (newest first), visually equivalent but subject to the
 /// mixing the call_id index fixes.
-fn remove_tool_placeholder(messages: &mut VecDeque<ConversationEntry>, name: &str) {
+fn remove_tool_placeholder(
+    messages: &mut VecDeque<ConversationEntry>,
+    name: &str,
+    registered: &std::collections::HashMap<String, usize>,
+) -> Option<usize> {
+    let is_registered = |i: usize| registered.values().any(|&r| r == i);
     let prefix = format!("🔧 {name} ");
     let idx = messages
         .iter()
-        .rposition(|m| m.role == "tool" && m.streaming && m.content.starts_with(&prefix));
+        .enumerate()
+        .rev()
+        .find(|(i, m)| {
+            m.role == "tool" && m.streaming && m.content.starts_with(&prefix) && !is_registered(*i)
+        })
+        .map(|(i, _)| i);
     if let Some(idx) = idx {
         messages.remove(idx);
-    } else if messages
-        .back()
-        .is_some_and(|m| m.role == "tool" && m.streaming)
-    {
-        messages.pop_back();
+        Some(idx)
+    } else {
+        let back = messages.len().saturating_sub(1);
+        if messages
+            .back()
+            .is_some_and(|m| m.role == "tool" && m.streaming)
+            && !is_registered(back)
+        {
+            messages.pop_back();
+            Some(back)
+        } else {
+            None
+        }
     }
 }
 
@@ -1529,6 +1600,189 @@ mod tests {
             s.conversation.messages[0].tool_output.as_deref(),
             Some("done")
         );
+    }
+
+    /// WO 48.43 probe 1: an empty-call_id ToolResult (old-trace path)
+    /// must pair ONLY with legacy (unregistered) placeholders — it
+    /// must not remove a streaming card registered under a real
+    /// call_id by a different in-flight call, and the survivor's map
+    /// entry must be re-based to the shifted index.
+    #[test]
+    fn legacy_tool_result_never_steals_call_id_card() {
+        let mut s = app_state();
+        // Legacy placeholder first, id'd second — the name-matcher's
+        // backwards scan would find the id'd card (the newest "bash"
+        // match) and steal it pre-fix.
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({ "command": "legacy" }),
+                call_id: String::new(),
+            },
+        );
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({ "command": "modern" }),
+                call_id: "call-a".into(),
+            },
+        );
+        // Mark call-a's card with its own chunk so the two same-name
+        // cards are distinguishable.
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput {
+                call_id: "call-a".into(),
+                text: "A-stream".into(),
+            },
+        );
+        assert_eq!(s.conversation.messages.len(), 2);
+        assert_eq!(s.conversation.streaming_tool_index.len(), 1);
+
+        // The legacy result finalizes the LEGACY card...
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: "legacy done".into(),
+                success: true,
+                call_id: String::new(),
+            },
+        );
+        // ...not call-a's: exactly one streaming card remains, it is
+        // call-a's, and the map re-based to the shifted index (was 1,
+        // the legacy removal at 0 shifts it to 0).
+        assert_eq!(s.conversation.streaming_tool_index.get("call-a"), Some(&0));
+        let streaming: Vec<_> = s
+            .conversation
+            .messages
+            .iter()
+            .filter(|m| m.streaming)
+            .collect();
+        assert_eq!(streaming.len(), 1, "call-a's card must survive");
+        assert!(
+            streaming[0].content.contains("A-stream"),
+            "the survivor is call-a's card, not the legacy one"
+        );
+        assert!(
+            !streaming[0].content.contains("(done)"),
+            "the legacy summary must not have landed on call-a's card"
+        );
+
+        // Chunks and the final result still route to call-a's card;
+        // no orphaned placeholder survives the full lifecycle.
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput {
+                call_id: "call-a".into(),
+                text: "A-tail".into(),
+            },
+        );
+        assert!(s.conversation.messages.iter().any(|m| {
+            m.streaming && m.content.contains("A-stream") && m.content.contains("A-tail")
+        }));
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: "modern done".into(),
+                success: true,
+                call_id: "call-a".into(),
+            },
+        );
+        assert!(s.conversation.streaming_tool_index.is_empty());
+        assert!(
+            !s.conversation.messages.iter().any(|m| m.streaming),
+            "no orphaned placeholder"
+        );
+        let outs: Vec<_> = s
+            .conversation
+            .messages
+            .iter()
+            .map(|m| m.tool_output.as_deref())
+            .collect();
+        assert!(
+            outs.contains(&Some("legacy done")) && outs.contains(&Some("modern done")),
+            "each result pairs with its own call: {outs:?}"
+        );
+    }
+
+    /// WO 48.43 probe 2: a late BashPartialOutput arriving AFTER
+    /// TurnComplete (map cleared, nothing streaming) must be dropped —
+    /// pre-fix it resurrected a streaming card nothing ever clears.
+    #[test]
+    fn late_bash_partial_output_after_turn_complete_is_dropped() {
+        let mut s = app_state();
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolStart {
+                name: "bash".into(),
+                args: serde_json::json!({ "command": "x" }),
+                call_id: "call-a".into(),
+            },
+        );
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput {
+                call_id: "call-a".into(),
+                text: "live chunk".into(),
+            },
+        );
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::ToolResult {
+                name: "bash".into(),
+                output: "done".into(),
+                success: true,
+                call_id: "call-a".into(),
+            },
+        );
+        dispatch_turn_event(&mut s, TurnEvent::TurnComplete);
+        let len_before = s.conversation.messages.len();
+        assert!(s.conversation.messages.iter().all(|m| !m.streaming));
+        assert!(s.conversation.streaming_tool_index.is_empty());
+        assert!(s.generation.turn_finished);
+
+        // The late chunk: no live map entry, no streaming card —
+        // noise after turn end. Dropped, not resurrected.
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput {
+                call_id: "call-a".into(),
+                text: "late tail".into(),
+            },
+        );
+        assert_eq!(s.conversation.messages.len(), len_before, "no ghost card");
+        assert!(s.conversation.messages.iter().all(|m| !m.streaming));
+        assert!(s.conversation.streaming_tool_index.is_empty());
+        assert!(
+            !s.conversation
+                .messages
+                .iter()
+                .any(|m| m.content.contains("late tail")),
+            "the late chunk must not land anywhere"
+        );
+
+        // A NEW turn's unknown-id chunk still creates its card — the
+        // WO 48.31 race-ahead contract survives the turn boundary.
+        dispatch_turn_event(&mut s, TurnEvent::Token("next turn".into()));
+        dispatch_turn_event(
+            &mut s,
+            TurnEvent::BashPartialOutput {
+                call_id: "call-z".into(),
+                text: "fresh".into(),
+            },
+        );
+        assert!(
+            s.conversation
+                .messages
+                .iter()
+                .any(|m| m.content.contains("fresh")),
+            "mid-turn unknown-id chunk still gets a card"
+        );
+        assert!(!s.generation.turn_finished);
     }
 
     /// `ToolResult` is the v1.1 contract: full output goes into

@@ -337,6 +337,12 @@ pub struct GenerationState {
     /// input box against stacking tests, (2) drive the spinner in
     /// place of the model-generation spinner.
     pub test_in_progress: bool,
+    /// True after `TurnComplete` cleared the turn's streaming state,
+    /// until the next turn's first event (Token/Thinking/ToolStart).
+    /// BashPartialOutput uses it to DROP late chunks whose call_id no
+    /// longer has a live registration instead of resurrecting a ghost
+    /// streaming card nothing clears (WO 48.43).
+    pub turn_finished: bool,
 }
 
 /// Token / cost / cache budget state (WO 26.8).

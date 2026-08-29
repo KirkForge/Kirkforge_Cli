@@ -145,6 +145,7 @@ one WO 47.12 regression (48.3).
 | 48.34 | [max_turns unbounded + glob walker not cancel-aware — model-controlled resource without ceilings](48.34-resource-bound-bundle.md) | Done |
 | 48.35 | [untrusted_content delimiter is breakable (closing tag in content, truncation cuts the tag) — document as mitigation, harden the wrap](48.35-untrusted-delimiter-honesty.md) | Done |
 | 48.36 | [Job IDs are max+1 from a directory scan — two clients pick the same ID, logical overwrite](48.36-job-id-generation-race.md) | Done |
+| 48.41 | [Walker cancel flag only set on one of three teardown paths — timeout/abort leaves walkers scanning](48.41-walker-flag-drop-guard.md) | Done |
 
 ## Conventions
 

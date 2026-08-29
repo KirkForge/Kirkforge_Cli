@@ -1,11 +1,11 @@
 use crate::shared::access::{GuardVerdict, PathGuard};
 use crate::shared::{Match as SearchMatch, ToolDef, ToolError, ToolOutcome};
+use crate::tools::glob::WalkerCancel;
 use crate::tools::{Tool, ToolContext};
 use std::path::PathBuf;
 #[cfg(test)]
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 /// Maximum file size in bytes we'll attempt to read for grep (10 MB).
 const MAX_GREP_FILE_SIZE: u64 = 10 * 1024 * 1024;
@@ -531,13 +531,18 @@ impl Tool for Grep {
         // Fallback walk + reads are blocking fs ops — offload to the pool.
         // WO 46.8: race the blocking walk against the cancel token so a
         // user/turn cancel returns promptly with `Cancelled`. WO 48.34: the
-        // cancel arm now also flips `cancel_flag`, which the fallback walker
-        // checks per entry — the blocking-pool thread stops at the next
-        // entry instead of walking (and reading) the whole tree.
+        // fallback walker checks `cancel_flag` per entry — the blocking-pool
+        // thread stops at the next entry instead of walking (and reading)
+        // the whole tree. WO 48.41: the flag is flipped by the
+        // `WalkerCancel` drop guard (glob.rs), owned by this future — so
+        // the tool timeout and JoinHandle-abort teardown paths stop the
+        // walker too.
         let path_guard = self.path_guard.clone();
         let path = path.to_string();
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-        let walk_cancel = cancel_flag.clone();
+        // `_` prefix is deliberate: the binding is never read, only
+        // dropped — at scope end, on the cancel arm, or when this future
+        // is dropped by timeout/abort. Drop is the mechanism.
+        let (_walker_cancel, cancel_flag) = WalkerCancel::new();
         let walk = tokio::task::spawn_blocking(move || {
             fallback_search_blocking(
                 &pattern,
@@ -546,13 +551,12 @@ impl Tool for Grep {
                 max_matches,
                 use_literal,
                 &path_guard,
-                &walk_cancel,
+                &cancel_flag,
             )
         });
         let outcome = tokio::select! {
             biased;
             _ = ctx.token.cancelled() => {
-                cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                 ToolOutcome::Failure(ToolError::Cancelled)
             }
             res = walk => res.unwrap_or_else(|e| ToolOutcome::Failure(ToolError::Internal {
@@ -1224,6 +1228,33 @@ mod tests {
             "control run without the flag matches both files, got {outcome:?}"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WO 48.41: mirror of the glob drop-guard test on the fallback walk
+    /// wiring — dispatch's timeout/abort teardown drops the tool future
+    /// without running any select arm; the WalkerCancel guard owned by
+    /// that future must flip the flag the fallback walker checks.
+    #[test]
+    fn fallback_walk_cancel_guard_flips_when_dropped_before_completion() {
+        let dir = std::env::temp_dir().join("kf_code_grep_drop_guard_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "needle here\n").unwrap();
+        let guard = PathGuard::default();
+        let path = dir.to_string_lossy().to_string();
+
+        let (walker_cancel, cancel_flag) = WalkerCancel::new();
+        let probe = cancel_flag.clone();
+        let walk = std::thread::spawn(move || {
+            fallback_search_blocking("needle", &path, 2, 50, true, &guard, &cancel_flag)
+        });
+        drop(walker_cancel);
+        assert!(
+            probe.load(std::sync::atomic::Ordering::Relaxed),
+            "guard drop must flip the fallback walker cancel flag"
+        );
+        let _ = walk.join().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -16,6 +16,30 @@ impl Glob {
     }
 }
 
+// WO 48.41: drop guard for the walker cancel flag (shared with the grep
+// fallback walk). The 48.34 cancel arm flipped the flag on only ONE of
+// three teardown paths — the tool timeout (`run_prepared_call`'s
+// `tokio::time::timeout`, dispatch.rs) and the collect-loop `h.abort()`
+// drop the whole tool future before the select arm's store() runs, so the
+// detached blocking walker kept scanning past a reported Timeout. Drop
+// covers every path: cancel-arm return, normal return, timeout, abort.
+pub(crate) struct WalkerCancel(Arc<AtomicBool>);
+
+impl WalkerCancel {
+    // Returns the guard plus the flag clone the walker observes; the
+    // guard stays owned by the tool future that spawned the walker.
+    pub(crate) fn new() -> (Self, Arc<AtomicBool>) {
+        let flag = Arc::new(AtomicBool::new(false));
+        (Self(flag.clone()), flag)
+    }
+}
+
+impl Drop for WalkerCancel {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 // WO 48.34: the walk body, extracted so the cancel contract is testable
 // without racing a real token. `cancel` is checked per directory entry —
 // when the tool's select arm loses to `ctx.token.cancelled()` it flips
@@ -152,28 +176,31 @@ impl Tool for Glob {
         //
         // WO 46.8: race the blocking walk against `ctx.token.cancelled()` so
         // a user/turn cancel returns promptly with `Cancelled`. WO 48.34: the
-        // cancel arm now also flips `cancel_flag`, which the walker checks
-        // per entry — the blocking-pool thread stops at the next entry
-        // instead of walking to completion (previously the residual run was
-        // bounded only by the cap or the tree size).
-        // Pattern: `plugin_tools/wrapper.rs:324` (`Finish::Cancelled`).
+        // walker checks `cancel_flag` per entry — the blocking-pool thread
+        // stops at the next entry instead of walking to completion. WO 48.41:
+        // the flag is flipped by the `WalkerCancel` drop guard, owned by this
+        // future — so the tool timeout and JoinHandle-abort teardown paths
+        // (which drop the future without running any select arm) stop the
+        // walker too. Pattern: `plugin_tools/wrapper.rs:324`
+        // (`Finish::Cancelled`).
         let path_guard = self.path_guard.clone();
         let walk_base = base_path.clone();
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-        let walk_cancel = cancel_flag.clone();
+        // `_` prefix is deliberate: the binding is never read, only
+        // dropped — at scope end, on the cancel-arm return, or when this
+        // future is dropped by timeout/abort. Drop is the mechanism.
+        let (_walker_cancel, cancel_flag) = WalkerCancel::new();
         let walk = tokio::task::spawn_blocking(move || {
             walk_glob_matches(
                 &walk_base,
                 &glob_set,
                 max_matches,
                 &path_guard,
-                &walk_cancel,
+                &cancel_flag,
             )
         });
         let (mut matches, truncated) = tokio::select! {
             biased;
             _ = ctx.token.cancelled() => {
-                cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                 return ToolOutcome::Failure(ToolError::Cancelled);
             }
             res = walk => res.unwrap_or_default(),
@@ -236,6 +263,42 @@ mod tests {
         let (out, _) = walk_glob_matches(&dir, &glob_set, 1000, &guard, &cancel);
         assert_eq!(out.len(), 5, "control run without the flag matches all");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // WO 48.41: dispatch's tool timeout (`run_prepared_call`'s
+    // `tokio::time::timeout`) and the collect-loop `h.abort()` drop the
+    // tool future mid-run — no select arm executes. The WalkerCancel
+    // guard is owned by that future, so dropping it must flip the flag
+    // the walker checks. Simulated: walker spawned and in flight, guard
+    // dropped (the timeout-path teardown), flag observed set — Drop is
+    // synchronous, so the assertion itself is race-free.
+    #[test]
+    fn walker_cancel_guard_flips_when_dropped_before_completion() {
+        let dir = std::env::temp_dir().join("kf_code_glob_drop_guard_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..5 {
+            std::fs::write(dir.join(format!("file{i}.txt")), "x").unwrap();
+        }
+        let glob_set = GlobSetBuilder::new()
+            .add(GlobPattern::new("*.txt").unwrap())
+            .build()
+            .unwrap();
+        let guard = PathGuard::default();
+
+        let (walker_cancel, cancel_flag) = WalkerCancel::new();
+        let probe = cancel_flag.clone();
+        let walk_dir = dir.clone();
+        let walk = std::thread::spawn(move || {
+            walk_glob_matches(&walk_dir, &glob_set, 1000, &guard, &cancel_flag)
+        });
+        drop(walker_cancel);
+        assert!(
+            probe.load(std::sync::atomic::Ordering::Relaxed),
+            "guard drop must flip the walker cancel flag"
+        );
+        let _ = walk.join().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

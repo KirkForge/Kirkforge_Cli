@@ -170,3 +170,13 @@ one WO 47.12 regression (48.3).
 | 48.46 | [minify_rust_inner raw-string blind — r#"..."# with // or quotes inside corrupts on write-back](48.46-minify-rust-raw-strings.md) | Done |
 | 48.48 | [Minify VFS cache keyed on mtime.as_secs() — same-second rewrite serves the stale pre-edit view](48.48-minify-cache-nanos.md) | Done |
 | 48.51 | [Docs+CI gaps from 48.44: nightly job inventory stale in TECHNICAL/ADR-074; pty tests compiled but never executed](48.51-nightly-docs-and-pty-tests.md) | Done |
+
+### Series 49 — Sweep-6 closing findings (merge-revert restore + expand symmetry + residuals)
+
+5 workorders from the sixth-sweep closing audits. 49.1 (the P0 merge revert) fixed in the same commit.
+
+| 49.1 | [MERGE REVERT: dd72a4ca silently deleted 48.46's raw-string fix + 3 tests — restored](49.1-merge-revert-48.46-restored.md) | Done |
+| 49.2 | [fallback_c_like expand side raw-string blind — colon arm splices spaces into r#"..."# URLs](49.2-expand-raw-string-awareness.md) | Planned |
+| 49.3 | [ci-nightly pty filter 'bash::' misses the 48.49 fail-closed kill test](49.3-pty-nightly-filter.md) | Planned |
+| 49.4 | [apply_bash_partial_output empty-call_id branch lacks turn_finished guard — late straggler resurrects a ghost card](49.4-late-empty-id-chunk-guard.md) | Planned |
+| 49.5 | [Session-close docs pass: CHANGELOG missing ~9 wave one-liners, state.md says 36/36 vs 51/51, stale not-merged flags, branch pin stale](49.5-session-close-docs-pass.md) | Planned |

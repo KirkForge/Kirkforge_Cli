@@ -360,16 +360,35 @@ fn fallback_c_like(code: &str) -> String {
                 }
             }
             ':' => {
+                // `::` scope resolution (`std::cout`, `use std::io`): emit
+                // the pair as one unit, verbatim — padding here corrupts
+                // paths on disk write-back (WO 48.26).
+                if chars.peek() == Some(&':') {
+                    out.push(':');
+                    out.push(chars.next().expect("peeked Some above"));
+                    continue;
+                }
                 out.push(':');
+                // Existing space after the colon (label form `case 1: x`)
+                // normalizes to exactly one — eat-then-maybe-readd would
+                // lose it for identifier-glued colons.
                 if chars.peek() == Some(&' ') {
                     chars.next();
+                    out.push(' ');
+                    continue;
                 }
-                if chars.peek() != Some(&'\n')
-                    && chars.peek() != Some(&';')
-                    && chars.peek() != Some(&',')
-                    && chars.peek() != Some(&')')
-                    && chars.peek() != Some(&'}')
-                {
+                // Only add a space when the colon can't be glued to an
+                // identifier: collapsed ternaries (`a?b:c`) and type keys
+                // (`map[string]int`) must not gain one.
+                if chars.peek().is_none_or(|&c| {
+                    !(c == '\n'
+                        || c == ';'
+                        || c == ','
+                        || c == ')'
+                        || c == '}'
+                        || c.is_alphanumeric()
+                        || c == '_')
+                }) {
                     out.push(' ');
                 }
             }
@@ -531,5 +550,52 @@ mod tests {
         let expanded = fallback_python(minified);
         assert!(expanded.contains("def f():"));
         assert!(expanded.contains("    pass"));
+    }
+
+    #[test]
+    fn fallback_c_like_colons_round_trip_byte_identical() {
+        // WO 48.26: colons must survive minify -> fallback expand intact.
+        let cases = [
+            "std::cout << \"hi\";\n",
+            "auto u = \"http://example.com/x\";\n",
+            "int m = cond ? a : b;\n",
+            "case 1: return x;\n",
+            "default:\nbreak;\n",
+        ];
+        for src in cases {
+            let minified = crate::shared::minify::lang::minify_content_by_ext(src, "cpp", false);
+            assert_eq!(
+                fallback_expand(&minified, "cpp"),
+                src,
+                "colon corruption for {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fallback_c_like_rust_scope_resolution_round_trips() {
+        let src = "use std::io;\n";
+        let minified = crate::shared::minify::lang::minify_content_by_ext(src, "rs", false);
+        assert_eq!(fallback_expand(&minified, "rs"), src);
+    }
+
+    #[test]
+    fn fallback_c_like_never_splits_double_colon() {
+        assert!(fallback_c_like("std::cout").contains("std::cout"));
+        assert!(fallback_c_like("a?b:c").contains("a?b:c"));
+    }
+
+    #[test]
+    fn fallback_c_like_envelope_expansion_keeps_colons() {
+        // Full pipeline (minify -> envelope -> expand). cpp has no external
+        // formatter arm, so this deterministically exercises the fallback.
+        // The envelope's inner code starts with a newline from the wrapper
+        // tag; colons must otherwise survive byte-for-byte.
+        let src = "std::cout << \"hi\";\n";
+        let minified = crate::shared::minify::lang::minify_content_by_ext(src, "cpp", false);
+        let wrapped = wrap_minified_envelope("cpp", &minified);
+        let expanded = expand_minified(Path::new("x.cpp"), &wrapped);
+        assert_eq!(expanded, format!("\n{src}"));
+        assert!(!expanded.contains(": :"));
     }
 }

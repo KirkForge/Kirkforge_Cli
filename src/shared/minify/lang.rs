@@ -576,6 +576,30 @@ fn minify_rust_inner(source: &str, preserve_tests: bool) -> String {
             continue;
         }
 
+        // Raw strings (r#*"/br#*") run verbatim to their `"` + N `#` closer:
+        // `//`, `/*` and `\` inside are content, not comments/escapes (48.46).
+        if !in_string && ch == '"' {
+            let scan = open_string(&out);
+            if scan.raw {
+                out.push(ch);
+                while let Some(c) = chars.next() {
+                    out.push(c);
+                    if c == '"' {
+                        let mut n = 0;
+                        while n < scan.hashes && chars.peek() == Some(&'#') {
+                            chars.next();
+                            out.push('#');
+                            n += 1;
+                        }
+                        if n == scan.hashes {
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+
         // Track string literals to avoid false comment detection
         if !in_string && (ch == '"' || ch == '\'') {
             in_string = true;
@@ -1790,6 +1814,47 @@ pub const X: i32 = 1;
             "real test module must be stripped"
         );
         assert!(!out.contains("assert!(true)"), "test body must be stripped");
+    }
+
+    /// WO 48.46: raw strings emit verbatim — the quote before `http` must
+    /// not close a tracked string, so the `//` in the URL is content, not a
+    /// line comment (old first pass ate `x"}"#;` → invalid Rust).
+    #[test]
+    fn test_minify_rust_raw_string_json_round_trip() {
+        let src = "const S: &str = r#\"{\"repo\": \"http://x\"}\"#;\n// real comment\nlet x = 1;\n";
+        let out = minify_content_by_ext(src, "rs", false);
+        assert!(
+            out.contains("{\"repo\": \"http://x\"}"),
+            "raw-string JSON must round-trip: {out}"
+        );
+        assert!(out.contains("const S"), "code must round-trip");
+        assert!(!out.contains("real comment"), "real comments still strip");
+        assert!(out.contains("let x = 1;"), "code after must survive");
+    }
+
+    /// WO 48.46: r##"…"## closes only on `"##` — an inner `"#` is content.
+    #[test]
+    fn test_minify_rust_raw_string_nested_hashes() {
+        let src = "let s = r##\"a \"# b \"##;\nlet y = 2;\n";
+        let out = minify_content_by_ext(src, "rs", false);
+        assert!(out.contains("a \"# b"), "inner \"# must survive: {out}");
+        assert!(out.contains("let y = 2;"), "code after must survive");
+    }
+
+    /// WO 48.46: b"…" keeps escape processing; br#"…"# is raw and verbatim.
+    #[test]
+    fn test_minify_rust_byte_string_prefixes() {
+        let src = "let a = b\"x\\\"y\";\nlet b = br#\"z//w\"#;\nlet c = 3;\n";
+        let out = minify_content_by_ext(src, "rs", false);
+        assert!(
+            out.contains("b\"x\\\"y\""),
+            "byte string must round-trip: {out}"
+        );
+        assert!(
+            out.contains("br#\"z//w\"#"),
+            "raw byte string must round-trip: {out}"
+        );
+        assert!(out.contains("let c = 3;"), "code after must survive");
     }
 
     // ── WO 9.7: per-language minification contracts ─────────────────────

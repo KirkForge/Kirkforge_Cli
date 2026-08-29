@@ -163,3 +163,4 @@ one WO 47.12 regression (48.3).
 - The scratch `workplan.md` at the repo root (gitignored) is for the current
   task's working notes; the workorders here are the persistent plan.
 | 48.43 | [call_id routing edges: empty-id ToolResult steals a sibling's card; late PTY chunk after TurnComplete resurrects a streaming card](48.43-callid-routing-edges.md) | Done |
+| 48.46 | [minify_rust_inner raw-string-blind — `//` inside r#"…"# comment-strips content → invalid Rust](48.46-minify-rust-raw-strings.md) | Done |

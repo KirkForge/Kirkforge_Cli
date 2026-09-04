@@ -338,11 +338,12 @@
   — a pre-created symlink makes appends follow it. Remaining: add
   `O_NOFOLLOW` on Unix + decide the Windows path.
   [46.24](docs/workorders/46.24-predictable-tmp-filenames-toctou.md)
-- **WO 43.26 DEFERRED**: `dispatch.rs:185` holds `Mutex<VerifierBus>`
-  while calling sync `verify()` (up to 5s on a tokio worker). Fix
-  requires a contract change (async `BusVerifier` or `spawn_blocking`
-  per verifier inside `VerifierBus::run`); AGENTS.md §7 forbids the
-  trait unification in one pass. No separate WO yet.
+- **WO 43.26 (DONE 2026-09-04)**: `VerifierBus::run` is now offloaded to
+  `tokio::task::spawn_blocking` — the bus is extracted from the
+  `std::sync::Mutex`, run on a blocking thread, then put back. The lock is
+  held only for extract/replace (microseconds), not across the sync verify
+  calls (up to 5s per plugin verifier). No trait change needed; the
+  `BusVerifier` trait stays sync.
 - **kf-lsp PDEATHSIG gap**: `crates/kf-lsp/src/lib.rs:1094` has its own
   `setup_process_group` duplicate without the PDEATHSIG call. Remaining:
   one prctl line or dedupe onto the session helper.
@@ -354,11 +355,13 @@
   typed); the adapter-error portion of the fallback is no longer reached
   by unmigrated adapters.
   [43.1](docs/archive/workorders/43.1-typed-adapter-errors.md)
-- **WO 43.20 (deferred tail)**: http 0.2/http-body 0.4 dedup NOT
-  achievable — aws `sign-http` needs http 0.2 and the newer crate set
-  needs rustc ≥1.91 (toolchain 1.88). Revisit at toolchain ≥1.94.
-  Wayland clipboard path unverified (manual: Wayland session → TUI →
-  select → Ctrl+Shift+C → `wl-paste`).
+- **WO 43.20 (DONE 2026-09-04)**: replaced `aws-sigv4` +
+  `aws-credential-types` + `aws-smithy-runtime-api` with in-tree SigV4
+  signing using the already-present `sha2` + `hmac` + `hex` deps (~100
+  lines in `bedrock_signing.rs`). All 3 aws crates removed from
+  Cargo.toml; http 0.2 + http-body 0.4 duplicates GONE from Cargo.lock
+  (only http 1.5.0 + http-body 1.1.0 remain). Wayland clipboard path
+  still unverified (manual check, not blocked on code).
 - **WO 43.22 (DONE 2026-09-04)**: `estimated: bool` field added to
   `TurnEvent::CostStats`, populated `true` on the usage-less fallback path
   (`turn.rs:was_estimated = usage.is_none()`), `false` for real usage.

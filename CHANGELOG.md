@@ -8,6 +8,14 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- WO 43.26: VerifierBus sync verify offloaded to `spawn_blocking` — the
+  bus is extracted from its `std::sync::Mutex`, run on a blocking thread,
+  then put back; the lock is held only for extract/replace, not across
+  the 5s-per-verifier sync run. No trait change needed.
+- WO 43.20: replaced aws-sigv4 + aws-credential-types + aws-smithy-runtime-api
+  with in-tree SigV4 signing (sha2 + hmac + hex, already deps); http 0.2 +
+  http-body 0.4 duplicates eliminated from the dependency tree.
+  [43.20](docs/archive/workorders/43.20-dep-size-audit.md)
 - WO 43.1: all 5 adapters (ollama + openai_compat + anthropic + bedrock +
   vertex) now wrap stream() errors via `classify_transport_error` → typed
   `AdapterError`; string-probe fallback in error.rs kept only for

@@ -1426,3 +1426,25 @@
   2 tails remain open (43.26: blocked on executor contract change;
   43.20: blocked on toolchain ≥1.94). Subagent-based verification +
   implementation is efficient for independent, no-file-overlap tasks.
+- WO 43.26 + 43.20 close-out (2026-09-04, same session): both "blocked"
+  tails turned out to be codeable with the ponytail approach:
+  (1) WO 43.26 (Mutex<VerifierBus> held across sync verify): the
+  "contract change" framing was over-engineered. The actual fix was
+  `std::mem::take` + `spawn_blocking` + put-back — 20 lines, no trait
+  change. Key gotcha: `std::sync::MutexGuard` is `!Send`, so the guard
+  must be scoped so the compiler can prove it's dropped before the
+  `.await`. A bare `drop(bus)` before the await doesn't work — the
+  compiler's borrows-from analysis can't prove the guard doesn't live
+  across the await. Wrapping the lock+take in a block scope `{ let mut
+  bus = lock(); mem::take(&mut *bus) }` makes the drop provable. This is
+  a recurring pattern for `std::sync::Mutex` + async.
+  (2) WO 43.20 (http 0.2 dedup "blocked on toolchain ≥1.94"): the
+  "toolchain blocker" was a red herring — the real fix was to eliminate
+  the aws-sigv4 dependency entirely with manual SigV4 (~100 lines using
+  already-present sha2 + hmac + hex). The toolchain was never the
+  problem; the problem was using a 3-crate AWS SDK dependency for an
+  algorithm that's 4 HMAC calls. Lesson: when a deferral says "blocked
+  on external constraint X", check whether eliminating the dependency
+  that creates the constraint is simpler than waiting for X. The
+  ponytail ladder rung 4 (native platform feature / stdlib) beat rung 5
+  (already-installed dependency) here — the "dependency" was the problem.

@@ -182,6 +182,11 @@ impl Executor {
         }
 
         // Run the unified verifier bus after file-modifying tool calls.
+        // WO 43.26: offload to spawn_blocking — bus.run() is sync and can
+        // block up to 5s per plugin verifier (subprocess spawn + wait).
+        // std::sync::MutexGuard is !Send, so the bus is extracted from the
+        // lock, run on a blocking thread, then put back; the lock is held
+        // only for extract/replace, not across the run.
         let is_file_modification = matches!(tool_name, "write_file" | "edit_file");
         if is_file_modification {
             if let Some(ref bus_lock) = self.verifier_bus {
@@ -198,9 +203,25 @@ impl Executor {
                 // WO 47.19: recover from poison instead of skipping — a
                 // panic that crossed this guard must not silently disable
                 // bus verification for the rest of the session.
-                let mut bus = bus_lock.lock().unwrap_or_else(|e| e.into_inner());
-                bus.run(&ctx);
-                for entry in bus.verdicts() {
+                // WO 43.26: extract the bus from the mutex, run it on a
+                // blocking thread (sync verifiers can block up to 5s
+                // each), then put it back. The lock is held only for
+                // extract/replace, not across the run — the guard is
+                // scoped so it's provably dropped before the await.
+                let mut bus_out = {
+                    let mut bus = bus_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    std::mem::take(&mut *bus)
+                };
+                let mut bus_back = tokio::task::spawn_blocking(move || {
+                    bus_out.run(&ctx);
+                    bus_out
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::error!("verifier bus task panicked: {e}");
+                    crate::session::verifier::bus::VerifierBus::new()
+                });
+                for entry in bus_back.verdicts() {
                     let is_error = entry.severity == crate::session::verifier::bus::Severity::Error;
                     // WO 45.36: prior `success: !is_error` mapped Error
                     // → failure (false) and Info/Warning → success (true).
@@ -234,7 +255,9 @@ impl Executor {
                         line: entry.line,
                     });
                 }
-                bus.clear();
+                bus_back.clear();
+                let mut bus = bus_lock.lock().unwrap_or_else(|e| e.into_inner());
+                *bus = bus_back;
             }
         }
 

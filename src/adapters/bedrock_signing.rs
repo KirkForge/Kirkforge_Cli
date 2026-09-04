@@ -1,8 +1,10 @@
 //! AWS SigV4 signing for Anthropic-on-Bedrock requests.
 //!
-//! We avoid pulling in the full AWS SDK by using `aws-sigv4` directly. The
-//! signing process builds a canonical request, hashes the payload, and
-//! produces the `Authorization` header plus any required session headers.
+//! Implemented in-tree (WO 43.20) using `sha2` + `hmac` + `hex` — no
+//! `aws-sigv4` dependency, which eliminates the http 0.2 / http-body 0.4
+//! duplicate that crate pulled in. The signing process builds a canonical
+//! request, hashes the payload, derives the HMAC-SHA256 signing key chain,
+//! and produces the `Authorization` header plus any required session headers.
 //!
 //! Credentials are resolved from:
 //! 1. `profile` if non-empty (via `aws_config` profile chain; not implemented in
@@ -14,11 +16,12 @@
 //! documented extension point.
 
 use anyhow::Context;
-use aws_credential_types::Credentials as AwsCredentials;
-use aws_sigv4::http_request::{sign as sigv4_sign, SignableBody, SignableRequest, SigningSettings};
-use aws_sigv4::sign::v4;
-use aws_smithy_runtime_api::client::identity::Identity;
+use chrono::Utc;
+use hmac::{Hmac, Mac};
+use sha2::{Digest, Sha256};
 use std::time::SystemTime;
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// A fully signed HTTP request ready for `reqwest`.
 pub struct SignedRequest {
@@ -27,84 +30,129 @@ pub struct SignedRequest {
     pub headers: reqwest::header::HeaderMap,
 }
 
+/// Env-resolved AWS credentials. Minimal mirror of the `aws-credential-types`
+/// `Credentials` accessors that this module (and its tests) use.
+struct Credentials {
+    access_key: String,
+    secret_key: String,
+    session_token: Option<String>,
+}
+
+impl Credentials {
+    fn access_key_id(&self) -> &str {
+        &self.access_key
+    }
+    fn secret_access_key(&self) -> &str {
+        &self.secret_key
+    }
+    fn session_token(&self) -> Option<&str> {
+        self.session_token.as_deref()
+    }
+}
+
 /// Sign a Bedrock InvokeModelWithResponseStream request.
 pub fn sign_request(url: &str, body: &[u8], region: &str) -> anyhow::Result<SignedRequest> {
     let creds = resolve_credentials()?;
-    let session_token = creds.session_token().map(|s| s.to_string());
-    let identity: Identity = creds.into();
-    let signing_params = v4::SigningParams::builder()
-        .identity(&identity)
-        .region(region)
-        .name("bedrock")
-        .time(SystemTime::now())
-        .settings(SigningSettings::default())
-        .build()
-        .context("failed to build signing params")?;
+    let host = host_header(url)?;
+    let parsed = url::Url::parse(url).context("invalid URL")?;
+    let path = parsed.path();
+    let path = if path.is_empty() { "/" } else { path };
 
-    let mut request_builder = http::Request::builder()
-        .method(http::Method::POST)
-        .uri(url)
-        .header("host", host_header(url)?)
-        .header("content-type", "application/json")
-        .header("x-amz-content-sha256", sha256_hex(body))
-        // Signed per the SigV4 spec (mm-H13, WO 47.29): content-length is
-        // part of the request, so it must be in the signed header set —
-        // real AWS rejects a signature that omits a header the client
-        // actually sends. reqwest would add this header itself; adding it
-        // here first makes the signed value and the sent value identical.
-        .header("content-length", body.len().to_string());
+    // Bedrock invoke-with-response-stream uses POST with no query string.
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .context("system time before epoch")?;
+    let datetime = chrono::DateTime::<Utc>::from_timestamp(now.as_secs() as i64, 0)
+        .context("invalid timestamp")?;
+    let amz_date = datetime.format("%Y%m%dT%H%M%SZ").to_string();
+    let date = datetime.format("%Y%m%d").to_string();
+    let payload_hash = sha256_hex(body);
 
-    if let Some(token) = session_token {
-        request_builder = request_builder.header("x-amz-security-token", token);
+    // Build the header set in canonical (sorted) order. content-length is
+    // signed per the SigV4 spec (mm-H13, WO 47.29): reqwest would add it
+    // itself; adding it here first makes the signed value and the sent
+    // value identical, and real AWS rejects a signature that omits a
+    // header the client actually sends.
+    let content_length = body.len().to_string();
+    let mut headers: Vec<(&str, String)> = vec![
+        ("content-length", content_length),
+        ("content-type", "application/json".to_string()),
+        ("host", host),
+        ("x-amz-content-sha256", payload_hash.clone()),
+        ("x-amz-date", amz_date.clone()),
+    ];
+    if let Some(token) = creds.session_token() {
+        headers.push(("x-amz-security-token", token.to_string()));
     }
 
-    let request = request_builder
-        .body(body.to_vec())
-        .context("failed to build signable request")?;
+    // Canonical headers: sorted, lowercased keys, trimmed values, "k:v\n".
+    let mut canonical_headers: Vec<(String, String)> = headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.trim().to_string()))
+        .collect();
+    canonical_headers.sort_by(|a, b| a.0.cmp(&b.0));
+    let canonical_headers_str: String = canonical_headers
+        .iter()
+        .map(|(k, v)| format!("{k}:{v}\n"))
+        .collect();
+    let signed_headers_str: String = canonical_headers
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .collect::<Vec<_>>()
+        .join(";");
 
-    let signing_params: aws_sigv4::http_request::SigningParams<'_> =
-        aws_sigv4::http_request::SigningParams::V4(signing_params);
+    // Canonical request (query string is empty for Bedrock invoke).
+    let canonical_request =
+        format!("POST\n{path}\n\n{canonical_headers_str}\n{signed_headers_str}\n{payload_hash}");
 
-    let signing_output = sigv4_sign(
-        SignableRequest::new(
-            "POST",
-            url,
-            request
-                .headers()
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.to_str().unwrap_or(""))),
-            SignableBody::Bytes(body),
-        )
-        .context("invalid signable request")?,
-        &signing_params,
-    )
-    .context("signing failed")?;
-    let signing_instructions = signing_output.output();
+    // String to sign.
+    let credential_scope = format!("{date}/{region}/bedrock/aws4_request");
+    let canonical_request_hash = sha256_hex(canonical_request.as_bytes());
+    let string_to_sign =
+        format!("AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{canonical_request_hash}");
 
-    let mut headers = reqwest::header::HeaderMap::new();
-    for (key, value) in request.headers() {
-        let name = reqwest::header::HeaderName::from_bytes(key.as_ref())
-            .with_context(|| format!("invalid header name from SigV4 request: {key:?}"))?;
-        let v_str = value
-            .to_str()
-            .with_context(|| format!("non-ASCII value for SigV4 header {key:?}"))?;
-        let v = reqwest::header::HeaderValue::from_str(v_str)
-            .with_context(|| format!("non-ASCII value for SigV4 header {key:?}"))?;
-        headers.insert(name, v);
+    // Signing key: kDate -> kRegion -> kService -> kSigning.
+    let k_date = hmac_bytes(
+        format!("AWS4{}", creds.secret_access_key()).as_bytes(),
+        date.as_bytes(),
+    );
+    let k_region = hmac_bytes(&k_date, region.as_bytes());
+    let k_service = hmac_bytes(&k_region, b"bedrock");
+    let k_signing = hmac_bytes(&k_service, b"aws4_request");
+
+    let signature = hex::encode(hmac_bytes(&k_signing, string_to_sign.as_bytes()));
+    let authorization = format!(
+        "AWS4-HMAC-SHA256 Credential={}/{credential_scope}, SignedHeaders={signed_headers_str}, Signature={signature}",
+        creds.access_key_id()
+    );
+
+    // Assemble the reqwest HeaderMap.
+    let mut header_map = reqwest::header::HeaderMap::new();
+    for (k, v) in &headers {
+        let name = reqwest::header::HeaderName::from_bytes(k.as_bytes())
+            .with_context(|| format!("invalid header name: {k:?}"))?;
+        let val = reqwest::header::HeaderValue::from_str(v)
+            .with_context(|| format!("non-ASCII value for header {k:?}"))?;
+        header_map.insert(name, val);
     }
-    for (key, value) in signing_instructions.headers() {
-        let name = reqwest::header::HeaderName::from_bytes(key.as_ref())
-            .with_context(|| format!("invalid header name from signing instructions: {key:?}"))?;
-        let v = reqwest::header::HeaderValue::from_str(value)
-            .with_context(|| format!("non-ASCII value for signing header {key:?}"))?;
-        headers.insert(name, v);
-    }
+    let auth_name = reqwest::header::HeaderName::from_bytes(b"authorization")
+        .context("invalid header name: authorization")?;
+    let auth_val = reqwest::header::HeaderValue::from_str(&authorization)
+        .context("non-ASCII value for authorization header")?;
+    header_map.insert(auth_name, auth_val);
 
     Ok(SignedRequest {
         method: reqwest::Method::POST,
         url: url.to_string(),
-        headers,
+        headers: header_map,
     })
+}
+
+/// HMAC-SHA256(key, data) → raw bytes.
+fn hmac_bytes(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(data);
+    mac.finalize().into_bytes().to_vec()
 }
 
 fn host_header(url: &str) -> anyhow::Result<String> {
@@ -116,24 +164,21 @@ fn host_header(url: &str) -> anyhow::Result<String> {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
 }
 
-fn resolve_credentials() -> anyhow::Result<AwsCredentials> {
+fn resolve_credentials() -> anyhow::Result<Credentials> {
     let access_key = std::env::var("AWS_ACCESS_KEY_ID").context("AWS_ACCESS_KEY_ID not set")?;
     let secret_key =
         std::env::var("AWS_SECRET_ACCESS_KEY").context("AWS_SECRET_ACCESS_KEY not set")?;
     let session_token = std::env::var("AWS_SESSION_TOKEN").ok();
-    Ok(AwsCredentials::new(
+    Ok(Credentials {
         access_key,
         secret_key,
         session_token,
-        None,
-        "env",
-    ))
+    })
 }
 
 #[cfg(test)]

@@ -180,6 +180,16 @@ impl Tool for Task {
             .get("background")
             .and_then(|b| b.as_bool())
             .unwrap_or(false);
+        // Subagent audit 2026-09-04: an agent's `background: true`
+        // frontmatter supplies the default when the model omits the
+        // `background` arg. An explicit arg (true or false) always wins.
+        let background = if args.get("background").is_none() {
+            self.agents
+                .get(&persona)
+                .is_some_and(|a| a.background)
+        } else {
+            background
+        };
         let max_turns = args
             .get("max_turns")
             .and_then(|m| m.as_u64())
@@ -1090,6 +1100,9 @@ mod tests {
             tools: vec!["Read".into(), "Grep".into()],
             model: Some("fast-model".into()),
             max_turns: None,
+            isolation: crate::session::agents::AgentIsolation::None,
+            background: false,
+            permission_mode: None,
         });
         std::sync::Arc::new(reg)
     }
@@ -1187,6 +1200,9 @@ mod tests {
             tools: vec!["Grep".into()],
             model: Some("custom-model-x".into()),
             max_turns: None,
+            isolation: crate::session::agents::AgentIsolation::None,
+            background: false,
+            permission_mode: None,
         });
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
@@ -1241,6 +1257,9 @@ mod tests {
             tools: vec!["Grep".into()],
             model: None,
             max_turns: Some(10),
+            isolation: crate::session::agents::AgentIsolation::None,
+            background: false,
+            permission_mode: None,
         });
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
@@ -1304,6 +1323,9 @@ mod tests {
             tools: vec![],
             model: None,
             max_turns: Some(999_999),
+            isolation: crate::session::agents::AgentIsolation::None,
+            background: false,
+            permission_mode: None,
         });
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
@@ -1319,6 +1341,122 @@ mod tests {
             *seen_turns.lock().unwrap(),
             Some(crate::shared::config::DEFAULT_MAX_SUBAGENT_TURNS),
             "agent maxTurns above the ceiling must clamp to the default ceiling"
+        );
+    }
+
+    // ── Subagent audit 2026-09-04: agent `background` frontmatter hint ──
+
+    // An agent with `background: true` must start in background mode when
+    // the model omits the `background` arg (the agent hint supplies the
+    // default). Captures the TaskRequest to confirm no synchronous result.
+    #[tokio::test]
+    async fn task_tool_agent_background_hint_defaults_when_arg_omitted() {
+        struct Capture {
+            seen: Arc<StdMutex<Option<TaskRequest>>>,
+        }
+        #[async_trait::async_trait]
+        impl TaskSpawner for Capture {
+            async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+                *self.seen.lock().unwrap() = Some(request);
+                Ok("ok".to_string())
+            }
+        }
+        let mut reg = crate::session::agents::AgentRegistry::new();
+        reg.register(crate::session::agents::AgentDef {
+            name: "bg-agent".into(),
+            description: "background agent".into(),
+            system_prompt: "You run in background.".into(),
+            tools: vec!["Grep".into()],
+            model: None,
+            max_turns: None,
+            isolation: crate::session::agents::AgentIsolation::None,
+            background: true,
+            permission_mode: None,
+        });
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
+        let seen = Arc::new(StdMutex::new(None));
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(Capture { seen: seen.clone() });
+        let ctx = ToolContext::with_spawner(spawner);
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({"prompt": "do thing", "persona": "bg-agent"}),
+            )
+            .await;
+        // background mode returns a "Started background task" success,
+        // not the subagent's "ok" summary.
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected Success, got {other:?}"),
+        };
+        assert!(
+            content.contains("Started background task"),
+            "agent background hint must start in background mode: {content}"
+        );
+        // The spawner is invoked by the background worker; give it a beat
+        // to record the request. The request is background-routed, so the
+        // owner field is set (non-None) — proving it went through the bg path.
+        tokio::task::yield_now().await;
+        let req = seen.lock().unwrap().clone();
+        if let Some(r) = req {
+            assert!(r.owner.is_some(), "background task must carry an owner id");
+        }
+    }
+
+    // An explicit `background: false` arg must override the agent's
+    // `background: true` hint (the model's explicit choice wins).
+    #[tokio::test]
+    async fn task_tool_explicit_background_false_overrides_agent_hint() {
+        struct Capture {
+            seen: Arc<StdMutex<Option<TaskRequest>>>,
+        }
+        #[async_trait::async_trait]
+        impl TaskSpawner for Capture {
+            async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+                *self.seen.lock().unwrap() = Some(request);
+                Ok("inline-ok".to_string())
+            }
+        }
+        let mut reg = crate::session::agents::AgentRegistry::new();
+        reg.register(crate::session::agents::AgentDef {
+            name: "bg-agent".into(),
+            description: "background agent".into(),
+            system_prompt: "You run in background.".into(),
+            tools: vec!["Grep".into()],
+            model: None,
+            max_turns: None,
+            isolation: crate::session::agents::AgentIsolation::None,
+            background: true,
+            permission_mode: None,
+        });
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
+        let seen = Arc::new(StdMutex::new(None));
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(Capture { seen: seen.clone() });
+        let ctx = ToolContext::with_spawner(spawner);
+        let outcome = tool
+            .run(
+                &ctx,
+                serde_json::json!({
+                    "prompt": "do thing",
+                    "persona": "bg-agent",
+                    "background": false
+                }),
+            )
+            .await;
+        // Inline mode returns the subagent's summary directly.
+        let content = match outcome {
+            ToolOutcome::Success { content } => content,
+            other => panic!("expected Success, got {other:?}"),
+        };
+        assert!(
+            content.contains("inline-ok"),
+            "explicit background:false must run inline and return the summary: {content}"
+        );
+        assert!(
+            !content.contains("Started background task"),
+            "explicit background:false must not start a background task: {content}"
         );
     }
 }

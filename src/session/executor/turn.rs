@@ -815,6 +815,12 @@ impl Executor {
                 Some(&args_json),
                 Some(&result_text),
             );
+            self.run_hook_with_result(
+                "post-tool",
+                Some(&tc.name),
+                Some(&args_json),
+                Some(&result_text),
+            );
 
             let crs = self
                 .emit_tool_event_and_correct(
@@ -904,6 +910,12 @@ impl Executor {
         let result_text = outcome_for_emit.text_content();
         self.run_hook_with_result(
             &format!("post-tool-{}", tc.name),
+            Some(&tc.name),
+            Some(&args_json),
+            Some(&result_text),
+        );
+        self.run_hook_with_result(
+            "post-tool",
             Some(&tc.name),
             Some(&args_json),
             Some(&result_text),

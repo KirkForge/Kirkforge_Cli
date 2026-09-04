@@ -350,6 +350,24 @@ impl Executor {
                 message: denied,
             });
         }
+        // Generic pre-tool hook (WO 39.4): runs alongside the per-tool event
+        // so a single `pre-tool.sh` catches ALL tool calls. Per-tool fires
+        // first (more specific); if either denies, the tool is denied.
+        if let Some(reason) = self
+            .run_pre_tool_hook("pre-tool", Some(&tc.name), Some(&args_json))
+            .await
+        {
+            let denied = format!("❌ Hook denied {}: {}", tc.name, reason);
+            return Ok(PreRunVerdict::Skip {
+                events: vec![TurnEvent::ToolResult {
+                    name: tc.name.clone(),
+                    output: denied.clone(),
+                    success: false,
+                    call_id: tc.id.clone(),
+                }],
+                message: denied,
+            });
+        }
 
         Ok(PreRunVerdict::Spawn(tool, file_resolved))
     }

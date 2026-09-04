@@ -281,17 +281,17 @@
 
 ## Pending / Deferred (open)
 
-- **WO 48.9 (deferred tail)**: CI job running `cargo check --workspace
-  --no-default-features` in `ci-merge.yml` (+ `ci-pr.yml`) so the minimal
-  build (ADR-0017) can't silently break again. Deferred because it needs a
-  new ~10-line job block, beyond the 3-line allowance in this WO's scope.
-  Also observed (pre-existing, minimal-build-only warnings, not fixed):
-  `unused_mut` `src/session/skills.rs:174`, dead-code `apply_budget_slice`.
+- **WO 48.9 (DONE 2026-09-04)**: added `minimal-build` CI job to
+  `ci-merge.yml` + `ci-pr.yml` — runs `cargo check --workspace
+  --no-default-features --locked`. The pre-existing warnings
+  (`unused_mut` skills.rs, dead-code `apply_budget_slice`) were already
+  fixed by WO 48.24 (commit `d9e6c60f`); the state.md note was stale.
   [48.9](docs/workorders/48.9-no-default-features-broken.md)
 
-- **WO 47.8 (owner-skipped)**: wire or delete the 9 fuzz targets — the
-  only WO in the 47 series not Done (Status: Planned by owner choice).
-  [47.8](docs/workorders/47.8-wire-or-delete-fuzz-targets.md)
+- **WO 47.8 (Done)**: deleted the 9 fuzz targets — `fuzz/` was 100%
+  unwired (own `[workspace]`, 4 of 9 targets orphaned, zero CI jobs ran
+  cargo-fuzz). Deleted the whole dir; no production consumers. Removed
+  from this pending list. [47.8](docs/workorders/47.8-wire-or-delete-fuzz-targets.md)
 - **WO 47.6 (deferred tail — structural 6→2)**: fold
   `maybe_microcompact` + `compact_to_budget` behind one `MiddleStrategy`
   enum (CollapseToSummary | StubPerSlot), wire `summarize_conversation`
@@ -314,14 +314,10 @@
   Doom banner deliberately ungated (safety UI, WO 43.31); line-mode
   `/carryover show|clear` ungated (parity follow-up if wanted).
   [47.13](docs/workorders/47.13-tui-command-diet.md)
-- **Needs WO (found by 2026-08-29 docs audit)**: the TUI enable-hint
-  teaches a config form that never parses — `slash_commands.rs:92` +
-  `commands/jobs.rs:15` tell users to write `[display]
-  extra_commands = [...]`, but DisplayConfig is serde-flattened so only
-  the top-level `extra_commands` key parses (config.toml.example now
-  documents the correct form). Remaining: either accept the nested table
-  or fix the two hint strings; no test covers the TOML path (tests set
-  the field programmatically).
+- **TUI extra_commands hint (DONE 2026-09-04)**: both hint strings
+  (`slash_commands.rs:92`, `commands/jobs.rs:15`) now teach the correct
+  top-level `extra_commands = [...]` form instead of the unparsable
+  `[display] extra_commands` nested form.
 - **WO 47.14 (1-of-N consumers)**: plugin verifiers are bus-only
   (PluginVerifierAdapter + dual registration deleted); the remaining
   `Verifier`→`BusVerifier` migration (steps 1-5: handler, correction
@@ -332,11 +328,12 @@
   `kf_plugin_host` root re-exports; an optional future sweep could import
   from `kf_plugin_host::sdk` explicitly for provenance. Zero behavior
   difference. [47.4](docs/workorders/47.4-fold-routing-memory-crates.md)
-- **WO 46.24 (deferred tail)**: the two append-mode sites
-  (`src/shared/audit.rs:143` `AuditLog::new`,
-  `src/main/cli_dispatch.rs:73` `init_tracing`) open without `O_NOFOLLOW`
-  — a pre-created symlink makes appends follow it. Remaining: add
-  `O_NOFOLLOW` on Unix + decide the Windows path.
+- **WO 46.24 (DONE 2026-09-04)**: both append-mode sites
+  (`src/shared/audit.rs` `AuditLog::new`, `src/main/cli_dispatch.rs`
+  `init_tracing`) now open with `O_NOFOLLOW` on Unix via
+  `OpenOptionsExt::custom_flags(libc::O_NOFOLLOW)`. Windows path
+  documented as unprotected (ponytail: upgrade path is
+  `openat2(RESOLVE_NO_SYMLINKS)`).
   [46.24](docs/workorders/46.24-predictable-tmp-filenames-toctou.md)
 - **WO 43.26 (DONE 2026-09-04)**: `VerifierBus::run` is now offloaded to
   `tokio::task::spawn_blocking` — the bus is extracted from the
@@ -344,9 +341,9 @@
   held only for extract/replace (microseconds), not across the sync verify
   calls (up to 5s per plugin verifier). No trait change needed; the
   `BusVerifier` trait stays sync.
-- **kf-lsp PDEATHSIG gap**: `crates/kf-lsp/src/lib.rs:1094` has its own
-  `setup_process_group` duplicate without the PDEATHSIG call. Remaining:
-  one prctl line or dedupe onto the session helper.
+- **kf-lsp PDEATHSIG (DONE 2026-09-04)**: `crates/kf-lsp/src/lib.rs`
+  `setup_process_group` now calls `prctl(PR_SET_PDEATHSIG, SIGKILL)` on
+  Linux, matching the session helper.
 - **WO 43.1 (DONE 2026-09-04)**: all 5 adapters (ollama + openai_compat +
   anthropic + anthropic_bedrock + anthropic_vertex) now wrap stream()
   errors via `classify_transport_error` → typed `AdapterError`. The
@@ -397,6 +394,41 @@ inherent CPU cost (proptest ×32, fresh runtime per case); if it flakes
 again under sustained >2× load, the next step is sharing one tokio
 runtime across proptest cases (WO 33.11 follow-up), not lowering
 coverage.
+
+## Subagent system audit (2026-09-04)
+
+Two HIGH-priority gaps found by the subagent system audit:
+
+- **No subagent nesting depth limit**: a subagent's `Executor` builds its
+  own `InProcessTaskSpawner` (`executor/mod.rs:343`), threaded into every
+  tool call's `ToolContext` (`dispatch.rs:315`). A `coder` can spawn an
+  `explore` which spawns another, ad infinitum. `parent_task_id` is
+  recorded but never checked against a depth cap. Needs: `subagent_depth`
+  config (default ~3), depth counter in `ToolContext`, task tool refuses
+  spawn when depth exceeded. Claude Code has depth-limited nesting.
+- **Task tool persona enum blocks dynamic agents**: `persona` parameter
+  schema hardcodes `"enum": ["explore", "plan", "coder"]`
+  (`task_tool.rs:129`). Discovered agent names are listed in the
+  description prose but NOT in the enum. Strict-schema models cannot
+  produce a custom agent name. Needs: drop the enum (accept any string,
+  validate at runtime) or dynamically extend the enum with discovered
+  agent names.
+
+MEDIUM-priority gaps (not blocking but limit capability):
+- Model failure: no fallback to cheaper model (error propagates raw)
+- Pipeline: strictly sequential, no parallel pipelines or fan-out
+- Pipeline roles: hardcoded scout→coder→reviewer, not configurable
+- Agent frontmatter: only 4 of 10+ Claude fields parsed (missing maxTurns,
+  isolation, hooks, mcpServers, memory, background, permissionMode)
+- Inter-subagent messaging: no SendMessage/ListAgents/TaskCreate tools
+- Agent registry: OnceLock singleton, no per-session reload
+
+Strengths vs competitors:
+- Untrusted handoff fencing (prompt-injection-safe context handoff)
+- Cooperative cancel cascade to nested subagents
+- Per-subagent provider override with API key inheritance + model allowlist
+- Concurrency backpressure (Queue + Reject modes with semaphore)
+- Background subagents are production (not experimental like opencode)
 
 ## Architecture notes (load-bearing, not in WOs)
 

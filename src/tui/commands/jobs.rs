@@ -12,7 +12,7 @@
 //! - `/jobs clean`        → drop all finished jobs
 //!
 //! Scheduled-job sub-commands (WO 47.13: opt-in via
-//! `[display] extra_commands = ["jobs-schedule"]`, default off):
+//! `extra_commands = ["jobs-schedule"]` at the top level of config.toml, default off):
 //! - `/jobs schedule <spec> bash <command>`  → create a bash scheduled job
 //! - `/jobs schedule <spec> workflow <name> [vars...]` → create a workflow job
 //! - `/jobs scheduled list`                    → list scheduled jobs

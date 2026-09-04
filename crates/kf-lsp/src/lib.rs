@@ -1090,6 +1090,17 @@ extern "C" {
 #[cfg(unix)]
 const SIGKILL: i32 = 9;
 
+// ponytail: no `libc` dep in this standalone crate, so declare prctl
+// manually. Upgrade path: add `libc` to Cargo.toml if more libc fns are
+// needed here and use `libc::prctl`/`libc::PR_SET_PDEATHSIG` instead.
+#[cfg(target_os = "linux")]
+extern "C" {
+    fn prctl(option: i32, arg2: usize, arg3: usize, arg4: usize, arg5: usize) -> i32;
+}
+
+#[cfg(target_os = "linux")]
+const PR_SET_PDEATHSIG: i32 = 1;
+
 #[cfg(unix)]
 fn setup_process_group(cmd: &mut Command) {
     use std::os::unix::process::CommandExt;
@@ -1098,6 +1109,13 @@ fn setup_process_group(cmd: &mut Command) {
             #[allow(unused_must_use)]
             {
                 setpgid(0, 0);
+                // WO 43.23: panic=abort and SIGKILL run no Drop, so
+                // PDEATHSIG is the only mechanism that kills the LSP child
+                // when the parent dies; matches src/session/process_group.rs.
+                #[cfg(target_os = "linux")]
+                {
+                    prctl(PR_SET_PDEATHSIG, SIGKILL as usize, 0, 0, 0);
+                }
             }
             Ok(())
         });

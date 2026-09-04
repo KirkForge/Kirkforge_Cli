@@ -125,6 +125,32 @@ jobs:
             echo "Affected packages: $pkgs"
           fi
 
+  # Minimal build (ADR-0017): --no-default-features verifies the budget /
+  # stratum / kf-plugin-tools feature gates compile cleanly without the
+  # default feature set. A separate job (not `cargo check` inside clippy)
+  # because clippy runs with the default features on; this catches un-gated
+  # kf_budget_core / kf_compress_core refs that only surface in the minimal
+  # build (WO 48.9). Skipped on docs-only changes.
+  minimal-build:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.packages != '' && needs.changes.outputs.packages != '__NO_RUST_CHANGES__'
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pr-minimal-build
+
+      - name: Check minimal build (no default features)
+        run: cargo check --workspace --no-default-features --locked
+
   # Clippy is the compile gate. --lib --bins (NOT --all-targets) skips
   # most test-target/bench/example compilation for PR speed. --test e2e
   # explicitly adds the single [[test]] e2e target (feature-gated behind

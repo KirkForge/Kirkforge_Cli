@@ -73,12 +73,18 @@ fn init_tracing(log_level: &str) -> anyhow::Result<()> {
 
     // Open the log file once. Rotation-by-moving-aside is sacrificed for
     // performance; callers can copy/truncate the file in place instead.
-    let file_handle: Option<std::sync::Arc<std::sync::Mutex<std::fs::File>>> =
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file)
+    let file_handle: Option<std::sync::Arc<std::sync::Mutex<std::fs::File>>> = {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).append(true);
+        #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        // ponytail: Windows append path is unprotected against a
+        // pre-created symlink — O_NOFOLLOW is Posix-only; upgrade path
+        // is a per-component openat2(RESOLVE_NO_SYMLINKS) walk.
+        match opts.open(&log_file) {
             Ok(file) => Some(std::sync::Arc::new(std::sync::Mutex::new(file))),
             Err(e) => {
                 // Last-ditch fallback: write to stderr so logs aren't lost,
@@ -88,7 +94,8 @@ fn init_tracing(log_level: &str) -> anyhow::Result<()> {
                 eprintln!("failed to open log file {}: {}", log_file.display(), e);
                 None
             }
-        };
+        }
+    };
 
     let file_layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)

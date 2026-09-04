@@ -72,7 +72,7 @@ Only the three most recent series are kept live.
 | 47.5 | [Feature-gate bench + testdoctor out of the default binary (~5K lines)](47.5-devtools-out-of-binary.md) | Done |
 | 47.6 | [Six live compression layers → two (stratum modes should map to 2 pipelines)](47.6-compression-layers-6-to-2.md) | Done |
 | 47.7 | [MCP transport trait (every op exists 3×: enum + stdio_* + http)](47.7-mcp-transport-trait.md) | Done |
-| 47.8 | [Wire or delete the 9 fuzz targets (100% unwired dead weight)](47.8-wire-or-delete-fuzz-targets.md) | Planned |
+| 47.8 | [Wire or delete the 9 fuzz targets (100% unwired dead weight)](47.8-wire-or-delete-fuzz-targets.md) | Done |
 | 47.9 | [Archive the completed workorder corpus (490 files, 45.6K lines = 74% of docs)](47.9-archive-workorder-corpus.md) | Done |
 
 ### WO 47 additions — multi-model audit findings (vetted)

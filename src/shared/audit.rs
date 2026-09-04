@@ -140,7 +140,17 @@ impl AuditLog {
                     return None;
                 }
             }
-            match OpenOptions::new().append(true).create(true).open(p) {
+            let mut opts = OpenOptions::new();
+            opts.append(true).create(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.custom_flags(libc::O_NOFOLLOW);
+            }
+            // ponytail: Windows append path is unprotected against a
+            // pre-created symlink — O_NOFOLLOW is Posix-only; upgrade path
+            // is a per-component openat2(RESOLVE_NO_SYMLINKS) walk.
+            match opts.open(p) {
                 Ok(f) => Some(BufWriter::new(f)),
                 Err(e) => {
                     tracing::warn!(

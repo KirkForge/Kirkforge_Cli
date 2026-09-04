@@ -89,7 +89,7 @@ fn command_enabled(extras: &[String], cmd: &SlashCommand) -> bool {
 pub(crate) fn extra_disabled_msg(cmd: &str, key: &str) -> String {
     format!(
         "{cmd} is off by default (WO 47.13 command diet). \
-         Enable: add \"{key}\" to [display] extra_commands in config.toml, then /reload."
+         Enable: add \"{key}\" to extra_commands at the top level of config.toml, then /reload."
     )
 }
 

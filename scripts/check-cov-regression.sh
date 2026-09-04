@@ -83,7 +83,7 @@ if not baselines:
 # crates/<name>/src/...  -> <name>   (relative OR absolute; llvm-cov emits
 #                                     absolute paths, lcov merges may be relative)
 # <root>/src/...         -> kf-code  (the binary crate lives at repo root)
-# anything else (tests/, benches/, build.rs, fuzz/) -> None (skip)
+# anything else (tests/, benches/, build.rs) -> None (skip)
 def crate_of(sf_path):
     p = sf_path.replace("\\", "/")
     m = re.search(r"(?:^|/)crates/([A-Za-z0-9_-]+)/src/", p)

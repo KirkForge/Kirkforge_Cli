@@ -8,6 +8,16 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- WO 48.9: `minimal-build` CI job (`cargo check --workspace
+  --no-default-features --locked`) in ci-merge + ci-pr.
+- WO 47.8: deleted 9 unwired fuzz targets (`fuzz/` dir) — 100% dead code.
+- WO 46.24: `O_NOFOLLOW` on audit-log + tracing append sites (Unix).
+- kf-lsp: `PR_SET_PDEATHSIG` added to LSP child process group (Linux).
+- TUI: fixed `extra_commands` hint strings (was teaching unparsable
+  `[display]` nested form; now teaches correct top-level form).
+- Subagent audit: 2 HIGH-priority gaps found — (1) no subagent nesting
+  depth limit (unbounded recursion risk), (2) task tool `persona` enum
+  blocks dynamic agent names for strict-schema models. See state.md.
 - WO 43.26: VerifierBus sync verify offloaded to `spawn_blocking` — the
   bus is extracted from its `std::sync::Mutex`, run on a blocking thread,
   then put back; the lock is held only for extract/replace, not across

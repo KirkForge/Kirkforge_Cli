@@ -8,6 +8,18 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- WO 43.1: all 5 adapters (ollama + openai_compat + anthropic + bedrock +
+  vertex) now wrap stream() errors via `classify_transport_error` → typed
+  `AdapterError`; string-probe fallback in error.rs kept only for
+  session-layer sandbox/path-policy denials.
+  [43.1](docs/archive/workorders/43.1-typed-adapter-errors.md)
+- WO 43.22: `estimated: bool` field on `TurnEvent::CostStats` — the
+  usage-less fallback path sets it `true` so consumers can distinguish
+  estimated from real token counts; integration test tightened.
+- WO 43.24: kf-testdoctor assert-free-body heuristic —
+  `find_assert_free_tests` in `suggest.rs` flags `#[test]` fns whose
+  bodies contain no assertion macros; 5 tests added.
+  [43.24](docs/archive/workorders/43.24-test-assertion-quality.md)
 - minify: VFS cache key is nanos-granular (`as_nanos()` instead of
   `.as_secs()`) — a same-second rewrite after an edit (edit_file envelope
   round-trip race) no longer serves the stale pre-edit minified view.

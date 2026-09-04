@@ -346,21 +346,32 @@
 - **kf-lsp PDEATHSIG gap**: `crates/kf-lsp/src/lib.rs:1094` has its own
   `setup_process_group` duplicate without the PDEATHSIG call. Remaining:
   one prctl line or dedupe onto the session helper.
-- **WO 43.1 (deferred tail)**: migrate openai_compat / anthropic /
-  anthropic_bedrock / anthropic_vertex to typed `AdapterError` so the
-  string-probe fallback in `src/main/error.rs` can be deleted.
+- **WO 43.1 (DONE 2026-09-04)**: all 5 adapters (ollama + openai_compat +
+  anthropic + anthropic_bedrock + anthropic_vertex) now wrap stream()
+  errors via `classify_transport_error` → typed `AdapterError`. The
+  string-probe fallback in `src/main/error.rs` remains ONLY for
+  session-layer sandbox/path-policy denials (those producers are not yet
+  typed); the adapter-error portion of the fallback is no longer reached
+  by unmigrated adapters.
   [43.1](docs/archive/workorders/43.1-typed-adapter-errors.md)
 - **WO 43.20 (deferred tail)**: http 0.2/http-body 0.4 dedup NOT
   achievable — aws `sign-http` needs http 0.2 and the newer crate set
   needs rustc ≥1.91 (toolchain 1.88). Revisit at toolchain ≥1.94.
   Wayland clipboard path unverified (manual: Wayland session → TUI →
   select → Ctrl+Shift+C → `wl-paste`).
-- **WO 43.22 (deferred tail)**: `estimated: bool` on
-  TurnEvent::CostStats for the usage-less fallback; unit tests for the
-  fallback + vertex token cache (executor harness / Authenticator
-  injection needed).
-- **WO 43.24 (deferred tail)**: kf-testdoctor assert-free-body heuristic
-  — needs a source-scan pass in suggest.rs (~150+ lines).
+- **WO 43.22 (DONE 2026-09-04)**: `estimated: bool` field added to
+  `TurnEvent::CostStats`, populated `true` on the usage-less fallback path
+  (`turn.rs:was_estimated = usage.is_none()`), `false` for real usage.
+  Integration test in `context_economics_test.rs` tightened to assert the
+  flag. Vertex token cache implementation already shipped; unit tests for
+  it still pending (Authenticator injection seam needed — minor tail).
+- **WO 43.24 (DONE 2026-09-04)**: kf-testdoctor assert-free-body
+  heuristic shipped — `find_assert_free_tests` in `suggest.rs` scans
+  `#[test]`/`#[tokio::test]` function bodies for assertion macros
+  (assert!/assert_eq!/assert_ne!/panic!/should_panic/unreachable!/todo!/
+  unimplemented!), flags assert-free fns as `AssertFreeBody` suggestions.
+  Line-based scan (ponytail: not AST-level; FP on helper-only test fns
+  with asserts in callees). 5 tests added.
 - **WO 39.4** Claude-compat phase 3 (hook stdin-JSON contract);
   **WO 39.1** phase 3-4 (external `claude -p`/`codex exec`/`opencode run`
   runner + LiteLLM gateway); **WO 38.10** P2 CLI polish;

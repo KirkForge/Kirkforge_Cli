@@ -1403,3 +1403,26 @@
   distinguishes a secs-key (stale hit) from a nanos-key (fresh) with zero
   flake; ext4/tmpfs preserve ns resolution (daemon tests' "rounds to whole
   seconds" caveat is FAT-class filesystems).
+- WO 43 deferred-tails session (2026-09-04): nematron flagged 5 WO 43
+  deferred tails in state.md. Parallel explore subagents verified all 5
+  against the codebase — none were stale (unlike prior "persist plugin
+  state" / "agent steps limit" items that AGENTS.md §7 warns about). 3
+  were codeable and shipped in one pass:
+  (1) WO 43.1 adapter migration was a 4-line mechanical change (`.await?`
+  → `.await.map_err(super::classify_transport_error)?` in 4 adapters),
+  but the string-probe fallback in error.rs STAYS because it also
+  handles session-layer sandbox/path-policy denials — don't assume
+  migrating the adapters alone deletes the fallback; read the ponytail:
+  comment.
+  (2) WO 43.22 `estimated: bool` on an enum variant required updating
+  ~15 construction + match sites across 8 files — Rust's exhaustive
+  match caught every site at compile time, but `cargo check` was the
+  fast feedback, not LSP (worktree stale-diagnostics caveat per
+  AGENTS.md §7).
+  (3) WO 43.24 testdoctor heuristic was estimated at "~150+ lines" in
+  the deferral note but shipped at ~80 lines — line-based scan, not a
+  real parser. The estimate was conservative; ponytail approach (find
+  the simplest thing that works) cut it nearly in half.
+  2 tails remain open (43.26: blocked on executor contract change;
+  43.20: blocked on toolchain ≥1.94). Subagent-based verification +
+  implementation is efficient for independent, no-file-overlap tasks.

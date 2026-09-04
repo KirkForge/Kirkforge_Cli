@@ -564,6 +564,7 @@ mod tests {
                 completion_tokens: 50,
                 turn_cost: 0.002,
                 cumulative_cost: 0.002,
+                estimated: false,
             },
             super::super::executor::TurnEvent::ToolStart {
                 name: "write_file".to_string(),
@@ -575,6 +576,7 @@ mod tests {
                 completion_tokens: 80,
                 turn_cost: 0.003,
                 cumulative_cost: 0.005,
+                estimated: false,
             },
             super::super::executor::TurnEvent::ToolStart {
                 name: "bash".to_string(),
@@ -790,12 +792,14 @@ mod tests {
                 completion_tokens: 5,
                 turn_cost: 0.001,
                 cumulative_cost: 0.001,
+                estimated: false,
             },
             super::super::executor::TurnEvent::CostStats {
                 prompt_tokens: 20,
                 completion_tokens: 10,
                 turn_cost: 0.002,
                 cumulative_cost: 0.003,
+                estimated: false,
             },
         ];
         let result = collect_turn_metrics(&events, 1.0, &task, dir.path(), None, None);

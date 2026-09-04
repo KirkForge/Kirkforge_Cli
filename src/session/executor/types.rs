@@ -105,6 +105,7 @@ pub enum TurnEvent {
         completion_tokens: usize,
         turn_cost: f64,
         cumulative_cost: f64,
+        estimated: bool,
     },
 
     CacheStats {

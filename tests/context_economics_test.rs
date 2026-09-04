@@ -278,18 +278,18 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
     // that omit usage must not read zero-cost). The mock only stamps usage
     // on the final text reply; the two tool turns before it fall back to
     // token_count-cache estimates. Estimates are > 0 and grow with the
-    // context (turn 2 carries the sliced corpus). The estimated entries
-    // carry no flag yet — the `estimated: bool` field is a disclosed
-    // deferral in state.md pending; when it lands, tighten this to check
-    // it. ──
+    // context (turn 2 carries the sliced corpus). The first two CostStats
+    // carry `estimated: true` (usage-less fallback), the third carries
+    // `estimated: false` (real provider usage). ──
     let cost_stats: Vec<_> = events
         .iter()
         .filter_map(|e| match e {
             TurnEvent::CostStats {
                 prompt_tokens,
                 completion_tokens,
+                estimated,
                 ..
-            } => Some((*prompt_tokens, *completion_tokens)),
+            } => Some((*prompt_tokens, *completion_tokens, *estimated)),
             _ => None,
         })
         .collect();
@@ -303,9 +303,20 @@ async fn turn_threads_retrieval_compression_budget_provider_verification() {
         "estimated prompt tokens must be positive and grow with context: {cost_stats:?}"
     );
     assert_eq!(
-        cost_stats[2],
-        (7, 11),
-        "the real-usage turn must match the mock's emitted usage exactly"
+        cost_stats[2].0, 7,
+        "the real-usage turn's prompt tokens must match the mock's emitted usage exactly"
+    );
+    assert_eq!(
+        cost_stats[2].1, 11,
+        "the real-usage turn's completion tokens must match the mock's emitted usage exactly"
+    );
+    assert!(
+        cost_stats[0].2 && cost_stats[1].2,
+        "the two usage-less turns must be flagged estimated: {cost_stats:?}"
+    );
+    assert!(
+        !cost_stats[2].2,
+        "the real-usage turn must NOT be flagged estimated: {cost_stats:?}"
     );
 
     // ── Verification leg: a verifier ran on the turn's file write and

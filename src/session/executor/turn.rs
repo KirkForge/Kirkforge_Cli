@@ -1109,6 +1109,7 @@ impl Executor {
                     // as real ones — CostStats carries plain counts
                     // (same convention as CacheStats' estimated
                     // stem_tokens); the log line is the estimated flag.
+                    let was_estimated = usage.is_none();
                     let usage = match usage {
                         Some(u) => u,
                         None => {
@@ -1163,6 +1164,7 @@ impl Executor {
                             completion_tokens: completion,
                             turn_cost: cost,
                             cumulative_cost: self.cost.usage.cumulative_cost,
+                            estimated: was_estimated,
                         }
                     );
                     // Emit cache stats whenever the provider reports

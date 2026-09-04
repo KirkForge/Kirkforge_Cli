@@ -422,6 +422,7 @@ fn budget_indicator_update() {
         completion_tokens: 1_000,
         turn_cost: 0.001,
         cumulative_cost: 0.001,
+        estimated: false,
     });
 
     let rendered = h.render();

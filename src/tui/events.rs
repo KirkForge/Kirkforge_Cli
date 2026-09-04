@@ -308,6 +308,7 @@ pub fn dispatch_turn_event(state: &mut AppState, ev: TurnEvent) {
             completion_tokens,
             turn_cost,
             cumulative_cost,
+            estimated: _,
         } => {
             // Budget accounting only. Turn finalization (clearing
             // is_generating / streaming) is handled by TurnComplete, which
@@ -2048,6 +2049,7 @@ mod tests {
                 completion_tokens: 50,
                 turn_cost: 0.001,
                 cumulative_cost: 0.001,
+                estimated: false,
             },
         );
         assert_eq!(s.budget.tokens_sent, 100);
@@ -2066,6 +2068,7 @@ mod tests {
                 completion_tokens: 80,
                 turn_cost: 0.002,
                 cumulative_cost: 0.003,
+                estimated: false,
             },
         );
         assert_eq!(s.budget.tokens_sent, 300);

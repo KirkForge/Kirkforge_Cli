@@ -194,6 +194,7 @@ pub(super) fn emit_turn_events(
                 completion_tokens,
                 turn_cost,
                 cumulative_cost: _cum_cost,
+                estimated: _,
             } => {
                 // Accumulate the per-turn cost locally. The event's
                 // `cumulative_cost` field is authoritative inside the
@@ -436,12 +437,14 @@ mod tests {
                     completion_tokens: 50,
                     turn_cost: 0.001,
                     cumulative_cost: 0.001,
+                    estimated: false,
                 },
                 TurnEvent::CostStats {
                     prompt_tokens: 200,
                     completion_tokens: 80,
                     turn_cost: 0.0,
                     cumulative_cost: 0.0,
+                    estimated: false,
                 },
             ],
             OutputFormat::Json,

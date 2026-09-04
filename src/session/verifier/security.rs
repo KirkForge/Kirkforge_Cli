@@ -1,3 +1,6 @@
+use crate::session::verifier::bus::{
+    BusVerifier, Severity, VerdictEntry, VerifierSource, VerifyContext,
+};
 use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
 /// Security verifier — scans file writes and edits for dangerous patterns.
 ///
@@ -352,6 +355,109 @@ pub async fn verify_security(event: &BusEvent) -> Verdict {
     }
 
     Verdict::Clean
+}
+
+// ── BusVerifier impl (WO 47.14) ─────────────────────────────────────────
+//
+// The sync `BusVerifier` path. Performs the same substring/entropy/shell
+// checks as `verify_security` but reads from `VerifyContext` and returns
+// `Vec<VerdictEntry>`. The optional `trufflehog` second-opinion scan is
+// omitted on the bus path (it uses async subprocess with timeout; the
+// Rust regex emitter `TsOrchestratorBridgeVerifier` already covers the
+// regex-based security rules on the bus).
+
+/// Security verifier registered on the `VerifierBus`. WO 47.14.
+pub struct SecurityVerifier;
+
+impl BusVerifier for SecurityVerifier {
+    fn name(&self) -> &str {
+        "security"
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        let Some(path) = ctx.changed_files.first() else {
+            return vec![];
+        };
+        // Only scan if content is reasonable (under 1MB). We check file size
+        // via metadata since VerifyContext doesn't carry content_length.
+        let meta = match std::fs::metadata(path) {
+            Ok(m) => m,
+            Err(_) => return vec![],
+        };
+        if meta.len() > 1_000_000 {
+            return vec![];
+        }
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return vec![],
+        };
+        // 1. Check for obvious secret patterns (cheap fast path)
+        for (name, pattern) in SECRET_PATTERNS {
+            if content.contains(pattern) {
+                return vec![VerdictEntry {
+                    source: VerifierSource::Security,
+                    severity: Severity::Error,
+                    message: format!(
+                        "Potential secret detected: {name}\nPattern '{pattern}' found in {}. This must be reviewed manually.",
+                        path.display()
+                    ),
+                    file: Some(path.clone()),
+                    line: None,
+                    fix: None,
+                }];
+            }
+        }
+        // 2. High-entropy token detector
+        for (name, prefix) in ENTROPY_PREFIXES {
+            if let Some(token) = scan_entropy_token(&content, prefix) {
+                if token.len() >= MIN_TOKEN_LEN && shannon_entropy(token) > ENTROPY_THRESHOLD {
+                    return vec![VerdictEntry {
+                        source: VerifierSource::Security,
+                        severity: Severity::Error,
+                        message: format!(
+                            "High-entropy {name} detected\nA value following the '{prefix}' prefix in {} looks like a random secret (entropy {:.2} bits/char).",
+                            path.display(),
+                            shannon_entropy(token)
+                        ),
+                        file: Some(path.clone()),
+                        line: None,
+                        fix: None,
+                    }];
+                }
+            }
+        }
+        // 3. Check for dangerous shell patterns (skip comment lines)
+        for pattern in DANGEROUS_SHELL_PATTERNS {
+            let in_code = content
+                .lines()
+                .any(|line| !is_comment_line(line) && line.contains(pattern));
+            if in_code {
+                return vec![VerdictEntry {
+                    source: VerifierSource::Security,
+                    severity: Severity::Error,
+                    message: format!(
+                        "Dangerous shell command: {pattern}\nThis command is blocked by security policy. Remove it to proceed."
+                    ),
+                    file: Some(path.clone()),
+                    line: None,
+                    fix: None,
+                }];
+            }
+        }
+        vec![]
+    }
+}
+
+/// Extract the token immediately following `prefix` inside `content`.
+/// Returns the token string if found, else `None`.
+fn scan_entropy_token<'a>(content: &'a str, prefix: &str) -> Option<&'a str> {
+    for (idx, _) in content.match_indices(prefix) {
+        let start = idx + prefix.len();
+        let rest = &content[start..];
+        let end = rest.find(|c: char| !is_token_char(c)).unwrap_or(rest.len());
+        return Some(&rest[..end]);
+    }
+    None
 }
 
 #[cfg(test)]

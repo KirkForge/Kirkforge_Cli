@@ -7,26 +7,12 @@
 //! file-modifying tool calls; error verdicts are injected into the
 //! conversation so the model sees them immediately.
 //!
-//! ## Why two verifier traits? (WO 47.14: unification in progress)
+//! ## WO 47.14: unification complete
 //!
-//! The `Verifier` trait (in `types.rs`) is async and event-driven: verifiers
-//! receive a `BusEvent` and can do async I/O (run `cargo build`, spawn
-//! processes). It powers the correction loop (`CorrectionLoop`).
-//!
-//! The `BusVerifier` trait (here) is sync and context-based: verifiers
-//! receive a `VerifyContext` (changed files list) and return structured
-//! `VerdictEntry`s synchronously. It powers the structured verdict report
-//! (WO 11.7) and plugin verifiers that run via subprocess exit codes.
-//!
-//! WO 47.14 designates `BusVerifier` the surviving trait of the eventual
-//! unification; consumers of the event-driven `Verifier` trait migrate one
-//! at a time. Migrated so far: plugin verifiers (the legacy async
-//! `PluginVerifierAdapter` is deleted — they register here exclusively and
-//! no longer run twice per file-modifying tool call). Still on the
-//! event-driven path: the 14 built-in language/toolchain verifiers and the
-//! `VerifierHandler`/`CorrectionLoop` pipeline (they need the event payload,
-//! fix suggestions, and bounded async concurrency — see the WO 47.14
-//! remaining-work ledger before extending this trait).
+//! The old `Verifier` trait (async, event-driven) is deleted. All 14
+//! built-in verifiers now implement `BusVerifier` and register on the
+//! `VerifierBus`. The `CorrectionLoop` reads verdicts from the bus. The
+//! `VerifierHandler`/`VerifierSlots` are deleted.
 
 use kf_plugin_host::PluginVerifier;
 use std::collections::HashMap;
@@ -87,6 +73,11 @@ pub struct VerdictEntry {
     pub message: String,
     pub file: Option<PathBuf>,
     pub line: Option<u32>,
+    /// Optional fix for the correction loop to apply. WO 47.14: carried
+    /// over from the old `Verdict::Fixable(FixSuggestion)` shape so the
+    /// correction loop can auto-fix without the event-driven `Verifier`
+    /// trait.
+    pub fix: Option<crate::session::verifier::types::FixSuggestion>,
 }
 
 /// Context for a verification run.
@@ -94,6 +85,28 @@ pub struct VerdictEntry {
 pub struct VerifyContext {
     pub sandbox_dir: PathBuf,
     pub changed_files: Vec<PathBuf>,
+    /// The triggering event type (e.g. "post-tool-write_file"). WO 47.14:
+    /// carried over from `BusEvent::kind()` so event-aware verifiers can
+    /// gate without the event-driven `Verifier` trait.
+    pub event_kind: Option<String>,
+    /// The tool that triggered the verification (e.g. "write_file",
+    /// "edit_file", "bash"). WO 47.14: replaces the `BusEvent` variant
+    /// discriminant the old verifiers switched on.
+    pub tool_name: Option<String>,
+    /// Content hash for verdict cache compatibility. WO 47.14: carried
+    /// over from `FileWriteEvent::content_hash` so the verdict cache
+    /// (keyed by `(file_path, content_hash)`) still works.
+    pub content_hash: u64,
+    /// Bash command string (when `tool_name` is "bash"). WO 47.14:
+    /// carried over from `BashExecEvent::command` so the git verifier
+    /// can detect git-modifying commands.
+    pub bash_command: Option<String>,
+    /// Bash exit code (when `tool_name` is "bash"). WO 47.14: carried
+    /// over from `BashExecEvent::exit_code`.
+    pub bash_exit_code: Option<i32>,
+    /// Bash workdir (when `tool_name` is "bash"). WO 47.14: carried
+    /// over from `BashExecEvent::workdir`.
+    pub bash_workdir: Option<PathBuf>,
 }
 
 /// The unified verifier bus. Verifiers register here, and the
@@ -125,12 +138,9 @@ impl VerifierBus {
     /// `ceiling:` duplicate names are allowed and COEXIST — every
     /// registered verifier runs on each `run()` and contributes verdicts.
     /// This is intentional: a plugin-declared verifier whose name matches
-    /// a built-in slot (`"security"`, `"git"`) augments the same slot
-    /// rather than replacing it. The built-in slot stubs
-    /// (`SecurityBusVerifier`, `GitBusVerifier`) were removed — the bus
-    /// starts empty and contains only what the host explicitly registers
-    /// (plugin verifiers, the TS orchestrator bridge). Async verifiers
-    /// continue to operate through the event-driven `Verifier` trait path.
+    /// a built-in (`"security"`, `"git"`) augments the same slot rather
+    /// than replacing it. WO 47.14: the 14 built-in verifiers now register
+    /// here as `BusVerifier` impls (the old `Verifier` trait is deleted).
     /// (bucketlist 3.41)
     pub fn register(&mut self, verifier: Box<dyn BusVerifier>) {
         self.verifiers.push(verifier);
@@ -197,6 +207,7 @@ impl VerifierBus {
                         message: format!("verifier panicked: {msg}"),
                         file: None,
                         line: None,
+                        fix: None,
                     }]
                 }
             };
@@ -241,16 +252,13 @@ impl Default for VerifierBus {
     }
 }
 
-// ── Built-in bus verifier adapters ──────────────────────────────────────
+// ── Plugin bus verifier adapter ──────────────────────────────────────────
 //
-// The built-in bus verifier stubs (SecurityBusVerifier, GitBusVerifier) have
-// been removed. The event-driven verifier system (VerifierHandler +
-// CorrectionLoop) handles async verification via BusEvents. The bus collects
-// structured findings from BusVerifiers that don't need async I/O.
-// Async verifiers continue to operate through the event bus.
-// Plugin verifiers and the TS orchestrator bridge register on the bus
-// independently; the bus starts empty and only contains what the host
-// explicitly registers.
+// WO 47.14: the 14 built-in verifiers now register on the bus as
+// `BusVerifier` impls (in their respective files: build.rs, lint.rs, etc.).
+// Plugin verifiers register via the `PluginBusVerifier` adapter below.
+// The TS orchestrator bridge (`TsOrchestratorBridgeVerifier`) also
+// registers on the bus for the Rust security emitter.
 
 /// Adapter: a plugin-declared verifier on the bus.
 ///
@@ -301,6 +309,7 @@ impl BusVerifier for PluginBusVerifier {
                     message,
                     file: ctx.changed_files.first().cloned(),
                     line: None,
+                    fix: None,
                 }]
             }
             Err(e) => vec![VerdictEntry {
@@ -309,6 +318,7 @@ impl BusVerifier for PluginBusVerifier {
                 message: format!("plugin verifier execution failed: {e}"),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }
     }
@@ -482,6 +492,12 @@ mod tests {
         VerifyContext {
             sandbox_dir: PathBuf::from("/tmp/test"),
             changed_files: vec![PathBuf::from("src/lib.rs")],
+            event_kind: None,
+            tool_name: None,
+            content_hash: 0,
+            bash_command: None,
+            bash_exit_code: None,
+            bash_workdir: None,
         }
     }
 
@@ -496,6 +512,7 @@ mod tests {
                 message: "clean build".into(),
                 file: Some(PathBuf::from("src/lib.rs")),
                 line: None,
+                fix: None,
             }],
         }));
         bus.register(Box::new(StubVerifier {
@@ -506,6 +523,7 @@ mod tests {
                 message: "dirty worktree".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
 
@@ -528,6 +546,7 @@ mod tests {
                 message: "secret detected".into(),
                 file: Some(PathBuf::from("src/config.rs")),
                 line: Some(42),
+                fix: None,
             }],
         }));
 
@@ -546,6 +565,7 @@ mod tests {
                 message: "no issues".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
 
@@ -567,6 +587,7 @@ mod tests {
                 message: "test failed".into(),
                 file: Some(PathBuf::from("src/lib.rs")),
                 line: None,
+                fix: None,
             }],
         }));
 
@@ -581,6 +602,12 @@ mod tests {
         let ctx = VerifyContext {
             sandbox_dir: PathBuf::from("/tmp/project"),
             changed_files: vec![PathBuf::from("src/main.rs"), PathBuf::from("src/lib.rs")],
+            event_kind: None,
+            tool_name: None,
+            content_hash: 0,
+            bash_command: None,
+            bash_exit_code: None,
+            bash_workdir: None,
         };
         assert_eq!(ctx.changed_files.len(), 2);
         assert_eq!(ctx.sandbox_dir, PathBuf::from("/tmp/project"));
@@ -849,6 +876,12 @@ mod tests {
         let ctx = VerifyContext {
             sandbox_dir: dir.path().to_path_buf(),
             changed_files: vec![target.clone()],
+            event_kind: None,
+            tool_name: None,
+            content_hash: 0,
+            bash_command: None,
+            bash_exit_code: None,
+            bash_workdir: None,
         };
         let v = TsOrchestratorBridgeVerifier::new("ts-bridge".into());
         let entries = v.verify(&ctx);
@@ -871,6 +904,12 @@ mod tests {
         let ctx = VerifyContext {
             sandbox_dir: dir.path().to_path_buf(),
             changed_files: vec![PathBuf::from("rel.py")],
+            event_kind: None,
+            tool_name: None,
+            content_hash: 0,
+            bash_command: None,
+            bash_exit_code: None,
+            bash_workdir: None,
         };
         let v = TsOrchestratorBridgeVerifier::new("ts-bridge".into());
         let entries = v.verify(&ctx);
@@ -889,6 +928,12 @@ mod tests {
         let ctx = VerifyContext {
             sandbox_dir: dir.path().to_path_buf(),
             changed_files: vec![target],
+            event_kind: None,
+            tool_name: None,
+            content_hash: 0,
+            bash_command: None,
+            bash_exit_code: None,
+            bash_workdir: None,
         };
         let v = TsOrchestratorBridgeVerifier::new("ts-bridge".into());
         assert!(v.verify(&ctx).is_empty());
@@ -908,6 +953,12 @@ mod tests {
         let ctx = VerifyContext {
             sandbox_dir: PathBuf::from("/tmp"),
             changed_files: vec![],
+            event_kind: None,
+            tool_name: None,
+            content_hash: 0,
+            bash_command: None,
+            bash_exit_code: None,
+            bash_workdir: None,
         };
         bus.run(&ctx);
         assert!(!bus.has_errors(), "built-in stubs emit no verdicts");
@@ -929,6 +980,7 @@ mod tests {
                 message: "first".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
         bus.register(Box::new(StubVerifier {
@@ -939,6 +991,7 @@ mod tests {
                 message: "second".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
         assert_eq!(bus.verifier_count(), 2, "both same-name verifiers kept");
@@ -953,11 +1006,11 @@ mod tests {
     #[test]
     #[allow(deprecated)]
     fn verifier_bus_plugin_verifier_coexists_with_builtin_stub() {
-        // bucketlist 3.41: a plugin verifier named "security" (the slot
-        // the built-in SecurityBusVerifier stub occupies) coexists with
-        // the stub. The stub returns no verdicts; the plugin verifier
-        // (simulated here by a same-named StubVerifier) contributes the
-        // real verdict.
+        // bucketlist 3.41: a plugin verifier named "security" can coexist
+        // with a same-named verifier on the bus. WO 47.14: the built-in
+        // SecurityVerifier registers on the bus at init time; this test
+        // uses default_verifier_bus() (empty) so it only verifies the
+        // coexistence contract with a same-named plugin verifier.
         let mut bus = default_verifier_bus();
         let builtin_count = bus.verifier_count();
         bus.register(Box::new(StubVerifier {
@@ -968,12 +1021,13 @@ mod tests {
                 message: "plugin finding".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
         assert_eq!(
             bus.verifier_count(),
             builtin_count + 1,
-            "plugin 'security' verifier is registered alongside the built-in stub"
+            "plugin 'security' verifier is registered alongside the built-in"
         );
         bus.run(&make_verify_ctx());
         assert!(
@@ -1011,6 +1065,7 @@ mod tests {
                 message: "first run".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
         bus.run(&make_verify_ctx());
@@ -1062,6 +1117,7 @@ mod tests {
                 message: "sibling finding".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
 
@@ -1101,6 +1157,12 @@ mod tests {
         let ctx = VerifyContext {
             sandbox_dir: dir.path().to_path_buf(),
             changed_files: vec![target],
+            event_kind: None,
+            tool_name: None,
+            content_hash: 0,
+            bash_command: None,
+            bash_exit_code: None,
+            bash_workdir: None,
         };
         let entries = v.verify(&ctx);
         assert!(
@@ -1182,6 +1244,7 @@ mod tests {
                 message: "a".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
         bus.register(Box::new(StubVerifier {
@@ -1192,6 +1255,7 @@ mod tests {
                 message: "b".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
         bus.register(Box::new(StubVerifier {
@@ -1202,6 +1266,7 @@ mod tests {
                 message: "c".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
         assert_eq!(bus.verifier_count(), 3);
@@ -1243,6 +1308,7 @@ mod tests {
                 message: "info finding".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
         // Verifier 2: only Warning.
@@ -1254,6 +1320,7 @@ mod tests {
                 message: "warn finding".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
         // Verifier 3: an Error.
@@ -1265,6 +1332,7 @@ mod tests {
                 message: "err finding".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
 
@@ -1315,6 +1383,7 @@ mod tests {
                 message: "survivor finding".into(),
                 file: None,
                 line: None,
+                fix: None,
             }],
         }));
 
@@ -1397,6 +1466,7 @@ mod tests {
                     message: "alpha-finding".into(),
                     file: Some(PathBuf::from("src/a.rs")),
                     line: Some(10),
+                    fix: None,
                 }],
             },
             StubVerifier {
@@ -1407,6 +1477,7 @@ mod tests {
                     message: "beta-finding".into(),
                     file: Some(PathBuf::from("src/b.rs")),
                     line: None,
+                    fix: None,
                 }],
             },
             StubVerifier {
@@ -1417,6 +1488,7 @@ mod tests {
                     message: "gamma-finding".into(),
                     file: None,
                     line: Some(42),
+                    fix: None,
                 }],
             },
             StubVerifier {
@@ -1428,6 +1500,7 @@ mod tests {
                         message: "delta-1".into(),
                         file: None,
                         line: None,
+                        fix: None,
                     },
                     VerdictEntry {
                         source: VerifierSource::Test,
@@ -1435,6 +1508,7 @@ mod tests {
                         message: "delta-2".into(),
                         file: Some(PathBuf::from("tests/d.rs")),
                         line: Some(7),
+                        fix: None,
                     },
                 ],
             },

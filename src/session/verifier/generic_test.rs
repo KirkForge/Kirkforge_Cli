@@ -17,10 +17,15 @@
 
 use std::path::Path;
 
+use crate::session::verifier::bus::{
+    BusVerifier, Severity, VerdictEntry, VerifierSource, VerifyContext,
+};
 use crate::session::verifier::detect::detect_project_languages;
-use crate::session::verifier::helpers::{command_finding, modified_path, tail_body, tool_on_path};
+use crate::session::verifier::helpers::{
+    command_finding, modified_path, tail_body, tool_on_path, tool_on_path_sync,
+};
 use crate::session::verifier::types::BusEvent;
-use crate::session::verifier::{Verdict, VerificationError};
+use crate::session::verifier::{Verdict, VerificationError, FixSuggestion};
 
 /// True if `./test.sh` exists in `root` and is executable (file present).
 fn test_script_present(root: &Path) -> bool {
@@ -107,6 +112,82 @@ pub async fn verify_generic_test(event: &BusEvent) -> Verdict {
         path,
         "error",
     )
+}
+
+// ── BusVerifier impl (WO 47.14) ─────────────────────────────────────────
+
+/// Generic fallback test verifier registered on the `VerifierBus`. WO 47.14.
+pub struct GenericTestVerifier;
+
+impl BusVerifier for GenericTestVerifier {
+    fn name(&self) -> &str {
+        "generic_test"
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        let Some(path) = ctx.changed_files.first() else {
+            return vec![];
+        };
+        let Some(root) = path.parent().map(std::path::Path::to_path_buf) else {
+            return vec![];
+        };
+        if !detect_project_languages(&root).is_empty() {
+            return vec![];
+        }
+        // Sync runner pick
+        let runner: Option<(&'static str, Vec<String>)> = {
+            if tool_on_path_sync("make", &["--version"]) && root.join("Makefile").is_file() {
+                Some(("make", vec!["test".into()]))
+            } else if tool_on_path_sync("ctest", &["--version"])
+                && (root.join("CTestTestfile.cmake").is_file()
+                    || root.join("CMakeCache.txt").is_file())
+            {
+                Some(("ctest", vec![]))
+            } else if test_script_present(&root) {
+                Some(("./test.sh", vec![]))
+            } else {
+                None
+            }
+        };
+        let Some((runner, args)) = runner else {
+            return vec![];
+        };
+        let output = match std::process::Command::new(runner)
+            .current_dir(&root)
+            .args(&args)
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => {
+                return vec![]
+            }
+        };
+        if output.status.success() {
+            return vec![];
+        }
+        let body = tail_body(
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+            20,
+        );
+        let fix = FixSuggestion {
+            description: format!("{runner} failure near {}\n{body}", path.display()),
+            file: path.clone(),
+            original: String::new(),
+            replacement: String::new(),
+            severity: "error".to_string(),
+            command: None,
+            line: None,
+        };
+        vec![VerdictEntry {
+            source: VerifierSource::Test,
+            severity: Severity::Warning,
+            message: fix.description.clone(),
+            file: Some(path.clone()),
+            line: None,
+            fix: Some(fix),
+        }]
+    }
 }
 
 #[cfg(test)]

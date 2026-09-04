@@ -6,12 +6,16 @@
 //! project root. Lint findings are returned as `Verdict::Fixable` with the
 //! tool output. If neither tool is installed, the verifier skips gracefully.
 
+use crate::session::verifier::bus::{
+    BusVerifier, Severity, VerdictEntry, VerifierSource, VerifyContext,
+};
 use crate::session::verifier::detect::{find_python_root, ProjectLanguage};
 use crate::session::verifier::helpers::{
-    command_finding, head_body, language_gate, modified_path, tool_on_path, Gate,
+    command_finding, head_body, language_gate, modified_path, tool_on_path, tool_on_path_sync,
+    Gate,
 };
 use crate::session::verifier::types::BusEvent;
-use crate::session::verifier::Verdict;
+use crate::session::verifier::{Verdict, FixSuggestion};
 
 /// Pick the first available Python linter binary by probing `--version`.
 /// Returns the binary name (`"ruff"` or `"flake8"`) or `None`.
@@ -83,6 +87,82 @@ pub async fn verify_python_lint(event: &BusEvent) -> Verdict {
         path,
         "warning",
     )
+}
+
+// ── BusVerifier impl (WO 47.14) ─────────────────────────────────────────
+
+/// Python lint verifier registered on the `VerifierBus`. WO 47.14.
+pub struct PythonLintVerifier;
+
+impl BusVerifier for PythonLintVerifier {
+    fn name(&self) -> &str {
+        "python_lint"
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        let Some(path) = ctx.changed_files.first() else {
+            return vec![];
+        };
+        let root = match language_gate(
+            path,
+            &["py"],
+            "Python",
+            find_python_root,
+            ProjectLanguage::Python,
+        ) {
+            Gate::Root(root) => root,
+            Gate::Skip(_) => return vec![],
+        };
+        let tool = ["ruff", "flake8"]
+            .into_iter()
+            .find(|bin| tool_on_path_sync(bin, &["--version"]));
+        let Some(tool) = tool else {
+            return vec![];
+        };
+        let output = match tool {
+            "ruff" => {
+                std::process::Command::new(tool)
+                    .current_dir(&root)
+                    .args(["check", &path.to_string_lossy()])
+                    .output()
+            }
+            _ => {
+                std::process::Command::new(tool)
+                    .current_dir(&root)
+                    .arg(path)
+                    .output()
+            }
+        };
+        let output = match output {
+            Ok(o) => o,
+            Err(_) => return vec![],
+        };
+        if output.status.success() {
+            return vec![];
+        }
+        let body = head_body(
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+            20,
+        );
+        let fix = FixSuggestion {
+            description: format!("{tool} findings near {}\n{body}", path.display()),
+            file: path.clone(),
+            original: String::new(),
+            replacement: String::new(),
+            severity: "warning".to_string(),
+            command: None,
+            line: None,
+        };
+        vec![VerdictEntry {
+            source: VerifierSource::Lint,
+            severity: Severity::Warning,
+            message: fix.description.clone(),
+            file: Some(path.clone()),
+            line: None,
+            fix: Some(fix),
+        }]
+    }
 }
 
 #[cfg(test)]

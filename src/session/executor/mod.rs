@@ -12,7 +12,7 @@ use crate::session::conversation::ConversationLog;
 use crate::session::hooks::HookRunner;
 use crate::session::prompt::PromptBuilder;
 use crate::session::verifier::{
-    CorrectionLoop, CorrectionResult, VerifierBus, VerifierHandler, VerifierSlots,
+    CorrectionLoop, CorrectionResult, VerifierBus,
 };
 use crate::shared::audit::AuditLog;
 use crate::shared::{read_shared_config, Config, Message, Role, SharedConfig, ToolInvocation};
@@ -644,102 +644,59 @@ impl Executor {
         &mut self,
         plugin_registry: Option<&kf_plugin_host::PluginRegistry>,
     ) -> usize {
-        use crate::session::verifier::{BusEvent, SystemCommandRunner, Verdict, Verifier};
-        use std::future::Future;
-        use std::pin::Pin;
+        use crate::session::verifier::bus::BusVerifier;
+        use crate::session::verifier::types::SystemCommandRunner;
+        use std::sync::Arc;
 
-        // Table-driven registration (WO 47.1): one row per built-in verifier
-        // replaces a per-verifier struct + Verifier impl + register block.
-        // Rows must keep their order and names/priorities — pinned by
-        // executor::tests::verifier_cross and BUILTIN_VERIFIERS below.
-        type VerifyFn =
-            for<'a> fn(&'a BusEvent) -> Pin<Box<dyn Future<Output = Verdict> + Send + 'a>>;
+        // The 14 built-in verifiers register on the VerifierBus as
+        // BusVerifier impls (WO 47.14). The old VerifierSlots/VerifierHandler
+        // path is deleted; the correction loop reads from the bus.
+        let sys_runner: Arc<dyn crate::session::verifier::types::CommandRunner> =
+            Arc::new(SystemCommandRunner);
 
-        // Box an async verify fn's future into the type-erased shape the
-        // table stores (the unsize coercion needs this named boundary).
-        fn boxed_verdict<'a, F: Future<Output = Verdict> + Send + 'a>(
-            fut: F,
-        ) -> Pin<Box<dyn Future<Output = Verdict> + Send + 'a>> {
-            Box::pin(fut)
-        }
-
-        struct FnVerifier {
-            name: &'static str,
-            priority: u8,
-            verify_fn: VerifyFn,
-        }
-
-        #[async_trait::async_trait]
-        impl Verifier for FnVerifier {
-            fn name(&self) -> &str {
-                self.name
-            }
-            fn priority(&self) -> u8 {
-                self.priority
-            }
-            async fn verify(&self, event: &BusEvent) -> Verdict {
-                (self.verify_fn)(event).await
-            }
-        }
-
-        // The build/lint/test verifiers take a CommandRunner; their rows pass
-        // the production runner via a static so the boxed future borrows a
-        // 'static reference instead of capturing (captures would block the
-        // closure-to-fn-pointer coercion).
-        static SYS_RUNNER: SystemCommandRunner = SystemCommandRunner;
-
-        #[rustfmt::skip]
-        let table: &[(&str, u8, VerifyFn)] = &[
-            ("security", 1, |e| boxed_verdict(crate::session::verifier::security::verify_security(e))),
-            ("lint", 2, |e| boxed_verdict(crate::session::verifier::lint::verify_lint(e, &SYS_RUNNER))),
-            ("build", 3, |e| boxed_verdict(crate::session::verifier::build::verify_build(e, &SYS_RUNNER))),
-            ("git", 3, |e| boxed_verdict(crate::session::verifier::git::verify_git(e))),
-            ("rustfmt", 4, |e| boxed_verdict(crate::session::verifier::rustfmt::verify_rustfmt(e))),
-            ("test", 5, |e| boxed_verdict(crate::session::verifier::test::verify_test(e, &SYS_RUNNER))),
-            // Python verifiers (WO 31.1). Each self-gates on language detection
-            // inside its verify fn — they return Skipped unless a Python marker
-            // is found at the edited file's project root, so registering them
-            // alongside the Rust verifiers is safe for pure-Rust workspaces.
-            ("python_test", 6, |e| boxed_verdict(crate::session::verifier::python_test::verify_python_test(e))),
-            ("python_lint", 7, |e| boxed_verdict(crate::session::verifier::python_lint::verify_python_lint(e))),
-            ("python_typecheck", 8, |e| boxed_verdict(crate::session::verifier::python_typecheck::verify_python_typecheck(e))),
-            // Node/Go/generic verifiers (WO 32.20) — same marker self-gating.
-            ("node_test", 9, |e| boxed_verdict(crate::session::verifier::node_test::verify_node_test(e))),
-            ("node_lint", 10, |e| boxed_verdict(crate::session::verifier::node_lint::verify_node_lint(e))),
-            ("go_test", 11, |e| boxed_verdict(crate::session::verifier::go_test::verify_go_test(e))),
-            ("go_vet", 12, |e| boxed_verdict(crate::session::verifier::go_vet::verify_go_vet(e))),
-            ("generic_test", 13, |e| boxed_verdict(crate::session::verifier::generic_test::verify_generic_test(e))),
-        ];
-
-        // Default slots need room for security, lint, build, git, rustfmt,
-        // test, plus any plugin verifiers registered below. Use a generous cap
-        // so live plugin reload can add many plugin verifiers without running out.
-        let slots = Arc::new(std::sync::RwLock::new(VerifierSlots::with_max_slots(64)));
-        let mut count = 0;
-        {
-            let mut s = slots.write().unwrap_or_else(|e| e.into_inner());
-            for &(name, priority, verify_fn) in table {
-                let v = FnVerifier {
-                    name,
-                    priority,
-                    verify_fn,
-                };
-                if s.register(Arc::new(v)).is_ok() {
-                    count += 1;
-                }
-            }
-        }
-
-        // WO 47.14: plugin verifiers register ONLY into the VerifierBus
-        // below — the legacy dual registration into VerifierSlots (which
-        // made every plugin verifier run twice per file-modifying tool
-        // call) is deleted.
-
-        let handler = Arc::new(VerifierHandler::new(slots, self.sandbox.path_guard.clone()));
-        self.correction_loop = Some(CorrectionLoop::new(handler));
         match tokio::runtime::Handle::try_current() {
             Ok(_) => {
                 let mut vbus = super::verifier::VerifierBus::new();
+
+                // Register the 14 built-in verifiers.
+                vbus.register(Box::new(
+                    crate::session::verifier::security::SecurityVerifier,
+                ));
+                vbus.register(Box::new(
+                    crate::session::verifier::lint::LintVerifier::new(sys_runner.clone()),
+                ));
+                vbus.register(Box::new(
+                    crate::session::verifier::build::BuildVerifier::new(sys_runner.clone()),
+                ));
+                vbus.register(Box::new(crate::session::verifier::git::GitVerifier));
+                vbus.register(Box::new(crate::session::verifier::rustfmt::RustfmtVerifier));
+                vbus.register(Box::new(
+                    crate::session::verifier::test::TestVerifier::new(sys_runner.clone()),
+                ));
+                vbus.register(Box::new(
+                    crate::session::verifier::python_test::PythonTestVerifier,
+                ));
+                vbus.register(Box::new(
+                    crate::session::verifier::python_lint::PythonLintVerifier,
+                ));
+                vbus.register(Box::new(
+                    crate::session::verifier::python_typecheck::PythonTypecheckVerifier,
+                ));
+                vbus.register(Box::new(
+                    crate::session::verifier::node_test::NodeTestVerifier,
+                ));
+                vbus.register(Box::new(
+                    crate::session::verifier::node_lint::NodeLintVerifier,
+                ));
+                vbus.register(Box::new(crate::session::verifier::go_test::GoTestVerifier));
+                vbus.register(Box::new(crate::session::verifier::go_vet::GoVetVerifier));
+                vbus.register(Box::new(
+                    crate::session::verifier::generic_test::GenericTestVerifier,
+                ));
+
+                let mut count = 14;
+
+                // Plugin verifiers register on the bus too (WO 47.14).
                 if let Some(registry) = plugin_registry {
                     let n = crate::session::verifier::plugin::register_plugin_verifiers_into_bus(
                         registry, &mut vbus,
@@ -750,8 +707,18 @@ impl Executor {
                             "registered plugin verifiers into verifier bus"
                         );
                     }
+                    count += n;
                 }
+
                 self.verifier_bus = Some(std::sync::Mutex::new(vbus));
+
+                // The correction loop now reads from the bus via the
+                // executor's verifier_bus field. We store a placeholder
+                // CorrectionLoop that carries the path_guard for auto-fixes.
+                self.correction_loop = Some(CorrectionLoop::new(
+                    self.sandbox.path_guard.clone(),
+                ));
+
                 count
             }
             Err(e) => {
@@ -840,9 +807,8 @@ impl Executor {
 
         // 3. Rebuild plugin verifiers on the unified bus (ADR-028; the
         // sole plugin-verifier path since WO 47.14): drop old plugin
-        // verifiers, keep built-in bus verifiers, re-add from the fresh
-        // registry. The event-driven slots hold only built-ins and need
-        // no rebuild.
+        // verifiers, keep the 14 built-in bus verifiers, re-add from
+        // the fresh registry.
         let plugin_verifier_count = self.rebuild_bus_plugin_verifiers(registry);
 
         // 4. Reload the dynamic agent registry (`.claude/agents/*.md`) so
@@ -861,10 +827,25 @@ impl Executor {
     }
 
     /// Re-register plugin verifiers on the `VerifierBus` while keeping the
-    /// built-in bus verifiers (`security`, `git`) intact. The sole
-    /// plugin-verifier reload path since WO 47.14. ADR-028.
+    /// 14 built-in bus verifiers intact. WO 47.14: all 14 built-ins now
+    /// register on the bus, so the keep-list must include all of them.
     fn rebuild_bus_plugin_verifiers(&mut self, registry: &kf_plugin_host::PluginRegistry) -> usize {
-        const BUILTIN_BUS_VERIFIERS: &[&str] = &["security", "git"];
+        const BUILTIN_BUS_VERIFIERS: &[&str] = &[
+            "security",
+            "lint",
+            "build",
+            "git",
+            "rustfmt",
+            "test",
+            "python_test",
+            "python_lint",
+            "python_typecheck",
+            "node_test",
+            "node_lint",
+            "go_test",
+            "go_vet",
+            "generic_test",
+        ];
         let Some(ref bus_lock) = self.verifier_bus else {
             return 0;
         };

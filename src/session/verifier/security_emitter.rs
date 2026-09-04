@@ -248,6 +248,7 @@ pub fn emit_security_findings(files: &[PathBuf]) -> Vec<VerdictEntry> {
                     message: format!("[{}] {}", rule.rule_id, rule.message),
                     file: Some(file.clone()),
                     line: Some(line_of(&clean, m.start())),
+                    fix: None,
                 });
             }
         }

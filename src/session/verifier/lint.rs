@@ -1,4 +1,7 @@
 use crate::session::error_recovery;
+use crate::session::verifier::bus::{
+    BusVerifier, Severity, VerdictEntry, VerifierSource, VerifyContext,
+};
 use crate::session::verifier::helpers::find_cargo_root;
 use crate::session::verifier::types::{BusEvent, CommandRunner, EditEvent, FileWriteEvent};
 /// Lint verifier — runs `cargo clippy` on Rust files and reports findings.
@@ -138,6 +141,83 @@ pub async fn verify_lint(event: &BusEvent, runner: &dyn CommandRunner) -> Verdic
             })
         }
         ExitState::SpawnFailed(_) => Verdict::Skipped("cargo not available".into()),
+    }
+}
+
+// ── BusVerifier impl (WO 47.14) ─────────────────────────────────────────
+
+/// Lint verifier registered on the `VerifierBus`. WO 47.14.
+pub struct LintVerifier {
+    runner: std::sync::Arc<dyn CommandRunner>,
+}
+
+impl LintVerifier {
+    pub fn new(runner: std::sync::Arc<dyn CommandRunner>) -> Self {
+        Self { runner }
+    }
+}
+
+impl BusVerifier for LintVerifier {
+    fn name(&self) -> &str {
+        "lint"
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        let Some(path) = ctx.changed_files.first() else {
+            return vec![];
+        };
+        let target = LintTarget::from_path(path);
+        if matches!(target, LintTarget::Unknown) {
+            return vec![];
+        }
+        if !matches!(target, LintTarget::Rust) {
+            return vec![];
+        }
+        let Some(cargo_root) = find_cargo_root(path) else {
+            return vec![];
+        };
+        let outcome = self
+            .runner
+            .run("cargo", &["clippy", "--message-format=json"], &cargo_root);
+        use crate::session::verifier::types::ExitState;
+        match outcome.status {
+            ExitState::SpawnFailed(_) => return vec![],
+            ExitState::Success | ExitState::Code(_) => {}
+        }
+        let stdout = String::from_utf8_lossy(&outcome.stdout);
+        for line in stdout.lines() {
+            if let Some(suggestion) = parse_clippy_json(line, path, &cargo_root) {
+                return vec![VerdictEntry {
+                    source: VerifierSource::Lint,
+                    severity: Severity::Warning,
+                    message: suggestion.description.clone(),
+                    file: Some(suggestion.file.clone()),
+                    line: suggestion.line,
+                    fix: Some(suggestion),
+                }];
+            }
+        }
+        match outcome.status {
+            ExitState::Success => vec![],
+            ExitState::Code(_) => {
+                let stderr = String::from_utf8_lossy(&outcome.stderr);
+                let stderr_summary = stderr.lines().take(5).collect::<Vec<_>>().join("\n");
+                let mut details = stderr_summary;
+                if let Some(hint) = error_recovery::classify_error(&stderr) {
+                    details.push('\n');
+                    details.push_str(&error_recovery::render_hint(&hint));
+                }
+                vec![VerdictEntry {
+                    source: VerifierSource::Lint,
+                    severity: Severity::Error,
+                    message: details,
+                    file: Some(path.clone()),
+                    line: None,
+                    fix: None,
+                }]
+            }
+            ExitState::SpawnFailed(_) => vec![],
+        }
     }
 }
 

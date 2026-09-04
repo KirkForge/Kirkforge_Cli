@@ -116,6 +116,18 @@ pub(super) async fn tool_on_path(bin: &str, probe_args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+/// Sync version of `tool_on_path` for the `BusVerifier` path. WO 47.14:
+/// the bus runs inside `spawn_blocking`, so `std::process::Command` is
+/// the correct spawn API (tokio's runtime is not available on a blocking
+/// thread).
+pub(super) fn tool_on_path_sync(bin: &str, probe_args: &[&str]) -> bool {
+    std::process::Command::new(bin)
+        .args(probe_args)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,3 +1,6 @@
+use crate::session::verifier::bus::{
+    BusVerifier, Severity, VerdictEntry, VerifierSource, VerifyContext,
+};
 use crate::session::verifier::helpers::find_cargo_root;
 use crate::session::verifier::types::{BusEvent, CommandRunner, EditEvent, FileWriteEvent};
 /// Test verifier — runs targeted `cargo test` for the edited Rust file.
@@ -121,6 +124,77 @@ pub async fn verify_test(event: &BusEvent, runner: &dyn CommandRunner) -> Verdic
         command: None,
         line: None,
     })
+}
+
+// ── BusVerifier impl (WO 47.14) ─────────────────────────────────────────
+
+/// Test verifier registered on the `VerifierBus`. WO 47.14.
+pub struct TestVerifier {
+    runner: std::sync::Arc<dyn CommandRunner>,
+}
+
+impl TestVerifier {
+    pub fn new(runner: std::sync::Arc<dyn CommandRunner>) -> Self {
+        Self { runner }
+    }
+}
+
+impl BusVerifier for TestVerifier {
+    fn name(&self) -> &str {
+        "test"
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        let Some(path) = ctx.changed_files.first() else {
+            return vec![];
+        };
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            return vec![];
+        }
+        let Some(cargo_root) = find_cargo_root(path) else {
+            return vec![];
+        };
+        let prefix = match module_path_prefix(path, &cargo_root) {
+            Some(p) => p,
+            None => return vec![],
+        };
+        let mut args: Vec<String> = vec!["test".into(), "--".into(), "--nocapture".into()];
+        if !prefix.is_empty() {
+            args.insert(1, prefix.clone());
+        }
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let test_output = self.runner.run("cargo", &arg_refs, &cargo_root);
+        use crate::session::verifier::types::ExitState;
+        if matches!(test_output.status, ExitState::Success) {
+            return vec![];
+        }
+        let stdout_text = String::from_utf8_lossy(&test_output.stdout);
+        let stderr_text = String::from_utf8_lossy(&test_output.stderr);
+        let mut combined: Vec<&str> = stdout_text.lines().chain(stderr_text.lines()).collect();
+        const TAIL_LINES: usize = 20;
+        if combined.len() > TAIL_LINES {
+            let start = combined.len() - TAIL_LINES;
+            combined = combined.split_off(start);
+        }
+        let description = combined.join("\n");
+        let fix = FixSuggestion {
+            description: format!("test failure near {}\n{description}", path.display()),
+            file: path.clone(),
+            original: String::new(),
+            replacement: String::new(),
+            severity: "error".to_string(),
+            command: None,
+            line: None,
+        };
+        vec![VerdictEntry {
+            source: VerifierSource::Test,
+            severity: Severity::Warning,
+            message: fix.description.clone(),
+            file: Some(path.clone()),
+            line: None,
+            fix: Some(fix),
+        }]
+    }
 }
 
 #[cfg(test)]

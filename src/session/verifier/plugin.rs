@@ -10,11 +10,10 @@
 //! conversation.
 //!
 //! WO 47.14: the legacy event-driven `PluginVerifierAdapter` (which bridged
-//! the same plugin verifiers onto the async `Verifier` trait in
-//! `VerifierSlots`) is deleted. Until then, plugin verifiers were registered
-//! into BOTH systems and ran twice per file-modifying tool call. The bus
-//! path is the sole integration path — `BusVerifier` is the surviving trait
-//! of the WO 47.14 unification.
+//! the same plugin verifiers onto the async `Verifier` trait) is deleted.
+//! The bus path is the sole integration path — `BusVerifier` is the
+//! surviving trait of the WO 47.14 unification. The old `VerifierSlots`
+//! and `VerifierHandler` are also deleted.
 //!
 //! The verifier receives the following environment variables:
 //!
@@ -172,6 +171,12 @@ command = "bin/check.sh"
         let ctx = VerifyContext {
             sandbox_dir: std::path::PathBuf::from("/tmp/test"),
             changed_files: vec![std::path::PathBuf::from("src/lib.rs")],
+            event_kind: None,
+            tool_name: None,
+            content_hash: 0,
+            bash_command: None,
+            bash_exit_code: None,
+            bash_workdir: None,
         };
         bus.run(&ctx);
         assert_eq!(bus.verdicts().len(), 1);

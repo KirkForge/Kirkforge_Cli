@@ -5,12 +5,16 @@
 //! Non-zero exit → `Verdict::Fixable` with the tail of the output. If `go`
 //! isn't on PATH, skips gracefully.
 
+use crate::session::verifier::bus::{
+    BusVerifier, Severity, VerdictEntry, VerifierSource, VerifyContext,
+};
 use crate::session::verifier::detect::{find_go_root, ProjectLanguage};
 use crate::session::verifier::helpers::{
-    command_finding, language_gate, modified_path, tail_body, tool_on_path, Gate,
+    command_finding, language_gate, modified_path, tail_body, tool_on_path, tool_on_path_sync,
+    Gate,
 };
 use crate::session::verifier::types::BusEvent;
-use crate::session::verifier::{Verdict, VerificationError};
+use crate::session::verifier::{Verdict, VerificationError, FixSuggestion};
 
 /// Probe `go version` to confirm the Go toolchain is on PATH.
 async fn pick_go() -> bool {
@@ -66,6 +70,63 @@ pub async fn verify_go_test(event: &BusEvent) -> Verdict {
         path,
         "error",
     )
+}
+
+// ── BusVerifier impl (WO 47.14) ─────────────────────────────────────────
+
+/// Go test verifier registered on the `VerifierBus`. WO 47.14.
+pub struct GoTestVerifier;
+
+impl BusVerifier for GoTestVerifier {
+    fn name(&self) -> &str {
+        "go_test"
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        let Some(path) = ctx.changed_files.first() else {
+            return vec![];
+        };
+        let root = match language_gate(path, &["go"], "Go", find_go_root, ProjectLanguage::Go) {
+            Gate::Root(root) => root,
+            Gate::Skip(_) => return vec![],
+        };
+        if !tool_on_path_sync("go", &["version"]) {
+            return vec![];
+        }
+        let output = match std::process::Command::new("go")
+            .current_dir(&root)
+            .args(["test", "./..."])
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return vec![],
+        };
+        if output.status.success() {
+            return vec![];
+        }
+        let body = tail_body(
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+            20,
+        );
+        let fix = FixSuggestion {
+            description: format!("go test failure near {}\n{body}", path.display()),
+            file: path.clone(),
+            original: String::new(),
+            replacement: String::new(),
+            severity: "error".to_string(),
+            command: None,
+            line: None,
+        };
+        vec![VerdictEntry {
+            source: VerifierSource::Test,
+            severity: Severity::Warning,
+            message: fix.description.clone(),
+            file: Some(path.clone()),
+            line: None,
+            fix: Some(fix),
+        }]
+    }
 }
 
 #[cfg(test)]

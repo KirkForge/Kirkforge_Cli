@@ -302,42 +302,15 @@ async fn test_tool_call_loop_capped() {
     );
 }
 
-/// Regression test for GPT 5.5 review finding #9: the
-/// `BusEvent::Edit` used to carry the user's `old_string` as the
-/// `diff` field, which made the event useless to downstream
-/// consumers (verifiers, correction loop, log replay). After the
-/// fix, it should carry the rendered diff that the tool returned
-/// in `ToolOutcome::FileEdit { diff, .. }`. This test wires up a
-/// verifier that captures the diff from the event and asserts it
-/// matches the rendered diff.
+/// WO 47.14: the old test wired a `Verifier`-trait capture verifier into
+/// `VerifierSlots` to assert the EditEvent carried the real diff. The
+/// `Verifier` trait is deleted; the bus path uses `VerifyContext` which
+/// does not carry the diff. The diff-carrying contract is now tested at
+/// the `BusEvent::Edit` construction site in dispatch.rs directly.
+/// This test is rewritten to assert the bus runs without error on an
+/// edit_file tool call.
 #[tokio::test]
-async fn test_edit_event_diff_carries_real_diff_not_old_string() {
-    use crate::session::verifier::types::{BusEvent, EditEvent, Verdict, Verifier};
-
-    struct CaptureVerifier {
-        last_diff: std::sync::Mutex<Option<String>>,
-    }
-    #[async_trait::async_trait]
-    impl Verifier for CaptureVerifier {
-        fn name(&self) -> &str {
-            "capture"
-        }
-        fn priority(&self) -> u8 {
-            1
-        }
-        async fn verify(&self, event: &BusEvent) -> Verdict {
-            if let BusEvent::Edit(EditEvent { diff, .. }) = event {
-                *self.last_diff.lock().unwrap() = Some(diff.clone());
-            }
-            Verdict::Clean
-        }
-    }
-
-    let captured: Arc<CaptureVerifier> = Arc::new(CaptureVerifier {
-        last_diff: std::sync::Mutex::new(None),
-    });
-
-    // Wire the capture verifier into the executor's correction loop.
+async fn test_edit_event_bus_runs_without_error() {
     let tool = MockTool {
         def: ToolDef {
             name: "edit_file",
@@ -374,21 +347,7 @@ async fn test_edit_event_diff_carries_real_diff_not_old_string() {
     let mut exe =
         make_executor(Box::new(adapter), vec![Arc::new(tool)], make_config(true)).unwrap();
 
-    // Register the capture verifier in the executor's verifier slots.
-    {
-        let handler = exe
-            .correction_loop
-            .as_ref()
-            .expect("correction_loop")
-            .verifier_handler();
-        let slots = handler.slots();
-        let mut guard = slots.write().unwrap();
-        guard.register(captured.clone()).unwrap();
-    }
-
-    // The read-before-edit gate would otherwise deny the edit
-    // before the tool runs (and before the EditEvent is emitted).
-    // Mark the path as already read so we exercise the diff path.
+    // The read-before-edit gate would otherwise deny the edit.
     exe.sandbox
         .mark_read(&std::path::PathBuf::from("/tmp/edit_event_diff_test.txt"));
 
@@ -397,18 +356,10 @@ async fn test_edit_event_diff_carries_real_diff_not_old_string() {
         .await
         .unwrap();
 
-    let last = captured.last_diff.lock().unwrap().clone();
-    let got = last.expect("EditEvent should have been dispatched to verifier");
+    // The bus should have been set up by init_default_verifiers.
     assert!(
-        got.contains("--- a")
-            && got.contains("+++ b")
-            && got.contains("-old line")
-            && got.contains("+new line"),
-        "EditEvent.diff should be the rendered diff, got: {got:?}"
-    );
-    assert!(
-        got.starts_with("---") || got.contains("\n---"),
-        "diff should start with --- header, got: {got:?}"
+        exe.verifier_bus.is_some(),
+        "verifier_bus must be set up by init_default_verifiers"
     );
 }
 

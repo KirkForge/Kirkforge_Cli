@@ -1,3 +1,6 @@
+use crate::session::verifier::bus::{
+    BusVerifier, Severity, VerdictEntry, VerifierSource, VerifyContext,
+};
 use crate::session::verifier::types::{BashExecEvent, BusEvent};
 /// Git verifier — validates git state after operations.
 ///
@@ -218,6 +221,122 @@ async fn check_merge_conflicts(workdir: Option<&Path>) -> Verdict {
         ),
         line: None,
     })
+}
+
+// ── BusVerifier impl (WO 47.14) ─────────────────────────────────────────
+//
+// The sync `BusVerifier` path. Reads bash command/exit_code/workdir from
+// `VerifyContext` and runs `git status`/`git diff` via `std::process::Command`
+// (blocking — the bus runs inside `spawn_blocking`).
+
+/// Git verifier registered on the `VerifierBus`. WO 47.14.
+pub struct GitVerifier;
+
+impl BusVerifier for GitVerifier {
+    fn name(&self) -> &str {
+        "git"
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        // Only react to bash events
+        let Some(ref command) = ctx.bash_command else {
+            return vec![];
+        };
+        let exit_code = ctx.bash_exit_code.unwrap_or(0);
+        let workdir = ctx.bash_workdir.as_deref();
+
+        // Only react to bash commands that invoke git
+        if !command_invokes_git(command) {
+            return vec![];
+        }
+
+        if exit_code == 0 {
+            if is_git_modifying_command(command) {
+                return check_dirty_worktree_sync(workdir);
+            }
+            return vec![];
+        }
+
+        if is_conflict_prone_command(command) {
+            return check_merge_conflicts_sync(workdir);
+        }
+
+        vec![]
+    }
+}
+
+/// Sync version of check_dirty_worktree using std::process::Command.
+fn check_dirty_worktree_sync(workdir: Option<&Path>) -> Vec<VerdictEntry> {
+    let mut cmd = std::process::Command::new("git");
+    if let Some(dir) = workdir {
+        cmd.current_dir(dir);
+    }
+    let output = match cmd.args(["status", "--porcelain"]).output() {
+        Ok(o) if o.status.success() => o,
+        _ => return vec![],
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut dirty: Vec<&str> = Vec::new();
+    for line in stdout.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let bytes = line.as_bytes();
+        let is_untracked = bytes.len() >= 2 && bytes[0] == b'?' && bytes[1] == b'?';
+        let has_worktree_changes = bytes.len() >= 2 && bytes[1] != b' ' && bytes[1] != b'\0';
+        if is_untracked || has_worktree_changes {
+            dirty.push(line);
+        }
+    }
+    if dirty.is_empty() {
+        return vec![];
+    }
+    let dirty_count = dirty.len();
+    vec![VerdictEntry {
+        source: VerifierSource::Git,
+        severity: Severity::Error,
+        message: format!(
+            "Dirty worktree: {dirty_count} uncommitted changes\nThere are {} uncommitted files. Consider committing or stashing before proceeding.\n{}",
+            dirty_count,
+            dirty.iter().take(10).copied().collect::<Vec<_>>().join("\n")
+        ),
+        file: None,
+        line: None,
+        fix: None,
+    }]
+}
+
+/// Sync version of check_merge_conflicts using std::process::Command.
+fn check_merge_conflicts_sync(workdir: Option<&Path>) -> Vec<VerdictEntry> {
+    let mut cmd = std::process::Command::new("git");
+    if let Some(dir) = workdir {
+        cmd.current_dir(dir);
+    }
+    let output = match cmd.args(["diff", "--name-only", "--diff-filter=U"]).output() {
+        Ok(o) if o.status.success() => o,
+        _ => return vec![],
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let conflicted: Vec<&str> = stdout.lines().collect();
+    if conflicted.is_empty() {
+        return vec![];
+    }
+    vec![VerdictEntry {
+        source: VerifierSource::Git,
+        severity: Severity::Error,
+        message: format!(
+            "{} merge conflicts detected\nFiles with conflicts:\n{}",
+            conflicted.len(),
+            conflicted
+                .iter()
+                .map(|f| format!("  - {f}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+        file: conflicted.first().map(|f| PathBuf::from(f)),
+        line: None,
+        fix: None,
+    }]
 }
 
 #[cfg(test)]

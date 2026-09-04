@@ -1,3 +1,6 @@
+use crate::session::verifier::bus::{
+    BusVerifier, Severity, VerdictEntry, VerifierSource, VerifyContext,
+};
 use crate::session::verifier::types::{BusEvent, EditEvent, FileWriteEvent};
 /// Rustfmt verifier — checks formatting for edited Rust files.
 ///
@@ -48,6 +51,62 @@ pub async fn verify_rustfmt(event: &BusEvent) -> Verdict {
         command: Some("rustfmt".into()),
         line: None,
     })
+}
+
+// ── BusVerifier impl (WO 47.14) ─────────────────────────────────────────
+//
+// Uses `std::process::Command` (blocking) instead of `tokio::process::Command`
+// because `BusVerifier::verify` is sync and the bus runs inside
+// `spawn_blocking` from dispatch.rs.
+
+/// Rustfmt verifier registered on the `VerifierBus`. WO 47.14.
+pub struct RustfmtVerifier;
+
+impl BusVerifier for RustfmtVerifier {
+    fn name(&self) -> &str {
+        "rustfmt"
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        let Some(path) = ctx.changed_files.first() else {
+            return vec![];
+        };
+        let is_rust = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e == "rs");
+        if !is_rust {
+            return vec![];
+        }
+        let output = match std::process::Command::new("rustfmt")
+            .arg("--check")
+            .arg(path)
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return vec![],
+        };
+        if output.status.success() {
+            return vec![];
+        }
+        let fix = FixSuggestion {
+            description: format!("{} is not formatted", path.display()),
+            file: path.clone(),
+            original: String::new(),
+            replacement: String::new(),
+            severity: "warning".into(),
+            command: Some("rustfmt".into()),
+            line: None,
+        };
+        vec![VerdictEntry {
+            source: VerifierSource::Rustfmt,
+            severity: Severity::Warning,
+            message: fix.description.clone(),
+            file: Some(path.clone()),
+            line: None,
+            fix: Some(fix),
+        }]
+    }
 }
 
 #[cfg(test)]

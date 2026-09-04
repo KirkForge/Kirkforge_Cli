@@ -158,6 +158,8 @@ impl Executor {
             _ => None,
         };
 
+        let _ = bus_event;
+
         let error_event = match outcome {
             ToolOutcome::Error { message } => Some(BusEvent::ToolError(ToolErrorEvent {
                 tool: tool_name.to_string(),
@@ -169,39 +171,72 @@ impl Executor {
             })),
             _ => None,
         };
+        let _ = error_event;
 
         let mut corrections = Vec::new();
 
-        if let Some(ref event) = bus_event {
-            if let Some(ref correction_loop) = self.correction_loop {
-                corrections.extend(correction_loop.run(event).await);
-            }
-        }
-
-        if let Some(ref event) = error_event {
-            if let Some(ref correction_loop) = self.correction_loop {
-                corrections.extend(correction_loop.run(event).await);
-            }
-        }
-
-        // Run the unified verifier bus after file-modifying tool calls.
+        // Run the unified verifier bus after file-modifying tool calls AND
+        // bash calls (the git verifier reacts to bash commands).
         // WO 43.26: offload to spawn_blocking — bus.run() is sync and can
         // block up to 5s per plugin verifier (subprocess spawn + wait).
         // std::sync::MutexGuard is !Send, so the bus is extracted from the
         // lock, run on a blocking thread, then put back; the lock is held
         // only for extract/replace, not across the run.
         let is_file_modification = matches!(tool_name, "write_file" | "edit_file");
-        if is_file_modification {
+        let is_bash = tool_name == "bash";
+        if is_file_modification || is_bash {
             if let Some(ref bus_lock) = self.verifier_bus {
-                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                let ctx = crate::session::verifier::bus::VerifyContext {
-                    sandbox_dir: self
-                        .sandbox
-                        .path_guard
-                        .sandbox_dir
-                        .clone()
-                        .unwrap_or_default(),
-                    changed_files: vec![std::path::PathBuf::from(path)],
+                let ctx = if is_file_modification {
+                    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    let content_hash = {
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        if let Some(content) = args.get("content").and_then(|v| v.as_str()) {
+                            content.hash(&mut hasher);
+                        }
+                        hasher.finish()
+                    };
+                    crate::session::verifier::bus::VerifyContext {
+                        sandbox_dir: self
+                            .sandbox
+                            .path_guard
+                            .sandbox_dir
+                            .clone()
+                            .unwrap_or_default(),
+                        changed_files: vec![std::path::PathBuf::from(path)],
+                        event_kind: Some(format!("post-tool-{tool_name}")),
+                        tool_name: Some(tool_name.to_string()),
+                        content_hash,
+                        bash_command: None,
+                        bash_exit_code: None,
+                        bash_workdir: None,
+                    }
+                } else {
+                    // bash event — populate bash fields for the git verifier
+                    let command = args
+                        .get("command")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let workdir = args
+                        .get("workdir")
+                        .and_then(|v| v.as_str())
+                        .map(std::path::PathBuf::from);
+                    crate::session::verifier::bus::VerifyContext {
+                        sandbox_dir: self
+                            .sandbox
+                            .path_guard
+                            .sandbox_dir
+                            .clone()
+                            .unwrap_or_default(),
+                        changed_files: vec![],
+                        event_kind: Some(format!("post-tool-{tool_name}")),
+                        tool_name: Some(tool_name.to_string()),
+                        content_hash: 0,
+                        bash_command: Some(command),
+                        bash_exit_code: real_exit_code,
+                        bash_workdir: workdir,
+                    }
                 };
                 // WO 47.19: recover from poison instead of skipping — a
                 // panic that crossed this guard must not silently disable
@@ -224,43 +259,65 @@ impl Executor {
                     tracing::error!("verifier bus task panicked: {e}");
                     crate::session::verifier::bus::VerifierBus::new()
                 });
-                for entry in bus_back.verdicts() {
-                    let is_error = entry.severity == crate::session::verifier::bus::Severity::Error;
-                    // WO 45.36: prior `success: !is_error` mapped Error
-                    // → failure (false) and Info/Warning → success (true).
-                    // Preserve that partition exactly with the typed
-                    // outcome: Error → Failed; Info/Warning → Clean (the
-                    // advisory findings were not verifier failures).
-                    let outcome = if is_error {
-                        crate::session::executor::types::VerificationOutcome::Failed
-                    } else {
-                        crate::session::executor::types::VerificationOutcome::Clean
-                    };
-                    corrections.push(CorrectionResult {
-                        verifier: format!("{}", entry.source),
-                        outcome,
-                        message: format!(
-                            "[{}] {}:{} {}",
-                            entry.severity,
-                            entry
-                                .file
-                                .as_ref()
-                                .map(|f| f.display().to_string())
-                                .unwrap_or_else(|| "—".to_string()),
-                            entry
-                                .line
-                                .map(|l| l.to_string())
-                                .unwrap_or_else(|| "—".to_string()),
-                            entry.message
-                        ),
-                        fix: None,
-                        file: entry.file.clone(),
-                        line: entry.line,
-                    });
-                }
+
+                // WO 47.14: pass bus verdicts to the correction loop for
+                // auto-fix application. The correction loop reads
+                // VerdictEntry.fix and applies text/command fixes.
+                let verdicts: Vec<crate::session::verifier::bus::VerdictEntry> =
+                    bus_back.verdicts().to_vec();
+                let changed_files = ctx.changed_files.clone();
                 bus_back.clear();
-                let mut bus = bus_lock.lock().unwrap_or_else(|e| e.into_inner());
-                *bus = bus_back;
+                {
+                    let mut bus = bus_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    *bus = bus_back;
+                }
+
+                if let Some(ref correction_loop) = self.correction_loop {
+                    corrections.extend(
+                        correction_loop
+                            .run_from_verdicts(&verdicts, &changed_files)
+                            .await,
+                    );
+                }
+
+                // Also add non-fixable verdicts (errors/info) that the
+                // correction loop didn't turn into CorrectionResults.
+                for entry in &verdicts {
+                    let already_covered = corrections
+                        .iter()
+                        .any(|c| c.verifier == entry.source.to_string()
+                            && c.message == entry.message);
+                    if !already_covered {
+                        let is_error =
+                            entry.severity == crate::session::verifier::bus::Severity::Error;
+                        let outcome = if is_error {
+                            crate::session::executor::types::VerificationOutcome::Failed
+                        } else {
+                            crate::session::executor::types::VerificationOutcome::Clean
+                        };
+                        corrections.push(CorrectionResult {
+                            verifier: format!("{}", entry.source),
+                            outcome,
+                            message: format!(
+                                "[{}] {}:{} {}",
+                                entry.severity,
+                                entry
+                                    .file
+                                    .as_ref()
+                                    .map(|f| f.display().to_string())
+                                    .unwrap_or_else(|| "—".to_string()),
+                                entry
+                                    .line
+                                    .map(|l| l.to_string())
+                                    .unwrap_or_else(|| "—".to_string()),
+                                entry.message
+                            ),
+                            fix: entry.fix.clone(),
+                            file: entry.file.clone(),
+                            line: entry.line,
+                        });
+                    }
+                }
             }
         }
 

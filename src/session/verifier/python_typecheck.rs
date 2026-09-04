@@ -6,12 +6,15 @@
 //! gracefully. Type errors are returned as `Verdict::Fixable` with the tool
 //! output.
 
+use crate::session::verifier::bus::{
+    BusVerifier, Severity, VerdictEntry, VerifierSource, VerifyContext,
+};
 use crate::session::verifier::detect::{find_python_root, ProjectLanguage};
 use crate::session::verifier::helpers::{
     command_finding, head_body, language_gate, modified_path, Gate,
 };
 use crate::session::verifier::types::BusEvent;
-use crate::session::verifier::Verdict;
+use crate::session::verifier::{Verdict, FixSuggestion};
 
 /// True if mypy is configured for `root` (mypy.ini file, or a
 /// `[tool.mypy]` section in pyproject.toml).
@@ -77,6 +80,69 @@ pub async fn verify_python_typecheck(event: &BusEvent) -> Verdict {
         path,
         "error",
     )
+}
+
+// ── BusVerifier impl (WO 47.14) ─────────────────────────────────────────
+
+/// Python type-check verifier registered on the `VerifierBus`. WO 47.14.
+pub struct PythonTypecheckVerifier;
+
+impl BusVerifier for PythonTypecheckVerifier {
+    fn name(&self) -> &str {
+        "python_typecheck"
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        let Some(path) = ctx.changed_files.first() else {
+            return vec![];
+        };
+        let root = match language_gate(
+            path,
+            &["py"],
+            "Python",
+            find_python_root,
+            ProjectLanguage::Python,
+        ) {
+            Gate::Root(root) => root,
+            Gate::Skip(_) => return vec![],
+        };
+        if !mypy_configured(&root) {
+            return vec![];
+        }
+        let output = match std::process::Command::new("mypy")
+            .current_dir(&root)
+            .arg(path)
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return vec![],
+        };
+        if output.status.success() {
+            return vec![];
+        }
+        let body = head_body(
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+            20,
+        );
+        let fix = FixSuggestion {
+            description: format!("mypy errors near {}\n{body}", path.display()),
+            file: path.clone(),
+            original: String::new(),
+            replacement: String::new(),
+            severity: "error".to_string(),
+            command: None,
+            line: None,
+        };
+        vec![VerdictEntry {
+            source: VerifierSource::Custom("python_typecheck".into()),
+            severity: Severity::Warning,
+            message: fix.description.clone(),
+            file: Some(path.clone()),
+            line: None,
+            fix: Some(fix),
+        }]
+    }
 }
 
 #[cfg(test)]

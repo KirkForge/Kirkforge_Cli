@@ -7,12 +7,16 @@
 //! → `Verdict::Fixable` with the tool output. If neither tool/config is
 //! available, skips gracefully.
 
+use crate::session::verifier::bus::{
+    BusVerifier, Severity, VerdictEntry, VerifierSource, VerifyContext,
+};
 use crate::session::verifier::detect::{find_node_root, ProjectLanguage};
 use crate::session::verifier::helpers::{
-    command_finding, head_body, language_gate, modified_path, tool_on_path, Gate,
+    command_finding, head_body, language_gate, modified_path, tool_on_path, tool_on_path_sync,
+    Gate,
 };
 use crate::session::verifier::types::BusEvent;
-use crate::session::verifier::Verdict;
+use crate::session::verifier::{Verdict, FixSuggestion};
 
 const NODE_EXTS: &[&str] = &["js", "jsx", "ts", "tsx", "mjs", "cjs"];
 
@@ -140,6 +144,106 @@ pub async fn verify_node_lint(event: &BusEvent) -> Verdict {
         path,
         "warning",
     )
+}
+
+// ── BusVerifier impl (WO 47.14) ─────────────────────────────────────────
+
+/// Node lint verifier registered on the `VerifierBus`. WO 47.14.
+pub struct NodeLintVerifier;
+
+impl BusVerifier for NodeLintVerifier {
+    fn name(&self) -> &str {
+        "node_lint"
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        let Some(path) = ctx.changed_files.first() else {
+            return vec![];
+        };
+        let root = match language_gate(
+            path,
+            NODE_EXTS,
+            "Node",
+            find_node_root,
+            ProjectLanguage::Node,
+        ) {
+            Gate::Root(root) => root,
+            Gate::Skip(_) => return vec![],
+        };
+        let want_eslint = eslint_configured(&root);
+        let want_tsc = tsc_configured(&root)
+            && path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e, "ts" | "tsx"));
+        if !want_eslint && !want_tsc {
+            return vec![];
+        }
+        let mut bodies: Vec<String> = Vec::new();
+        let mut had_failure = false;
+        if want_eslint && tool_on_path_sync("npx", &["eslint", "--version"]) {
+            if let Ok(o) = std::process::Command::new("npx")
+                .current_dir(&root)
+                .args(["eslint", "."])
+                .output()
+            {
+                if !o.status.success() {
+                    had_failure = true;
+                }
+                let body = head_body(
+                    &String::from_utf8_lossy(&o.stdout),
+                    &String::from_utf8_lossy(&o.stderr),
+                    20,
+                );
+                if !body.trim().is_empty() {
+                    bodies.push(format!("eslint:\n{body}"));
+                }
+            }
+        }
+        if want_tsc && tool_on_path_sync("npx", &["typescript", "--version"]) {
+            if let Ok(o) = std::process::Command::new("npx")
+                .current_dir(&root)
+                .args(["tsc", "--noEmit"])
+                .output()
+            {
+                if !o.status.success() {
+                    had_failure = true;
+                }
+                let body = head_body(
+                    &String::from_utf8_lossy(&o.stdout),
+                    &String::from_utf8_lossy(&o.stderr),
+                    20,
+                );
+                if !body.trim().is_empty() {
+                    bodies.push(format!("tsc:\n{body}"));
+                }
+            }
+        }
+        if !had_failure {
+            return vec![];
+        }
+        let fix = FixSuggestion {
+            description: format!(
+                "node lint findings near {}\n{}",
+                path.display(),
+                bodies.join("\n")
+            ),
+            file: path.clone(),
+            original: String::new(),
+            replacement: String::new(),
+            severity: "warning".to_string(),
+            command: None,
+            line: None,
+        };
+        vec![VerdictEntry {
+            source: VerifierSource::Lint,
+            severity: Severity::Warning,
+            message: fix.description.clone(),
+            file: Some(path.clone()),
+            line: None,
+            fix: Some(fix),
+        }]
+    }
 }
 
 #[cfg(test)]

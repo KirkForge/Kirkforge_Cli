@@ -13,12 +13,16 @@
 //! (the canonical name on most Linux distros — many ship NO `python` symlink)
 //! and falls back to `python`.
 
+use crate::session::verifier::bus::{
+    BusVerifier, Severity, VerdictEntry, VerifierSource, VerifyContext,
+};
 use crate::session::verifier::detect::{find_python_root, ProjectLanguage};
 use crate::session::verifier::helpers::{
-    command_finding, language_gate, modified_path, tail_body, tool_on_path, Gate,
+    command_finding, language_gate, modified_path, tail_body, tool_on_path, tool_on_path_sync,
+    Gate,
 };
 use crate::session::verifier::types::BusEvent;
-use crate::session::verifier::{Verdict, VerificationError};
+use crate::session::verifier::{Verdict, VerificationError, FixSuggestion};
 
 /// Resolve the first available Python interpreter by probing `--version`.
 /// Prefers `python3` (the canonical name on most Linux distros — many ship
@@ -98,6 +102,74 @@ pub async fn verify_python_test(event: &BusEvent) -> Verdict {
         path,
         "error",
     )
+}
+
+// ── BusVerifier impl (WO 47.14) ─────────────────────────────────────────
+
+/// Python test verifier registered on the `VerifierBus`. WO 47.14.
+pub struct PythonTestVerifier;
+
+impl BusVerifier for PythonTestVerifier {
+    fn name(&self) -> &str {
+        "python_test"
+    }
+
+    fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry> {
+        let Some(path) = ctx.changed_files.first() else {
+            return vec![];
+        };
+        let root = match language_gate(
+            path,
+            &["py"],
+            "Python",
+            find_python_root,
+            ProjectLanguage::Python,
+        ) {
+            Gate::Root(root) => root,
+            Gate::Skip(_) => return vec![],
+        };
+        // Sync interpreter resolution
+        let python = ["python3", "python"]
+            .into_iter()
+            .find(|bin| tool_on_path_sync(bin, &["--version"]));
+        let Some(python) = python else {
+            return vec![];
+        };
+        let output = match std::process::Command::new(python)
+            .current_dir(&root)
+            .args(["-m", "pytest", "-x", "--tb=short", "-q"])
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return vec![],
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if output.status.success() {
+            return vec![];
+        }
+        if stderr.contains("No module named pytest") {
+            return vec![];
+        }
+        let body = tail_body(&stdout, &stderr, 20);
+        let fix = FixSuggestion {
+            description: format!("pytest failure near {}\n{body}", path.display()),
+            file: path.clone(),
+            original: String::new(),
+            replacement: String::new(),
+            severity: "error".to_string(),
+            command: None,
+            line: None,
+        };
+        vec![VerdictEntry {
+            source: VerifierSource::Test,
+            severity: Severity::Warning,
+            message: fix.description.clone(),
+            file: Some(path.clone()),
+            line: None,
+            fix: Some(fix),
+        }]
+    }
 }
 
 #[cfg(test)]

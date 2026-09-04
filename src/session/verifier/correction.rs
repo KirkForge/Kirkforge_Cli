@@ -1,8 +1,8 @@
-use super::handler::VerifierHandler;
-use super::types::BusEvent;
-use super::types::{FixSuggestion, Verdict};
+use super::bus::{Severity, VerdictEntry};
+use super::types::FixSuggestion;
+use crate::session::access::PathGuard;
 use crate::session::executor::types::VerificationOutcome;
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Hard bound on formatter subprocesses (WO 38.3). Matches the hook
@@ -13,26 +13,29 @@ const FORMATTER_TIMEOUT: Duration = Duration::from_secs(FORMATTER_TIMEOUT_SECS);
 
 // ── Correction Loop ─────────────────────────────────────────────────────
 
-/// Manages the correction loop: after tool execution, check verifiers,
-/// apply auto-fixes, and report results back to the conversation.
+/// Manages the correction loop: after tool execution, check verifier bus
+/// verdicts, apply auto-fixes, and report results back to the conversation.
+///
+/// WO 47.14: the correction loop now reads from the `VerifierBus` instead
+/// of the old `VerifierHandler`. The auto-fix logic (applying
+/// `FixSuggestion`) stays the same — it just reads verdicts from the bus.
 pub struct CorrectionLoop {
-    verifier_handler: Arc<VerifierHandler>,
+    path_guard: PathGuard,
     max_iterations: usize,
 }
 
 impl CorrectionLoop {
-    /// Create a new correction loop.
-    pub fn new(verifier_handler: Arc<VerifierHandler>) -> Self {
+    /// Create a new correction loop with the given path guard for auto-fixes.
+    pub fn new(path_guard: PathGuard) -> Self {
         Self {
-            verifier_handler,
+            path_guard,
             max_iterations: 3,
         }
     }
 
-    /// Access the verifier handler so the executor can mutate slots during
-    /// live plugin reload.
-    pub fn verifier_handler(&self) -> Arc<VerifierHandler> {
-        self.verifier_handler.clone()
+    /// Access the path guard (for the executor's dispatch path).
+    pub fn path_guard(&self) -> &PathGuard {
+        &self.path_guard
     }
 
     /// Create with a custom iteration limit.
@@ -41,133 +44,126 @@ impl CorrectionLoop {
         Self { ..self }
     }
 
-    /// Run the correction loop after a tool execution event.
+    /// Run the correction loop after the bus has already been run. Reads
+    /// verdicts from `bus` and applies fixes from `VerdictEntry.fix`.
+    /// Returns a list of correction messages.
     ///
-    /// Re-checks after each auto-fix to catch cascading issues.
-    /// Returns a list of correction messages that should be appended to
-    /// the conversation as tool results.
-    pub async fn run(&self, event: &BusEvent) -> Vec<CorrectionResult> {
+    /// The caller (dispatch.rs) runs the bus and passes the verdicts here.
+    /// This keeps the bus ownership in the executor.
+    pub async fn run_from_verdicts(
+        &self,
+        verdicts: &[VerdictEntry],
+        changed_files: &[PathBuf],
+    ) -> Vec<CorrectionResult> {
         let mut results = Vec::new();
 
-        for _iteration in 0..self.max_iterations {
-            let (verdict, decisive_name) = self.verifier_handler.verify_event(event).await;
-            match verdict {
-                Verdict::Clean => break,
-                Verdict::Skipped(reason) => {
-                    results.push(CorrectionResult {
-                        verifier: decisive_name.clone(),
-                        outcome: VerificationOutcome::Skipped,
-                        message: format!("verification skipped: {reason}"),
-                        fix: None,
-                        file: None,
-                        line: None,
-                    });
-                    break;
+        // Pick the first fixable verdict (if any) and apply it.
+        // The old code picked the most severe (Unfixable > Fixable); here
+        // we iterate verdicts and apply the first fix-bearing entry.
+        for entry in verdicts {
+            if let Some(ref fix) = entry.fix {
+                let (applied, message, is_suggestion) = self.apply_fix(fix).await;
+                let outcome = if is_suggestion {
+                    VerificationOutcome::Suggestion
+                } else if applied {
+                    VerificationOutcome::Fixed
+                } else {
+                    VerificationOutcome::Failed
+                };
+                results.push(CorrectionResult {
+                    verifier: entry.source.to_string(),
+                    outcome,
+                    message,
+                    fix: Some(fix.clone()),
+                    file: Some(fix.file.clone()),
+                    line: fix.line,
+                });
+                if !applied || is_suggestion {
+                    return results;
                 }
-                Verdict::Fixable(fix) => {
-                    // A fix with no concrete text replacement but with an
-                    // external command is a formatter-style fix (e.g. rustfmt).
-                    let (applied, message, is_suggestion) =
-                        if fix.original.is_empty() && fix.replacement.is_empty() {
-                            if let Some(ref cmd) = fix.command {
-                                let ok = apply_command_fix(
-                                    cmd,
-                                    &fix.file,
-                                    &self.verifier_handler.path_guard,
-                                )
-                                .await;
-                                (
-                                    ok,
-                                    if ok {
-                                        format!(
-                                            "Auto-formatted: {} — {}",
-                                            fix.severity, fix.description
-                                        )
-                                    } else {
-                                        format!(
-                                            "Failed to run formatter: {} — {}",
-                                            fix.severity, fix.description
-                                        )
-                                    },
-                                    false,
-                                )
-                            } else {
-                                // The verifier knows something is wrong but
-                                // cannot provide a deterministic text fix.
-                                // Return the suggestion to the model as an
-                                // informational tool result.
-                                (
-                                    true,
-                                    format!(
-                                        "Verifier suggestion: {} — {} ({})",
-                                        fix.severity,
-                                        fix.description,
-                                        fix.file.display()
-                                    ),
-                                    true,
-                                )
-                            }
-                        } else {
-                            let ok = apply_text_fix(&fix, &self.verifier_handler.path_guard).await;
-                            (
-                                ok,
-                                if ok {
-                                    format!("Auto-fixed: {} — {}", fix.severity, fix.description)
-                                } else {
-                                    format!(
-                                        "Failed to auto-fix: {} — {}",
-                                        fix.severity, fix.description
-                                    )
-                                },
-                                false,
-                            )
-                        };
+                // A fix was applied — stop (the bus will re-run on the next
+                // tool call if there are cascading issues).
+                return results;
+            }
+        }
 
-                    let file = fix.file.clone();
-                    let line = fix.line;
-                    let outcome = if is_suggestion {
-                        VerificationOutcome::Suggestion
-                    } else if applied {
-                        VerificationOutcome::Fixed
-                    } else {
-                        VerificationOutcome::Failed
-                    };
+        // No fixable verdicts — report errors/unfixable as findings.
+        for entry in verdicts {
+            if entry.severity == Severity::Error {
+                results.push(CorrectionResult {
+                    verifier: entry.source.to_string(),
+                    outcome: VerificationOutcome::Failed,
+                    message: entry.message.clone(),
+                    fix: entry.fix.clone(),
+                    file: entry.file.clone(),
+                    line: entry.line,
+                });
+            }
+        }
+
+        // If there were no errors and no fixes, report skipped/info verdicts.
+        if results.is_empty() {
+            for entry in verdicts {
+                if entry.severity == Severity::Info {
                     results.push(CorrectionResult {
-                        verifier: decisive_name.clone(),
-                        outcome,
-                        message,
-                        fix: Some(fix),
-                        file: Some(file),
-                        line,
+                        verifier: entry.source.to_string(),
+                        outcome: VerificationOutcome::Skipped,
+                        message: entry.message.clone(),
+                        fix: entry.fix.clone(),
+                        file: entry.file.clone(),
+                        line: entry.line,
                     });
-                    if !applied || is_suggestion {
-                        break; // can't fix, or suggestion only → stop looping
-                    }
-                    // A fix mutated disk content — any cached Clean verdict
-                    // for this event's path is now stale. Drop it so the next
-                    // verify_event re-runs verifiers against the fixed file.
-                    if let Some(path) = event_path(event) {
-                        self.verifier_handler.invalidate_cache(&path);
-                    }
-                }
-                Verdict::Unfixable(err) => {
-                    results.push(CorrectionResult {
-                        verifier: decisive_name.clone(),
-                        outcome: VerificationOutcome::Failed,
-                        message: format!(
-                            "Verification failed: {} — {}",
-                            err.description, err.details
-                        ),
-                        fix: None,
-                        file: err.file.clone(),
-                        line: err.line,
-                    });
-                    break; // unfixable → stop
                 }
             }
         }
 
+        let _ = changed_files; // currently unused — kept for future cache logic
         results
+    }
+
+    /// Apply a fix suggestion (text or command). Returns (applied, message, is_suggestion).
+    async fn apply_fix(
+        &self,
+        fix: &FixSuggestion,
+    ) -> (bool, String, bool) {
+        // A fix with no concrete text replacement but with an external
+        // command is a formatter-style fix (e.g. rustfmt).
+        if fix.original.is_empty() && fix.replacement.is_empty() {
+            if let Some(ref cmd) = fix.command {
+                let ok = apply_command_fix(cmd, &fix.file, &self.path_guard).await;
+                return (
+                    ok,
+                    if ok {
+                        format!("Auto-formatted: {} — {}", fix.severity, fix.description)
+                    } else {
+                        format!("Failed to run formatter: {} — {}", fix.severity, fix.description)
+                    },
+                    false,
+                );
+            }
+            // The verifier knows something is wrong but cannot provide a
+            // deterministic text fix. Return the suggestion to the model.
+            return (
+                true,
+                format!(
+                    "Verifier suggestion: {} — {} ({})",
+                    fix.severity,
+                    fix.description,
+                    fix.file.display()
+                ),
+                true,
+            );
+        }
+        let ok = apply_text_fix(fix, &self.path_guard).await;
+        (
+            ok,
+            if ok {
+                format!("Auto-fixed: {} — {}", fix.severity, fix.description)
+            } else {
+                format!("Failed to auto-fix: {} — {}", fix.severity, fix.description)
+            },
+            false,
+        )
     }
 
     pub fn max_iterations(&self) -> usize {
@@ -189,16 +185,6 @@ pub struct CorrectionResult {
     pub fix: Option<FixSuggestion>,
     pub file: Option<std::path::PathBuf>,
     pub line: Option<u32>,
-}
-
-/// Extract the file path from a `FileWrite`/`Edit` event. Returns `None`
-/// for events that don't target a specific file (BashExec, ToolError, …).
-fn event_path(event: &BusEvent) -> Option<std::path::PathBuf> {
-    match event {
-        BusEvent::FileWrite(e) => Some(e.path.clone()),
-        BusEvent::Edit(e) => Some(e.path.clone()),
-        _ => None,
-    }
 }
 
 /// Apply a text-based fix suggestion to the filesystem.
@@ -660,89 +646,107 @@ mod tests {
 
     #[test]
     fn correction_loop_new_uses_default_max_iterations() {
-        let slots = std::sync::Arc::new(std::sync::RwLock::new(
-            super::super::slots::VerifierSlots::new(),
-        ));
-        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
-            slots,
-            crate::session::access::PathGuard::default(),
-        ));
-        let loop_ = CorrectionLoop::new(handler.clone());
+        let loop_ = CorrectionLoop::new(crate::session::access::PathGuard::default());
         assert_eq!(loop_.max_iterations(), 3);
-        assert!(
-            std::sync::Arc::ptr_eq(&loop_.verifier_handler(), &handler),
-            "verifier_handler must return the same Arc"
-        );
     }
 
     #[test]
     fn correction_loop_with_max_iterations_overrides_default() {
-        let slots = std::sync::Arc::new(std::sync::RwLock::new(
-            super::super::slots::VerifierSlots::new(),
-        ));
-        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
-            slots,
-            crate::session::access::PathGuard::default(),
-        ));
-        let loop_ = CorrectionLoop::new(handler).with_max_iterations(7);
+        let loop_ =
+            CorrectionLoop::new(crate::session::access::PathGuard::default()).with_max_iterations(7);
         assert_eq!(loop_.max_iterations(), 7);
     }
 
     #[test]
     fn correction_loop_with_max_iterations_zero_allows_zero_iterations() {
-        let slots = std::sync::Arc::new(std::sync::RwLock::new(
-            super::super::slots::VerifierSlots::new(),
-        ));
-        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
-            slots,
-            crate::session::access::PathGuard::default(),
-        ));
-        let loop_ = CorrectionLoop::new(handler).with_max_iterations(0);
+        let loop_ =
+            CorrectionLoop::new(crate::session::access::PathGuard::default()).with_max_iterations(0);
         assert_eq!(loop_.max_iterations(), 0);
     }
 
     #[tokio::test]
-    async fn correction_loop_run_returns_empty_for_clean_event() {
-        let slots = std::sync::Arc::new(std::sync::RwLock::new(
-            super::super::slots::VerifierSlots::new(),
-        ));
-        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
-            slots,
-            crate::session::access::PathGuard::default(),
-        ));
-        let loop_ = CorrectionLoop::new(handler);
-        let event = crate::session::verifier::types::BusEvent::FileRead(
-            crate::session::verifier::types::FileReadEvent {
-                path: std::path::PathBuf::from("x.rs"),
-                size_bytes: 1,
-                truncated: false,
-            },
-        );
-        let results = loop_.run(&event).await;
-        assert!(results.is_empty(), "empty slots → Clean → no results");
+    async fn correction_loop_run_from_verdicts_empty_returns_empty() {
+        let loop_ = CorrectionLoop::new(crate::session::access::PathGuard::default());
+        let results = loop_.run_from_verdicts(&[], &[]).await;
+        assert!(results.is_empty());
     }
 
+    /// WO 15.8 (2.4): the correction loop must populate
+    /// `CorrectionResult.verifier` with the verifier source name.
     #[tokio::test]
-    async fn correction_loop_run_with_zero_iterations_returns_empty() {
-        let slots = std::sync::Arc::new(std::sync::RwLock::new(
-            super::super::slots::VerifierSlots::new(),
-        ));
-        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
-            slots,
-            crate::session::access::PathGuard::default(),
-        ));
-        let loop_ = CorrectionLoop::new(handler).with_max_iterations(0);
-        let event = crate::session::verifier::types::BusEvent::FileRead(
-            crate::session::verifier::types::FileReadEvent {
-                path: std::path::PathBuf::from("x.rs"),
-                size_bytes: 1,
-                truncated: false,
-            },
+    async fn correction_loop_run_carries_verifier_source_name() {
+        let entries = vec![super::super::bus::VerdictEntry {
+            source: super::super::bus::VerifierSource::Lint,
+            severity: super::super::bus::Severity::Warning,
+            message: "unused import".into(),
+            file: Some(PathBuf::from("/tmp/none.rs")),
+            line: None,
+            fix: Some(FixSuggestion {
+                description: "unused import".into(),
+                file: PathBuf::from("/tmp/none.rs"),
+                original: "use foo;".into(),
+                replacement: "".into(),
+                severity: "warning".into(),
+                command: None,
+                line: None,
+            }),
+        }];
+        let loop_ = CorrectionLoop::new(crate::session::access::PathGuard::default());
+        let results = loop_.run_from_verdicts(&entries, &[]).await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].verifier, "lint",
+            "verifier name must be the source name"
         );
-        let results = loop_.run(&event).await;
-        assert!(
-            results.is_empty(),
-            "max_iterations=0 must not run any iteration"
+    }
+
+    /// WO 25.14-R4: line from FixSuggestion propagates into CorrectionResult.
+    #[tokio::test]
+    async fn correction_loop_propagates_line_from_fix_suggestion() {
+        let entries = vec![super::super::bus::VerdictEntry {
+            source: super::super::bus::VerifierSource::Lint,
+            severity: super::super::bus::Severity::Warning,
+            message: "unused import".into(),
+            file: Some(PathBuf::from("/tmp/none.rs")),
+            line: None,
+            fix: Some(FixSuggestion {
+                description: "unused import".into(),
+                file: PathBuf::from("/tmp/none.rs"),
+                original: "use foo;".into(),
+                replacement: "".into(),
+                severity: "warning".into(),
+                command: None,
+                line: Some(42),
+            }),
+        }];
+        let loop_ = CorrectionLoop::new(crate::session::access::PathGuard::default());
+        let results = loop_.run_from_verdicts(&entries, &[]).await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].line,
+            Some(42),
+            "line from FixSuggestion must propagate into CorrectionResult"
+        );
+    }
+
+    /// WO 25.14-R4: error verdicts propagate line.
+    #[tokio::test]
+    async fn correction_loop_propagates_line_from_error_verdict() {
+        let entries = vec![super::super::bus::VerdictEntry {
+            source: super::super::bus::VerifierSource::Build,
+            severity: super::super::bus::Severity::Error,
+            message: "build error".into(),
+            file: Some(PathBuf::from("/tmp/x.rs")),
+            line: Some(7),
+            fix: None,
+        }];
+        let loop_ = CorrectionLoop::new(crate::session::access::PathGuard::default());
+        let results = loop_.run_from_verdicts(&entries, &[]).await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].line,
+            Some(7),
+            "line from error verdict must propagate into CorrectionResult"
         );
     }
 
@@ -770,195 +774,5 @@ mod tests {
         assert!(cr.outcome.is_success());
         assert_eq!(cr.message, "ok");
         assert_eq!(cr.fix.as_ref().unwrap().file, fix.file);
-    }
-
-    /// WO 15.8 (2.4): the correction loop must populate
-    /// `CorrectionResult.verifier` with the decisive verifier's `name()`,
-    /// not the hard-coded `"verifier"` (which produced the useless
-    /// `verifier:verifier` tool name the model saw).
-    #[tokio::test]
-    async fn correction_loop_run_carries_decisive_verifier_name() {
-        use super::super::types::{Verdict, Verifier};
-        struct StubFixableVerifier;
-        #[async_trait::async_trait]
-        impl Verifier for StubFixableVerifier {
-            fn name(&self) -> &str {
-                "lint"
-            }
-            fn priority(&self) -> u8 {
-                1
-            }
-            async fn verify(&self, _event: &BusEvent) -> Verdict {
-                Verdict::Fixable(FixSuggestion {
-                    description: "unused import".into(),
-                    file: PathBuf::from("/tmp/none.rs"),
-                    original: "use foo;".into(),
-                    replacement: "".into(),
-                    severity: "warning".into(),
-                    command: None,
-                    line: None,
-                })
-            }
-        }
-        let mut slots_inner = super::super::slots::VerifierSlots::new();
-        slots_inner
-            .register(std::sync::Arc::new(StubFixableVerifier))
-            .unwrap();
-        let slots = std::sync::Arc::new(std::sync::RwLock::new(slots_inner));
-        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
-            slots,
-            crate::session::access::PathGuard::default(),
-        ));
-        let loop_ = CorrectionLoop::new(handler).with_max_iterations(1);
-        let event = crate::session::verifier::types::BusEvent::Edit(
-            crate::session::verifier::types::EditEvent {
-                path: PathBuf::from("/tmp/none.rs"),
-                diff: "@@ -1 +1 @@\n-use foo;\n+".into(),
-            },
-        );
-        let results = loop_.run(&event).await;
-        assert_eq!(results.len(), 1);
-        assert_eq!(
-            results[0].verifier, "lint",
-            "verifier name must be the decisive verifier's name(), not \"verifier\""
-        );
-    }
-
-    /// WO 22.10-R1: Skipped verdicts must produce a CorrectionResult so the
-    /// model can see that verification was skipped. The handler folds
-    /// individual-verifier `Skipped` to `Clean` (see
-    /// `handler_verify_event_skipped_verdict`); the only aggregate
-    /// `Verdict::Skipped` the correction loop ever sees is the handler's
-    /// ToolError short-circuit (handler.rs verify_event). So this test drives
-    /// the loop with a `BusEvent::ToolError` and asserts the loop's Skipped
-    /// branch produces exactly one CorrectionResult.
-    #[tokio::test]
-    async fn correction_loop_skipped_verdict_produces_result() {
-        let slots_inner = super::super::slots::VerifierSlots::new();
-        let slots = std::sync::Arc::new(std::sync::RwLock::new(slots_inner));
-        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
-            slots,
-            crate::session::access::PathGuard::default(),
-        ));
-        let loop_ = CorrectionLoop::new(handler).with_max_iterations(1);
-        let event = crate::session::verifier::types::BusEvent::ToolError(
-            crate::session::verifier::types::ToolErrorEvent {
-                tool: "bash".into(),
-                error: "exit code 1".into(),
-            },
-        );
-        let results = loop_.run(&event).await;
-        assert_eq!(results.len(), 1, "Skipped verdict must produce one result");
-        assert_eq!(results[0].verifier, "aggregate");
-        assert_eq!(
-            results[0].outcome,
-            VerificationOutcome::Skipped,
-            "Skipped is not a failure"
-        );
-        assert!(results[0].outcome.is_success());
-        assert_eq!(
-            results[0].message,
-            "verification skipped: tool-error event: no verifiers act on ToolError"
-        );
-        assert!(results[0].fix.is_none());
-        assert!(results[0].file.is_none());
-        assert!(results[0].line.is_none());
-    }
-
-    /// WO 25.14-R4: line from FixSuggestion propagates into CorrectionResult.
-    #[tokio::test]
-    async fn correction_loop_propagates_line_from_fix_suggestion() {
-        use super::super::types::{Verdict, Verifier};
-        struct StubLineVerifier;
-        #[async_trait::async_trait]
-        impl Verifier for StubLineVerifier {
-            fn name(&self) -> &str {
-                "lint"
-            }
-            fn priority(&self) -> u8 {
-                1
-            }
-            async fn verify(&self, _event: &BusEvent) -> Verdict {
-                Verdict::Fixable(FixSuggestion {
-                    description: "unused import".into(),
-                    file: PathBuf::from("/tmp/none.rs"),
-                    original: "use foo;".into(),
-                    replacement: "".into(),
-                    severity: "warning".into(),
-                    command: None,
-                    line: Some(42),
-                })
-            }
-        }
-        let mut slots_inner = super::super::slots::VerifierSlots::new();
-        slots_inner
-            .register(std::sync::Arc::new(StubLineVerifier))
-            .unwrap();
-        let slots = std::sync::Arc::new(std::sync::RwLock::new(slots_inner));
-        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
-            slots,
-            crate::session::access::PathGuard::default(),
-        ));
-        let loop_ = CorrectionLoop::new(handler).with_max_iterations(1);
-        let event = crate::session::verifier::types::BusEvent::Edit(
-            crate::session::verifier::types::EditEvent {
-                path: PathBuf::from("/tmp/none.rs"),
-                diff: "@@ -1 +1 @@\n-use foo;\n+".into(),
-            },
-        );
-        let results = loop_.run(&event).await;
-        assert_eq!(results.len(), 1);
-        assert_eq!(
-            results[0].line,
-            Some(42),
-            "line from FixSuggestion must propagate into CorrectionResult"
-        );
-    }
-
-    /// WO 25.14-R4: line from VerificationError propagates into CorrectionResult.
-    #[tokio::test]
-    async fn correction_loop_propagates_line_from_verification_error() {
-        use super::super::types::{Verdict, VerificationError, Verifier};
-        struct StubErrLineVerifier;
-        #[async_trait::async_trait]
-        impl Verifier for StubErrLineVerifier {
-            fn name(&self) -> &str {
-                "build"
-            }
-            fn priority(&self) -> u8 {
-                1
-            }
-            async fn verify(&self, _event: &BusEvent) -> Verdict {
-                Verdict::Unfixable(VerificationError {
-                    description: "build error".into(),
-                    file: Some(PathBuf::from("/tmp/x.rs")),
-                    details: "oops".into(),
-                    line: Some(7),
-                })
-            }
-        }
-        let mut slots_inner = super::super::slots::VerifierSlots::new();
-        slots_inner
-            .register(std::sync::Arc::new(StubErrLineVerifier))
-            .unwrap();
-        let slots = std::sync::Arc::new(std::sync::RwLock::new(slots_inner));
-        let handler = std::sync::Arc::new(super::super::handler::VerifierHandler::new(
-            slots,
-            crate::session::access::PathGuard::default(),
-        ));
-        let loop_ = CorrectionLoop::new(handler).with_max_iterations(1);
-        let event = crate::session::verifier::types::BusEvent::Edit(
-            crate::session::verifier::types::EditEvent {
-                path: PathBuf::from("/tmp/x.rs"),
-                diff: "@@ -1 +1 @@".into(),
-            },
-        );
-        let results = loop_.run(&event).await;
-        assert_eq!(results.len(), 1);
-        assert_eq!(
-            results[0].line,
-            Some(7),
-            "line from VerificationError must propagate into CorrectionResult"
-        );
     }
 }

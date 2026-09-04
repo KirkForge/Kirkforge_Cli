@@ -400,22 +400,9 @@ pub struct VerificationError {
     pub line: Option<u32>,
 }
 
-// ── Verifier trait ──────────────────────────────────────────────────────
-
-/// A verifier performs deterministic checks on tool execution results.
-///
-/// Verifiers are called directly by the dispatch layer after each
-/// tool call. Unlike generic handlers, verifiers return a [`Verdict`]
-/// that the correction loop can act on.
-#[async_trait::async_trait]
-pub trait Verifier: Send + Sync {
-    /// Unique verifier name (e.g. "lint", "type-check", "git", "security").
-    fn name(&self) -> &str;
-
-    /// Priority: lower number = higher priority (runs first).
-    /// Used by the truth model — the first definitive result wins.
-    fn priority(&self) -> u8;
-
-    /// Verify the state after a tool event.
-    async fn verify(&self, event: &BusEvent) -> Verdict;
-}
+// WO 47.14: the old `Verifier` trait (async `verify(&self, event: &BusEvent)
+// -> Verdict`) is deleted. All 14 built-in verifiers now implement the sync
+// `BusVerifier` trait (`verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry>`)
+// and register on the `VerifierBus`. The `Verdict` enum and `FixSuggestion`
+// struct are kept because the old `verify_*` free functions still return
+// `Verdict` (used by unit tests in each verifier file).

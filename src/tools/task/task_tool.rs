@@ -184,9 +184,7 @@ impl Tool for Task {
         // frontmatter supplies the default when the model omits the
         // `background` arg. An explicit arg (true or false) always wins.
         let background = if args.get("background").is_none() {
-            self.agents
-                .get(&persona)
-                .is_some_and(|a| a.background)
+            self.agents.get(&persona).is_some_and(|a| a.background)
         } else {
             background
         };

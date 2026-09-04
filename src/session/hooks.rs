@@ -2165,10 +2165,10 @@ command = "hooks/pre-tool-bash.sh"
     }
 
     /// WO 39.4 deferred tail: `parse_claude_hooks_obj` translates the
-    /// Claude event names + matcher tool names to kf-code equivalents.
-    /// `PreToolUse` + `matcher:"Bash"` → `pre-tool-bash`; `PostToolUse`
-    /// + `matcher:"Write"` → `post-tool-write_file`; a catch-all
-    /// `PreToolUse` → generic `pre-tool`.
+    /// Claude event names and matcher tool names are translated to
+    /// kf-code equivalents: PreToolUse with matcher "Bash" becomes
+    /// pre-tool-bash; PostToolUse with matcher "Write" becomes
+    /// post-tool-write_file; a catch-all PreToolUse becomes pre-tool.
     #[test]
     fn test_parse_claude_hooks_translates_events_and_matchers() {
         let json: serde_json::Value = serde_json::json!({
@@ -2211,12 +2211,14 @@ command = "hooks/pre-tool-bash.sh"
                 ]
             }
         });
-        let entries = parse_claude_hooks_obj(&json);
+        let entries = parse_claude_hooks_obj(&json["hooks"]);
         // 2 from PreToolUse (Bash + catch-all) + 1 PostToolUse + 1 Stop.
         // SessionEnd is unmapped → skipped.
         assert_eq!(entries.len(), 4, "{entries:?}");
-        let by_event: std::collections::HashMap<&str, &PathBuf> =
-            entries.iter().map(|e| (e.event.as_str(), &e.command)).collect();
+        let by_event: std::collections::HashMap<&str, &PathBuf> = entries
+            .iter()
+            .map(|e| (e.event.as_str(), &e.command))
+            .collect();
         assert_eq!(
             by_event.get("pre-tool-bash").map(|p| p.to_str().unwrap()),
             Some("scripts/pre-bash.sh"),
@@ -2228,7 +2230,9 @@ command = "hooks/pre-tool-bash.sh"
             "empty matcher → generic pre-tool"
         );
         assert_eq!(
-            by_event.get("post-tool-write_file").map(|p| p.to_str().unwrap()),
+            by_event
+                .get("post-tool-write_file")
+                .map(|p| p.to_str().unwrap()),
             Some("scripts/post-write.sh"),
             "Write matcher → post-tool-write_file"
         );
@@ -2261,7 +2265,7 @@ command = "hooks/pre-tool-bash.sh"
                 ]
             }
         });
-        let entries = parse_claude_hooks_obj(&json);
+        let entries = parse_claude_hooks_obj(&json["hooks"]);
         assert_eq!(entries.len(), 1, "{entries:?}");
         assert_eq!(entries[0].event, "pre-tool-bash");
         assert_eq!(entries[0].command.to_str().unwrap(), "scripts/ok.sh");

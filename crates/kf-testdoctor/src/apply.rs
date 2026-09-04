@@ -51,7 +51,8 @@ fn rewrite(src: &str, suggestion: &Suggestion) -> Result<String> {
         // do safely. The doctor prints the suggestion; the human edits.
         SuggestionKind::MockSubprocess
         | SuggestionKind::Wiremock
-        | SuggestionKind::NamedTempFile => bail!(
+        | SuggestionKind::NamedTempFile
+        | SuggestionKind::AssertFreeBody => bail!(
             "suggestion kind {:?} is suggestion-only for v1; apply is not \
              supported. Apply the fix by hand.",
             suggestion.kind

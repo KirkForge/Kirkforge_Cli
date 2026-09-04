@@ -223,6 +223,7 @@ fn parse_kind_from_id(id: &str) -> Option<suggest::SuggestionKind> {
         "mock_subprocess" => suggest::SuggestionKind::MockSubprocess,
         "wiremock" => suggest::SuggestionKind::Wiremock,
         "named_temp_file" => suggest::SuggestionKind::NamedTempFile,
+        "assert_free_body" => suggest::SuggestionKind::AssertFreeBody,
         _ => return None,
     })
 }

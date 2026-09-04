@@ -54,6 +54,8 @@ pub enum SuggestionKind {
     Wiremock,
     /// Use `tempfile::NamedTempFile` for race-safe temp writes.
     NamedTempFile,
+    /// Test fn body contains no assertion macros (WO 43.24).
+    AssertFreeBody,
 }
 
 pub fn run(profile_path: &str) -> Result<()> {
@@ -408,6 +410,25 @@ pub fn suggestions_from_source(test_path: &Path, profile: &TestProfile) -> Vec<S
         });
     }
 
+    // Assert-free test bodies (WO 43.24). Flagged regardless of
+    // duration — a test with no assertion is suspect at any speed.
+    for finding in find_assert_free_tests(&src) {
+        out.push(Suggestion {
+            id: format!("{}::assert_free_body", finding.fn_name),
+            test: finding.fn_name.clone(),
+            severity: "low".to_string(),
+            fix: "Add an assertion (assert!/assert_eq!/panic!) — the test \
+                  body currently contains no assertion macro, so a \
+                  passing run proves nothing."
+                .to_string(),
+            rationale: format!(
+                "test fn `{}` at line {} has no assertion macro in its body.",
+                finding.fn_name, finding.line
+            ),
+            kind: SuggestionKind::AssertFreeBody,
+        });
+    }
+
     // If the test is pathologically slow (>5s) and none of the source
     // patterns matched, still emit an `#[ignore]` suggestion so the
     // apply path can annotate it.
@@ -429,6 +450,122 @@ pub fn suggestions_from_source(test_path: &Path, profile: &TestProfile) -> Vec<S
     }
 
     out
+}
+
+/// A `#[test]` / `#[tokio::test]` fn whose body contains no assertion
+/// macro. Emitted by `find_assert_free_tests` (WO 43.24).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssertFreeTest {
+    pub fn_name: String,
+    pub line: usize,
+}
+
+// ponytail: line-based scan, not AST — false-positives on helper-only test
+// fns whose asserts live in callees, and false-negatives on macro-generated
+// asserts. A real parser (syn) would fix both; not worth the dep here.
+/// Scan source for `#[test]` / `#[tokio::test]` fns whose bodies contain
+/// no assertion macro (`assert!`, `assert_eq!`, `assert_ne!`, `panic!`,
+/// `should_panic`, `unreachable!`, `todo!`, `unimplemented!`). Returns
+/// one `AssertFreeTest` per offending fn.
+pub fn find_assert_free_tests(source: &str) -> Vec<AssertFreeTest> {
+    const MARKERS: &[&str] = &[
+        "assert!",
+        "assert_eq!",
+        "assert_ne!",
+        "panic!",
+        "should_panic",
+        "unreachable!",
+        "todo!",
+        "unimplemented!",
+    ];
+
+    let lines: Vec<&str> = source.lines().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let t = lines[i].trim();
+        let is_test_attr =
+            t == "#[test]" || t == "#[tokio::test]" || t.starts_with("#[tokio::test(");
+        if !is_test_attr {
+            i += 1;
+            continue;
+        }
+        let attr_line = i;
+        // Find the next `fn` declaration after the attribute. Allow
+        // other attributes (`#[ignore]`, `#[serial]`, …) between.
+        let mut j = i + 1;
+        let fn_idx = loop {
+            if j >= lines.len() {
+                break None;
+            }
+            let lj = lines[j].trim();
+            if lj.starts_with("fn ")
+                || lj.starts_with("async fn ")
+                || lj.starts_with("pub fn ")
+                || lj.starts_with("pub async fn ")
+            {
+                break Some(j);
+            }
+            j += 1;
+        };
+        let Some(fn_idx) = fn_idx else {
+            i = j;
+            continue;
+        };
+        let fn_name = parse_fn_name(lines[fn_idx].trim());
+        // Walk from the `#[test]` attr through the body's closing
+        // brace, checking every line for an assertion marker. Brace
+        // depth finds the body end; attrs (#[should_panic], #[ignore])
+        // are scanned too so should_panic counts as an assertion.
+        let mut depth: i32 = 0;
+        let mut entered = false;
+        let mut has_assert = false;
+        let mut k = attr_line;
+        while k < lines.len() {
+            let line = lines[k];
+            if line_contains_any(line, MARKERS) {
+                has_assert = true;
+            }
+            for ch in line.chars() {
+                match ch {
+                    '{' => {
+                        depth += 1;
+                        entered = true;
+                    }
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            k += 1;
+            if entered && depth <= 0 {
+                break;
+            }
+        }
+        if !has_assert {
+            out.push(AssertFreeTest {
+                fn_name,
+                line: attr_line + 1,
+            });
+        }
+        i = k;
+    }
+    out
+}
+
+fn parse_fn_name(fn_line: &str) -> String {
+    // Strip leading `pub ` / `async ` / combinations.
+    let s = fn_line.trim();
+    let s = s.strip_prefix("pub ").unwrap_or(s);
+    let s = s.strip_prefix("async ").unwrap_or(s);
+    let s = s.strip_prefix("fn ").unwrap_or(s);
+    s.split(|c: char| c.is_whitespace() || c == '(')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+fn line_contains_any(line: &str, markers: &[&str]) -> bool {
+    markers.iter().any(|m| line.contains(m))
 }
 
 /// Print the smart (source-aware) suggestions for every slow test in a
@@ -653,5 +790,45 @@ mod tests {
         let p = tp("test_foo", 3_000);
         let s = suggestions_from_source(f.path(), &p);
         assert!(s.iter().any(|x| x.id == "test_foo::mock_subprocess"));
+    }
+
+    // ---- find_assert_free_tests (WO 43.24) ----------------------------
+
+    #[test]
+    fn assert_free_flags_test_with_no_assertions() {
+        let src = "#[test]\nfn test_empty() {\n    let _x = 42;\n}\n";
+        let found = find_assert_free_tests(src);
+        assert!(found.iter().any(|f| f.fn_name == "test_empty"));
+    }
+
+    #[test]
+    fn assert_free_does_not_flag_test_with_assertion() {
+        let src = "#[test]\nfn test_checked() {\n    assert_eq!(1, 1);\n}\n";
+        let found = find_assert_free_tests(src);
+        assert!(!found.iter().any(|f| f.fn_name == "test_checked"));
+    }
+
+    #[test]
+    fn assert_free_flags_tokio_test() {
+        let src = "#[tokio::test]\nasync fn test_async_empty() {\n    let _x = 1;\n}\n";
+        let found = find_assert_free_tests(src);
+        assert!(found.iter().any(|f| f.fn_name == "test_async_empty"));
+    }
+
+    #[test]
+    fn assert_free_respects_should_panic_attr() {
+        let src = "#[test]\n#[should_panic]\nfn test_panic() {\n    panic!(\"expected\");\n}\n";
+        let found = find_assert_free_tests(src);
+        assert!(!found.iter().any(|f| f.fn_name == "test_panic"));
+    }
+
+    #[test]
+    fn assert_free_suggestion_emitted_from_source() {
+        let f = write_fixture("#[test]\nfn test_noop() {\n    let _x = 1;\n}\n");
+        let p = tp("test_noop", 500);
+        let s = suggestions_from_source(f.path(), &p);
+        assert!(s
+            .iter()
+            .any(|x| x.kind == SuggestionKind::AssertFreeBody && x.test == "test_noop"));
     }
 }

@@ -1,5 +1,34 @@
 # Lessons — WO 43 session
 
+## WO 39.4 deferred tail (Claude hooks.json reader)
+
+- Reusing the existing `plugin_hooks: Vec<(String, PathBuf,
+  Option<String>)>` execution pipeline for Claude hooks is the
+  ponytail move: zero new fields, zero new code paths. The new
+  `load_claude_hooks_config` just pushes `(event, command, label)`
+  tuples — they run through the same `run_hook_script` (5s timeout,
+  bash safety gate, capped output, audit attribution). The only new
+  surface is the JSON parser + the `claude:<filename>` audit label.
+- The matcher→event translation has a clean rule: a non-empty matcher
+  pins to the per-tool event (`pre-tool-bash`), an empty/absent
+  matcher stays generic (`pre-tool`). This matches the existing
+  `<event>-<tool>.sh` filename convention — a Claude `PreToolUse` +
+  `matcher:"Bash"` behaves identically to a kf-code `pre-tool-bash.sh`.
+- `detect_changes` from a worktree reports every symbol in the edited
+  files as "touched" (line-number shift), inflating the risk rating.
+  The "critical" here came from `with_log_and_undo_and_plugins` being
+  a hub constructor, not from a real logic change — the diff is purely
+  additive (new block after existing plugin-hook load). Trust the diff
+  over the symbol-level "touched" attribution when the change is
+  append-only.
+- Doc-sync gap (disclosed, not fixed — out of scope): WO 39.4 is now
+  fully complete (steps 1-3 in `91e3ca54`, step 4 here) but
+  `docs/archive/workorders/39.4-claude-compat-phase3.md` (Status:
+  Pending), the README index row, and `docs/TECHNICAL.md` line ~1498
+  ("not yet implemented") are all stale. The task scope named only the
+  two source files, so I disclosed in workplan.md instead of editing
+  the docs. A doc-sync task should flip these three.
+
 ## WO 46.28 (prune_oldest_in_dir wrong slice)
 
 - External-model bug reports can misdiagnose root cause AND propose the

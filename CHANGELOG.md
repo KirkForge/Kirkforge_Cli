@@ -12,6 +12,11 @@ why, and the gate evidence.
   payload (ADR-0009 schema) to the subprocess's stdin instead of
   nulling it. KF_* env vars kept for back-compat. Event-name mapping
   (PreToolUse↔pre-tool, etc.) + generic pre-tool/post-tool events.
+- WO 39.4 deferred tail: Claude `settings.json` / `hooks.json` reader
+  — `HookRunner::load_claude_hooks_config` parses the `hooks` key,
+  translates event + matcher tool names, and registers entries through
+  the existing plugin-hooks pipeline. Gated by `plugin_trust_workspace`
+  (same threat model as workspace agents).
 - WO 47.12: compile-time daemon excision — `daemon` cargo feature
   (default-off) gates `src/daemon/**` + `kf-rbac`. Minimal build
   (`--no-default-features`) excludes the daemon entirely.

@@ -282,6 +282,23 @@ impl Executor {
         if let Some(registry) = plugin_registry {
             hook_runner.load_plugin_hooks(registry, &cfg.tools.disabled_plugins);
         }
+        // WO 39.4 deferred tail: load Claude `settings.json` / `hooks.json`
+        // hooks so a Claude plugin's hooks run without manual conversion.
+        // `.claude/settings.json` is checked first, then `.claude/hooks.json`
+        // (relative to CWD, matching the `.claude/agents` loader convention).
+        // The trust gate mirrors workspace agents — a dropped `hooks.json`
+        // can run arbitrary commands, so `plugin_trust_workspace` must be on.
+        {
+            let trust = cfg.tools.plugin_trust_workspace;
+            let settings = std::path::Path::new(".claude/settings.json");
+            let hooks_json = std::path::Path::new(".claude/hooks.json");
+            if settings.is_file() {
+                hook_runner.load_claude_hooks_config(settings, trust);
+            }
+            if hooks_json.is_file() {
+                hook_runner.load_claude_hooks_config(hooks_json, trust);
+            }
+        }
         #[cfg(feature = "stratum")]
         {
             // Runtime `enabled_plugins` gate (WO 15.7 5.1): skip hooks when

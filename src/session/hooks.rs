@@ -181,6 +181,127 @@ pub fn claude_to_kf_event(claude_event: &str) -> Option<&'static str> {
     }
 }
 
+/// One hook entry parsed from a Claude `settings.json` / `hooks.json`
+/// `hooks` block (WO 39.4 deferred tail).
+///
+/// Claude nests hooks as `hooks[EventName][]` → `{matcher, hooks[]}` →
+/// `{type:"command", command:"..."}`. We flatten to one entry per
+/// command. `matcher` is the Claude tool name (e.g. `"Bash"`) or empty
+/// for a catch-all; it is translated to the native tool name at
+/// registration time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaudeHookEntry {
+    /// kf-code event name, already translated via [`claude_to_kf_event`]
+    /// and (for tool events) suffixed with the native tool name when a
+    /// matcher is present (e.g. `pre-tool-bash`).
+    pub event: String,
+    /// Absolute or relative path to the command script.
+    pub command: PathBuf,
+}
+
+/// Parse the `hooks` key from a Claude `settings.json` or `hooks.json`
+/// file (WO 39.4 deferred tail).
+///
+/// Returns one [`ClaudeHookEntry`] per `{type:"command", command:...}`
+/// found, with the Claude event name translated to its kf-code
+/// equivalent via [`claude_to_kf_event`] and the matcher tool name
+/// translated via [`crate::session::agents::alias_for`]. A `PreToolUse`
+/// entry with `matcher:"Bash"` becomes event `pre-tool-bash`; a
+/// `PreToolUse` entry with no matcher becomes the generic `pre-tool`.
+///
+/// Unknown Claude event names (SessionEnd, Notification, SubagentStop)
+/// and non-`command` hook types are silently skipped — they have no
+/// kf-code execution path.
+///
+// ponytail: only the `hooks` key is parsed, not the full Claude
+// settings.json schema (permissions, env, model, status callbacks,
+// etc.). Ceiling: a plugin that puts hooks under a non-`hooks` key or
+// nests them differently is invisible. upgrade path: pull in the
+// official `claude-code` settings crate if one is published, or parse
+// the full schema when a plugin needs the other keys.
+pub fn load_claude_hooks_config(path: &Path) -> Vec<ClaudeHookEntry> {
+    let data = match std::fs::read_to_string(path) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "claude hooks config: could not read file"
+            );
+            return Vec::new();
+        }
+    };
+    let root: serde_json::Value = match serde_json::from_str(&data) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "claude hooks config: invalid JSON"
+            );
+            return Vec::new();
+        }
+    };
+    let hooks_obj = match root.get("hooks") {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    parse_claude_hooks_obj(hooks_obj)
+}
+
+/// Parse the `hooks` JSON object (the value keyed at `"hooks"`).
+///
+/// Split out so the test module can feed a parsed object directly
+/// without writing a temp file.
+fn parse_claude_hooks_obj(hooks: &serde_json::Value) -> Vec<ClaudeHookEntry> {
+    let mut out = Vec::new();
+    let Some(hooks_map) = hooks.as_object() else {
+        return out;
+    };
+    for (claude_event, groups) in hooks_map {
+        let Some(kf_base) = claude_to_kf_event(claude_event) else {
+            // SessionEnd, Notification, SubagentStop — no kf-code path.
+            continue;
+        };
+        let Some(groups) = groups.as_array() else {
+            continue;
+        };
+        for group in groups {
+            let matcher = group
+                .get("matcher")
+                .and_then(|m| m.as_str())
+                .unwrap_or("")
+                .trim();
+            let Some(hook_list) = group.get("hooks").and_then(|h| h.as_array()) else {
+                continue;
+            };
+            for hook in hook_list {
+                let ty = hook.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if ty != "command" {
+                    continue;
+                }
+                let Some(command) = hook.get("command").and_then(|c| c.as_str()) else {
+                    continue;
+                };
+                // A matcher pins the event to the per-tool variant
+                // (`pre-tool-bash`); no matcher → the generic event
+                // (`pre-tool`) fires for every tool.
+                let event = if matcher.is_empty() {
+                    kf_base.to_string()
+                } else {
+                    let native = crate::session::agents::alias_for(matcher);
+                    format!("{kf_base}-{native}")
+                };
+                out.push(ClaudeHookEntry {
+                    event,
+                    command: PathBuf::from(command),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// Lifecycle event names that hooks may register for (WO 39.4).
 ///
 /// Includes the generic `pre-tool` / `post-tool` events (fire for ALL
@@ -334,6 +455,56 @@ impl HookRunner {
                 }
             }
         }
+    }
+
+    /// Load hooks from a Claude `settings.json` / `hooks.json` file
+    /// (WO 39.4 deferred tail).
+    ///
+    /// Reads `path`, translates each Claude hook entry to a kf-code
+    /// event name, and pushes the entries into the same `plugin_hooks`
+    /// execution pipeline as plugin-defined hooks — so they get the
+    /// 5-second timeout, bash safety gate, capped output, and audit
+    /// attribution. The `plugin_name` is `"claude:<filename>"` so a
+    /// denial/failure is attributed to the right config file.
+    ///
+    /// Trust gate: the workspace `.claude/` tree is model-writable, so
+    /// a dropped `hooks.json` can run arbitrary commands — the same
+    /// threat model as workspace agents/plugins (ADR-057). When
+    /// `trust_workspace` is false the load is refused with a
+    /// `tracing::warn!`, mirroring `AgentRegistry::load_from_dir`. The
+    /// operator opts in via `plugin_trust_workspace = true`.
+    pub fn load_claude_hooks_config(&mut self, path: &Path, trust_workspace: bool) {
+        if !trust_workspace {
+            tracing::warn!(
+                path = %path.display(),
+                "claude hooks config refused (plugin_trust_workspace=false); \
+                 set plugin_trust_workspace=true to load workspace hooks"
+            );
+            return;
+        }
+        if !path.is_file() {
+            return;
+        }
+        let entries = load_claude_hooks_config(path);
+        if entries.is_empty() {
+            return;
+        }
+        let label = format!(
+            "claude:{}",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+        );
+        let count = entries.len();
+        for entry in entries {
+            self.plugin_hooks
+                .push((entry.event, entry.command, Some(label.clone())));
+        }
+        tracing::info!(
+            path = %path.display(),
+            count,
+            "loaded Claude hooks config"
+        );
     }
 
     /// Register an in-process Rust hook handler.
@@ -1991,5 +2162,168 @@ command = "hooks/pre-tool-bash.sh"
         assert!(KNOWN_EVENTS.contains(&"post-tool"));
         assert!(KNOWN_EVENTS.contains(&"post-turn"));
         assert!(KNOWN_EVENTS.contains(&"session-start"));
+    }
+
+    /// WO 39.4 deferred tail: `parse_claude_hooks_obj` translates the
+    /// Claude event names + matcher tool names to kf-code equivalents.
+    /// `PreToolUse` + `matcher:"Bash"` → `pre-tool-bash`; `PostToolUse`
+    /// + `matcher:"Write"` → `post-tool-write_file`; a catch-all
+    /// `PreToolUse` → generic `pre-tool`.
+    #[test]
+    fn test_parse_claude_hooks_translates_events_and_matchers() {
+        let json: serde_json::Value = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {"type": "command", "command": "scripts/pre-bash.sh"}
+                        ]
+                    },
+                    {
+                        "matcher": "",
+                        "hooks": [
+                            {"type": "command", "command": "scripts/pre-any.sh"}
+                        ]
+                    }
+                ],
+                "PostToolUse": [
+                    {
+                        "matcher": "Write",
+                        "hooks": [
+                            {"type": "command", "command": "scripts/post-write.sh"}
+                        ]
+                    }
+                ],
+                "Stop": [
+                    {
+                        "hooks": [
+                            {"type": "command", "command": "scripts/stop.sh"}
+                        ]
+                    }
+                ],
+                "SessionEnd": [
+                    {
+                        "hooks": [
+                            {"type": "command", "command": "scripts/ignored.sh"}
+                        ]
+                    }
+                ]
+            }
+        });
+        let entries = parse_claude_hooks_obj(&json);
+        // 2 from PreToolUse (Bash + catch-all) + 1 PostToolUse + 1 Stop.
+        // SessionEnd is unmapped → skipped.
+        assert_eq!(entries.len(), 4, "{entries:?}");
+        let by_event: std::collections::HashMap<&str, &PathBuf> =
+            entries.iter().map(|e| (e.event.as_str(), &e.command)).collect();
+        assert_eq!(
+            by_event.get("pre-tool-bash").map(|p| p.to_str().unwrap()),
+            Some("scripts/pre-bash.sh"),
+            "Bash matcher → pre-tool-bash"
+        );
+        assert_eq!(
+            by_event.get("pre-tool").map(|p| p.to_str().unwrap()),
+            Some("scripts/pre-any.sh"),
+            "empty matcher → generic pre-tool"
+        );
+        assert_eq!(
+            by_event.get("post-tool-write_file").map(|p| p.to_str().unwrap()),
+            Some("scripts/post-write.sh"),
+            "Write matcher → post-tool-write_file"
+        );
+        assert_eq!(
+            by_event.get("post-turn").map(|p| p.to_str().unwrap()),
+            Some("scripts/stop.sh"),
+            "Stop → post-turn"
+        );
+        assert!(
+            !by_event.contains_key("session-end"),
+            "SessionEnd has no kf-code mapping and must be skipped"
+        );
+    }
+
+    /// WO 39.4 deferred tail: non-`command` hook types and entries
+    /// without a `command` string are skipped.
+    #[test]
+    fn test_parse_claude_hooks_skips_non_command_types() {
+        let json: serde_json::Value = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [
+                            {"type": "webhook", "url": "https://example.com"},
+                            {"type": "command", "command": "scripts/ok.sh"},
+                            {"type": "command"}
+                        ]
+                    }
+                ]
+            }
+        });
+        let entries = parse_claude_hooks_obj(&json);
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].event, "pre-tool-bash");
+        assert_eq!(entries[0].command.to_str().unwrap(), "scripts/ok.sh");
+    }
+
+    /// WO 39.4 deferred tail: `load_claude_hooks_config` reads a file
+    /// and returns the translated entries; a missing file returns an
+    /// empty vec (no panic).
+    #[test]
+    fn test_load_claude_hooks_config_reads_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("hooks.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "hooks": {
+                    "PreToolUse": [
+                        {"matcher": "Bash", "hooks": [{"type":"command","command":"x.sh"}]}
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+        let entries = load_claude_hooks_config(&path);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].event, "pre-tool-bash");
+        assert_eq!(entries[0].command.to_str().unwrap(), "x.sh");
+    }
+
+    /// WO 39.4 deferred tail: `HookRunner::load_claude_hooks_config`
+    /// registers entries so `has()` sees them. The trust gate refuses
+    /// when `trust_workspace` is false.
+    #[test]
+    fn test_hook_runner_load_claude_hooks_registers_and_gates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "hooks": {
+                    "PreToolUse": [
+                        {"matcher": "Bash", "hooks": [{"type":"command","command":"pre.sh"}]}
+                    ],
+                    "Stop": [
+                        {"hooks": [{"type":"command","command":"stop.sh"}]}
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+        let (_hooks_tmp, hooks_dir) = temp_hooks_dir();
+        let mut runner = HookRunner::new(hooks_dir);
+        assert!(!runner.has("pre-tool-bash"));
+        assert!(!runner.has("post-turn"));
+
+        // Trust gate refused → nothing loaded.
+        runner.load_claude_hooks_config(&path, false);
+        assert!(!runner.has("pre-tool-bash"));
+
+        // Trust gate open → entries registered.
+        runner.load_claude_hooks_config(&path, true);
+        assert!(runner.has("pre-tool-bash"), "Bash matcher → pre-tool-bash");
+        assert!(runner.has("post-turn"), "Stop → post-turn");
     }
 }

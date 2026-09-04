@@ -37,6 +37,10 @@ pub struct MicrocompactResult {
 /// When `use_llm` is true and the heuristic drops more than `drop_threshold`
 /// fraction of the content, the LLM summarizer is attempted instead. This
 /// produces higher-quality summaries at the cost of an extra API call.
+///
+/// Thin wrapper over `compaction::process_middle` with `CollapseToSummary`:
+/// the anchor/middle/tail split and the summary-message shape live in one
+/// shared driver; this function owns the heuristic/LLM summary-text fork.
 pub fn maybe_microcompact(
     messages: &[Message],
     threshold_tokens: usize,
@@ -55,73 +59,62 @@ pub fn maybe_microcompact(
     }
 
     let anchor = super::compaction::anchor_len(messages);
-
-    // We must keep the anchor plus keep_tail trailing messages. Everything
-    // in between is eligible for summarization.
     let tail_start = messages.len().saturating_sub(keep_tail);
     if tail_start <= anchor {
-        // No room in the middle to compress.
         return None;
     }
 
-    let heuristic_summary = heuristic_summary(&messages[anchor..tail_start]);
-    let heuristic_tokens = super::estimate_message_tokens(&Message {
-        role: Role::System,
-        content: heuristic_summary.clone(),
-        content_parts: None,
-        thinking: None,
-        tool_calls: None,
-        tool_call_id: None,
-        tool_name: None,
-        token_count: None,
-    });
-
-    // Decide whether to use LLM summarization instead of heuristic.
-    let summary = if use_llm {
+    // Build the collapse-text closure: decides between the heuristic
+    // summary and the structured LLM-style summary based on the drop
+    // ratio, exactly as the inline code did before the fold. Returns the
+    // FULL summary-message content (including the `[Context summary …]`
+    // prefix) so `process_middle`'s collapse arm doesn't format-wrap it.
+    let collapse_fn: Box<dyn Fn(&[Message]) -> String> = {
         let middle_tokens = super::estimate_tokens(&messages[anchor..tail_start]);
-        let heuristic_ratio = if middle_tokens > 0 {
-            1.0 - (heuristic_tokens as f64 / middle_tokens as f64)
-        } else {
-            0.0
-        };
-
-        if heuristic_ratio > drop_threshold {
-            // Heuristic drops too much — try LLM summary. The LLM
-            // summary uses a structured prompt (goals/decisions/files/
-            // tool-outputs/TODOs) that mirrors vix's compaction order.
-            deterministic_compaction_summary(&messages[anchor..tail_start])
-        } else {
-            heuristic_summary
-        }
-    } else {
-        heuristic_summary
+        Box::new(move |middle: &[Message]| {
+            let summarised_count = middle.len();
+            let heuristic = heuristic_summary(middle);
+            let summary = if use_llm {
+                let heuristic_tokens = super::estimate_message_tokens(&Message {
+                    role: Role::System,
+                    content: heuristic.clone(),
+                    content_parts: None,
+                    thinking: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                    token_count: None,
+                });
+                let heuristic_ratio = if middle_tokens > 0 {
+                    1.0 - (heuristic_tokens as f64 / middle_tokens as f64)
+                } else {
+                    0.0
+                };
+                if heuristic_ratio > drop_threshold {
+                    deterministic_compaction_summary(middle)
+                } else {
+                    heuristic
+                }
+            } else {
+                heuristic
+            };
+            format!(
+                "[Context summary — {summarised_count} earlier messages compressed]\n{summary}",
+            )
+        })
     };
 
-    let summarised_count = tail_start - anchor;
-    let mut out = Vec::with_capacity(anchor + 1 + keep_tail);
-    if anchor > 0 {
-        out.push(messages[0].clone());
-    }
-    out.push(Message {
-        role: Role::System,
-        content: format!(
-            "[Context summary — {summarised_count} earlier messages compressed]\n{summary}",
-        ),
-        content_parts: None,
-        thinking: None,
-        tool_calls: None,
-        tool_call_id: None,
-        tool_name: None,
-        token_count: None,
-    });
-    for msg in &messages[tail_start..] {
-        out.push(msg.clone());
-    }
+    let result = super::compaction::process_middle(
+        messages,
+        super::compaction::MiddleStrategy::CollapseToSummary,
+        keep_tail,
+        None,
+        Some(&collapse_fn),
+    );
 
-    let tokens_after = super::estimate_tokens(&out);
     Some(MicrocompactResult {
-        messages: out,
-        tokens_after,
+        messages: result.new_messages,
+        tokens_after: result.tokens_after,
     })
 }
 
@@ -131,7 +124,7 @@ pub fn maybe_microcompact(
 /// - Tool calls made (by name)
 /// - File paths mentioned in tool calls or results
 /// - Error/failure markers
-fn heuristic_summary(messages: &[Message]) -> String {
+pub(crate) fn heuristic_summary(messages: &[Message]) -> String {
     let mut tool_names = Vec::new();
     let mut paths = Vec::new();
     let mut errors = 0usize;

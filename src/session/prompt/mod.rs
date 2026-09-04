@@ -643,13 +643,25 @@ impl PromptBuilder {
             return messages;
         }
 
+        // Over-budget: escalate through the compaction strategies from
+        // cheapest (collapse the middle into a summary) to most aggressive
+        // (truncate). Each step works on the output of the previous one;
+        // the first step that brings the token count under budget wins.
+        //
+        // Rung 1 — CollapseToSummary (microcompaction): replaces the
+        //   oldest non-anchor messages with one `[Context summary]` system
+        //   message. Cheapest structural compression.
+        // Rung 2 — Minify: language-aware minification of old non-tool
+        //   messages. Reads indices from the ORIGINAL `messages` (the
+        //   pre-collapse list) and writes into the current `adjusted` vec;
+        //   the `i < adjusted.len()` guard (WO 43.29) prevents indexing
+        //   past the shorter collapsed list.
+        // Rung 3 — StubPerSlot (stub_old_tool_results): replaces old tool
+        //   results with the stub marker. In-place on `adjusted`.
+        // Rung 4 — Truncate: hard cut to the budget. Always succeeds.
         let mut adjusted = messages.clone();
 
-        // Microcompaction: before more aggressive truncation, summarize
-        // the oldest non-anchor messages into a single compact system
-        // message while preserving the last few turns verbatim. This is
-        // P3-6's middle-compression strategy — distinct from the `/compact`
-        // log rewrite because it happens on the fly at request-build time.
+        // Rung 1: CollapseToSummary.
         if let Some(result) = microcompaction::maybe_microcompact(
             &messages,
             budget,
@@ -660,22 +672,23 @@ impl PromptBuilder {
             if result.tokens_after <= budget {
                 return result.messages;
             }
-            // Even if not under budget, continue with the compacted form
-            // so the later fallback truncation has less to chew through.
             adjusted = result.messages;
         }
 
+        // Rung 2: Minify.
         if Self::minify_old_messages(&messages, &mut adjusted)
             && Self::estimated_tokens(&adjusted) <= budget
         {
             return adjusted;
         }
 
+        // Rung 3: StubPerSlot (stub old tool results).
         if Self::stub_old_tool_results(&mut adjusted) && Self::estimated_tokens(&adjusted) <= budget
         {
             return adjusted;
         }
 
+        // Rung 4: Truncate.
         Self::truncate_to_budget(&adjusted, budget)
     }
 

@@ -334,17 +334,15 @@ impl Executor {
                     let mut did_summarize = false;
                     let mut compact_stats = None;
 
-                    // Try LLM-based summarization if enabled
+                    // Try LLM-based summarization if enabled. Routes
+                    // through `process_middle` with `CollapseToSummary`
+                    // so the `/compact` command and automatic compaction
+                    // share the same anchor/middle/tail driver; the LLM
+                    // summary text is produced by `summarize_conversation`
+                    // (async) and threaded in via the collapse closure.
                     if summarize_enabled && history.len() > 2 {
-                        // Preserve the system anchor and `keep` recent messages.
                         let working_set_size = keep;
-                        let anchor = if !history.is_empty()
-                            && matches!(history[0].role, Role::System)
-                        {
-                            1
-                        } else {
-                            0
-                        };
+                        let anchor = crate::session::prompt::compaction::anchor_len(&history);
 
                         let summarize_from = anchor;
                         let summarize_to = history.len().saturating_sub(working_set_size);
@@ -368,24 +366,29 @@ impl Executor {
                                 .await;
 
                                 if let Some(ref summary) = result.summary {
-                                    let mut new_msgs = Vec::new();
-                                    // Keep the anchor
-                                    if anchor > 0 {
-                                        new_msgs.push(history[0].clone());
-                                    }
-                                    // Insert summary as system message
-                                    new_msgs.push(Message {
-                                        role: Role::System,
-                                        content: format!(
-                                            "[Context summary — {} messages compressed]\n{}",
-                                            result.summarised_messages, summary
-                                        ),
-                                        ..Default::default()
-                                    });
-                                    // Append working set
-                                    for msg in &history[summarize_to..] {
-                                        new_msgs.push(msg.clone());
-                                    }
+                                    // Build the collapse closure: returns the
+                                    // full summary-message content, preserving
+                                    // the LLM arm's "messages compressed"
+                                    // wording (distinct from microcompaction's
+                                    // "earlier messages compressed").
+                                    let summarised_messages = result.summarised_messages;
+                                    let summary_owned = summary.clone();
+                                    let collapse_fn: Box<dyn Fn(&[Message]) -> String> = Box::new(
+                                        move |_middle: &[Message]| {
+                                            format!(
+                                                "[Context summary — {summarised_messages} messages compressed]\n{summary_owned}",
+                                            )
+                                        },
+                                    );
+
+                                    let pm = crate::session::prompt::compaction::process_middle(
+                                        &history,
+                                        crate::session::prompt::compaction::MiddleStrategy::CollapseToSummary,
+                                        keep,
+                                        None,
+                                        Some(&collapse_fn),
+                                    );
+                                    let new_msgs = pm.new_messages;
 
                                     if let Err(e) = self.conversation.replace_all_async(new_msgs.clone()).await
                                     {

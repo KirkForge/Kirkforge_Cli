@@ -119,7 +119,8 @@ impl ModelAdapter for AnthropicBedrockAdapter {
                 .send()
                 .await
         })
-        .await?;
+        .await
+        .map_err(super::classify_transport_error)?;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
         let idle_timeout = self.stream_idle_timeout;

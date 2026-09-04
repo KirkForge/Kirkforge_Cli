@@ -194,7 +194,8 @@ impl ModelAdapter for AnthropicVertexAdapter {
                 .send()
                 .await
         })
-        .await?;
+        .await
+        .map_err(super::classify_transport_error)?;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
         tokio::spawn(anthropic::parse_anthropic_stream(

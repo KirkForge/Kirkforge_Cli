@@ -31,19 +31,19 @@ impl From<anyhow::Error> for KirkForgeError {
         // Downcast migration (WO 14.3 / WO 43.1) — typed errors are classified
         // by type, not by string. The string probes below remain the fallback
         // for the categories whose producers have not been migrated yet:
-        // ponytail: string-probe fallback — kept for unmigrated adapters
-        // (openai_compat, anthropic, bedrock, vertex) and for the session-layer
-        // sandbox/path-policy denials that still arrive as bare anyhow. To be
-        // removed when every producer of those categories returns a typed
-        // error; tracked in WO 43.1 (ollama migrated, rest deferred).
+        // ponytail: string-probe fallback — kept for the session-layer
+        // sandbox/path-policy denials that still arrive as bare anyhow (their
+        // producers are not yet typed). To be removed when those producers
+        // return a typed error; tracked in a future WO.
         // Downcasted so far:
         //   - kf_plugin_host::ManifestError  -> ConfigParse
         //   - kf_plugin_host::ToolError -> AccessDenied (NotFound = the
         //     tool command isn't present at the sandboxed plugin root, i.e. a
         //     path-availability outcome after the root-gating policy).
         //   - kf_code::adapters::AdapterError (WO 43.1) -> ModelUnreachable
-        //     (Unreachable/ModelNotFound) or AccessDenied (Denied). Currently
-        //     only the ollama adapter wraps its stream() errors this way.
+        //     (Unreachable/ModelNotFound) or AccessDenied (Denied). All five
+        //     adapters (ollama, openai_compat, anthropic, anthropic_bedrock,
+        //     anthropic_vertex) now wrap their stream() errors this way.
         if e.downcast_ref::<kf_plugin_host::ManifestError>().is_some() {
             return KirkForgeError::ConfigParse(e);
         }

@@ -5,9 +5,11 @@
 // from Display strings ("connection refused", "model not found", ...) —
 // fragile against provider phrasing changes. These typed variants let an
 // adapter tag its failure at the source so the classifier can downcast
-// instead of string-matching. Only ollama is migrated in 43.1; the other
-// adapters (openai_compat, anthropic, bedrock, vertex) keep returning bare
-// `anyhow` and rely on the string-probe fallback until they are migrated.
+// instead of string-matching. All five adapters (ollama, openai_compat,
+// anthropic, anthropic_bedrock, anthropic_vertex) now wrap their stream()
+// transport errors via classify_transport_error. The string-probe fallback
+// remains only for the session-layer sandbox/path-policy denials, whose
+// producers are not yet typed.
 
 use thiserror::Error;
 

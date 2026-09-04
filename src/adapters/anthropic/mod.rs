@@ -189,7 +189,8 @@ impl ModelAdapter for AnthropicAdapter {
             }
             req.send().await
         })
-        .await?;
+        .await
+        .map_err(super::classify_transport_error)?;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(4096);
         tokio::spawn(parse_anthropic_stream(

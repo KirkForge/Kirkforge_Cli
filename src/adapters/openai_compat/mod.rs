@@ -606,7 +606,8 @@ impl ModelAdapter for OpenAiCompatAdapter {
             };
             req.send().await
         })
-        .await?;
+        .await
+        .map_err(super::classify_transport_error)?;
 
         // Channel size: 4096 events. The previous value of 128 was
         // the proximate cause of the "stream consumer dropped

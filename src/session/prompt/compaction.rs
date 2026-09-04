@@ -82,6 +82,21 @@ pub fn anchor_len(messages: &[Message]) -> usize {
     }
 }
 
+/// Middle-region compaction strategy. The two live compression paths
+/// (`compact_to_budget` and `maybe_microcompact`) share an anchor/middle/tail
+/// split but differ in what they do to the middle. This enum routes the
+/// shared `process_middle` driver to the right middle transform.
+#[derive(Debug, Clone, Copy)]
+pub enum MiddleStrategy {
+    /// Replace each middle message with a stub/condense marker
+    /// (deterministic, no LLM). The strategy used by `compact_to_budget`.
+    StubPerSlot,
+    /// Collapse the entire middle into one summary system message
+    /// (heuristic or LLM). The strategy used by `maybe_microcompact`'s
+    /// collapse path.
+    CollapseToSummary,
+}
+
 /// Marker prefix for condensed assistant turns. The trailing `(N chars)` is
 /// the original message's character count, which is useful debugging info
 /// (and makes the marker grep-able in the on-disk NDJSON log).
@@ -134,30 +149,116 @@ pub fn compact_to_budget(
     preserve_recent: usize,
     target_budget_tokens: Option<usize>,
 ) -> CompactionResult {
+    process_middle(
+        messages,
+        MiddleStrategy::StubPerSlot,
+        preserve_recent,
+        target_budget_tokens,
+        None,
+    )
+    .into()
+}
+
+/// Shared anchor/middle/tail driver behind the two compression paths.
+///
+/// `StubPerSlot` reproduces `compact_to_budget`'s deterministic per-slot
+/// stubbing (tools stubbed, assistants condensed, users kept verbatim);
+/// `CollapseToSummary` reproduces `maybe_microcompact`'s collapse-the-middle
+/// shape, emitting `[Context summary — N earlier messages compressed]\n…`.
+/// Both share the leading-system anchor and the `keep_tail`-verbatim tail.
+///
+/// `collapse_fn` supplies the summary text for the `CollapseToSummary` arm
+/// (microcompaction owns the heuristic/LLM fork). `StubPerSlot` ignores it.
+pub(crate) fn process_middle(
+    messages: &[Message],
+    strategy: MiddleStrategy,
+    keep_tail: usize,
+    budget: Option<usize>,
+    collapse_fn: Option<&dyn Fn(&[Message]) -> String>,
+) -> ProcessMiddleResult {
     let original_count = messages.len();
-    let preserve_recent_min = preserve_recent.max(1);
+    let keep_tail_min = keep_tail.max(1);
     let original_tokens = estimate_tokens(messages);
 
-    // Empty / trivial input — nothing to do.
-    if messages.len() <= preserve_recent_min {
-        return CompactionResult {
-            new_messages: messages.to_vec(),
-            dropped_tool_results: 0,
-            condensed_assistant_turns: 0,
-            original_count,
-            compacted_count: messages.len(),
-            tokens_before: original_tokens,
-            tokens_after: original_tokens,
-        };
+    // CollapseToSummary short-circuits when the history is too short to
+    // have a middle worth collapsing — mirrors maybe_microcompact's
+    // `messages.len() <= keep_tail + 1` early return.
+    if matches!(strategy, MiddleStrategy::CollapseToSummary) {
+        if messages.len() <= keep_tail_min + 1 {
+            return ProcessMiddleResult::noop(messages, original_tokens);
+        }
+    } else if messages.len() <= keep_tail_min {
+        return ProcessMiddleResult::noop(messages, original_tokens);
     }
 
-    // Anchor: a leading system message, if present.
     let anchor = anchor_len(messages);
 
-    // Tail: start with the minimum, then expand backwards if a budget is
-    // set and we are currently over budget.
-    let mut tail_size = preserve_recent_min;
-    if let Some(budget) = target_budget_tokens {
+    // Tail sizing: StubPerSlot expands the tail backwards when over a
+    // token budget (compact_to_budget's budget-aware tail growth).
+    // CollapseToSummary keeps a flat `keep_tail` tail — maybe_microcompact
+    // does not grow the tail from a budget.
+    let tail_size = if matches!(strategy, MiddleStrategy::StubPerSlot) {
+        budget_tail_size(messages, keep_tail_min, budget, original_tokens, anchor)
+    } else {
+        keep_tail_min
+    };
+
+    let working_set_start = messages.len() - tail_size;
+
+    // Middle: [anchor .. working_set_start). May be empty.
+    let (middle_msgs, dropped_tool_results, condensed_assistant_turns, summarised_messages) =
+        match strategy {
+            MiddleStrategy::StubPerSlot => {
+                stub_middle(messages, anchor, working_set_start)
+            }
+            MiddleStrategy::CollapseToSummary => {
+                // Maybe_microcompact bails when the middle is empty
+                // (tail_start <= anchor) — reproduce that here so the
+                // collapse path returns a no-op instead of emitting a
+                // spurious summary with zero source messages.
+                if working_set_start <= anchor {
+                    return ProcessMiddleResult::noop(messages, original_tokens);
+                }
+                collapse_middle(messages, anchor, working_set_start, collapse_fn)
+            }
+        };
+
+    let mut new_messages: Vec<Message> =
+        Vec::with_capacity(middle_msgs.len() + tail_size + anchor);
+    if anchor > 0 {
+        new_messages.push(messages[0].clone());
+    }
+    new_messages.extend(middle_msgs);
+    for msg in &messages[working_set_start..] {
+        new_messages.push(msg.clone());
+    }
+
+    let compacted_count = new_messages.len();
+    let tokens_after = estimate_tokens(&new_messages);
+    ProcessMiddleResult {
+        new_messages,
+        dropped_tool_results,
+        condensed_assistant_turns,
+        summarised_messages,
+        original_count,
+        compacted_count,
+        tokens_before: original_tokens,
+        tokens_after,
+    }
+}
+
+/// `compact_to_budget`'s budget-aware tail sizing: start at the minimum
+/// tail and expand backwards while the tail tokens stay under a quarter
+/// of the budget.
+fn budget_tail_size(
+    messages: &[Message],
+    keep_tail_min: usize,
+    budget: Option<usize>,
+    original_tokens: usize,
+    anchor: usize,
+) -> usize {
+    let mut tail_size = keep_tail_min;
+    if let Some(budget) = budget {
         if original_tokens > budget {
             let tail_budget = budget / 4;
             let mut tail_tokens = estimate_tokens(&messages[messages.len() - tail_size..]);
@@ -172,70 +273,125 @@ pub fn compact_to_budget(
             }
         }
     }
+    tail_size
+}
 
-    let working_set_start = messages.len() - tail_size;
-
-    // Middle: [anchor .. working_set_start). May be empty.
-    let mut new_messages: Vec<Message> = Vec::with_capacity(messages.len());
-    if anchor > 0 {
-        new_messages.push(messages[0].clone());
-    }
-
+/// `StubPerSlot` middle transform: stub each Tool result, condense each
+/// Assistant turn (keeping tool_calls), preserve User/System verbatim.
+/// Returns the middle messages + the two work counters.
+fn stub_middle(
+    messages: &[Message],
+    anchor: usize,
+    working_set_start: usize,
+) -> (Vec<Message>, usize, usize, usize) {
+    let mut out: Vec<Message> = Vec::new();
     let mut dropped_tool_results = 0usize;
     let mut condensed_assistant_turns = 0usize;
 
     for msg in &messages[anchor..working_set_start] {
         match msg.role {
             Role::Tool => {
-                // Stub the content (shared stub shape — see stub_tool_result).
-                new_messages.push(stub_tool_result(msg));
+                out.push(stub_tool_result(msg));
                 dropped_tool_results += 1;
             }
             Role::Assistant => {
-                // Condense: drop the content, replace with a marker
-                // that records the original size. Preserve
-                // tool_calls (they're the structural intent — the
-                // model needs to know it called `bash` here, even
-                // if the prose around the call is gone).
                 let original_chars = msg.content.chars().count();
                 if original_chars == 0 {
-                    // No prose to condense — keep the message as-is
-                    // so tool_calls / thinking stay attached to a
-                    // real message slot.
-                    new_messages.push(msg.clone());
+                    out.push(msg.clone());
                 } else {
                     let mut condensed = msg.clone();
                     condensed.content = format!(
                         "{ASSISTANT_CONDENSED_PREFIX}{original_chars}{ASSISTANT_CONDENSED_SUFFIX}",
                     );
                     condensed.token_count = None;
-                    new_messages.push(condensed);
+                    out.push(condensed);
                     condensed_assistant_turns += 1;
                 }
             }
-            // User / System messages in the middle: keep verbatim.
-            // System messages in the middle are rare but legal (a
-            // post-init re-prompt, an injected reminder); user
-            // messages are the user's actual words and cheap to keep.
-            _ => new_messages.push(msg.clone()),
+            _ => out.push(msg.clone()),
         }
     }
 
-    // Append the working set verbatim.
-    for msg in &messages[working_set_start..] {
-        new_messages.push(msg.clone());
-    }
+    (out, dropped_tool_results, condensed_assistant_turns, 0)
+}
 
-    let compacted_count = new_messages.len();
-    let tokens_after = estimate_tokens(&new_messages);
-    CompactionResult {
-        new_messages,
-        dropped_tool_results,
-        condensed_assistant_turns,
-        original_count,
-        compacted_count,
-        tokens_before: original_tokens,
-        tokens_after,
+/// `CollapseToSummary` middle transform: replace the whole middle with a
+/// single summary system message. `collapse_fn` supplies the **full
+/// content** of the summary message (including the `[Context summary …]`
+/// prefix), so each caller controls the exact wording. The LLM arm
+/// (`loop_.rs`) uses "messages compressed"; the heuristic arm
+/// (`maybe_microcompact`) uses "earlier messages compressed".
+fn collapse_middle(
+    messages: &[Message],
+    anchor: usize,
+    working_set_start: usize,
+    collapse_fn: Option<&dyn Fn(&[Message]) -> String>,
+) -> (Vec<Message>, usize, usize, usize) {
+    let middle = &messages[anchor..working_set_start];
+    let summarised_count = middle.len();
+    let content = match collapse_fn {
+        Some(f) => f(middle),
+        None => format!(
+            "[Context summary — {summarised_count} earlier messages compressed]\n{}",
+            super::microcompaction::heuristic_summary(middle),
+        ),
+    };
+
+    let mut out: Vec<Message> = Vec::new();
+    out.push(Message {
+        role: Role::System,
+        content,
+        content_parts: None,
+        thinking: None,
+        tool_calls: None,
+        tool_call_id: None,
+        tool_name: None,
+        token_count: None,
+    });
+
+    (out, 0, 0, summarised_count)
+}
+
+/// Internal result of `process_middle`. Converts to `CompactionResult`
+/// (for `compact_to_budget`) and to `MicrocompactResult`-equivalent output
+/// (for `maybe_microcompact`) via the wrappers.
+pub(crate) struct ProcessMiddleResult {
+    pub new_messages: Vec<Message>,
+    pub dropped_tool_results: usize,
+    pub condensed_assistant_turns: usize,
+    pub summarised_messages: usize,
+    pub original_count: usize,
+    pub compacted_count: usize,
+    pub tokens_before: usize,
+    pub tokens_after: usize,
+}
+
+impl ProcessMiddleResult {
+    fn noop(messages: &[Message], original_tokens: usize) -> Self {
+        Self {
+            new_messages: messages.to_vec(),
+            dropped_tool_results: 0,
+            condensed_assistant_turns: 0,
+            summarised_messages: 0,
+            original_count: messages.len(),
+            compacted_count: messages.len(),
+            tokens_before: original_tokens,
+            tokens_after: original_tokens,
+        }
+    }
+}
+
+impl From<ProcessMiddleResult> for CompactionResult {
+    fn from(r: ProcessMiddleResult) -> Self {
+        CompactionResult {
+            new_messages: r.new_messages,
+            dropped_tool_results: r.dropped_tool_results,
+            condensed_assistant_turns: r.condensed_assistant_turns,
+            original_count: r.original_count,
+            compacted_count: r.compacted_count,
+            tokens_before: r.tokens_before,
+            tokens_after: r.tokens_after,
+        }
     }
 }
 

@@ -8,6 +8,13 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- WO 47.14: unified verifier architecture — all 14 built-in verifiers
+  migrated to BusVerifier; Verifier/VerifierSlots/VerifierHandler
+  deleted. One trait, one bus, one correction loop. Net -392 lines.
+- WO 47.6: compression structural fold — MiddleStrategy enum unifies
+  maybe_microcompact + compact_to_budget behind one process_middle
+  driver. 3-rung fallback ladder re-expressed as escalation sequence.
+  Zero behavior drift, all tests unchanged.
 - WO 39.4 (complete): Claude settings.json/hooks.json reader — loads
   Claude hook configs and registers them as native hooks (event-name +
   tool-matcher translation). Generic pre-tool/post-tool events now fire

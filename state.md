@@ -292,15 +292,11 @@
   unwired (own `[workspace]`, 4 of 9 targets orphaned, zero CI jobs ran
   cargo-fuzz). Deleted the whole dir; no production consumers. Removed
   from this pending list. [47.8](docs/workorders/47.8-wire-or-delete-fuzz-targets.md)
-- **WO 47.6 (deferred tail — structural 6→2)**: fold
-  `maybe_microcompact` + `compact_to_budget` behind one `MiddleStrategy`
-  enum (CollapseToSummary | StubPerSlot), wire `summarize_conversation`
-  as its LLM arm at the `/compact` call site, collapse the 3-rung
-  request-build fallback ladder into escalation params. Deferred because
-  the executor call site (`loop_.rs`) + TUI `/compact` were outside the
-  WO's file scope and the rungs are only outer-contract-pinned. Shipped
-  half was the zero-drift dedup (shared `TOOL_RESULT_STUB` +
-  `stub_tool_result()`, `anchor_len()`, estimator delegates deleted).
+- **WO 47.6 (DONE 2026-09-04)**: `MiddleStrategy` enum unifies
+  `maybe_microcompact` + `compact_to_budget` behind one
+  `process_middle` driver. 3-rung fallback ladder re-expressed as
+  escalation sequence. LLM arm routes through same driver. Zero
+  behavior drift — all 146+74 tests unchanged.
   [47.6](docs/workorders/47.6-compression-layers-6-to-2.md)
 - **WO 47.12 (DONE 2026-09-04)**: compile-time excision of `src/daemon/**`
   + kf-rbac from default builds via `daemon` cargo feature (default-off).
@@ -317,11 +313,11 @@
   (`slash_commands.rs:92`, `commands/jobs.rs:15`) now teach the correct
   top-level `extra_commands = [...]` form instead of the unparsable
   `[display] extra_commands` nested form.
-- **WO 47.14 (1-of-N consumers)**: plugin verifiers are bus-only
-  (PluginVerifierAdapter + dual registration deleted); the remaining
-  `Verifier`→`BusVerifier` migration (steps 1-5: handler, correction
-  loop, 14 built-in verifiers + test suites, ~1.5-2K lines) is undone.
-  `BusVerifier` is the designated surviving trait.
+- **WO 47.14 (DONE 2026-09-04)**: all 14 built-in verifiers migrated to
+  `BusVerifier`; `Verifier`/`VerifierSlots`/`VerifierHandler` deleted.
+  One verifier architecture. `VerifyContext` extended (event_kind,
+  tool_name, content_hash, bash fields). `VerdictEntry` gained `fix`
+  field. Correction loop reads from bus verdicts. Net -392 lines.
   [47.14](docs/workorders/47.14-unify-verifier-traits.md)
 - **WO 47.4 (DONE 2026-09-04)**: src/ imports now use
   `kf_plugin_host::sdk::TypeName` explicitly for types defined in the

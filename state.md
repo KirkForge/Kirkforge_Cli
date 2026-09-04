@@ -302,11 +302,10 @@
   half was the zero-drift dedup (shared `TOOL_RESULT_STUB` +
   `stub_tool_result()`, `anchor_len()`, estimator delegates deleted).
   [47.6](docs/workorders/47.6-compression-layers-6-to-2.md)
-- **WO 47.12 (deferred tail)**: compile-time excision of `src/daemon/**`
-  + kf-rbac from default builds via a default-off cargo feature (the
-  runtime opt-in shipped instead: `KF_CODE_DAEMON_AUTOSTART`, on-disk
-  session-index fallback). Remaining: dedicated WO with consumer cfg
-  sites (6+ files) + CI feature matrix.
+- **WO 47.12 (DONE 2026-09-04)**: compile-time excision of `src/daemon/**`
+  + kf-rbac from default builds via `daemon` cargo feature (default-off).
+  Runtime opt-in (`KF_CODE_DAEMON_AUTOSTART`) stays. Minimal build
+  (`--no-default-features`) excludes daemon entirely.
   [47.12](docs/workorders/47.12-daemon-opt-in.md)
 - **WO 47.13 (gates-not-cuts disclosure)**: TUI commands were GATED
   behind `[display] extra_commands`, not deleted — shipped-line count
@@ -324,10 +323,10 @@
   loop, 14 built-in verifiers + test suites, ~1.5-2K lines) is undone.
   `BusVerifier` is the designated surviving trait.
   [47.14](docs/workorders/47.14-unify-verifier-traits.md)
-- **WO 47.4 cosmetic tail**: src/ imports SDK types via the
-  `kf_plugin_host` root re-exports; an optional future sweep could import
-  from `kf_plugin_host::sdk` explicitly for provenance. Zero behavior
-  difference. [47.4](docs/workorders/47.4-fold-routing-memory-crates.md)
+- **WO 47.4 (DONE 2026-09-04)**: src/ imports now use
+  `kf_plugin_host::sdk::TypeName` explicitly for types defined in the
+  sdk module. Zero behavior difference.
+  [47.4](docs/workorders/47.4-fold-routing-memory-crates.md)
 - **WO 46.24 (DONE 2026-09-04)**: both append-mode sites
   (`src/shared/audit.rs` `AuditLog::new`, `src/main/cli_dispatch.rs`
   `init_tracing`) now open with `O_NOFOLLOW` on Unix via
@@ -416,10 +415,16 @@ MEDIUM-priority gaps (not blocking but limit capability):
 - Model failure: no fallback to cheaper model (error propagates raw)
 - Pipeline: strictly sequential, no parallel pipelines or fan-out
 - Pipeline roles: hardcoded scout→coder→reviewer, not configurable
-- Agent frontmatter: only 4 of 10+ Claude fields parsed (missing maxTurns,
-  isolation, hooks, mcpServers, memory, background, permissionMode)
+- Agent frontmatter: maxTurns FIXED; still missing isolation, hooks,
+  mcpServers, memory, background, permissionMode
 - Inter-subagent messaging: no SendMessage/ListAgents/TaskCreate tools
-- Agent registry: OnceLock singleton, no per-session reload
+- Agent registry: FIXED (reloadable via /reload)
+
+WO 39.4 (DONE 2026-09-04): Claude hook stdin-JSON contract shipped —
+hooks pipe ADR-0009 JSON payload to stdin; KF_* env vars kept;
+event-name mapping + generic pre-tool/post-tool events registered.
+Deferred: Claude settings.json/hooks.json reader (separate WO);
+emit-site wiring for generic pre-tool/post-tool fires (one-line-per-site).
 
 Strengths vs competitors:
 - Untrusted handoff fencing (prompt-injection-safe context handoff)

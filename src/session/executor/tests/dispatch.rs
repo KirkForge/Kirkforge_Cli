@@ -805,7 +805,7 @@ command = "bin/check.sh"
     let warnings = registry
         .load_from_dir(
             &plugins_dir,
-            TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
+            TrustPolicy::up_to(kf_plugin_host::sdk::TrustTier::Shell),
         )
         .unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");

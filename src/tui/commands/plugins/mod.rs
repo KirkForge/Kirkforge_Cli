@@ -9,7 +9,7 @@
 
 use crate::shared::{read_shared_config, write_shared_config};
 use crate::tui::app::AppState;
-use kf_plugin_host::TrustTier;
+use kf_plugin_host::sdk::TrustTier;
 use kf_plugin_host::{PluginRegistry, TrustPolicy};
 use std::path::PathBuf;
 use tokio::sync::mpsc;

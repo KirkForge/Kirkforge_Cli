@@ -4,7 +4,12 @@
 
 use super::line_mode::run_line_mode;
 use super::turn_events::resolve_continue_path;
-use kf_code::{adapters, daemon, line_mode, session, tools, tui};
+use kf_code::{adapters, line_mode, session, tools, tui};
+// daemon-gated (WO 47.12): the daemon client is compiled in only with
+// --features daemon; without it, run_session falls back to the on-disk
+// session index for --attach/--auto-resume/recent-session resolution.
+#[cfg(feature = "daemon")]
+use kf_code::daemon;
 use std::io::{IsTerminal, Write};
 
 pub(crate) struct RunArgs {
@@ -202,31 +207,81 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
     } else if let Some(resume) = &resume {
         std::path::PathBuf::from(resume)
     } else if let Some(id) = &attach {
-        match daemon::client::try_resolve_id(id).await? {
-            Some(path) => path,
-            None => {
-                anyhow::bail!(
-                    "daemon could not resolve session '{id}'. Run `/sessions` to see available ids."
-                );
+        // daemon-gated (WO 47.12): with the daemon compiled out, resolve
+        // via the on-disk session index (same exact-then-prefix, newest-
+        // first matching the daemon serves).
+        #[cfg(feature = "daemon")]
+        {
+            match daemon::client::try_resolve_id(id).await? {
+                Some(path) => path,
+                None => {
+                    anyhow::bail!(
+                        "daemon could not resolve session '{id}'. Run `/sessions` to see available ids."
+                    );
+                }
+            }
+        }
+        #[cfg(not(feature = "daemon"))]
+        {
+            match session::session_index::resolve_session_id(id)? {
+                Some(path) => path,
+                None => {
+                    anyhow::bail!(
+                        "could not resolve session '{id}'. Run `/sessions` to see available ids."
+                    );
+                }
             }
         }
     } else if auto_resume {
-        match daemon::client::try_resolve_recent().await? {
-            Some(path) => {
-                tracing::info!(path = %path.display(), "auto-resuming most recent session");
-                path
+        // daemon-gated (WO 47.12): with the daemon compiled out, resolve
+        // the most recent session from the on-disk index.
+        #[cfg(feature = "daemon")]
+        {
+            match daemon::client::try_resolve_recent().await? {
+                Some(path) => {
+                    tracing::info!(path = %path.display(), "auto-resuming most recent session");
+                    path
+                }
+                None => {
+                    tracing::info!("no recent sessions found; starting a new session");
+                    let sessions_dir = data_dir.join("sessions");
+                    std::fs::create_dir_all(&sessions_dir)?;
+                    sessions_dir.join(format!("{session_id}.conv.ndjson"))
+                }
             }
-            None => {
-                tracing::info!("no recent sessions found; starting a new session");
-                let sessions_dir = data_dir.join("sessions");
-                std::fs::create_dir_all(&sessions_dir)?;
-                sessions_dir.join(format!("{session_id}.conv.ndjson"))
+        }
+        #[cfg(not(feature = "daemon"))]
+        {
+            match session::session_index::list_sessions()?
+                .into_iter()
+                .next()
+                .map(|e| e.path)
+            {
+                Some(path) => {
+                    tracing::info!(path = %path.display(), "auto-resuming most recent session");
+                    path
+                }
+                None => {
+                    tracing::info!("no recent sessions found; starting a new session");
+                    let sessions_dir = data_dir.join("sessions");
+                    std::fs::create_dir_all(&sessions_dir)?;
+                    sessions_dir.join(format!("{session_id}.conv.ndjson"))
+                }
             }
         }
     } else {
         // Try the daemon for a startup picker in TUI mode, or a hint in
         // non-interactive / no-TUI mode.
-        match daemon::client::try_list_recent().await? {
+        //
+        // daemon-gated (WO 47.12): with the daemon compiled out, the
+        // recent-session list comes straight from the on-disk index.
+        #[cfg(feature = "daemon")]
+        let recent: Option<Vec<session::session_index::SessionEntry>> =
+            daemon::client::try_list_recent().await?;
+        #[cfg(not(feature = "daemon"))]
+        let recent: Option<Vec<session::session_index::SessionEntry>> =
+            session::session_index::list_sessions().ok();
+        match recent {
             Some(sessions) if !sessions.is_empty() && tui_capable => {
                 match tui::run_session_picker(sessions).await? {
                     Some(path) => {
@@ -260,12 +315,15 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         }
     };
 
-    // Tell the daemon this session is now active.
+    // Tell the daemon this session is now active. With the daemon compiled
+    // out (WO 47.12), the on-disk session index is the source of truth —
+    // `touch_session` updates it directly.
     let touch_id = log_path
         .file_stem()
         .and_then(|f| f.to_str())
         .map(|s| s.trim_end_matches(".conv").to_string())
         .unwrap_or_else(|| session_id.to_string());
+    #[cfg(feature = "daemon")]
     daemon::client::try_touch(&touch_id, log_path.clone()).await;
     kf_code::session::session_index::touch_session(&touch_id, &log_path);
 
@@ -1004,12 +1062,12 @@ fn prompt_mcp_approval(names: &[&str]) -> bool {
 /// Print a hint listing recent sessions when running non-interactively
 /// without an explicit resume target.
 fn print_recent_sessions_hint(sessions: &[kf_code::session::session_index::SessionEntry]) {
+    // Mirror of daemon::RECENT_SESSIONS_LIMIT (5). The daemon module is
+    // compiled out without --features daemon (WO 47.12); the on-disk index
+    // path caps the hint at the same N for parity.
+    const RECENT_SESSIONS_LIMIT: usize = 5;
     eprintln!("Recent sessions (run with --auto-resume or --attach <id> to resume):");
-    for (i, e) in sessions
-        .iter()
-        .enumerate()
-        .take(kf_code::daemon::RECENT_SESSIONS_LIMIT)
-    {
+    for (i, e) in sessions.iter().enumerate().take(RECENT_SESSIONS_LIMIT) {
         eprintln!(
             "  {}. {} — {} messages — {}",
             i + 1,

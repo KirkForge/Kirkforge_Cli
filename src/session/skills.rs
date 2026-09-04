@@ -1,5 +1,4 @@
 use crate::session::plugin_tools::loader::trust_policy_from_config;
-use kf_plugin_host::PluginRegistry;
 /// Skills system — slash-command skill registry and loader.
 ///
 /// Skills are reusable capabilities defined in SKILL.md files with
@@ -22,7 +21,8 @@ use kf_plugin_host::PluginRegistry;
 ///
 /// The body after the frontmatter is the system prompt that's injected
 /// when the skill is invoked.
-use kf_plugin_host::{Capability, TrustTier};
+use kf_plugin_host::sdk::{Capability, TrustTier};
+use kf_plugin_host::PluginRegistry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -207,8 +207,8 @@ impl SkillRegistry {
         let disabled = &cfg.tools.disabled_plugins;
         let mut count = 0;
         let plugin_entries: Vec<(
-            kf_plugin_host::PluginManifest,
-            std::sync::Arc<kf_plugin_host::LoadedPlugin>,
+            kf_plugin_host::sdk::PluginManifest,
+            std::sync::Arc<kf_plugin_host::sdk::LoadedPlugin>,
         )> = self
             .plugin_registry
             .active_plugins()
@@ -228,7 +228,7 @@ impl SkillRegistry {
                 );
                 continue;
             }
-            let plugin = plugin_arc.as_ref() as &dyn kf_plugin_host::Plugin;
+            let plugin = plugin_arc.as_ref() as &dyn kf_plugin_host::sdk::Plugin;
             count += self.add_plugin(&manifest, plugin);
         }
         Ok(count)
@@ -238,8 +238,8 @@ impl SkillRegistry {
     /// Returns the number of skills added.
     pub fn add_plugin(
         &mut self,
-        manifest: &kf_plugin_host::PluginManifest,
-        plugin: &dyn kf_plugin_host::Plugin,
+        manifest: &kf_plugin_host::sdk::PluginManifest,
+        plugin: &dyn kf_plugin_host::sdk::Plugin,
     ) -> usize {
         let plugins_dir = crate::session::data_dir()
             .map(|d| d.join("plugins"))
@@ -301,7 +301,7 @@ impl SkillRegistry {
     }
 
     /// Active plugin manifests, useful for status/logging.
-    pub fn active_plugins(&self) -> Vec<&kf_plugin_host::PluginManifest> {
+    pub fn active_plugins(&self) -> Vec<&kf_plugin_host::sdk::PluginManifest> {
         self.plugin_registry
             .active_plugins()
             .iter()

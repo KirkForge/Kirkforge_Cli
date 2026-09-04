@@ -37,6 +37,9 @@ pub struct AgentDef {
     pub tools: Vec<String>,
     /// Optional per-agent model override (frontmatter `model`).
     pub model: Option<String>,
+    /// Optional per-agent turn limit (frontmatter `maxTurns`). Overrides
+    /// the `task` tool's default of 1 when the caller omits `max_turns`.
+    pub max_turns: Option<usize>,
 }
 
 /// Claude → kf-code tool-name alias table.
@@ -259,6 +262,7 @@ pub fn parse_agent(content: &str) -> anyhow::Result<AgentDef> {
     let mut description = String::new();
     let mut tools: Vec<String> = Vec::new();
     let mut model: Option<String> = None;
+    let mut max_turns: Option<usize> = None;
 
     for line in frontmatter_str.lines() {
         let line = line.trim();
@@ -281,6 +285,16 @@ pub fn parse_agent(content: &str) -> anyhow::Result<AgentDef> {
                     .collect();
             }
             "model" => model = Some(value.to_string()),
+            "maxTurns" | "max_turns" => {
+                if let Ok(n) = value.parse::<usize>() {
+                    max_turns = Some(n);
+                } else {
+                    tracing::warn!(
+                        value = value,
+                        "agent file: unparseable maxTurns value ignored"
+                    );
+                }
+            }
             _ => {}
         }
     }
@@ -295,6 +309,7 @@ pub fn parse_agent(content: &str) -> anyhow::Result<AgentDef> {
         system_prompt: body,
         tools,
         model,
+        max_turns,
     })
 }
 
@@ -313,31 +328,60 @@ pub fn build_agent_prompt(agent: &AgentDef, task: &str) -> String {
     )
 }
 
-/// Shared, lazily-loaded registry handle.
+/// Shared, reloadable registry handle.
 ///
 /// `all_tools` and `InProcessTaskSpawner` both need the registry; a
-/// single `OnceLock` keeps them consistent and avoids re-reading the
-/// directory on every `task` call. The load is best-effort — a missing
-/// or empty `.claude/agents/` yields an empty registry, not an error.
-static GLOBAL_REGISTRY: std::sync::OnceLock<Arc<AgentRegistry>> = std::sync::OnceLock::new();
+/// single `OnceLock<RwLock<Arc<AgentRegistry>>>` keeps them consistent.
+/// The `OnceLock` is required because `RwLock::new` is not const; the
+/// inner `RwLock` lets `/reload` swap the `Arc` without restarting the
+/// process. The load is best-effort — a missing or empty
+/// `.claude/agents/` yields an empty registry, not an error.
+static GLOBAL_REGISTRY: std::sync::OnceLock<std::sync::RwLock<std::sync::Arc<AgentRegistry>>> =
+    std::sync::OnceLock::new();
+/// Guards the one-time load so an empty-but-initialized registry is not
+/// mistaken for "not yet loaded" and re-read on every call (the read
+/// guard alone cannot distinguish the two states).
+static GLOBAL_REGISTRY_LOADED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 /// Load the global registry from `.claude/agents` (workspace) once.
 /// Returns an empty registry if the dir is absent or refused by the
-/// trust gate.
+/// trust gate. Subsequent calls return the cached registry until
+/// [`reload_global_registry`] replaces it.
 pub fn global_registry(trust_workspace: bool) -> Arc<AgentRegistry> {
-    GLOBAL_REGISTRY
-        .get_or_init(|| {
-            let mut reg = AgentRegistry::new();
-            let dir = PathBuf::from(".claude/agents");
-            reg.load_from_dir(&dir, trust_workspace, None);
-            Arc::new(reg)
-        })
-        .clone()
+    let lock = GLOBAL_REGISTRY
+        .get_or_init(|| std::sync::RwLock::new(std::sync::Arc::new(AgentRegistry::new())));
+    if GLOBAL_REGISTRY_LOADED.set(()).is_ok() {
+        let mut reg = AgentRegistry::new();
+        let dir = PathBuf::from(".claude/agents");
+        reg.load_from_dir(&dir, trust_workspace, None);
+        let arc = Arc::new(reg);
+        *lock.write().unwrap_or_else(|e| e.into_inner()) = Arc::clone(&arc);
+        return arc;
+    }
+    Arc::clone(&lock.read().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// Reload the global registry from `.claude/agents` (workspace) on
+/// demand — invoked by `/plugins reload` so newly-added or edited
+/// agent files are picked up without restarting the session. Returns
+/// the number of agents loaded. The trust gate mirrors
+/// [`global_registry`]: the operator opts in via
+/// `plugin_trust_workspace = true`.
+pub fn reload_global_registry(trust_workspace: bool) -> usize {
+    let mut new_reg = AgentRegistry::new();
+    let dir = PathBuf::from(".claude/agents");
+    let count = new_reg.load_from_dir(&dir, trust_workspace, None);
+    let arc = Arc::new(new_reg);
+    let lock = GLOBAL_REGISTRY
+        .get_or_init(|| std::sync::RwLock::new(std::sync::Arc::new(AgentRegistry::new())));
+    *lock.write().unwrap_or_else(|e| e.into_inner()) = arc;
+    count
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     fn agent_md(body: &str) -> String {
         format!("---\n{body}\n---\nYou are a test agent.")
@@ -353,6 +397,37 @@ mod tests {
         assert_eq!(a.tools, vec!["Read", "Grep"]);
         assert_eq!(a.model.as_deref(), Some("fast"));
         assert!(a.system_prompt.contains("test agent"));
+    }
+
+    #[test]
+    fn parse_agent_max_turns_camel() {
+        let content = agent_md("name: lim\ndescription: limited\nmaxTurns: 10");
+        let a = parse_agent(&content).unwrap();
+        assert_eq!(a.max_turns, Some(10));
+    }
+
+    #[test]
+    fn parse_agent_max_turns_snake() {
+        let content = agent_md("name: lim\ndescription: limited\nmax_turns: 7");
+        let a = parse_agent(&content).unwrap();
+        assert_eq!(a.max_turns, Some(7));
+    }
+
+    #[test]
+    fn parse_agent_max_turns_defaults_none_when_absent() {
+        let content = agent_md("name: lim\ndescription: limited");
+        let a = parse_agent(&content).unwrap();
+        assert!(a.max_turns.is_none());
+    }
+
+    #[test]
+    fn parse_agent_max_turns_unparseable_ignored() {
+        let content = agent_md("name: lim\ndescription: limited\nmaxTurns: not-a-number");
+        let a = parse_agent(&content).unwrap();
+        assert!(
+            a.max_turns.is_none(),
+            "non-numeric value must not yield Some(0)"
+        );
     }
 
     #[test]
@@ -433,6 +508,7 @@ mod tests {
             system_prompt: "You are a senior reviewer.".into(),
             tools: vec!["Read".into()],
             model: None,
+            max_turns: None,
         };
         let p = build_agent_prompt(&a, "review this PR");
         assert!(p.contains("senior reviewer"));
@@ -449,6 +525,7 @@ mod tests {
             system_prompt: "body".into(),
             tools: vec![],
             model: None,
+            max_turns: None,
         });
         assert!(reg.get("rev").is_some());
         assert!(reg.get("nope").is_none());
@@ -470,6 +547,7 @@ mod tests {
             system_prompt: "b".into(),
             tools: vec![],
             model: None,
+            max_turns: None,
         });
         reg.register(AgentDef {
             name: "alpha".into(),
@@ -477,6 +555,7 @@ mod tests {
             system_prompt: "a".into(),
             tools: vec![],
             model: None,
+            max_turns: None,
         });
         let s = reg.description_suffix();
         assert!(s.contains("alpha: alpha agent"));
@@ -574,10 +653,31 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn global_registry_returns_same_handle() {
         // Two calls return the same Arc (OnceLock dedupes).
         let a = global_registry(true);
         let b = global_registry(true);
         assert!(Arc::ptr_eq(&a, &b));
+    }
+
+    #[test]
+    #[serial]
+    fn reload_global_registry_swaps_handle() {
+        // reload returns a fresh Arc (the RwLock swaps in a new one) and
+        // a count reflecting the directory scan (0 here — no .claude/agents).
+        let before = global_registry(true);
+        let count = reload_global_registry(true);
+        let after = global_registry(true);
+        // Count mirrors load_from_dir on the workspace dir; in the test
+        // environment .claude/agents is absent, so 0.
+        assert_eq!(count, 0);
+        assert!(
+            !Arc::ptr_eq(&before, &after),
+            "reload must swap the registry Arc, not return the cached handle"
+        );
+        // A second read after reload is stable.
+        let after2 = global_registry(true);
+        assert!(Arc::ptr_eq(&after, &after2));
     }
 }

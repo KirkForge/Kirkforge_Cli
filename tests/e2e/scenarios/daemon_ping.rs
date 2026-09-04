@@ -12,15 +12,19 @@
 // file; on Windows the subcommand exits with an error before binding.
 // All imports + the test are cfg(unix)-gated so Windows doesn't see
 // unused-import errors under -D warnings.
-#[cfg(unix)]
+//
+// daemon-gated (WO 47.12): the `daemon` subcommand only exists when the
+// binary is built with --features daemon; skip the whole scenario in
+// default builds so the e2e suite stays green without the feature.
+#[cfg(all(unix, feature = "daemon"))]
 use crate::harness::shard;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon"))]
 use crate::harness::IsolatedEnv;
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon"))]
 use std::time::Duration;
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon"))]
 #[test]
 fn daemon_creates_socket_and_exits_cleanly() {
     if !shard::shard_gate("daemon_creates_socket_and_exits_cleanly") {

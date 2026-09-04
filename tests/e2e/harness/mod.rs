@@ -110,6 +110,10 @@ pub struct IsolatedEnv {
     /// Path to the kf-code binary resolved via CARGO_BIN_EXE.
     bin: PathBuf,
     /// Daemon child handle (set after `start_daemon`).
+    // daemon-gated (WO 47.12): only the daemon_ping scenario spawns the
+    // daemon subprocess; the field + start/stop helpers are compiled in
+    // only with --features daemon.
+    #[cfg(feature = "daemon")]
     daemon: Option<Child>,
 }
 
@@ -142,6 +146,7 @@ impl IsolatedEnv {
         Self {
             root,
             bin,
+            #[cfg(feature = "daemon")]
             daemon: None,
         }
     }
@@ -152,6 +157,8 @@ impl IsolatedEnv {
     }
 
     /// Path to the daemon socket inside the isolated data dir.
+    // daemon-gated (WO 47.12): only the daemon_ping scenario uses this.
+    #[cfg(feature = "daemon")]
     pub fn socket_path(&self) -> PathBuf {
         self.data_dir().join("daemon.sock")
     }
@@ -202,6 +209,9 @@ impl IsolatedEnv {
 
     /// Start `kf-code daemon --foreground` in the isolated env.
     /// Returns the daemon's PID.  The daemon is stopped on drop.
+    // daemon-gated (WO 47.12): the `daemon` subcommand only exists with
+    // --features daemon.
+    #[cfg(feature = "daemon")]
     #[allow(dead_code)]
     pub fn start_daemon(&mut self) -> u32 {
         let mut cmd = self.command(&["daemon", "--foreground"]);
@@ -212,6 +222,7 @@ impl IsolatedEnv {
     }
 
     /// Stop the daemon (SIGTERM then wait).  Called automatically on drop.
+    #[cfg(feature = "daemon")]
     pub fn stop_daemon(&mut self) {
         if let Some(mut child) = self.daemon.take() {
             let _ = child.kill();
@@ -234,6 +245,8 @@ impl IsolatedEnv {
 
 impl Drop for IsolatedEnv {
     fn drop(&mut self) {
+        // daemon-gated (WO 47.12): stop_daemon only exists with the feature.
+        #[cfg(feature = "daemon")]
         self.stop_daemon();
     }
 }

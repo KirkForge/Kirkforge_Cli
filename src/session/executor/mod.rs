@@ -828,11 +828,18 @@ impl Executor {
         // no rebuild.
         let plugin_verifier_count = self.rebuild_bus_plugin_verifiers(registry);
 
+        // 4. Reload the dynamic agent registry (`.claude/agents/*.md`) so
+        // newly-added or edited agent files are picked up without a
+        // restart. Mirrors the plugin trust gate.
+        let agent_count =
+            crate::session::agents::reload_global_registry(cfg.tools.plugin_trust_workspace);
+
         format!(
-            "Reloaded plugins: {} active plugin(s), {} plugin tool(s), {} plugin verifier(s)",
+            "Reloaded plugins: {} active plugin(s), {} plugin tool(s), {} plugin verifier(s), {} agent(s)",
             registry.active_count(),
             plugin_tool_count,
-            plugin_verifier_count
+            plugin_verifier_count,
+            agent_count,
         )
     }
 

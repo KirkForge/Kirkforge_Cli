@@ -222,6 +222,10 @@ pub enum Command {
         search: Option<String>,
     },
     /// Run the background session daemon.
+    // daemon-gated (WO 47.12): the `Daemon` subcommand only exists when
+    // the binary is built with --features daemon; default builds exclude
+    // it so the daemon code path + kf-rbac are excised.
+    #[cfg(feature = "daemon")]
     Daemon {
         /// Stay in the foreground instead of detaching.
         #[arg(long)]
@@ -232,6 +236,9 @@ pub enum Command {
         stop: bool,
     },
     /// Run the background scheduled-job daemon.
+    // daemon-gated (WO 47.12): the `Jobd` subcommand only exists when the
+    // binary is built with --features daemon.
+    #[cfg(feature = "daemon")]
     Jobd {
         /// Stay in the foreground instead of detaching.
         #[arg(long)]
@@ -580,6 +587,9 @@ mod tests {
         assert!(err.kind() == clap::error::ErrorKind::ArgumentConflict);
     }
 
+    // daemon-gated (WO 47.12): the Daemon/Jobd variants only exist with
+    // --features daemon; skip these parse tests in default builds.
+    #[cfg(feature = "daemon")]
     #[test]
     fn daemon_stop_conflicts_with_foreground() {
         let err = Cli::try_parse_from(["kf-code", "daemon", "--stop", "--foreground"])
@@ -587,6 +597,7 @@ mod tests {
         assert!(err.kind() == clap::error::ErrorKind::ArgumentConflict);
     }
 
+    #[cfg(feature = "daemon")]
     #[test]
     fn jobd_stop_conflicts_with_foreground() {
         let err = Cli::try_parse_from(["kf-code", "jobd", "--stop", "--foreground"])

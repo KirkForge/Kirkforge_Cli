@@ -962,6 +962,7 @@ mod tests {
             // Claude names that map through the alias table.
             tools: vec!["Read".into(), "Grep".into(), "Task".into()],
             model: None,
+            max_turns: None,
         });
         let reg = Arc::new(reg);
 
@@ -994,6 +995,7 @@ mod tests {
             system_prompt: "x".into(),
             tools: vec![],
             model: None,
+            max_turns: None,
         });
         let reg = Arc::new(reg);
         let config: SharedConfig = Arc::new(std::sync::RwLock::new(Config::default()));
@@ -1028,6 +1030,7 @@ mod tests {
             system_prompt: String::new(),
             tools: vec![],
             model: Some(m.to_string()),
+            max_turns: None,
         });
         let agent_def_model = agent_def
             .as_ref()

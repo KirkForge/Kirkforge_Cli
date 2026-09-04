@@ -8,6 +8,9 @@
 
 pub mod adapters;
 pub mod cli;
+// daemon-gated (WO 47.12): src/daemon/** + kf-rbac are excised from
+// default builds; compiled in only with --features daemon.
+#[cfg(feature = "daemon")]
 pub mod daemon;
 pub mod jobs;
 pub mod line_mode;

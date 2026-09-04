@@ -189,6 +189,19 @@ impl Tool for Task {
             // layer — `.max(1)` above only floors it, so without this a
             // runaway arg (u64::MAX) reaches the executor loop.
             .min(self.max_turns_ceiling);
+        // Agent frontmatter `maxTurns` overrides the default of 1 when the
+        // model omitted the `max_turns` arg. An explicit arg always wins
+        // (the model asked for that turn count); the agent value is a
+        // default-of-last-resort, clamped to the same ceiling.
+        let max_turns = if args.get("max_turns").is_none() {
+            self.agents
+                .get(&persona)
+                .and_then(|a| a.max_turns)
+                .map(|n| n.min(self.max_turns_ceiling))
+                .unwrap_or(max_turns)
+        } else {
+            max_turns
+        };
         // WO 35.1: apply the persona preamble here — run_task uses the
         // prompt verbatim. prompt_summary below stays the raw user prompt.
         // WO 39.3: when the persona names a discovered agent, the agent's
@@ -1076,6 +1089,7 @@ mod tests {
             system_prompt: "You are a senior code reviewer.".into(),
             tools: vec!["Read".into(), "Grep".into()],
             model: Some("fast-model".into()),
+            max_turns: None,
         });
         std::sync::Arc::new(reg)
     }
@@ -1172,6 +1186,7 @@ mod tests {
             system_prompt: "You review fast.".into(),
             tools: vec!["Grep".into()],
             model: Some("custom-model-x".into()),
+            max_turns: None,
         });
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
@@ -1199,6 +1214,111 @@ mod tests {
             seen_model.lock().unwrap().as_deref(),
             Some("explicit-model"),
             "explicit model arg must reach the spawner"
+        );
+    }
+
+    // Agent frontmatter `maxTurns` must supply the `task` tool's
+    // `max_turns` when the model omits the arg (the default of 1 is
+    // replaced by the agent's value, clamped to the ceiling). An
+    // explicit `max_turns` arg still wins.
+    #[tokio::test]
+    async fn task_tool_agent_max_turns_used_when_arg_omitted() {
+        struct Capture {
+            seen_turns: Arc<StdMutex<Option<usize>>>,
+        }
+        #[async_trait::async_trait]
+        impl TaskSpawner for Capture {
+            async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+                *self.seen_turns.lock().unwrap() = Some(request.max_turns);
+                Ok("ok".to_string())
+            }
+        }
+        let mut reg = crate::session::agents::AgentRegistry::new();
+        reg.register(crate::session::agents::AgentDef {
+            name: "lim-rev".into(),
+            description: "limited reviewer".into(),
+            system_prompt: "You review.".into(),
+            tools: vec!["Grep".into()],
+            model: None,
+            max_turns: Some(10),
+        });
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
+
+        // Omitted max_turns → agent frontmatter (10) is used.
+        let seen_turns = Arc::new(StdMutex::new(None));
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(Capture {
+            seen_turns: seen_turns.clone(),
+        });
+        let ctx = ToolContext::with_spawner(spawner);
+        let _ = tool
+            .run(
+                &ctx,
+                serde_json::json!({"prompt": "review", "persona": "lim-rev"}),
+            )
+            .await;
+        assert_eq!(
+            *seen_turns.lock().unwrap(),
+            Some(10),
+            "agent maxTurns must be used when the model omits max_turns"
+        );
+
+        // Explicit max_turns=5 overrides the agent's 10.
+        let seen_turns = Arc::new(StdMutex::new(None));
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(Capture {
+            seen_turns: seen_turns.clone(),
+        });
+        let ctx = ToolContext::with_spawner(spawner);
+        let _ = tool
+            .run(
+                &ctx,
+                serde_json::json!({"prompt": "review", "persona": "lim-rev", "max_turns": 5}),
+            )
+            .await;
+        assert_eq!(
+            *seen_turns.lock().unwrap(),
+            Some(5),
+            "explicit max_turns arg must override the agent frontmatter"
+        );
+    }
+
+    // Agent `maxTurns` above the tool ceiling is clamped, matching the
+    // model-arg clamp (WO 48.34).
+    #[tokio::test]
+    async fn task_tool_agent_max_turns_clamped_to_ceiling() {
+        struct Capture {
+            seen_turns: Arc<StdMutex<Option<usize>>>,
+        }
+        #[async_trait::async_trait]
+        impl TaskSpawner for Capture {
+            async fn run_task(&self, request: TaskRequest) -> Result<String, String> {
+                *self.seen_turns.lock().unwrap() = Some(request.max_turns);
+                Ok("ok".to_string())
+            }
+        }
+        let mut reg = crate::session::agents::AgentRegistry::new();
+        reg.register(crate::session::agents::AgentDef {
+            name: "huge".into(),
+            description: "huge".into(),
+            system_prompt: "x".into(),
+            tools: vec![],
+            model: None,
+            max_turns: Some(999_999),
+        });
+        let manager = Arc::new(Mutex::new(TaskManager::new()));
+        let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
+        let seen_turns = Arc::new(StdMutex::new(None));
+        let spawner: Arc<dyn TaskSpawner> = Arc::new(Capture {
+            seen_turns: seen_turns.clone(),
+        });
+        let ctx = ToolContext::with_spawner(spawner);
+        let _ = tool
+            .run(&ctx, serde_json::json!({"prompt": "x", "persona": "huge"}))
+            .await;
+        assert_eq!(
+            *seen_turns.lock().unwrap(),
+            Some(crate::shared::config::DEFAULT_MAX_SUBAGENT_TURNS),
+            "agent maxTurns above the ceiling must clamp to the default ceiling"
         );
     }
 }

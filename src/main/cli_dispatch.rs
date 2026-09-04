@@ -207,6 +207,9 @@ pub async fn main() {
             output,
             search,
         } => handle_sessions_command(id, export, output, search),
+        // daemon-gated (WO 47.12): the Daemon/Jobd variants only exist
+        // with --features daemon; default builds never match these arms.
+        #[cfg(feature = "daemon")]
         Command::Daemon { foreground, stop } => {
             #[cfg(unix)]
             {
@@ -220,6 +223,7 @@ pub async fn main() {
                 ))
             }
         }
+        #[cfg(feature = "daemon")]
         Command::Jobd { foreground, stop } => {
             #[cfg(unix)]
             {

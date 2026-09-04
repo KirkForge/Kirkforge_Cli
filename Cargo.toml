@@ -238,7 +238,9 @@ tempfile.workspace = true
 # RBAC permission tiers for the daemon (WO 43.6). Maps the daemon auth token
 # to an Actor with a role (KF_CODE_DAEMON_ROLE, fallback admin) and checks
 # per-op permissions. Single-token deployments keep admin behavior.
-kf-rbac = { workspace = true }
+# Optional (WO 47.12): only linked via the `daemon` feature; default builds
+# exclude it so src/daemon/** + kf-rbac are excised from the minimal binary.
+kf-rbac = { workspace = true, optional = true }
 
 # PTY support for interactive bash commands (WO 21.5-R2, feature-gated).
 # ponytail: ~2 MB binary cost; opt-in via --features pty.
@@ -275,6 +277,16 @@ required-features = ["e2e-tests"]
 default = ["stratum", "budget", "kf-plugin-tools"]
 stratum = ["dep:kf-compress-core"]
 budget = ["dep:kf-budget-core"]
+# daemon: compiles the background session/scheduled-job daemons (src/daemon/**)
+# and the kf-rbac RBAC tier into the binary. Default OFF (WO 47.12): the
+# minimal binary excludes the daemon code path + kf-rbac entirely; the
+# `Daemon`/`Jobd` subcommands vanish and the TUI/run_session paths fall
+# back to the on-disk session index (the same fallback Windows uses).
+# Build with --features daemon to get the subcommands + auto-start back.
+# ponytail: subcommands vanish rather than degrade when off — the daemon
+# is a background-process feature, not a runtime toggle; upgrade path:
+# a separate daemon bin if the in-binary cost grows.
+daemon = ["dep:kf-rbac"]
 # e2e-tests: gate the slow e2e integration suite (tests/e2e/) behind an
 # opt-in feature so `cargo test --workspace` / `cargo check --all-targets`
 # skip it by default (WO 28.10). CI runs it in a dedicated job with

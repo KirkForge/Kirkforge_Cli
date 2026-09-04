@@ -5,12 +5,21 @@
 //! `post-tool-write_file.sh`, `post-turn.sh`, `session-start.sh`,
 //! `pre-compact.sh`, `post-compact.sh`.
 //!
-//! Each hook receives event data as environment variables:
-//! - `KF_EVENT` — the event name (e.g., "post-turn")
-//! - `KF_TOOL_NAME` — the tool being called (tool events only)
-//! - `KF_TOOL_ARGS_JSON` — JSON-serialised tool arguments (tool events only)
-//! - `KF_TOOL_RESULT` — tool result content (post-tool events only)
-//! - `KF_SESSION_ID` — the session identifier
+//! Each hook receives event data TWO ways (additive — both are set):
+//!
+//! 1. Environment variables (back-compat, pre-WO 39.4):
+//!    - `KF_EVENT` — the event name (e.g., "post-turn")
+//!    - `KF_TOOL_NAME` — the tool being called (tool events only)
+//!    - `KF_TOOL_ARGS_JSON` — JSON-serialised tool arguments (tool events only)
+//!    - `KF_TOOL_RESULT` — tool result content (post-tool events only)
+//!    - `KF_SESSION_ID` — the session identifier
+//!
+//! 2. JSON payload on STDIN (WO 39.4, ADR-0009 Claude compat):
+//!    a single JSON object matching Claude Code's hook contract, e.g.
+//!    `{"hook_event_name":"PostToolUse","session_id":"...","tool_name":
+//!    "bash","tool_input":{...},"tool_response":{...}}`. The
+//!    `hook_event_name` field carries the Claude event name; the
+//!    `tool_response` field is only set for post-tool events.
 //!
 //! Compaction hooks (`pre-compact` / `post-compact`) receive a JSON object
 //! in `KF_TOOL_ARGS_JSON` with fields such as `message_count`,
@@ -34,7 +43,7 @@ use crate::session::bash_runner::{
 use crate::session::process_group::{kill_process_group, reap_child, setup_process_group};
 use crate::shared::audit::AuditLog;
 use crate::shared::Config;
-use kf_plugin_host::Plugin;
+use kf_plugin_host::sdk::Plugin;
 use kf_plugin_host::PluginRegistry;
 use std::sync::Arc;
 
@@ -75,6 +84,119 @@ pub struct CompactHookStatsData {
     pub summarised_messages: usize,
     pub strategy: String,
 }
+
+/// JSON payload written to a hook subprocess's STDIN (WO 39.4, ADR-0009).
+///
+/// Mirrors Claude Code's hook contract so a Claude plugin's `hooks.json`
+/// entry runs unmodified: a single JSON object with `hook_event_name`,
+/// `session_id`, and (for tool events) `tool_name` / `tool_input` /
+/// `tool_response`. The `tool_input` / `tool_response` fields are
+/// `serde_json::Value` so the raw tool arguments / result pass through
+/// without a lossy round-trip.
+///
+/// `skip_serializing_if` keeps the wire shape minimal: non-tool events
+/// emit only `hook_event_name` + `session_id`; pre-tool events omit
+/// `tool_response`; post-tool events include it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HookPayload {
+    pub hook_event_name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_input: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_response: Option<serde_json::Value>,
+}
+
+impl HookPayload {
+    /// Build the STDIN JSON for a hook from a `HookContext`.
+    ///
+    /// `tool_args_json` (a JSON string) is parsed into a `Value` for the
+    /// `tool_input` field; a parse failure falls back to a string value
+    /// so the payload still carries something useful. `tool_result` is
+    /// only included for post-tool events (non-empty `tool_result`).
+    fn from_ctx(ctx: &HookContext) -> Self {
+        let claude_event = kf_to_claude_event(&ctx.event)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| ctx.event.clone());
+        let tool_input = ctx.tool_args_json.as_ref().and_then(|s| {
+            serde_json::from_str::<serde_json::Value>(s)
+                .ok()
+                .or_else(|| Some(serde_json::Value::String(s.clone())))
+        });
+        let tool_response = ctx.tool_result.as_ref().and_then(|s| {
+            serde_json::from_str::<serde_json::Value>(s)
+                .ok()
+                .or_else(|| Some(serde_json::Value::String(s.clone())))
+        });
+        Self {
+            hook_event_name: claude_event,
+            session_id: ctx.session_id.clone(),
+            tool_name: ctx.tool_name.clone(),
+            tool_input,
+            tool_response,
+        }
+    }
+
+    /// Serialise to the single-line JSON string written to STDIN.
+    fn to_stdin_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
+/// Map a kf-code event name to its Claude Code equivalent (WO 39.4).
+///
+/// Returns `None` for events with no Claude equivalent (e.g. the
+/// per-tool `pre-tool-bash` events, `post-compact`, `session-start`
+/// when used outside the Claude mapping). The Claude names are the
+/// keys Claude plugins write into `hooks.json`.
+pub fn kf_to_claude_event(kf_event: &str) -> Option<&'static str> {
+    match kf_event {
+        "pre-tool" => Some("PreToolUse"),
+        "post-tool" => Some("PostToolUse"),
+        "pre-turn" => Some("UserPromptSubmit"),
+        "session-start" => Some("SessionStart"),
+        "post-turn" => Some("Stop"),
+        "pre-compact" => Some("PreCompact"),
+        _ => None,
+    }
+}
+
+/// Map a Claude Code event name to its kf-code equivalent (WO 39.4).
+///
+/// Used when reading a Claude `hooks.json` so the registration maps to
+/// the kf-code event name. Returns `None` for Claude events with no
+/// kf-code equivalent (SessionEnd, Notification, SubagentStop).
+pub fn claude_to_kf_event(claude_event: &str) -> Option<&'static str> {
+    match claude_event {
+        "PreToolUse" => Some("pre-tool"),
+        "PostToolUse" => Some("post-tool"),
+        "UserPromptSubmit" => Some("pre-turn"),
+        "SessionStart" => Some("session-start"),
+        "Stop" => Some("post-turn"),
+        "PreCompact" => Some("pre-compact"),
+        _ => None,
+    }
+}
+
+/// Lifecycle event names that hooks may register for (WO 39.4).
+///
+/// Includes the generic `pre-tool` / `post-tool` events (fire for ALL
+/// tools, with the tool name carried in the payload's `tool_name`
+/// field so a hook can match per-tool) alongside the pre-existing
+/// per-tool and lifecycle events. A hook script named `pre-tool.sh`
+/// runs for every tool call; `pre-tool-bash.sh` runs only for bash.
+pub const KNOWN_EVENTS: &[&str] = &[
+    "pre-tool",
+    "post-tool",
+    "pre-turn",
+    "post-turn",
+    "session-start",
+    "pre-compact",
+    "post-compact",
+];
 
 /// A pre-hook (decision hook) that can allow or deny an operation.
 ///
@@ -205,7 +327,7 @@ impl HookRunner {
             }
             let root = plugin.root();
             for cap in plugin.hooks() {
-                if let kf_plugin_host::Capability::Hook { event, command } = cap {
+                if let kf_plugin_host::sdk::Capability::Hook { event, command } = cap {
                     let script_path = root.join(&command);
                     self.plugin_hooks
                         .push((event, script_path, Some(plugin_name.clone())));
@@ -279,9 +401,10 @@ impl HookRunner {
         let event = event_name.to_string();
         let audit_log = self.audit_log.clone();
         let plugin_owned = plugin_name.map(|s| s.to_string());
+        let stdin_json = stdin_json_from_env_vars(event_name, &env_vars);
         let handle = match tokio::runtime::Handle::try_current() {
             Ok(rt) => rt.spawn(async move {
-                match run_hook_script(&script_path, &env_vars, &config).await {
+                match run_hook_script(&script_path, &env_vars, &stdin_json, &config).await {
                     Ok(HookDecision::Allow) => {}
                     Ok(HookDecision::Deny(reason)) => {
                         tracing::warn!(
@@ -423,6 +546,7 @@ impl HookRunner {
         config: &Config,
     ) -> HookDecision {
         let mut decisions: Vec<HookDecision> = Vec::new();
+        let stdin_json = HookPayload::from_ctx(ctx).to_stdin_json();
 
         // In-process hooks (synchronous, run first so they can short-circuit).
         for hook in &self.in_process_hooks {
@@ -438,7 +562,7 @@ impl HookRunner {
         // Built-in hook.
         if self.available.contains(event_name) {
             let script_path = self.hooks_dir.join(format!("{event_name}.sh"));
-            match run_hook_script(&script_path, owned_vars, config).await {
+            match run_hook_script(&script_path, owned_vars, &stdin_json, config).await {
                 Ok(HookDecision::Deny(reason)) => {
                     self.audit_hook(event_name, None, "deny", Some(&reason));
                     decisions.push(HookDecision::Deny(reason));
@@ -453,7 +577,7 @@ impl HookRunner {
 
         // Plugin hooks.
         for (script_path, plugin_name) in self.plugin_hooks_for(event_name) {
-            match run_hook_script(&script_path, owned_vars, config).await {
+            match run_hook_script(&script_path, owned_vars, &stdin_json, config).await {
                 Ok(HookDecision::Deny(reason)) => {
                     tracing::warn!(
                         event = %event_name,
@@ -542,6 +666,20 @@ fn ctx_to_env_vars(ctx: &HookContext) -> Vec<(&str, String)> {
     vars
 }
 
+/// Build the STDIN JSON payload from env-var pairs (WO 39.4).
+///
+/// Used by the fire-and-forget `run` path where only the `KF_*` env vars
+/// are available (no `HookContext`). Reconstructs a `HookContext` via
+/// [`env_vars_to_ctx`] and serialises it through [`HookPayload`].
+fn stdin_json_from_env_vars(event_name: &str, env_vars: &[(String, String)]) -> String {
+    let refs: Vec<(&str, &str)> = env_vars
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let ctx = env_vars_to_ctx(event_name, &refs);
+    HookPayload::from_ctx(&ctx).to_stdin_json()
+}
+
 /// Convert env var pairs into a `HookContext` (for `run_decision` compat).
 fn env_vars_to_ctx(event_name: &str, env_vars: &[(&str, &str)]) -> HookContext {
     let mut ctx = HookContext {
@@ -576,6 +714,10 @@ pub enum HookDecision {
 /// [`MAX_BASH_OUTPUT_BYTES`]; anything past the cap is discarded and
 /// counted so the log can mention it.
 ///
+/// `stdin_json` is written to the subprocess's STDIN as a single JSON
+/// object (WO 39.4, ADR-0009 Claude compat). The `KF_*` env vars in
+/// `env_vars` are kept for back-compat — both channels are set.
+///
 /// Exit-code semantics for hooks that gate operations (`pre-tool-*`):
 /// - `0` → [`HookDecision::Allow`]
 /// - `2` → [`HookDecision::Deny`]
@@ -584,6 +726,7 @@ pub enum HookDecision {
 async fn run_hook_script(
     script: &Path,
     env_vars: &[(String, String)],
+    stdin_json: &str,
     config: &Config,
 ) -> Result<HookDecision, String> {
     let (deny_list, path_guard, _) = access_from_config(config);
@@ -622,7 +765,7 @@ async fn run_hook_script(
     let mut cmd = tokio::process::Command::new("bash");
     cmd.arg(script)
         .kill_on_drop(true)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     setup_process_group(&mut cmd);
@@ -637,6 +780,19 @@ async fn run_hook_script(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn hook {}: {}", script.display(), e))?;
+
+    // WO 39.4: write the JSON payload to the hook's STDIN. The payload is
+    // small (event + session id + tool args/result), well under the OS
+    // pipe buffer, so a blocking write here cannot deadlock — the child
+    // does not need to drain stdin before it can exit, and we drop the
+    // handle immediately after writing so the child sees EOF.
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        let _ = stdin.write_all(stdin_json.as_bytes()).await;
+        let _ = stdin.shutdown().await;
+        // stdin handle is dropped here on scope exit; explicit drop not
+        // needed since `take()` moved it out of `child`.
+    }
 
     let stdout = child
         .stdout
@@ -1101,7 +1257,7 @@ command = "hooks/post-turn.sh"
         let warnings = registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_host::sdk::TrustTier::Shell),
             )
             .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
@@ -1149,7 +1305,7 @@ command = "hooks/post-turn.sh"
         registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_host::sdk::TrustTier::Shell),
             )
             .unwrap();
 
@@ -1302,7 +1458,7 @@ command = "hooks/pre-tool-bash.sh"
         registry
             .load_from_dir(
                 &plugins_dir,
-                TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
+                TrustPolicy::up_to(kf_plugin_host::sdk::TrustTier::Shell),
             )
             .unwrap();
 
@@ -1695,5 +1851,145 @@ command = "hooks/pre-tool-bash.sh"
         let runner = HookRunner::new(dir.clone());
         let debug = format!("{runner:?}");
         assert!(debug.contains("hooks_dir"));
+    }
+
+    /// WO 39.4: a hook that reads STDIN sees the Claude-contract JSON
+    /// payload (single object with `hook_event_name`, `session_id`,
+    /// `tool_name`, `tool_input`). The `KF_*` env vars are kept too.
+    ///
+    /// Uses the generic `post-tool` event so the payload's
+    /// `hook_event_name` maps to Claude's `PostToolUse`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_hook_receives_json_payload_on_stdin() {
+        let (_tmp, dir) = temp_hooks_dir();
+        let marker = dir.join("stdin-payload.txt");
+        let marker_str = marker.to_string_lossy().to_string();
+        // Hook dumps STDIN to a marker file, then also writes KF_EVENT
+        // to prove env vars are still set alongside the JSON.
+        write_hook(
+            &dir,
+            "post-tool",
+            &format!("#!/bin/bash\ncat > {marker_str}\nprintf ':%s' \"$KF_EVENT\" >> {marker_str}"),
+        );
+        let runner = HookRunner::new(dir.clone());
+        let ctx = HookContext {
+            event: "post-tool".into(),
+            session_id: "sess-42".into(),
+            tool_name: Some("bash".into()),
+            tool_args_json: Some(r#"{"command":"ls"}"#.into()),
+            tool_result: Some("total 0".into()),
+            ..Default::default()
+        };
+        runner.run_with_context("post-tool", &ctx, &default_config());
+        tokio::task::yield_now().await;
+
+        // The marker content is: <json payload>:<KF_EVENT>. Poll until
+        // the env-var suffix is present (proves the hook ran AND set
+        // KF_EVENT), then parse the JSON prefix.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let content = loop {
+            if let Ok(c) = std::fs::read_to_string(&marker) {
+                if c.ends_with(":post-tool") {
+                    break c;
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!(
+                    "marker never reached expected suffix within 15s; got {:?}",
+                    std::fs::read_to_string(&marker).unwrap_or_default()
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        let json_str = content.strip_suffix(":post-tool").unwrap_or_default();
+        let v: serde_json::Value = serde_json::from_str(json_str).expect("stdin payload is JSON");
+        assert_eq!(v["hook_event_name"], "PostToolUse");
+        assert_eq!(v["session_id"], "sess-42");
+        assert_eq!(v["tool_name"], "bash");
+        assert_eq!(v["tool_input"]["command"], "ls");
+        assert_eq!(v["tool_response"], "total 0");
+    }
+
+    /// WO 39.4: `HookPayload::from_ctx` maps the kf event name to its
+    /// Claude equivalent and omits absent fields.
+    #[test]
+    fn test_hook_payload_from_ctx_post_tool() {
+        let ctx = HookContext {
+            event: "post-tool".into(),
+            session_id: "s1".into(),
+            tool_name: Some("write_file".into()),
+            tool_args_json: Some(r#"{"path":"x"}"#.into()),
+            tool_result: Some("ok".into()),
+            ..Default::default()
+        };
+        let p = HookPayload::from_ctx(&ctx);
+        assert_eq!(p.hook_event_name, "PostToolUse");
+        assert_eq!(p.session_id, "s1");
+        assert_eq!(p.tool_name.as_deref(), Some("write_file"));
+        assert_eq!(p.tool_input.unwrap()["path"], "x");
+        assert_eq!(p.tool_response.unwrap(), "ok");
+    }
+
+    /// WO 39.4: a non-tool event (post-turn) emits only the event name +
+    /// session id, with no tool fields.
+    #[test]
+    fn test_hook_payload_from_ctx_non_tool_event() {
+        let ctx = HookContext {
+            event: "post-turn".into(),
+            session_id: "s2".into(),
+            ..Default::default()
+        };
+        let json = HookPayload::from_ctx(&ctx).to_stdin_json();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["hook_event_name"], "Stop");
+        assert_eq!(v["session_id"], "s2");
+        assert!(v.get("tool_name").is_none());
+        assert!(v.get("tool_input").is_none());
+        assert!(v.get("tool_response").is_none());
+    }
+
+    /// WO 39.4: an event with no Claude mapping keeps its kf-code name.
+    #[test]
+    fn test_hook_payload_from_ctx_unmapped_event_keeps_name() {
+        let ctx = HookContext {
+            event: "post-tool-bash".into(),
+            ..Default::default()
+        };
+        let p = HookPayload::from_ctx(&ctx);
+        assert_eq!(p.hook_event_name, "post-tool-bash");
+    }
+
+    /// WO 39.4: the Claude↔kf event-name mappings are bijective for the
+    /// six supported events and return None outside that set.
+    #[test]
+    fn test_claude_event_mapping_round_trip() {
+        for (kf, claude) in [
+            ("pre-tool", "PreToolUse"),
+            ("post-tool", "PostToolUse"),
+            ("pre-turn", "UserPromptSubmit"),
+            ("session-start", "SessionStart"),
+            ("post-turn", "Stop"),
+            ("pre-compact", "PreCompact"),
+        ] {
+            assert_eq!(kf_to_claude_event(kf), Some(claude));
+            assert_eq!(claude_to_kf_event(claude), Some(kf));
+        }
+        // Unmapped in both directions.
+        assert_eq!(kf_to_claude_event("post-tool-bash"), None);
+        assert_eq!(kf_to_claude_event("post-compact"), None);
+        assert_eq!(claude_to_kf_event("SessionEnd"), None);
+        assert_eq!(claude_to_kf_event("Notification"), None);
+        assert_eq!(claude_to_kf_event("SubagentStop"), None);
+    }
+
+    /// WO 39.4: `KNOWN_EVENTS` includes the generic `pre-tool` /
+    /// `post-tool` events alongside the lifecycle events.
+    #[test]
+    fn test_known_events_includes_generic_tool_events() {
+        assert!(KNOWN_EVENTS.contains(&"pre-tool"));
+        assert!(KNOWN_EVENTS.contains(&"post-tool"));
+        assert!(KNOWN_EVENTS.contains(&"post-turn"));
+        assert!(KNOWN_EVENTS.contains(&"session-start"));
     }
 }

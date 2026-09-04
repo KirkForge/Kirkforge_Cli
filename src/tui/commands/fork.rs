@@ -210,7 +210,12 @@ pub async fn resume_conversation_log(
 
     // Touch the daemon so this resumed session is now the most recent.
     // `try_touch` logs its own errors; no additional handling needed here.
+    // daemon-gated (WO 47.12): with the daemon compiled out, the on-disk
+    // session index is updated directly via `touch_session`.
+    #[cfg(feature = "daemon")]
     crate::daemon::client::try_touch(&new_id, new_log_path.clone()).await;
+    #[cfg(not(feature = "daemon"))]
+    crate::session::session_index::touch_session(&new_id, &new_log_path);
 
     format!(
         "✅ Resumed session '{new_id}' — {entry_count} messages reloaded. Type a message to continue.",
@@ -221,9 +226,21 @@ pub async fn resume_conversation_log(
 /// empty list if the daemon is not reachable.
 async fn load_recent_sessions_for_picker(
 ) -> anyhow::Result<Vec<crate::session::session_index::SessionEntry>> {
-    match crate::daemon::client::try_list_recent().await? {
-        Some(sessions) => Ok(sessions),
-        None => Ok(Vec::new()),
+    // daemon-gated (WO 47.12): with the daemon compiled out, the recent
+    // list comes from the on-disk session index.
+    #[cfg(feature = "daemon")]
+    {
+        match crate::daemon::client::try_list_recent().await? {
+            Some(sessions) => Ok(sessions),
+            None => Ok(Vec::new()),
+        }
+    }
+    #[cfg(not(feature = "daemon"))]
+    {
+        crate::session::session_index::list_sessions().or_else(|e| {
+            tracing::warn!(error = %e, "session index scan failed; no recent sessions");
+            Ok(Vec::new())
+        })
     }
 }
 

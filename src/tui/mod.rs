@@ -39,7 +39,10 @@ pub mod widgets;
 mod selftest;
 
 mod connection;
-#[cfg(unix)]
+// daemon_events is Unix-only AND requires the `daemon` feature (WO 47.12):
+// the module imports crate::daemon::*, which is compiled in only with
+// --features daemon.
+#[cfg(all(unix, feature = "daemon"))]
 mod daemon_events;
 
 use crate::session::carryover::CarryoverProfile;
@@ -531,7 +534,7 @@ fn spawn_plugin_watcher(
     Some(watcher)
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon"))]
 async fn spawn_daemon_reader(state: &mut AppState) {
     let daemon_flags = std::sync::Arc::new(std::sync::Mutex::new(
         crate::tui::daemon_events::DaemonEventFlags::default(),
@@ -735,7 +738,9 @@ pub async fn run_tui(
         std::time::Duration::from_secs(30),
     ));
 
-    #[cfg(unix)]
+    // daemon-gated (WO 47.12): the daemon event reader needs the daemon
+    // module, which is compiled in only with --features daemon.
+    #[cfg(all(unix, feature = "daemon"))]
     spawn_daemon_reader(&mut state).await;
 
     let res = run_event_loop(
@@ -1281,7 +1286,7 @@ fn modal_captures_keys(state: &AppState) -> bool {
         || state.ui.command_palette_visible
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "daemon"))]
 fn drain_daemon_flags(state: &mut AppState) {
     // Drain the shared flags set by the daemon event reader into
     // the local AppState. The reader sets the flags; we clear
@@ -1309,7 +1314,7 @@ fn drain_daemon_flags(state: &mut AppState) {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(all(unix, feature = "daemon")))]
 fn drain_daemon_flags(_state: &mut AppState) {}
 
 /// True when the doom-loop banner is both present and unacknowledged —

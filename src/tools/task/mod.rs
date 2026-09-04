@@ -1148,6 +1148,7 @@ mod tests {
             system_prompt: "You are a senior code reviewer.".into(),
             tools: vec!["Read".into(), "Grep".into()],
             model: Some("fast-model".into()),
+            max_turns: None,
         });
         std::sync::Arc::new(reg)
     }

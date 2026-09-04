@@ -421,7 +421,7 @@ impl SandboxConfig {
     /// fields fall back to the global. The `harden` flag is inherited
     /// from the global (a per-plugin manifest cannot disable
     /// hardening — only raise limits).
-    pub fn merge_with(&self, limits: Option<&kf_plugin_host::ResourceLimits>) -> Self {
+    pub fn merge_with(&self, limits: Option<&kf_plugin_host::sdk::ResourceLimits>) -> Self {
         let Some(limits) = limits else {
             return self.clone();
         };

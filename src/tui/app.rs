@@ -448,7 +448,7 @@ pub struct SessionState {
     /// Shared flags set by the daemon event reader task. The TUI event
     /// loop drains these into the local `sessions_dirty` / `jobs_dirty`
     /// fields on each iteration so the render path never blocks.
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "daemon"))]
     pub daemon_flags:
         Option<std::sync::Arc<std::sync::Mutex<crate::tui::daemon_events::DaemonEventFlags>>>,
 }
@@ -470,7 +470,7 @@ impl Default for SessionState {
             sessions_dirty: false,
             jobs_dirty: false,
             cached_jobs_output: None,
-            #[cfg(unix)]
+            #[cfg(all(unix, feature = "daemon"))]
             daemon_flags: None,
         }
     }

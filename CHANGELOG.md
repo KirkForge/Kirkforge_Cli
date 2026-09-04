@@ -8,6 +8,19 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- WO 39.4: Claude hook stdin-JSON contract — hooks now pipe a JSON
+  payload (ADR-0009 schema) to the subprocess's stdin instead of
+  nulling it. KF_* env vars kept for back-compat. Event-name mapping
+  (PreToolUse↔pre-tool, etc.) + generic pre-tool/post-tool events.
+- WO 47.12: compile-time daemon excision — `daemon` cargo feature
+  (default-off) gates `src/daemon/**` + `kf-rbac`. Minimal build
+  (`--no-default-features`) excludes the daemon entirely.
+- WO 47.4: SDK import provenance — `kf_plugin_host::sdk::TypeName`
+  replaces root re-exports for types defined in the sdk module.
+- Agent frontmatter: `maxTurns` field parsed + wired into task tool
+  (agent's turn limit overrides the default when model omits it).
+- Agent registry: reloadable via `reload_global_registry` (called
+  from `/reload` alongside plugin/config reload).
 - Subagent: nesting depth limit added — `tools.max_subagent_depth`
   (default 3, clamped 0–10) prevents unbounded subagent recursion.
   Threaded through `ToolContext` → `TaskRequest` → subagent executor.

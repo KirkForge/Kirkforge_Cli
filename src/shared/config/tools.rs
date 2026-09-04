@@ -170,7 +170,7 @@ pub struct ToolConfig {
     #[serde(default = "default_max_subagent_depth")]
     pub max_subagent_depth: usize,
     #[serde(default = "default_max_plugin_trust")]
-    pub max_plugin_trust: kf_plugin_host::TrustTier,
+    pub max_plugin_trust: kf_plugin_host::sdk::TrustTier,
     #[serde(default = "default_reject_on_excess_plugin_trust")]
     pub reject_on_excess_plugin_trust: bool,
     #[serde(default = "default_plugin_signature_validation")]
@@ -233,8 +233,8 @@ fn default_plugin_trust_workspace() -> bool {
     false
 }
 
-fn default_max_plugin_trust() -> kf_plugin_host::TrustTier {
-    kf_plugin_host::TrustTier::Shell
+fn default_max_plugin_trust() -> kf_plugin_host::sdk::TrustTier {
+    kf_plugin_host::sdk::TrustTier::Shell
 }
 
 impl Default for ToolConfig {

@@ -2,7 +2,7 @@ use super::*;
 use crate::shared::test_util::EnvGuard;
 use crate::shared::{Config, SharedConfig, ToolOutcome};
 use crate::tools::ToolContext;
-use kf_plugin_host::{Capability, Plugin, TrustTier};
+use kf_plugin_host::sdk::{Capability, Plugin, TrustTier};
 use kf_plugin_host::{PluginRegistry, TrustPolicy};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -625,8 +625,8 @@ mod e2e {
     use crate::session::hooks::{HookDecision, HookRunner};
     use crate::shared::audit::{AuditEntry, AuditLog};
     use crate::shared::ToolError;
+    use kf_plugin_host::sdk::{Capability, Plugin, TrustTier};
     use kf_plugin_host::VerifierVerdict;
-    use kf_plugin_host::{Capability, Plugin, TrustTier};
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
 
@@ -849,7 +849,7 @@ mod resource_limits_tests {
     use super::*;
     use crate::shared::SandboxConfig;
     use crate::shared::ToolError;
-    use kf_plugin_host::{Plugin, ResourceLimits, TrustTier};
+    use kf_plugin_host::sdk::{Plugin, ResourceLimits, TrustTier};
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
 
@@ -992,7 +992,7 @@ memory_mb = 256
 "#,
         )
         .unwrap();
-        let plugin = kf_plugin_host::LoadedPlugin::load(&plugin_dir).unwrap();
+        let plugin = kf_plugin_host::sdk::LoadedPlugin::load(&plugin_dir).unwrap();
         let limits = plugin.manifest.resource_limits.expect("resource_limits");
         assert_eq!(limits.cpu_secs, Some(10));
         assert_eq!(limits.memory_mb, Some(256));

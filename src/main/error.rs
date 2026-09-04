@@ -44,7 +44,9 @@ impl From<anyhow::Error> for KirkForgeError {
         //     (Unreachable/ModelNotFound) or AccessDenied (Denied). All five
         //     adapters (ollama, openai_compat, anthropic, anthropic_bedrock,
         //     anthropic_vertex) now wrap their stream() errors this way.
-        if e.downcast_ref::<kf_plugin_host::ManifestError>().is_some() {
+        if e.downcast_ref::<kf_plugin_host::sdk::ManifestError>()
+            .is_some()
+        {
             return KirkForgeError::ConfigParse(e);
         }
         if e.downcast_ref::<kf_plugin_host::ToolError>().is_some() {
@@ -171,8 +173,8 @@ mod tests {
 
     #[test]
     fn downcast_manifest_error_classifies_as_config_parse() {
-        let typed: kf_plugin_host::ManifestError =
-            kf_plugin_host::ManifestError::UnsupportedApiVersion {
+        let typed: kf_plugin_host::sdk::ManifestError =
+            kf_plugin_host::sdk::ManifestError::UnsupportedApiVersion {
                 version: "v99".into(),
             };
         let anyhow_err: anyhow::Error = typed.into();

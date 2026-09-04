@@ -33,9 +33,11 @@
 //! the failure message. The plugin-host `PluginVerifier` implements this
 //! convention; the bus-side `PluginBusVerifier` (bus.rs) is the adapter.
 
-fn as_verifier_parts(cap: &kf_plugin_host::Capability) -> Option<(String, u8, std::path::PathBuf)> {
+fn as_verifier_parts(
+    cap: &kf_plugin_host::sdk::Capability,
+) -> Option<(String, u8, std::path::PathBuf)> {
     match cap {
-        kf_plugin_host::Capability::Verifier {
+        kf_plugin_host::sdk::Capability::Verifier {
             name,
             priority,
             command: Some(command),
@@ -56,7 +58,7 @@ pub fn register_plugin_verifiers_into_bus(
     registry: &kf_plugin_host::PluginRegistry,
     bus: &mut crate::session::verifier::bus::VerifierBus,
 ) -> usize {
-    use kf_plugin_host::Plugin;
+    use kf_plugin_host::sdk::Plugin;
     let mut count = 0;
     for hosted in registry.active_plugins() {
         let plugin = &hosted.plugin;
@@ -77,7 +79,7 @@ mod tests {
 
     #[test]
     fn as_verifier_parts_returns_none_for_non_verifier_capability() {
-        let cap = kf_plugin_host::Capability::Skill {
+        let cap = kf_plugin_host::sdk::Capability::Skill {
             trigger: "/x".into(),
             prompt: "do x".into(),
             skill_file: None,
@@ -88,7 +90,7 @@ mod tests {
 
     #[test]
     fn as_verifier_parts_returns_none_for_verifier_without_command() {
-        let cap = kf_plugin_host::Capability::Verifier {
+        let cap = kf_plugin_host::sdk::Capability::Verifier {
             name: "no-cmd".into(),
             priority: 1,
             command: None,
@@ -98,7 +100,7 @@ mod tests {
 
     #[test]
     fn as_verifier_parts_extracts_fields_when_command_present() {
-        let cap = kf_plugin_host::Capability::Verifier {
+        let cap = kf_plugin_host::sdk::Capability::Verifier {
             name: "fmt".into(),
             priority: 3,
             command: Some(std::path::PathBuf::from("bin/fmt.sh")),
@@ -158,7 +160,7 @@ command = "bin/check.sh"
         let warnings = registry
             .load_from_dir(
                 &plugins_dir,
-                kf_plugin_host::TrustPolicy::up_to(kf_plugin_host::TrustTier::Shell),
+                kf_plugin_host::TrustPolicy::up_to(kf_plugin_host::sdk::TrustTier::Shell),
             )
             .unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");

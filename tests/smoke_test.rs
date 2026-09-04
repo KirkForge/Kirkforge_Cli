@@ -71,9 +71,12 @@ fn completions_command_outputs_script() {
 fn help_flag_for_remaining_subcommands() {
     // WO 47.5: bench + doctor are devtools-gated (default-off) — only
     // asserted when the binary is built with --features devtools.
-    let mut subcommands = vec![
-        "run", "verify", "sessions", "daemon", "jobd", "replay", "plugin",
-    ];
+    // WO 47.12: daemon + jobd are daemon-gated (default-off) — only
+    // asserted when the binary is built with --features daemon.
+    let mut subcommands = vec!["run", "verify", "sessions", "replay", "plugin"];
+    if cfg!(feature = "daemon") {
+        subcommands.extend(["daemon", "jobd"]);
+    }
     if cfg!(feature = "devtools") {
         subcommands.extend(["bench", "doctor"]);
     }

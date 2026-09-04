@@ -1149,6 +1149,9 @@ mod tests {
             tools: vec!["Read".into(), "Grep".into()],
             model: Some("fast-model".into()),
             max_turns: None,
+            isolation: crate::session::agents::AgentIsolation::None,
+            background: false,
+            permission_mode: None,
         });
         std::sync::Arc::new(reg)
     }

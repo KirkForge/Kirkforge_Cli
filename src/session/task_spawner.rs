@@ -29,7 +29,16 @@ pub(crate) const SUBAGENT_PATCH_MARKER: &str =
 // WO 35.2: only writer personas need filesystem isolation — `explore` and
 // `plan` get read-only toolsets, so they keep the parent sandbox. The `_`
 // arm in the toolset filter below (full toolset) is the same predicate.
-fn subagent_worktree_wanted(cfg: &Config, persona: &str) -> bool {
+// Subagent audit 2026-09-04: an agent's `isolation: worktree` frontmatter
+// forces a worktree even when the global policy + persona would not.
+fn subagent_worktree_wanted(
+    cfg: &Config,
+    persona: &str,
+    agent_def: Option<&crate::session::agents::AgentDef>,
+) -> bool {
+    if agent_def.is_some_and(|a| a.isolation == crate::session::agents::AgentIsolation::Worktree) {
+        return true;
+    }
     cfg.session.artifact_policy.is_worktree_enabled() && !matches!(persona, "explore" | "plan")
 }
 
@@ -253,7 +262,7 @@ impl InProcessTaskSpawner {
         // so the path guard, landlock extra paths, and the executor's guard
         // tower all center on the worktree. Creation failure is a hard error
         // (same policy as the session-level worktree in run_session.rs).
-        let worktree = if subagent_worktree_wanted(&cfg, &request.persona) {
+        let worktree = if subagent_worktree_wanted(&cfg, &request.persona, agent_def.as_ref()) {
             let tag = format!("task-{}", task_temp_tag());
             let root = subagent_worktree_root(&cfg);
             Some(
@@ -436,6 +445,15 @@ impl InProcessTaskSpawner {
 
         if request.persona == "explore" {
             executor.set_plan_mode(true);
+        }
+        // Subagent audit 2026-09-04: an agent's `permissionMode: "plan"`
+        // frontmatter forces plan_mode on the subagent executor. Other
+        // Claude permission modes have no kf-code equivalent and are
+        // ignored. `explore` already set plan_mode above; this is additive.
+        if let Some(a) = &agent_def {
+            if a.permission_mode.as_deref() == Some("plan") {
+                executor.set_plan_mode(true);
+            }
         }
 
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel::<ApprovalRequest>();
@@ -627,14 +645,46 @@ mod tests {
     fn subagent_worktree_gated_on_flag_and_writer_persona() {
         let mut cfg = Config::default();
         cfg.session.artifact_policy = crate::shared::ArtifactPolicy::PatchOnly;
-        assert!(subagent_worktree_wanted(&cfg, "coder"));
-        assert!(!subagent_worktree_wanted(&cfg, "explore"));
-        assert!(!subagent_worktree_wanted(&cfg, "plan"));
+        assert!(subagent_worktree_wanted(&cfg, "coder", None));
+        assert!(!subagent_worktree_wanted(&cfg, "explore", None));
+        assert!(!subagent_worktree_wanted(&cfg, "plan", None));
         cfg.session.artifact_policy = crate::shared::ArtifactPolicy::DirectWrite;
         assert!(
-            !subagent_worktree_wanted(&cfg, "coder"),
+            !subagent_worktree_wanted(&cfg, "coder", None),
             "flag off = shared sandbox"
         );
+    }
+
+    #[test]
+    fn subagent_worktree_forced_by_agent_isolation_worktree() {
+        // Subagent audit 2026-09-04: an agent with `isolation: worktree`
+        // gets a worktree even when the global policy is off and the
+        // persona is a writer under DirectWrite (which would otherwise
+        // share the parent sandbox).
+        let cfg = Config::default();
+        let agent = crate::session::agents::AgentDef {
+            name: "iso".into(),
+            description: String::new(),
+            system_prompt: String::new(),
+            tools: vec![],
+            model: None,
+            max_turns: None,
+            isolation: crate::session::agents::AgentIsolation::Worktree,
+            background: false,
+            permission_mode: None,
+        };
+        assert!(
+            subagent_worktree_wanted(&cfg, "coder", Some(&agent)),
+            "agent isolation: worktree must force a worktree even under DirectWrite"
+        );
+        // explore persona with isolation: worktree still wins (agent field
+        // is checked first).
+        assert!(
+            subagent_worktree_wanted(&cfg, "explore", Some(&agent)),
+            "agent isolation: worktree must force a worktree even for explore"
+        );
+        // No agent def → falls back to global policy (DirectWrite = off).
+        assert!(!subagent_worktree_wanted(&cfg, "coder", None));
     }
 
     #[test]
@@ -963,6 +1013,9 @@ mod tests {
             tools: vec!["Read".into(), "Grep".into(), "Task".into()],
             model: None,
             max_turns: None,
+            isolation: crate::session::agents::AgentIsolation::None,
+            background: false,
+            permission_mode: None,
         });
         let reg = Arc::new(reg);
 
@@ -996,6 +1049,9 @@ mod tests {
             tools: vec![],
             model: None,
             max_turns: None,
+            isolation: crate::session::agents::AgentIsolation::None,
+            background: false,
+            permission_mode: None,
         });
         let reg = Arc::new(reg);
         let config: SharedConfig = Arc::new(std::sync::RwLock::new(Config::default()));
@@ -1031,6 +1087,9 @@ mod tests {
             tools: vec![],
             model: Some(m.to_string()),
             max_turns: None,
+            isolation: crate::session::agents::AgentIsolation::None,
+            background: false,
+            permission_mode: None,
         });
         let agent_def_model = agent_def
             .as_ref()

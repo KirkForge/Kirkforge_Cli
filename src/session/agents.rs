@@ -23,6 +23,18 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Per-agent worktree isolation (frontmatter `isolation`).
+/// `"worktree"` forces a private git worktree for this subagent,
+/// overriding the global `session.worktree_enabled` + persona rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AgentIsolation {
+    /// No per-agent isolation — follow the global worktree policy.
+    #[default]
+    None,
+    /// Force a private git worktree for this subagent.
+    Worktree,
+}
+
 /// A loaded Claude agent definition.
 #[derive(Debug, Clone)]
 pub struct AgentDef {
@@ -40,6 +52,17 @@ pub struct AgentDef {
     /// Optional per-agent turn limit (frontmatter `maxTurns`). Overrides
     /// the `task` tool's default of 1 when the caller omits `max_turns`.
     pub max_turns: Option<usize>,
+    /// Per-agent worktree isolation (frontmatter `isolation`).
+    pub isolation: AgentIsolation,
+    /// Per-agent background hint (frontmatter `background`). When `true`,
+    /// the `task` tool defaults to background mode for this persona; an
+    /// explicit `background` arg from the model still wins.
+    pub background: bool,
+    /// Per-agent permission mode (frontmatter `permissionMode`). Only
+    /// `"plan"` is mapped today — it forces plan_mode on the subagent
+    /// executor. Other Claude modes (`"default"`, `"auto"`, `"dontAsk"`,
+    /// `"bypassPermissions"`) have no kf-code equivalent and are ignored.
+    pub permission_mode: Option<String>,
 }
 
 /// Claude → kf-code tool-name alias table.
@@ -263,6 +286,9 @@ pub fn parse_agent(content: &str) -> anyhow::Result<AgentDef> {
     let mut tools: Vec<String> = Vec::new();
     let mut model: Option<String> = None;
     let mut max_turns: Option<usize> = None;
+    let mut isolation = AgentIsolation::None;
+    let mut background = false;
+    let mut permission_mode: Option<String> = None;
 
     for line in frontmatter_str.lines() {
         let line = line.trim();
@@ -295,6 +321,18 @@ pub fn parse_agent(content: &str) -> anyhow::Result<AgentDef> {
                     );
                 }
             }
+            "isolation" => {
+                isolation = match value {
+                    "worktree" => AgentIsolation::Worktree,
+                    _ => AgentIsolation::None,
+                };
+            }
+            "background" => {
+                background = value == "true";
+            }
+            "permissionMode" | "permission_mode" => {
+                permission_mode = Some(value.to_string());
+            }
             _ => {}
         }
     }
@@ -310,6 +348,9 @@ pub fn parse_agent(content: &str) -> anyhow::Result<AgentDef> {
         tools,
         model,
         max_turns,
+        isolation,
+        background,
+        permission_mode,
     })
 }
 
@@ -431,6 +472,69 @@ mod tests {
     }
 
     #[test]
+    fn parse_agent_isolation_worktree() {
+        let content = agent_md("name: iso\ndescription: isolated\nisolation: worktree");
+        let a = parse_agent(&content).unwrap();
+        assert_eq!(a.isolation, AgentIsolation::Worktree);
+    }
+
+    #[test]
+    fn parse_agent_isolation_defaults_none() {
+        let content = agent_md("name: iso\ndescription: isolated");
+        let a = parse_agent(&content).unwrap();
+        assert_eq!(a.isolation, AgentIsolation::None);
+    }
+
+    #[test]
+    fn parse_agent_isolation_unknown_is_none() {
+        let content = agent_md("name: iso\ndescription: isolated\nisolation: spaceship");
+        let a = parse_agent(&content).unwrap();
+        assert_eq!(a.isolation, AgentIsolation::None);
+    }
+
+    #[test]
+    fn parse_agent_background_true() {
+        let content = agent_md("name: bg\ndescription: backgrounded\nbackground: true");
+        let a = parse_agent(&content).unwrap();
+        assert!(a.background);
+    }
+
+    #[test]
+    fn parse_agent_background_defaults_false() {
+        let content = agent_md("name: bg\ndescription: backgrounded");
+        let a = parse_agent(&content).unwrap();
+        assert!(!a.background);
+    }
+
+    #[test]
+    fn parse_agent_background_non_true_is_false() {
+        let content = agent_md("name: bg\ndescription: backgrounded\nbackground: maybe");
+        let a = parse_agent(&content).unwrap();
+        assert!(!a.background, "only the literal 'true' enables background");
+    }
+
+    #[test]
+    fn parse_agent_permission_mode_plan() {
+        let content = agent_md("name: pm\ndescription: planner\npermissionMode: plan");
+        let a = parse_agent(&content).unwrap();
+        assert_eq!(a.permission_mode.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn parse_agent_permission_mode_snake_key() {
+        let content = agent_md("name: pm\ndescription: planner\npermission_mode: auto");
+        let a = parse_agent(&content).unwrap();
+        assert_eq!(a.permission_mode.as_deref(), Some("auto"));
+    }
+
+    #[test]
+    fn parse_agent_permission_mode_defaults_none() {
+        let content = agent_md("name: pm\ndescription: planner");
+        let a = parse_agent(&content).unwrap();
+        assert!(a.permission_mode.is_none());
+    }
+
+    #[test]
     fn parse_agent_missing_name_fails() {
         let content = agent_md("description: no name here");
         assert!(parse_agent(&content).is_err());
@@ -509,6 +613,9 @@ mod tests {
             tools: vec!["Read".into()],
             model: None,
             max_turns: None,
+            isolation: AgentIsolation::None,
+            background: false,
+            permission_mode: None,
         };
         let p = build_agent_prompt(&a, "review this PR");
         assert!(p.contains("senior reviewer"));
@@ -526,6 +633,9 @@ mod tests {
             tools: vec![],
             model: None,
             max_turns: None,
+            isolation: AgentIsolation::None,
+            background: false,
+            permission_mode: None,
         });
         assert!(reg.get("rev").is_some());
         assert!(reg.get("nope").is_none());
@@ -548,6 +658,9 @@ mod tests {
             tools: vec![],
             model: None,
             max_turns: None,
+            isolation: AgentIsolation::None,
+            background: false,
+            permission_mode: None,
         });
         reg.register(AgentDef {
             name: "alpha".into(),
@@ -556,6 +669,9 @@ mod tests {
             tools: vec![],
             model: None,
             max_turns: None,
+            isolation: AgentIsolation::None,
+            background: false,
+            permission_mode: None,
         });
         let s = reg.description_suffix();
         assert!(s.contains("alpha: alpha agent"));

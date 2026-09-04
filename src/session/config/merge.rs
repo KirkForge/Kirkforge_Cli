@@ -141,6 +141,7 @@ fn normalize(cfg: &mut Config) {
     cfg.tools.max_concurrent_scheduled_jobs = cfg.tools.max_concurrent_scheduled_jobs.max(1);
     cfg.tools.max_background_tasks = cfg.tools.max_background_tasks.clamp(1, 64);
     cfg.tools.max_subagent_turns = cfg.tools.max_subagent_turns.clamp(1, 1024);
+    cfg.tools.max_subagent_depth = cfg.tools.max_subagent_depth.clamp(0, 10);
     cfg.model.max_tokens = cfg.model.max_tokens.max(1);
     cfg.model.budget_tokens = cfg.model.budget_tokens.max(1);
     if let Some(t) = cfg.tools.tool_timeout_secs {

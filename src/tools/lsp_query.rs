@@ -852,6 +852,7 @@ mod tests {
             dry_run: false,
             task_spawner: None,
             tools: None,
+            subagent_depth: 0,
             ..Default::default()
         };
         ctx.token.cancel();
@@ -1290,6 +1291,7 @@ mod tests {
             dry_run: false,
             task_spawner: None,
             tools: None,
+            subagent_depth: 0,
             ..Default::default()
         };
         let me =

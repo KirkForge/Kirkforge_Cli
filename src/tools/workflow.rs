@@ -471,6 +471,7 @@ impl StepRunner for TaskSpawnerStepRunner {
                 max_turns: 1,
                 cancel: Some(cancel),
                 owner: None,
+                subagent_depth: 0,
             })
             .await
             .map_err(|e| anyhow::anyhow!("step '{name}' failed: {e}"));
@@ -540,6 +541,7 @@ impl StepRunner for TaskSpawnerStepRunner {
             dry_run: self.dry_run,
             task_spawner: Some(self.spawner.clone()),
             tools: Some(toolset.clone()),
+            subagent_depth: 0,
             ..Default::default()
         };
         match tool.run(&ctx, arguments.clone()).await {
@@ -624,6 +626,7 @@ impl StepRunner for TaskSpawnerStepRunner {
                                 max_turns: 1,
                                 cancel: Some(cancel),
                                 owner: None,
+                                subagent_depth: 0,
                             })
                             .await
                             .map_err(|e| anyhow::anyhow!("step '{}' failed: {e}", req.name));
@@ -695,6 +698,7 @@ impl StepRunner for TaskSpawnerStepRunner {
                             dry_run,
                             task_spawner: Some(spawner),
                             tools: Some(toolset.clone()),
+                            subagent_depth: 0,
                             ..Default::default()
                         };
                         match tool.run(&ctx, req.tool_arguments.clone()).await {

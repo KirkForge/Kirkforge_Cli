@@ -119,6 +119,11 @@ pub struct ToolContext {
     /// calls route to the right TUI card. Empty in contexts without
     /// an invocation id.
     pub call_id: String,
+    /// Subagent nesting depth (0 = root session, 1 = first subagent,
+    /// etc.). The `task` tool checks this against `max_subagent_depth`
+    /// to prevent unbounded recursion. Threaded from the executor
+    /// through `PreparedCall` into every tool call's context.
+    pub subagent_depth: usize,
     /// Optional channel for streaming partial tool output (e.g. PTY
     /// output) to the TUI while a command runs. `None` in non-interactive
     /// or test contexts — tools must treat it as best-effort.
@@ -136,6 +141,7 @@ impl std::fmt::Debug for ToolContext {
             .field("task_owner", &self.task_owner)
             .field("run_id", &self.run_id)
             .field("call_id", &self.call_id)
+            .field("subagent_depth", &self.subagent_depth)
             .field("event_tx", &self.event_tx.is_some())
             .finish()
     }
@@ -152,6 +158,7 @@ impl ToolContext {
             task_owner: None,
             run_id: None,
             call_id: String::new(),
+            subagent_depth: 0,
             event_tx: None,
         }
     }
@@ -169,6 +176,7 @@ impl ToolContext {
             task_owner: None,
             run_id: None,
             call_id: String::new(),
+            subagent_depth: 0,
             event_tx: None,
         }
     }
@@ -184,6 +192,7 @@ impl ToolContext {
             task_owner: None,
             run_id: None,
             call_id: String::new(),
+            subagent_depth: 0,
             event_tx: None,
         }
     }
@@ -277,6 +286,7 @@ pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
         ctx.max_background_tasks,
         ctx.task_concurrency_mode.clone(),
         ctx.max_subagent_turns,
+        ctx.max_subagent_depth,
     )));
     registry.register(Arc::new(TaskOutput::new(task_manager)));
     let mut workflow = WorkflowTool::new(
@@ -375,6 +385,7 @@ mod tests {
             max_background_tasks: 4,
             task_concurrency_mode: task::TaskConcurrencyMode::Queue,
             max_subagent_turns: 32,
+            max_subagent_depth: 3,
         };
         let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
@@ -431,6 +442,7 @@ mod tests {
             max_background_tasks: 4,
             task_concurrency_mode: task::TaskConcurrencyMode::Queue,
             max_subagent_turns: 32,
+            max_subagent_depth: 3,
         };
         let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();
@@ -469,6 +481,7 @@ mod tests {
             max_background_tasks: 4,
             task_concurrency_mode: task::TaskConcurrencyMode::Queue,
             max_subagent_turns: 32,
+            max_subagent_depth: 3,
         };
         let tools = all_tools(&ctx);
         let names: Vec<String> = tools.iter().map(|t| t.def().name.to_string()).collect();

@@ -8,6 +8,12 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- Subagent: nesting depth limit added — `tools.max_subagent_depth`
+  (default 3, clamped 0–10) prevents unbounded subagent recursion.
+  Threaded through `ToolContext` → `TaskRequest` → subagent executor.
+- Subagent: task tool `persona` enum removed — strict-schema models
+  can now invoke discovered `.claude/agents/*.md` agent names (the
+  enum was blocking the WO 39.3 Claude compat layer).
 - WO 48.9: `minimal-build` CI job (`cargo check --workspace
   --no-default-features --locked`) in ci-merge + ci-pr.
 - WO 47.8: deleted 9 unwired fuzz targets (`fuzz/` dir) — 100% dead code.

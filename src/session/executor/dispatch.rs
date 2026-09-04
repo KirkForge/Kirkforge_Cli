@@ -50,6 +50,9 @@ pub(super) struct PreparedCall {
     /// Canonical run id (WO 45.1) — the session id, lands in the per-call
     /// `ToolContext.run_id` so spawned tasks and bash jobs carry it.
     run_id: Option<String>,
+    /// Subagent nesting depth (0 = root). Threaded into `ToolContext`
+    /// so the `task` tool can enforce `max_subagent_depth`.
+    subagent_depth: usize,
 }
 
 /// Phase-1 output: a buffered skip (denied/unknown tool/plan-mode/etc.) waiting
@@ -325,6 +328,7 @@ impl Executor {
                         } else {
                             Some(self.session_id.clone())
                         },
+                        subagent_depth: self.subagent_depth,
                     });
                 }
                 PreRunVerdict::Skip { events, message } => {
@@ -789,6 +793,7 @@ async fn run_prepared_call(prep: PreparedCall) -> Option<(ToolInvocation, ToolOu
         // WO 48.31: stamp streaming events with the model-assigned
         // call id so PTY chunks route to the right TUI card.
         call_id: prep.invocation.id.clone(),
+        subagent_depth: prep.subagent_depth,
         event_tx: prep.event_tx,
     };
     let start = Instant::now();

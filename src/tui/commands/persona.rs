@@ -121,6 +121,7 @@ fn tools_for_persona(
         block_edits: config.security.sandbox.block_edits,
         max_background_tasks: config.tools.max_background_tasks,
         max_subagent_turns: config.tools.max_subagent_turns,
+        max_subagent_depth: config.tools.max_subagent_depth,
         task_concurrency_mode: config
             .tools
             .task_concurrency_mode
@@ -192,6 +193,7 @@ pub fn tools_for_scout(
         block_edits: config.security.sandbox.block_edits,
         max_background_tasks: config.tools.max_background_tasks,
         max_subagent_turns: config.tools.max_subagent_turns,
+        max_subagent_depth: config.tools.max_subagent_depth,
         task_concurrency_mode: config
             .tools
             .task_concurrency_mode

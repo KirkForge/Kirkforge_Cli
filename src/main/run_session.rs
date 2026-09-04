@@ -481,6 +481,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         block_edits: config.security.sandbox.block_edits,
         max_background_tasks: config.tools.max_background_tasks,
         max_subagent_turns: config.tools.max_subagent_turns,
+        max_subagent_depth: config.tools.max_subagent_depth,
         task_concurrency_mode: config
             .tools
             .task_concurrency_mode

@@ -425,6 +425,7 @@ impl StepRunner for TuiStepRunner {
                 max_turns: 1,
                 cancel: None,
                 owner: None,
+                subagent_depth: 0,
             })
             .await
             .map_err(|e| anyhow::anyhow!("step {name} failed: {e}"))?;
@@ -476,6 +477,7 @@ impl StepRunner for LineStepRunner {
                 max_turns: 1,
                 cancel: None,
                 owner: None,
+                subagent_depth: 0,
             })
             .await
             .map_err(|e| anyhow::anyhow!("step {name} failed: {e}"))

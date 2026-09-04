@@ -23,6 +23,9 @@ pub struct Task {
     /// WO 48.34: ceiling applied to the model-supplied `max_turns` arg —
     /// a runaway value (u64::MAX) must not reach the executor loop.
     max_turns_ceiling: usize,
+    /// Maximum subagent nesting depth (subagent audit 2026-09-04).
+    /// The `task` tool refuses to spawn when `ctx.subagent_depth` >= this.
+    max_subagent_depth: usize,
     /// Dynamic agent registry (WO 39.3). Used to (a) build the agent
     /// system-prompt preamble when `persona` names a discovered agent,
     /// and (b) list discovered agents in the tool description. An empty
@@ -39,6 +42,7 @@ impl Task {
             concurrency_mode: TaskConcurrencyMode::Queue,
             max_bg: 4,
             max_turns_ceiling: crate::shared::config::DEFAULT_MAX_SUBAGENT_TURNS,
+            max_subagent_depth: crate::shared::config::DEFAULT_MAX_SUBAGENT_DEPTH,
             agents: std::sync::Arc::new(crate::session::agents::AgentRegistry::new()),
         }
     }
@@ -50,6 +54,7 @@ impl Task {
             concurrency_mode: TaskConcurrencyMode::Queue,
             max_bg: 4,
             max_turns_ceiling: crate::shared::config::DEFAULT_MAX_SUBAGENT_TURNS,
+            max_subagent_depth: crate::shared::config::DEFAULT_MAX_SUBAGENT_DEPTH,
             agents: std::sync::Arc::new(crate::session::agents::AgentRegistry::new()),
         }
     }
@@ -59,6 +64,7 @@ impl Task {
         max_background_tasks: usize,
         concurrency_mode: TaskConcurrencyMode,
         max_turns_ceiling: usize,
+        max_subagent_depth: usize,
     ) -> Self {
         let permits = max_background_tasks.clamp(1, 64);
         // WO 39.3: share the global registry so the tool description and
@@ -73,6 +79,7 @@ impl Task {
             max_bg: permits,
             // max(1) so a zero ceiling can never invert the clamp below.
             max_turns_ceiling: max_turns_ceiling.max(1),
+            max_subagent_depth: max_subagent_depth.max(0),
             agents,
         }
     }
@@ -91,6 +98,7 @@ impl Task {
             concurrency_mode,
             max_bg: permits,
             max_turns_ceiling: crate::shared::config::DEFAULT_MAX_SUBAGENT_TURNS,
+            max_subagent_depth: crate::shared::config::DEFAULT_MAX_SUBAGENT_DEPTH,
             agents,
         }
     }
@@ -126,9 +134,8 @@ impl Tool for Task {
                     },
                     "persona": {
                         "type": "string",
-                        "enum": ["explore", "plan", "coder"],
                         "default": "coder",
-                        "description": "Tool restriction persona for the subagent"
+                        "description": "Tool restriction persona for the subagent. Built-in: 'explore' (read-only + bash), 'plan' (read-only), 'coder' (full toolset). Discovered .claude/agents/*.md agent names are also valid — see the agent list in the tool description above."
                     },
                     "background": {
                         "type": "boolean",
@@ -188,6 +195,20 @@ impl Tool for Task {
         // system prompt + alias suffix replace the generic preamble.
         let full_prompt = build_task_prompt_with_agents(&persona, &prompt, Some(&self.agents));
 
+        // Subagent nesting depth guard (subagent audit 2026-09-04):
+        // refuse to spawn when the current depth is at the ceiling.
+        let next_depth = ctx.subagent_depth + 1;
+        if next_depth > self.max_subagent_depth {
+            return ToolOutcome::Error {
+                message: format!(
+                    "Subagent nesting depth limit reached (depth {next_depth} > max {}). \
+                     The parent session is already {} levels deep; restructure the task \
+                     or increase max_subagent_depth in config.",
+                    self.max_subagent_depth, ctx.subagent_depth,
+                ),
+            };
+        }
+
         let spawner = match &ctx.task_spawner {
             Some(s) => s.clone(),
             None => {
@@ -207,6 +228,7 @@ impl Tool for Task {
                 max_turns,
                 cancel: None,
                 owner: None,
+                subagent_depth: next_depth,
             };
             let max_bg = self.max_bg;
             let permit = match self.concurrency_mode {
@@ -338,6 +360,7 @@ impl Tool for Task {
                 // Owner rides with the ancestor so bash jobs the child
                 // spawns die with the ancestor's cancel-by-owner kill.
                 owner: ctx.task_owner.clone(),
+                subagent_depth: next_depth,
             };
             let result = spawner.run_task(request).await;
             done.notify_waiters();
@@ -557,13 +580,13 @@ mod tests {
     #[test]
     fn task_with_config_clamps_semaphore_size() {
         let manager = Arc::new(Mutex::new(TaskManager::new()));
-        let task = Task::with_config(manager, 0, TaskConcurrencyMode::Queue, 32);
+        let task = Task::with_config(manager, 0, TaskConcurrencyMode::Queue, 32, 3);
         assert_eq!(task.max_bg, 1);
         let manager = Arc::new(Mutex::new(TaskManager::new()));
-        let task = Task::with_config(manager, 100, TaskConcurrencyMode::Queue, 32);
+        let task = Task::with_config(manager, 100, TaskConcurrencyMode::Queue, 32, 3);
         assert_eq!(task.max_bg, 64);
         let manager = Arc::new(Mutex::new(TaskManager::new()));
-        let task = Task::with_config(manager, 8, TaskConcurrencyMode::Reject, 32);
+        let task = Task::with_config(manager, 8, TaskConcurrencyMode::Reject, 32, 3);
         assert_eq!(task.max_bg, 8);
         assert_eq!(task.concurrency_mode, TaskConcurrencyMode::Reject);
     }
@@ -584,7 +607,7 @@ mod tests {
             }
         }
         let manager = Arc::new(Mutex::new(TaskManager::new()));
-        let task = Task::with_config(manager, 4, TaskConcurrencyMode::Queue, 32);
+        let task = Task::with_config(manager, 4, TaskConcurrencyMode::Queue, 32, 3);
         for (arg, expected) in [
             (999_999usize, 32usize),
             (u64::MAX as usize, 32),
@@ -653,7 +676,7 @@ mod tests {
     #[tokio::test]
     async fn task_reject_mode_returns_failure_when_semaphore_full() {
         let manager = Arc::new(Mutex::new(TaskManager::new()));
-        let task = Task::with_config(manager, 1, TaskConcurrencyMode::Reject, 32);
+        let task = Task::with_config(manager, 1, TaskConcurrencyMode::Reject, 32, 3);
         let started = Arc::new(tokio::sync::Notify::new());
         let spawner: Arc<dyn TaskSpawner> = Arc::new(BlockingSpawner {
             started: started.clone(),

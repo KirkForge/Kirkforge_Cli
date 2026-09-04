@@ -59,6 +59,15 @@ fn default_task_concurrency_mode() -> String {
 /// layer clamps against this.
 pub const DEFAULT_MAX_SUBAGENT_TURNS: usize = 32;
 
+/// WO 43.26 audit: maximum nesting depth for subagents. 0 = root session
+/// (can spawn), 1 = first subagent, etc. Default 3 — a coder spawns an
+/// explore which spawns a plan, but not ad infinitum.
+pub const DEFAULT_MAX_SUBAGENT_DEPTH: usize = 3;
+
+fn default_max_subagent_depth() -> usize {
+    DEFAULT_MAX_SUBAGENT_DEPTH
+}
+
 fn default_max_subagent_turns() -> usize {
     DEFAULT_MAX_SUBAGENT_TURNS
 }
@@ -158,6 +167,8 @@ pub struct ToolConfig {
     pub task_concurrency_mode: String,
     #[serde(default = "default_max_subagent_turns")]
     pub max_subagent_turns: usize,
+    #[serde(default = "default_max_subagent_depth")]
+    pub max_subagent_depth: usize,
     #[serde(default = "default_max_plugin_trust")]
     pub max_plugin_trust: kf_plugin_host::TrustTier,
     #[serde(default = "default_reject_on_excess_plugin_trust")]
@@ -247,6 +258,7 @@ impl Default for ToolConfig {
             max_background_tasks: default_max_background_tasks(),
             task_concurrency_mode: default_task_concurrency_mode(),
             max_subagent_turns: default_max_subagent_turns(),
+            max_subagent_depth: default_max_subagent_depth(),
             max_plugin_trust: default_max_plugin_trust(),
             reject_on_excess_plugin_trust: default_reject_on_excess_plugin_trust(),
             plugin_signature_validation: true,

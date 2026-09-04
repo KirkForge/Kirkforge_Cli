@@ -395,24 +395,22 @@ again under sustained >2× load, the next step is sharing one tokio
 runtime across proptest cases (WO 33.11 follow-up), not lowering
 coverage.
 
-## Subagent system audit (2026-09-04)
+## Subagent system audit (2026-09-04) — BOTH HIGH GAPS FIXED
 
-Two HIGH-priority gaps found by the subagent system audit:
+Two HIGH-priority gaps found and fixed:
 
-- **No subagent nesting depth limit**: a subagent's `Executor` builds its
-  own `InProcessTaskSpawner` (`executor/mod.rs:343`), threaded into every
-  tool call's `ToolContext` (`dispatch.rs:315`). A `coder` can spawn an
-  `explore` which spawns another, ad infinitum. `parent_task_id` is
-  recorded but never checked against a depth cap. Needs: `subagent_depth`
-  config (default ~3), depth counter in `ToolContext`, task tool refuses
-  spawn when depth exceeded. Claude Code has depth-limited nesting.
-- **Task tool persona enum blocks dynamic agents**: `persona` parameter
-  schema hardcodes `"enum": ["explore", "plan", "coder"]`
-  (`task_tool.rs:129`). Discovered agent names are listed in the
-  description prose but NOT in the enum. Strict-schema models cannot
-  produce a custom agent name. Needs: drop the enum (accept any string,
-  validate at runtime) or dynamically extend the enum with discovered
-  agent names.
+- **Subagent nesting depth limit (FIXED)**: `ToolContext.subagent_depth`
+  (0 = root, 1+ = nested) threaded through dispatch → tool calls.
+  `TaskRequest.subagent_depth` threads it into the subagent executor.
+  The `task` tool refuses spawn when `depth + 1 > max_subagent_depth`
+  (config `tools.max_subagent_depth`, default 3, clamped 0–10).
+  `CONFIG_FIELD_COUNT` bumped 109 → 110.
+- **Task tool persona enum (FIXED)**: removed the hardcoded
+  `"enum": ["explore", "plan", "coder"]` from the `persona` parameter
+  schema. Now accepts any string; strict-schema models can invoke
+  discovered `.claude/agents/*.md` agent names. Runtime validation
+  unchanged: unknown personas get the full toolset, agent names get
+  their restricted toolset.
 
 MEDIUM-priority gaps (not blocking but limit capability):
 - Model failure: no fallback to cheaper model (error propagates raw)

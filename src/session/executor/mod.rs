@@ -126,6 +126,9 @@ pub struct Executor {
     /// the task — `TaskManager::cancel` then kills exactly those jobs.
     /// `None` (parent sessions) leaves jobs unowned (main session).
     task_owner: Option<String>,
+    /// Subagent nesting depth (0 = root session). Threaded into
+    /// `ToolContext` so the `task` tool can enforce `max_subagent_depth`.
+    subagent_depth: usize,
 }
 
 impl Executor {
@@ -337,6 +340,7 @@ impl Executor {
             turn_count: 0,
             cancel_token: None,
             task_owner: None,
+            subagent_depth: 0,
         };
 
         this.init_default_verifiers(plugin_registry);
@@ -913,6 +917,13 @@ impl Executor {
     /// it unset.
     pub fn set_task_owner(&mut self, owner: Option<String>) {
         self.task_owner = owner;
+    }
+
+    /// Set the subagent nesting depth (0 = root session, 1 = first
+    /// subagent, etc.). Called by `InProcessTaskSpawner` before the
+    /// subagent's turn loop starts.
+    pub fn set_subagent_depth(&mut self, depth: usize) {
+        self.subagent_depth = depth;
     }
 
     pub fn set_plan_mode(&mut self, enabled: bool) {

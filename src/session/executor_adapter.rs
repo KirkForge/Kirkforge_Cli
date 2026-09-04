@@ -122,6 +122,7 @@ impl ModelClient for ExecutorAdapter {
                     token: c.token,
                 }),
                 owner: brief.owner.clone(),
+                subagent_depth: 0,
             })
             .await
             .map_err(anyhow::Error::msg)?;

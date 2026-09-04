@@ -1315,8 +1315,9 @@ mod tests {
         // auto_apply_patch replaced by artifact_policy enum.)
         // (WO 47.13: DisplayConfig 7 → 8 — added extra_commands.)
         // (WO 48.34: ToolConfig 35 → 36 — added max_subagent_turns.)
+        // (Subagent audit 2026-09-04: ToolConfig 36 → 37 — added max_subagent_depth.)
         assert_eq!(
-            CONFIG_FIELD_COUNT, 109,
+            CONFIG_FIELD_COUNT, 110,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 

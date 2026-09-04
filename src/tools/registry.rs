@@ -37,6 +37,9 @@ pub struct ToolContextBuilder {
     /// WO 48.34: ceiling for the `task` tool's model-supplied `max_turns`
     /// (from `config.tools.max_subagent_turns`, default 32).
     pub max_subagent_turns: usize,
+    /// Subagent audit 2026-09-04: max nesting depth for subagents
+    /// (from `config.tools.max_subagent_depth`, default 3).
+    pub max_subagent_depth: usize,
 }
 
 /// A builder that collects tools and produces the final tool list.

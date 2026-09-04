@@ -180,6 +180,7 @@ async fn coder_subagent_writes_own_worktree_and_returns_applicable_patch() {
             max_turns: 1,
             cancel: None,
             owner: None,
+            subagent_depth: 1,
         })
         .await
         .expect("run_task should succeed");
@@ -292,6 +293,7 @@ async fn subagent_destructive_write_denied_via_parent_approval() {
             max_turns: 1,
             cancel: None,
             owner: None,
+            subagent_depth: 1,
         })
         .await
         .expect("run_task should succeed");
@@ -356,7 +358,7 @@ async fn taskmanager_cancel_midflight_bash_exits_cooperatively() {
     .await;
 
     let manager = Arc::new(Mutex::new(TaskManager::new()));
-    let task_tool = Task::with_config(manager.clone(), 4, TaskConcurrencyMode::Queue, 32);
+    let task_tool = Task::with_config(manager.clone(), 4, TaskConcurrencyMode::Queue, 32, 3);
     let spawner = Arc::new(InProcessTaskSpawner::new(
         config,
         MODEL.to_string(),

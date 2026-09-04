@@ -76,6 +76,10 @@ pub struct TaskRequest {
     /// subagent's background bash jobs are tagged with it and die on
     /// cancel. `None` = uncancellable callers (foreground, workflows).
     pub owner: Option<String>,
+    /// Subagent nesting depth (0 = root session, 1 = first subagent).
+    /// Set by the `task` tool from `ctx.subagent_depth + 1` so the
+    /// spawner can thread it into the subagent executor.
+    pub subagent_depth: usize,
 }
 
 /// The two cooperative-cancel primitives a running subagent observes,
@@ -623,6 +627,7 @@ mod tests {
             max_turns: 1,
             cancel: None,
             owner: None,
+            subagent_depth: 1,
         };
         assert_eq!(req.model.as_deref(), Some("opencode/big-pickle"));
     }
@@ -636,6 +641,7 @@ mod tests {
             max_turns: 1,
             cancel: None,
             owner: None,
+            subagent_depth: 1,
         };
         assert!(req.model.is_none());
         assert!(
@@ -728,6 +734,7 @@ mod tests {
             max_turns: 3,
             cancel: None,
             owner: None,
+            subagent_depth: 0,
         };
         let s = format!("{req:?}");
         assert!(s.contains("coder") && s.contains("p") && s.contains("m"));

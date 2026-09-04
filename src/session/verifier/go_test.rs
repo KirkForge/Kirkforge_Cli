@@ -10,11 +10,10 @@ use crate::session::verifier::bus::{
 };
 use crate::session::verifier::detect::{find_go_root, ProjectLanguage};
 use crate::session::verifier::helpers::{
-    command_finding, language_gate, modified_path, tail_body, tool_on_path, tool_on_path_sync,
-    Gate,
+    command_finding, language_gate, modified_path, tail_body, tool_on_path, tool_on_path_sync, Gate,
 };
 use crate::session::verifier::types::BusEvent;
-use crate::session::verifier::{Verdict, VerificationError, FixSuggestion};
+use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
 
 /// Probe `go version` to confirm the Go toolchain is on PATH.
 async fn pick_go() -> bool {

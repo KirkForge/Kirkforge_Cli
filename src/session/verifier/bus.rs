@@ -1191,6 +1191,7 @@ mod tests {
                         message: format!("v{i}-a"),
                         file: None,
                         line: None,
+                        fix: None,
                     },
                     VerdictEntry {
                         source: VerifierSource::Lint,
@@ -1198,6 +1199,7 @@ mod tests {
                         message: format!("v{i}-b"),
                         file: None,
                         line: None,
+                        fix: None,
                     },
                 ],
             }));

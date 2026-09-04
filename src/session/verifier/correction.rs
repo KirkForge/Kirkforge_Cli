@@ -122,10 +122,7 @@ impl CorrectionLoop {
     }
 
     /// Apply a fix suggestion (text or command). Returns (applied, message, is_suggestion).
-    async fn apply_fix(
-        &self,
-        fix: &FixSuggestion,
-    ) -> (bool, String, bool) {
+    async fn apply_fix(&self, fix: &FixSuggestion) -> (bool, String, bool) {
         // A fix with no concrete text replacement but with an external
         // command is a formatter-style fix (e.g. rustfmt).
         if fix.original.is_empty() && fix.replacement.is_empty() {
@@ -136,7 +133,10 @@ impl CorrectionLoop {
                     if ok {
                         format!("Auto-formatted: {} — {}", fix.severity, fix.description)
                     } else {
-                        format!("Failed to run formatter: {} — {}", fix.severity, fix.description)
+                        format!(
+                            "Failed to run formatter: {} — {}",
+                            fix.severity, fix.description
+                        )
                     },
                     false,
                 );
@@ -652,15 +652,15 @@ mod tests {
 
     #[test]
     fn correction_loop_with_max_iterations_overrides_default() {
-        let loop_ =
-            CorrectionLoop::new(crate::session::access::PathGuard::default()).with_max_iterations(7);
+        let loop_ = CorrectionLoop::new(crate::session::access::PathGuard::default())
+            .with_max_iterations(7);
         assert_eq!(loop_.max_iterations(), 7);
     }
 
     #[test]
     fn correction_loop_with_max_iterations_zero_allows_zero_iterations() {
-        let loop_ =
-            CorrectionLoop::new(crate::session::access::PathGuard::default()).with_max_iterations(0);
+        let loop_ = CorrectionLoop::new(crate::session::access::PathGuard::default())
+            .with_max_iterations(0);
         assert_eq!(loop_.max_iterations(), 0);
     }
 

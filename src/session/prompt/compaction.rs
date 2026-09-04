@@ -169,12 +169,15 @@ pub fn compact_to_budget(
 ///
 /// `collapse_fn` supplies the summary text for the `CollapseToSummary` arm
 /// (microcompaction owns the heuristic/LLM fork). `StubPerSlot` ignores it.
+/// Type alias for the collapse-function parameter.
+pub(crate) type CollapseFn<'a> = Option<&'a dyn Fn(&[Message]) -> String>;
+
 pub(crate) fn process_middle(
     messages: &[Message],
     strategy: MiddleStrategy,
     keep_tail: usize,
     budget: Option<usize>,
-    collapse_fn: Option<&dyn Fn(&[Message]) -> String>,
+    collapse_fn: CollapseFn,
 ) -> ProcessMiddleResult {
     let original_count = messages.len();
     let keep_tail_min = keep_tail.max(1);
@@ -208,9 +211,7 @@ pub(crate) fn process_middle(
     // Middle: [anchor .. working_set_start). May be empty.
     let (middle_msgs, dropped_tool_results, condensed_assistant_turns, summarised_messages) =
         match strategy {
-            MiddleStrategy::StubPerSlot => {
-                stub_middle(messages, anchor, working_set_start)
-            }
+            MiddleStrategy::StubPerSlot => stub_middle(messages, anchor, working_set_start),
             MiddleStrategy::CollapseToSummary => {
                 // Maybe_microcompact bails when the middle is empty
                 // (tail_start <= anchor) — reproduce that here so the
@@ -223,8 +224,7 @@ pub(crate) fn process_middle(
             }
         };
 
-    let mut new_messages: Vec<Message> =
-        Vec::with_capacity(middle_msgs.len() + tail_size + anchor);
+    let mut new_messages: Vec<Message> = Vec::with_capacity(middle_msgs.len() + tail_size + anchor);
     if anchor > 0 {
         new_messages.push(messages[0].clone());
     }
@@ -325,7 +325,7 @@ fn collapse_middle(
     messages: &[Message],
     anchor: usize,
     working_set_start: usize,
-    collapse_fn: Option<&dyn Fn(&[Message]) -> String>,
+    collapse_fn: CollapseFn,
 ) -> (Vec<Message>, usize, usize, usize) {
     let middle = &messages[anchor..working_set_start];
     let summarised_count = middle.len();
@@ -337,8 +337,7 @@ fn collapse_middle(
         ),
     };
 
-    let mut out: Vec<Message> = Vec::new();
-    out.push(Message {
+    let out: Vec<Message> = vec![Message {
         role: Role::System,
         content,
         content_parts: None,
@@ -347,7 +346,7 @@ fn collapse_middle(
         tool_call_id: None,
         tool_name: None,
         token_count: None,
-    });
+    }];
 
     (out, 0, 0, summarised_count)
 }
@@ -359,6 +358,7 @@ pub(crate) struct ProcessMiddleResult {
     pub new_messages: Vec<Message>,
     pub dropped_tool_results: usize,
     pub condensed_assistant_turns: usize,
+    #[allow(dead_code)]
     pub summarised_messages: usize,
     pub original_count: usize,
     pub compacted_count: usize,

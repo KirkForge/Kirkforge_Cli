@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+type BoxCollapseFn = Box<dyn Fn(&[Message]) -> String + Send>;
+
 use super::types::CompactHookStats;
 use super::TurnEvent;
 use super::{ApprovalRequest, Executor};
@@ -373,7 +375,7 @@ impl Executor {
                                     // "earlier messages compressed").
                                     let summarised_messages = result.summarised_messages;
                                     let summary_owned = summary.clone();
-                                    let collapse_fn: Box<dyn Fn(&[Message]) -> String> = Box::new(
+                                    let collapse_fn: BoxCollapseFn = Box::new(
                                         move |_middle: &[Message]| {
                                             format!(
                                                 "[Context summary — {summarised_messages} messages compressed]\n{summary_owned}",

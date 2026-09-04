@@ -250,6 +250,7 @@ impl Executor {
                     let mut bus = bus_lock.lock().unwrap_or_else(|e| e.into_inner());
                     std::mem::take(&mut *bus)
                 };
+                let changed_files = ctx.changed_files.clone();
                 let mut bus_back = tokio::task::spawn_blocking(move || {
                     bus_out.run(&ctx);
                     bus_out
@@ -265,7 +266,6 @@ impl Executor {
                 // VerdictEntry.fix and applies text/command fixes.
                 let verdicts: Vec<crate::session::verifier::bus::VerdictEntry> =
                     bus_back.verdicts().to_vec();
-                let changed_files = ctx.changed_files.clone();
                 bus_back.clear();
                 {
                     let mut bus = bus_lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -283,10 +283,9 @@ impl Executor {
                 // Also add non-fixable verdicts (errors/info) that the
                 // correction loop didn't turn into CorrectionResults.
                 for entry in &verdicts {
-                    let already_covered = corrections
-                        .iter()
-                        .any(|c| c.verifier == entry.source.to_string()
-                            && c.message == entry.message);
+                    let already_covered = corrections.iter().any(|c| {
+                        c.verifier == entry.source.to_string() && c.message == entry.message
+                    });
                     if !already_covered {
                         let is_error =
                             entry.severity == crate::session::verifier::bus::Severity::Error;

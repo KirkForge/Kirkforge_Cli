@@ -11,9 +11,7 @@ use crate::session::config::config_diff_summary;
 use crate::session::conversation::ConversationLog;
 use crate::session::hooks::HookRunner;
 use crate::session::prompt::PromptBuilder;
-use crate::session::verifier::{
-    CorrectionLoop, CorrectionResult, VerifierBus,
-};
+use crate::session::verifier::{CorrectionLoop, CorrectionResult, VerifierBus};
 use crate::shared::audit::AuditLog;
 use crate::shared::{read_shared_config, Config, Message, Role, SharedConfig, ToolInvocation};
 use crate::tools::UndoStackRef;
@@ -644,7 +642,6 @@ impl Executor {
         &mut self,
         plugin_registry: Option<&kf_plugin_host::PluginRegistry>,
     ) -> usize {
-        use crate::session::verifier::bus::BusVerifier;
         use crate::session::verifier::types::SystemCommandRunner;
         use std::sync::Arc;
 
@@ -662,17 +659,17 @@ impl Executor {
                 vbus.register(Box::new(
                     crate::session::verifier::security::SecurityVerifier,
                 ));
-                vbus.register(Box::new(
-                    crate::session::verifier::lint::LintVerifier::new(sys_runner.clone()),
-                ));
+                vbus.register(Box::new(crate::session::verifier::lint::LintVerifier::new(
+                    sys_runner.clone(),
+                )));
                 vbus.register(Box::new(
                     crate::session::verifier::build::BuildVerifier::new(sys_runner.clone()),
                 ));
                 vbus.register(Box::new(crate::session::verifier::git::GitVerifier));
                 vbus.register(Box::new(crate::session::verifier::rustfmt::RustfmtVerifier));
-                vbus.register(Box::new(
-                    crate::session::verifier::test::TestVerifier::new(sys_runner.clone()),
-                ));
+                vbus.register(Box::new(crate::session::verifier::test::TestVerifier::new(
+                    sys_runner.clone(),
+                )));
                 vbus.register(Box::new(
                     crate::session::verifier::python_test::PythonTestVerifier,
                 ));
@@ -715,9 +712,7 @@ impl Executor {
                 // The correction loop now reads from the bus via the
                 // executor's verifier_bus field. We store a placeholder
                 // CorrectionLoop that carries the path_guard for auto-fixes.
-                self.correction_loop = Some(CorrectionLoop::new(
-                    self.sandbox.path_guard.clone(),
-                ));
+                self.correction_loop = Some(CorrectionLoop::new(self.sandbox.path_guard.clone()));
 
                 count
             }

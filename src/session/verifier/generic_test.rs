@@ -25,7 +25,7 @@ use crate::session::verifier::helpers::{
     command_finding, modified_path, tail_body, tool_on_path, tool_on_path_sync,
 };
 use crate::session::verifier::types::BusEvent;
-use crate::session::verifier::{Verdict, VerificationError, FixSuggestion};
+use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
 
 /// True if `./test.sh` exists in `root` and is executable (file present).
 fn test_script_present(root: &Path) -> bool {
@@ -158,9 +158,7 @@ impl BusVerifier for GenericTestVerifier {
             .output()
         {
             Ok(o) => o,
-            Err(_) => {
-                return vec![]
-            }
+            Err(_) => return vec![],
         };
         if output.status.success() {
             return vec![];

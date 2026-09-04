@@ -6,7 +6,6 @@ use crate::session::verifier::bus::{
 use crate::session::verifier::types::FixSuggestion;
 use crate::shared::test_util::remove_test_file;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 // ── BusVerifier-based test helpers (WO 47.14: replaces MockVerifier) ────
 

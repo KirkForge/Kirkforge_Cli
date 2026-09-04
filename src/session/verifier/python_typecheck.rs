@@ -14,7 +14,7 @@ use crate::session::verifier::helpers::{
     command_finding, head_body, language_gate, modified_path, Gate,
 };
 use crate::session::verifier::types::BusEvent;
-use crate::session::verifier::{Verdict, FixSuggestion};
+use crate::session::verifier::{FixSuggestion, Verdict};
 
 /// True if mypy is configured for `root` (mypy.ini file, or a
 /// `[tool.mypy]` section in pyproject.toml).

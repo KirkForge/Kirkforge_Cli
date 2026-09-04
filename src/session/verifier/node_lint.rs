@@ -12,11 +12,10 @@ use crate::session::verifier::bus::{
 };
 use crate::session::verifier::detect::{find_node_root, ProjectLanguage};
 use crate::session::verifier::helpers::{
-    command_finding, head_body, language_gate, modified_path, tool_on_path, tool_on_path_sync,
-    Gate,
+    command_finding, head_body, language_gate, modified_path, tool_on_path, tool_on_path_sync, Gate,
 };
 use crate::session::verifier::types::BusEvent;
-use crate::session::verifier::{Verdict, FixSuggestion};
+use crate::session::verifier::{FixSuggestion, Verdict};
 
 const NODE_EXTS: &[&str] = &["js", "jsx", "ts", "tsx", "mjs", "cjs"];
 

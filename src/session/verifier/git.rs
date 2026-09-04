@@ -312,7 +312,10 @@ fn check_merge_conflicts_sync(workdir: Option<&Path>) -> Vec<VerdictEntry> {
     if let Some(dir) = workdir {
         cmd.current_dir(dir);
     }
-    let output = match cmd.args(["diff", "--name-only", "--diff-filter=U"]).output() {
+    let output = match cmd
+        .args(["diff", "--name-only", "--diff-filter=U"])
+        .output()
+    {
         Ok(o) if o.status.success() => o,
         _ => return vec![],
     };
@@ -333,7 +336,7 @@ fn check_merge_conflicts_sync(workdir: Option<&Path>) -> Vec<VerdictEntry> {
                 .collect::<Vec<_>>()
                 .join("\n")
         ),
-        file: conflicted.first().map(|f| PathBuf::from(f)),
+        file: conflicted.first().map(PathBuf::from),
         line: None,
         fix: None,
     }]

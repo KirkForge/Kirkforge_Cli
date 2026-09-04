@@ -2,9 +2,7 @@
 //! `BusVerifier`/`VerifierBus`. This module fires a `FileWrite`-equivalent
 //! `VerifyContext` through the bus and asserts clean verdicts.
 
-use crate::session::verifier::bus::{
-    BusVerifier, VerdictEntry, VerifierBus, VerifyContext,
-};
+use crate::session::verifier::bus::{BusVerifier, VerdictEntry, VerifierBus, VerifyContext};
 use std::path::PathBuf;
 
 struct CleanBusVerifier;

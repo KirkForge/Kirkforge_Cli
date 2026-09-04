@@ -18,11 +18,10 @@ use crate::session::verifier::bus::{
 };
 use crate::session::verifier::detect::{find_python_root, ProjectLanguage};
 use crate::session::verifier::helpers::{
-    command_finding, language_gate, modified_path, tail_body, tool_on_path, tool_on_path_sync,
-    Gate,
+    command_finding, language_gate, modified_path, tail_body, tool_on_path, tool_on_path_sync, Gate,
 };
 use crate::session::verifier::types::BusEvent;
-use crate::session::verifier::{Verdict, VerificationError, FixSuggestion};
+use crate::session::verifier::{FixSuggestion, Verdict, VerificationError};
 
 /// Resolve the first available Python interpreter by probing `--version`.
 /// Prefers `python3` (the canonical name on most Linux distros — many ship

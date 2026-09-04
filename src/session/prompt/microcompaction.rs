@@ -20,6 +20,8 @@
 
 use crate::shared::{Message, Role};
 
+type BoxCollapseFn = Box<dyn Fn(&[Message]) -> String>;
+
 /// Result of applying microcompaction.
 #[derive(Debug, Clone)]
 pub struct MicrocompactResult {
@@ -69,7 +71,7 @@ pub fn maybe_microcompact(
     // ratio, exactly as the inline code did before the fold. Returns the
     // FULL summary-message content (including the `[Context summary …]`
     // prefix) so `process_middle`'s collapse arm doesn't format-wrap it.
-    let collapse_fn: Box<dyn Fn(&[Message]) -> String> = {
+    let collapse_fn: BoxCollapseFn = {
         let middle_tokens = super::estimate_tokens(&messages[anchor..tail_start]);
         Box::new(move |middle: &[Message]| {
             let summarised_count = middle.len();
@@ -98,9 +100,7 @@ pub fn maybe_microcompact(
             } else {
                 heuristic
             };
-            format!(
-                "[Context summary — {summarised_count} earlier messages compressed]\n{summary}",
-            )
+            format!("[Context summary — {summarised_count} earlier messages compressed]\n{summary}",)
         })
     };
 

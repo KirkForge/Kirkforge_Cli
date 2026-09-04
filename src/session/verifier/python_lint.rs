@@ -11,11 +11,10 @@ use crate::session::verifier::bus::{
 };
 use crate::session::verifier::detect::{find_python_root, ProjectLanguage};
 use crate::session::verifier::helpers::{
-    command_finding, head_body, language_gate, modified_path, tool_on_path, tool_on_path_sync,
-    Gate,
+    command_finding, head_body, language_gate, modified_path, tool_on_path, tool_on_path_sync, Gate,
 };
 use crate::session::verifier::types::BusEvent;
-use crate::session::verifier::{Verdict, FixSuggestion};
+use crate::session::verifier::{FixSuggestion, Verdict};
 
 /// Pick the first available Python linter binary by probing `--version`.
 /// Returns the binary name (`"ruff"` or `"flake8"`) or `None`.
@@ -120,18 +119,14 @@ impl BusVerifier for PythonLintVerifier {
             return vec![];
         };
         let output = match tool {
-            "ruff" => {
-                std::process::Command::new(tool)
-                    .current_dir(&root)
-                    .args(["check", &path.to_string_lossy()])
-                    .output()
-            }
-            _ => {
-                std::process::Command::new(tool)
-                    .current_dir(&root)
-                    .arg(path)
-                    .output()
-            }
+            "ruff" => std::process::Command::new(tool)
+                .current_dir(&root)
+                .args(["check", &path.to_string_lossy()])
+                .output(),
+            _ => std::process::Command::new(tool)
+                .current_dir(&root)
+                .arg(path)
+                .output(),
         };
         let output = match output {
             Ok(o) => o,

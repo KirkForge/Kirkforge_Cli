@@ -451,13 +451,14 @@ impl BusVerifier for SecurityVerifier {
 /// Extract the token immediately following `prefix` inside `content`.
 /// Returns the token string if found, else `None`.
 fn scan_entropy_token<'a>(content: &'a str, prefix: &str) -> Option<&'a str> {
-    for (idx, _) in content.match_indices(prefix) {
+    if let Some((idx, _)) = content.match_indices(prefix).next() {
         let start = idx + prefix.len();
         let rest = &content[start..];
         let end = rest.find(|c: char| !is_token_char(c)).unwrap_or(rest.len());
-        return Some(&rest[..end]);
+        Some(&rest[..end])
+    } else {
+        None
     }
-    None
 }
 
 #[cfg(test)]

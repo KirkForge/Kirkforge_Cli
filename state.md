@@ -415,16 +415,15 @@ MEDIUM-priority gaps (not blocking but limit capability):
 - Model failure: no fallback to cheaper model (error propagates raw)
 - Pipeline: strictly sequential, no parallel pipelines or fan-out
 - Pipeline roles: hardcoded scout→coder→reviewer, not configurable
-- Agent frontmatter: maxTurns FIXED; still missing isolation, hooks,
-  mcpServers, memory, background, permissionMode
+- Agent frontmatter: maxTurns FIXED; isolation/background/permissionMode
+  FIXED; still missing hooks, mcpServers, memory
 - Inter-subagent messaging: no SendMessage/ListAgents/TaskCreate tools
 - Agent registry: FIXED (reloadable via /reload)
 
-WO 39.4 (DONE 2026-09-04): Claude hook stdin-JSON contract shipped —
-hooks pipe ADR-0009 JSON payload to stdin; KF_* env vars kept;
-event-name mapping + generic pre-tool/post-tool events registered.
-Deferred: Claude settings.json/hooks.json reader (separate WO);
-emit-site wiring for generic pre-tool/post-tool fires (one-line-per-site).
+WO 39.4 (FULLY DONE 2026-09-04): Claude hook stdin-JSON contract +
+settings.json/hooks.json reader + generic pre-tool/post-tool emit-site
+wiring. A Claude plugin's hooks.json now runs its hooks with the payload
+it expects and the deny semantics it expects.
 
 Strengths vs competitors:
 - Untrusted handoff fencing (prompt-injection-safe context handoff)

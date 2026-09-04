@@ -8,6 +8,12 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- WO 39.4 (complete): Claude settings.json/hooks.json reader — loads
+  Claude hook configs and registers them as native hooks (event-name +
+  tool-matcher translation). Generic pre-tool/post-tool events now fire
+  at all 3 emit sites alongside per-tool events.
+- Agent frontmatter: isolation (worktree), background, permissionMode
+  (plan) fields parsed + wired into task_spawner/task_tool.
 - WO 39.4: Claude hook stdin-JSON contract — hooks now pipe a JSON
   payload (ADR-0009 schema) to the subprocess's stdin instead of
   nulling it. KF_* env vars kept for back-compat. Event-name mapping

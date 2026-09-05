@@ -319,7 +319,9 @@ mod tests {
     #[test]
     fn valid_commit_hashes_accepted() {
         assert!(is_valid_commit_hash("abc1234"));
-        assert!(is_valid_commit_hash("0123456789abcdef0123456789abcdef01234567"));
+        assert!(is_valid_commit_hash(
+            "0123456789abcdef0123456789abcdef01234567"
+        ));
         assert!(is_valid_commit_hash("ABCDEF0"));
     }
 

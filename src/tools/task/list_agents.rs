@@ -80,12 +80,7 @@ impl Tool for ListAgents {
         for e in &filtered {
             let notes_count = guard
                 .get(&e.id)
-                .map(|h| {
-                    h.notes
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .len()
-                })
+                .map(|h| h.notes.lock().unwrap_or_else(|e| e.into_inner()).len())
                 .unwrap_or(0);
             let notes_tag = if notes_count > 0 {
                 format!(

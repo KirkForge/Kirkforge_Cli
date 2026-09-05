@@ -233,8 +233,9 @@ pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
         bash::Bash, bash::BashCancel, bash::BashStatus, computer_use::ComputerUse,
         edit_file::EditFile, glob::Glob, grep::Grep, lsp_query::LspQuery,
         notebook_edit::NotebookEdit, read_file::ReadFile, read_image::ReadImage,
-        remember::Remember, task::Task, task::TaskOutput, todo::TodoRead, todo::TodoWrite,
-        web_fetch::WebFetch, web_search::WebSearch, workflow::WorkflowTool, write_file::WriteFile,
+        remember::Remember, task::ListAgents, task::SendMessage, task::Task, task::TaskOutput,
+        task::UpdateTask, todo::TodoRead, todo::TodoWrite, web_fetch::WebFetch,
+        web_search::WebSearch, workflow::WorkflowTool, write_file::WriteFile,
     };
 
     let task_manager = Arc::new(std::sync::Mutex::new(task::TaskManager::new()));
@@ -288,7 +289,14 @@ pub fn all_tools(ctx: &ToolContextBuilder) -> Vec<Arc<dyn Tool>> {
         ctx.max_subagent_turns,
         ctx.max_subagent_depth,
     )));
-    registry.register(Arc::new(TaskOutput::new(task_manager)));
+    registry.register(Arc::new(TaskOutput::new(task_manager.clone())));
+    // Inter-subagent messaging tools (send_message / list_agents /
+    // update_task): share the same TaskManager Arc so a subagent can
+    // message its peers, list them, and update its own status. The tools
+    // are thin wrappers over TaskManager helpers.
+    registry.register(Arc::new(SendMessage::new(task_manager.clone())));
+    registry.register(Arc::new(ListAgents::new(task_manager.clone())));
+    registry.register(Arc::new(UpdateTask::new(task_manager)));
     let mut workflow = WorkflowTool::new(
         ctx.deny_list.clone(),
         ctx.path_guard.clone(),
@@ -400,6 +408,9 @@ mod tests {
             "web_search",
             "task",
             "task_output",
+            "send_message",
+            "list_agents",
+            "update_task",
             "todo_write",
             "todo_read",
             "workflow_run",

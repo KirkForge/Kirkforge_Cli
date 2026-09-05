@@ -16,8 +16,26 @@ use crate::tools::task::{TaskConcurrencyMode, TaskRequest, TaskSpawner};
 use crate::tools::toolset::{CompositeToolset, VecToolset};
 use crate::tools::{Tool, UndoStackRef};
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+
+// Drain + clear the shared pending-messages queue (inter-subagent
+// messaging). Returns the joined messages (blank-line separated) or an
+// empty String when the queue is absent or empty. Called before each
+// run_turn_collecting so send_message appends land as a context addition
+// prepended to the turn input.
+fn drain_pending_messages(queue: &Option<Arc<Mutex<Vec<String>>>>) -> String {
+    let Some(q) = queue else {
+        return String::new();
+    };
+    let mut guard = q.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_empty() {
+        return String::new();
+    }
+    let joined = guard.join("\n\n");
+    guard.clear();
+    joined
+}
 
 // Marker separating the coder's change summary from its worktree patch in
 // the string run_task returns (WO 35.2). pub(crate) so the parallel
@@ -536,9 +554,23 @@ impl InProcessTaskSpawner {
             if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
                 break;
             }
-            let input = if turn_num == 0 { prompt } else { "continue" };
+            // Inter-subagent messaging (batch4): drain pending messages
+            // queued by `send_message` and prepend them to the turn input
+            // so they land as a system-level context addition. The queue
+            // is shared with the TaskHandle via Arc<Mutex<Vec>>, so
+            // appends from any task are visible here. An empty drain
+            // yields the plain turn input unchanged.
+            let inbox = drain_pending_messages(&request.pending_messages);
+            let base_input = if turn_num == 0 { prompt } else { "continue" };
+            let input: String = if inbox.is_empty() {
+                base_input.to_string()
+            } else {
+                format!(
+                    "[incoming message from another agent]\n{inbox}\n[end incoming message]\n\n{base_input}"
+                )
+            };
             let events = executor
-                .run_turn_collecting(input, &approval_tx, &cancelled)
+                .run_turn_collecting(&input, &approval_tx, &cancelled)
                 .await
                 .map_err(|e| format!("task turn {turn_num} failed: {e}"))?;
             for ev in &events {
@@ -638,6 +670,33 @@ impl InProcessTaskSpawner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── batch4: pending_messages drain helper ──
+
+    #[test]
+    fn drain_pending_messages_none_queue_returns_empty() {
+        assert_eq!(drain_pending_messages(&None), "");
+    }
+
+    #[test]
+    fn drain_pending_messages_empty_queue_returns_empty() {
+        let q: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        assert_eq!(drain_pending_messages(&Some(q.clone())), "");
+        // Still empty after drain.
+        assert!(q.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn drain_pending_messages_joins_and_clears() {
+        let q: Arc<Mutex<Vec<String>>> =
+            Arc::new(Mutex::new(vec!["hello".into(), "world".into()]));
+        let drained = drain_pending_messages(&Some(q.clone()));
+        assert_eq!(drained, "hello\n\nworld");
+        // Drain clears the queue.
+        assert!(q.lock().unwrap().is_empty());
+        // Second drain is empty.
+        assert_eq!(drain_pending_messages(&Some(q)), "");
+    }
 
     // ── WO 35.2: worktree gating + temp-dir hygiene ──
 
@@ -746,6 +805,7 @@ mod tests {
             cancel: None,
             owner: None,
             subagent_depth: 0,
+            pending_messages: None,
         };
         let result = spawner.run_task(request).await;
         assert!(
@@ -785,6 +845,7 @@ mod tests {
             cancel: Some(cancel),
             owner: None,
             subagent_depth: 0,
+            pending_messages: None,
         };
         let result = spawner.run_task(request).await;
         assert_eq!(
@@ -871,6 +932,7 @@ mod tests {
             cancel: None,
             owner: None,
             subagent_depth: 0,
+            pending_messages: None,
         };
         // Real spawned tasks (an un-awaited future never runs — the poll
         // loop below must observe dirs while both tasks are in flight).
@@ -959,6 +1021,7 @@ mod tests {
             cancel: None,
             owner: None,
             subagent_depth: 0,
+            pending_messages: None,
         };
         let spawner_a = spawner.clone();
         let a = tokio::spawn(async move { spawner_a.run_task(mk("doomed a")).await });

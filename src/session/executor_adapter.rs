@@ -123,6 +123,7 @@ impl ModelClient for ExecutorAdapter {
                 }),
                 owner: brief.owner.clone(),
                 subagent_depth: 0,
+                pending_messages: None,
             })
             .await
             .map_err(anyhow::Error::msg)?;

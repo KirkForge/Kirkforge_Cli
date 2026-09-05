@@ -29,6 +29,14 @@
 # body into a clean error instead of hanging the agent loop. Default: 180.
 # streaming_timeout_secs = 180
 
+# Fallback model tried when a subagent's primary model fails on the first
+# turn (connection refused, 401, 404, etc.). `None` = no fallback (propagate
+# the error as before). The per-provider [subagent_provider].fallback_model
+# field wins over this top-level field when set, so the fallback can be
+# scoped to a per-subagent-provider block. See `run_task_detailed`. WO 48.34
+# batch4 model-fallback. Default: none.
+# subagent_fallback_model = "qwen2.5:0.5b"
+
 # ---------------------------------------------------------------------------
 # Safety / approval
 # ---------------------------------------------------------------------------
@@ -75,6 +83,13 @@
 # (WO 48.34) — a runaway value cannot reach the subagent executor loop.
 # Clamped to 1–1024. Default: 32.
 # max_subagent_turns = 32
+
+# Maximum nesting depth for subagents (WO 43.26 audit, subagent audit
+# 2026-09-04). 0 = root session (can spawn), 1 = first subagent, etc. The
+# `task` tool refuses spawn when `depth + 1` exceeds this. Clamped to 0–10.
+# Default: 3 — a coder spawns an explore which spawns a plan, but not ad
+# infinitum.
+# max_subagent_depth = 3
 
 # ---------------------------------------------------------------------------
 # Computer-use browser tool ([computer_use] table — SecurityConfig is flattened
@@ -157,6 +172,11 @@
 # deepseek_api_key = ""
 # gemini_api_key = ""
 # kimi_api_key = ""
+# Fallback model tried when the primary subagent model fails on the first
+# turn. Wins over the top-level subagent_fallback_model when set, so the
+# fallback can be scoped to this provider block. WO 48.34 batch4. Default:
+# none.
+# fallback_model = "llama3.2:1b"
 
 # ---------------------------------------------------------------------------
 # Sandbox and filesystem access

@@ -312,6 +312,9 @@ async fn run_workflow_job(
             .collect(),
         cancel_token: tokio_util::sync::CancellationToken::new(),
         dry_run: false,
+        // WO 50.05 H1: scheduled jobs run unattended at the top level, so
+        // step spawns inherit depth 0 (no parent session to increment from).
+        subagent_depth: 0,
     };
 
     // 5. Execute with optional timeout (same pattern as run_bash_job).

@@ -689,7 +689,7 @@ const, `KEY_MAP` path integrity, that every env-var literal in the loader
 is accounted for, and that the const matches the serde-serialized field
 count. Adding a config field without updating the const fails the test.
 
-`ToolConfig.max_continuation_rounds` (default 5, clamped 0–50) caps how many
+`ToolConfig.max_continuation_rounds` (default 20, clamped 0–50) caps how many
 times the turn loop will continue after `FinishReason::Length`. When the cap
 is hit, the turn ends with a clear error message. Set to 0 to disable
 continuation entirely (treat `Length` as `Stop`). Each continuation round
@@ -1759,7 +1759,7 @@ Output Tokens:      1,153
 Compression Ratio:  63%
 Budget Violations:  0
 Provider:           GPT-5
-Cost:               £0.12
+Cost:               $0.12
 ```
 
 ### Hero benchmarks
@@ -1784,7 +1784,6 @@ Each task file in `benches/tasks/` is a TOML file:
 ```toml
 name = "fix_clippy_naming"
 difficulty = "easy"
-category = "C"            # A–H, matching the spec categories
 requires_model = false    # true = skipped by bench verify-only
 
 [setup]
@@ -1795,8 +1794,10 @@ type = "command_exits_zero"
 command = "grep -q 'pub fn first' src/lib.rs"
 ```
 
-The `category` field enables automated reporting by category. Tasks without a
-`category` field are reported under "Uncategorised".
+The `requires_model` field is optional (defaults to false). A `category`
+field (A–H, matching the spec categories) is accepted by the loader but
+no shipped task sets it today; tasks without one are reported under
+"Uncategorised".
 
 ### Implemented task mapping (30 tasks)
 

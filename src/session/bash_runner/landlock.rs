@@ -145,7 +145,6 @@ static SYSTEM_READ_DIRS: &[&CStr] = &[
 /// short paths like `.` (the default bash workdir) opened `".<junk>"`
 /// and failed with ENOENT/EINVAL, breaking every workdir-less bash call
 /// (WO 30.0.5 follow-up, 2026-08-13 dogfood).
-#[allow(dead_code)]
 pub(crate) struct LandlockPaths {
     pub workspace: CString,
     pub home: Option<CString>,

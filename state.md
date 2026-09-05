@@ -4,6 +4,23 @@
 
 ## Shipped (closed this session)
 
+- **Model fallback for subagents (2026-09-05, branch `batch4-model-fallback`)**:
+  when a subagent's primary model fails on the first turn (connection
+  refused, 401, 404, etc.), `run_task_detailed` retries with a fallback
+  model before giving up. New config fields: `subagent_fallback_model`
+  (top-level ModelConfig) and `subagent_provider.fallback_model`
+  (per-provider; wins over top-level). `None` = no fallback. New
+  `Executor::swap_adapter` method replaces the adapter at runtime and
+  updates `model_name` + `adapter_swap` tracker. Only the first turn
+  gets a fallback; subsequent turns use whatever adapter is active.
+  `build_subagent_adapter` helper factored out of the inline
+  construction. `CONFIG_FIELD_COUNT` bumped 110 → 111. Tests: TOML
+  parse test, `swap_adapter` test, first-turn-failure-then-recovery
+  test, fallback-triggered-on-dead-host test, no-fallback-propagates
+  test, per-provider-wins-over-top-level test.
+
+## Previous shipped (historical)
+
 - **WO 48.48 (2026-08-29, branch `wo48.48`, NOT merged)**: minify VFS cache
   key nanos-granular — `minify_source_impl` (src/shared/minify/mod.rs) keys on
   `duration_since(UNIX_EPOCH).as_nanos()` (u128) instead of `.as_secs()`; a

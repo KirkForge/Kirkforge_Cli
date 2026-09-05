@@ -438,3 +438,130 @@ async fn channel_close_without_done_persists_partial_as_truncated() {
         "partial assistant message must be persisted; got {msgs:?}"
     );
 }
+
+// ── Model fallback: swap_adapter + first-turn-failure recovery ──
+
+/// Adapter whose `stream()` always returns an Err. Simulates a model
+/// endpoint that is down (connection refused, 401, 404, etc.) so the
+/// fallback path in `run_task_detailed` can be exercised at the
+/// executor level.
+struct FailingAdapter {
+    info: crate::shared::ModelInfo,
+}
+
+#[async_trait::async_trait]
+impl crate::adapters::ModelAdapter for FailingAdapter {
+    fn model_info(&self) -> crate::shared::ModelInfo {
+        self.info.clone()
+    }
+
+    async fn stream(
+        &self,
+        _messages: &[crate::shared::Message],
+        _tools: &[ToolDef],
+    ) -> anyhow::Result<mpsc::Receiver<StreamEvent>> {
+        Err(anyhow::anyhow!("simulated connection refused"))
+    }
+}
+
+/// `swap_adapter` replaces the active adapter and updates the model
+/// name + adapter_swap tracker. After the swap, the executor's
+/// `model_name` reflects the new model, and a subsequent
+/// `run_turn_collecting` uses the new adapter.
+#[tokio::test]
+async fn swap_adapter_replaces_adapter_and_updates_model_name() {
+    let mut exe = make_executor(
+        Box::new(FailingAdapter {
+            info: make_info(),
+        }),
+        vec![],
+        make_config(false),
+    )
+    .unwrap();
+    assert_eq!(exe.model_name, "test-model");
+
+    // Swap in a working mock adapter.
+    let working = MockAdapter::new(
+        vec![
+            StreamEvent::Text("fallback reply".into()),
+            StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+    exe.swap_adapter(Box::new(working), "fallback-model");
+    assert_eq!(
+        exe.model_name, "fallback-model",
+        "model_name must reflect the swapped-in adapter"
+    );
+    assert_eq!(
+        exe.adapter_swap.current_model_name, "fallback-model",
+        "adapter_swap tracker must reflect the swapped-in adapter"
+    );
+
+    // The turn must now use the working adapter.
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+    let events = exe
+        .run_turn_collecting("hello", &approval_tx, never_cancelled())
+        .await
+        .expect("turn must succeed with the fallback adapter");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, TurnEvent::Token(s) if s.contains("fallback reply"))),
+        "fallback adapter output must appear in events; got {events:?}"
+    );
+}
+
+/// The first-turn-failure → fallback → retry pattern: a failing
+/// adapter produces an Err from `run_turn_collecting`, then
+/// `swap_adapter` installs a working adapter, and the retry succeeds.
+/// This mirrors the fallback logic in `run_task_detailed` without
+/// needing a live model endpoint.
+#[tokio::test]
+async fn first_turn_failure_then_swap_and_retry_succeeds() {
+    let mut exe = make_executor(
+        Box::new(FailingAdapter {
+            info: make_info(),
+        }),
+        vec![],
+        make_config(false),
+    )
+    .unwrap();
+    let (approval_tx, _approval_rx) = mpsc::unbounded_channel();
+
+    // First turn fails (simulated dead model).
+    let first = exe
+        .run_turn_collecting("do work", &approval_tx, never_cancelled())
+        .await;
+    assert!(
+        first.is_err(),
+        "failing adapter must produce an error on turn 0"
+    );
+
+    // Swap to a working adapter and retry — the fallback path.
+    let working = MockAdapter::new(
+        vec![
+            StreamEvent::Text("recovered".into()),
+            StreamEvent::Done {
+                finish_reason: FinishReason::Stop,
+                usage: None,
+            },
+        ],
+        make_info(),
+    );
+    exe.swap_adapter(Box::new(working), "recovery-model");
+
+    let events = exe
+        .run_turn_collecting("do work", &approval_tx, never_cancelled())
+        .await
+        .expect("retry with fallback adapter must succeed");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, TurnEvent::Token(s) if s.contains("recovered"))),
+        "fallback adapter output must appear in retry events; got {events:?}"
+    );
+}

@@ -79,6 +79,11 @@ pub struct SubagentProvider {
     pub gemini_api_key: Option<String>,
     #[serde(default)]
     pub kimi_api_key: Option<String>,
+    /// Fallback model tried when the primary subagent model fails on the
+    /// first turn (connection refused, 401, 404, etc.). `None` = no
+    /// fallback (propagate the error as before). See `run_task_detailed`.
+    #[serde(default)]
+    pub fallback_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +185,13 @@ pub struct ModelConfig {
     /// priced without a code change.
     #[serde(default)]
     pub price_overrides: HashMap<String, crate::shared::ModelPrice>,
+    /// Fallback model tried when the primary subagent model fails on the
+    /// first turn (connection refused, 401, 404, etc.). `None` = no
+    /// fallback. The `SubagentProvider.fallback_model` field wins over
+    /// this one when set, so the fallback can be scoped to a
+    /// per-subagent-provider block. See `run_task_detailed`.
+    #[serde(default)]
+    pub subagent_fallback_model: Option<String>,
 }
 
 impl Default for ModelConfig {
@@ -220,6 +232,7 @@ impl Default for ModelConfig {
             adapter_routing: HashMap::new(),
             subagent_provider: SubagentProvider::default(),
             price_overrides: HashMap::new(),
+            subagent_fallback_model: None,
         }
     }
 }
@@ -237,6 +250,7 @@ impl ModelConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::Config;
 
     #[test]
     fn effective_response_format_prefers_explicit_over_json_mode() {
@@ -275,7 +289,37 @@ mod tests {
         assert!(sub.deepseek_api_key.is_none());
         assert!(sub.gemini_api_key.is_none());
         assert!(sub.kimi_api_key.is_none());
+        assert!(sub.fallback_model.is_none());
         // ModelConfig exposes the sub-struct with a default.
         assert!(ModelConfig::default().subagent_provider.model.is_none());
+        assert!(
+            ModelConfig::default().subagent_fallback_model.is_none(),
+            "top-level fallback defaults to None"
+        );
+    }
+
+    // The fallback model field parses from TOML (per-subagent-provider
+    // and top-level). This is the config-side half of the
+    // model-failure fallback wired in `run_task_detailed`.
+    #[test]
+    fn subagent_fallback_model_parses_from_toml() {
+        let toml = r#"
+            subagent_fallback_model = "qwen2.5:0.5b"
+
+            [subagent_provider]
+            model = "kimi-2.7k-coder:cloud"
+            fallback_model = "llama3.2:1b"
+        "#;
+        let cfg: Config = toml::from_str(toml).expect("fallback TOML must parse");
+        assert_eq!(
+            cfg.model.subagent_fallback_model.as_deref(),
+            Some("qwen2.5:0.5b"),
+            "top-level subagent_fallback_model must parse"
+        );
+        assert_eq!(
+            cfg.model.subagent_provider.fallback_model.as_deref(),
+            Some("llama3.2:1b"),
+            "per-subagent-provider fallback_model must parse"
+        );
     }
 }

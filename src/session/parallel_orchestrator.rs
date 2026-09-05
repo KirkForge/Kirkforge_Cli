@@ -49,6 +49,12 @@ pub struct PipelineResult {
     /// not ported. `None` for aborted runs (no verdict reached). Set by
     /// `run_pipeline`; surfaced by `summary()` so a PASS states its scope.
     pub verdict_label: Option<String>,
+    /// Fan-out copies: when a role ran N copies in parallel (`fan_out:
+    /// Some(n)` in `RoleSpec`), each copy's result is recorded here in
+    /// spawn order. Empty for the default single-copy pipeline. The role's
+    /// combined summary (copies joined by `---`) is what the next role
+    /// receives as handoff and what populates the named slot.
+    pub fan_out_results: Vec<SubagentResult>,
 }
 
 /// One subagent's outcome: its TaskManager id and final summary.
@@ -69,6 +75,60 @@ impl SubagentResult {
             task_id: "(not started)".to_string(),
             summary: format!("(skipped: {reason})"),
             failed: false,
+        }
+    }
+}
+
+// ── Configurable pipeline roles (fan-out + custom shapes) ──
+
+// One role in a configurable pipeline. The default pipeline builds three
+// of these (scout, coder, reviewer); callers can build their own chain.
+pub struct RoleSpec {
+    pub name: String,
+    pub persona: String,
+    pub max_turns: usize,
+    /// If Some, this role runs N copies in parallel (fan-out). Each copy
+    /// gets the same handoff from the previous role; their summaries are
+    /// concatenated into one handoff for the next role.
+    pub fan_out: Option<usize>,
+    /// If true, this role's output is passed to the next role as handoff.
+    /// Set false for terminal roles whose output is not handed on (e.g. a
+    /// final reviewer whose summary is the end product).
+    pub pass_to_next: bool,
+}
+
+/// Configuration for a configurable pipeline. The default returns the
+/// classic scout→coder→reviewer shape with no fan-out.
+pub struct PipelineConfig {
+    pub roles: Vec<RoleSpec>,
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        Self {
+            roles: vec![
+                RoleSpec {
+                    name: "scout".into(),
+                    persona: "explore".into(),
+                    max_turns: 1,
+                    fan_out: None,
+                    pass_to_next: true,
+                },
+                RoleSpec {
+                    name: "coder".into(),
+                    persona: "coder".into(),
+                    max_turns: 1,
+                    fan_out: None,
+                    pass_to_next: true,
+                },
+                RoleSpec {
+                    name: "reviewer".into(),
+                    persona: "plan".into(),
+                    max_turns: 1,
+                    fan_out: None,
+                    pass_to_next: false,
+                },
+            ],
         }
     }
 }
@@ -101,6 +161,15 @@ impl PipelineResult {
             "  Reviewer [{}] — {}",
             self.reviewer.task_id, self.reviewer.summary
         ));
+        if !self.fan_out_results.is_empty() {
+            lines.push(format!("  Fan-out copies: {}", self.fan_out_results.len()));
+            for (i, r) in self.fan_out_results.iter().enumerate() {
+                lines.push(format!(
+                    "    copy {i} [{}] — {}",
+                    r.task_id, r.summary
+                ));
+            }
+        }
         // WO 41.4: state the verdict coverage scope. A completed run's
         // verdict is security-only until lint/types/graph emitters ship.
         if let Some(label) = &self.verdict_label {
@@ -172,56 +241,154 @@ impl PipelineOrchestrator {
     /// WO 41.1 collapsed the two public wrappers (`run_parallel` /
     /// `run_sequential`) into this single method.
     pub async fn run_pipeline(&self, task_description: &str) -> PipelineResult {
-        let mut aborted: Option<String> = None;
-
-        let scout = self
-            .spawn_role("scout", "explore", task_description, None, 1)
-            .await;
-        let coder = if self.pipeline_cancelled() {
-            aborted = Some("workflow cancelled".to_string());
-            SubagentResult::skipped("cancelled before coder started")
-        } else if scout.failed {
-            aborted = Some(format!("scout failed: {}", scout.summary));
-            SubagentResult::skipped("scout failed")
-        } else {
-            self.spawn_role("coder", "coder", task_description, Some(&scout.summary), 1)
-                .await
-        };
-
-        let reviewer = if self.pipeline_cancelled() {
-            aborted.get_or_insert_with(|| "workflow cancelled".to_string());
-            SubagentResult::skipped("cancelled before reviewer started")
-        } else if coder.failed {
-            aborted = Some(format!("coder failed: {}", coder.summary));
-            SubagentResult::skipped("coder failed")
-        } else if aborted.is_some() {
-            SubagentResult::skipped("pipeline aborted before reviewer")
-        } else {
-            self.spawn_role(
-                "reviewer",
-                "plan",
-                task_description,
-                Some(&coder.summary),
-                1,
-            )
+        self.run_pipeline_with_config(task_description, &PipelineConfig::default())
             .await
-        };
+    }
+
+    /// Run a configurable pipeline. Roles run in `config.roles` order; each
+    /// role's summary is handed off to the next role whose `pass_to_next`
+    /// is true. A role with `fan_out: Some(n)` spawns N copies in parallel
+    /// via `futures_util::future::join_all`; their summaries are joined by
+    /// `---` into one handoff. The classic shape is recovered by calling
+    /// with `&PipelineConfig::default()`.
+    pub async fn run_pipeline_with_config(
+        &self,
+        task_description: &str,
+        config: &PipelineConfig,
+    ) -> PipelineResult {
+        let mut aborted: Option<String> = None;
+        let mut last_handoff: Option<String> = None;
+        let mut last_failed = false;
+        let mut last_role_name = String::new();
+        let mut last_summary = String::new();
+        // Named slots for the classic shape (scout/coder/reviewer), filled
+        // from the configured roles by name so the default config produces
+        // the same PipelineResult shape as before.
+        let mut scout = SubagentResult::skipped("no scout role configured");
+        let mut coder = SubagentResult::skipped("no coder role configured");
+        let mut reviewer = SubagentResult::skipped("no reviewer role configured");
+        let mut coder_patch: Option<String> = None;
+        let mut fan_out_results: Vec<SubagentResult> = Vec::new();
+
+        for role in &config.roles {
+            if self.pipeline_cancelled() {
+                aborted.get_or_insert_with(|| "workflow cancelled".to_string());
+                break;
+            }
+            if last_failed {
+                aborted.get_or_insert_with(|| {
+                    format!("{last_role_name} failed: {last_summary}")
+                });
+                break;
+            }
+
+            let copies = role.fan_out.unwrap_or(1).max(1);
+            let results: Vec<SubagentResult> = if copies == 1 {
+                vec![
+                    self.spawn_role(
+                        &role.name,
+                        &role.persona,
+                        task_description,
+                        last_handoff.as_deref(),
+                        role.max_turns,
+                    )
+                    .await,
+                ]
+            } else {
+                let handoff = last_handoff.clone();
+                let futures: Vec<_> = (0..copies)
+                    .map(|_| {
+                        self.spawn_role(
+                            &role.name,
+                            &role.persona,
+                            task_description,
+                            handoff.as_deref(),
+                            role.max_turns,
+                        )
+                    })
+                    .collect();
+                futures_util::future::join_all(futures).await
+            };
+
+            let failed = results.iter().any(|r| r.failed);
+            let combined_summary = results
+                .iter()
+                .map(|r| r.summary.clone())
+                .collect::<Vec<_>>()
+                .join("\n---\n");
+
+            // Record the named slots for the classic shape.
+            match role.name.as_str() {
+                "scout" => {
+                    scout = results.into_iter().next().unwrap_or_else(|| {
+                        SubagentResult::skipped("scout produced no result")
+                    });
+                    last_handoff = Some(scout.summary.clone());
+                }
+                "coder" => {
+                    coder = SubagentResult {
+                        task_id: results
+                            .first()
+                            .map(|r| r.task_id.clone())
+                            .unwrap_or_else(|| "(no coder)".into()),
+                        summary: combined_summary.clone(),
+                        failed,
+                    };
+                    coder_patch = extract_patch(&coder.summary).map(str::to_string);
+                    if copies > 1 {
+                        fan_out_results = results;
+                    }
+                    last_handoff = Some(coder.summary.clone());
+                }
+                "reviewer" => {
+                    reviewer = results.into_iter().next().unwrap_or_else(|| {
+                        SubagentResult::skipped("reviewer produced no result")
+                    });
+                    // reviewer is terminal in the classic shape — its
+                    // output is not handed on.
+                    last_handoff = if role.pass_to_next {
+                        Some(reviewer.summary.clone())
+                    } else {
+                        None
+                    };
+                }
+                _ => {
+                    // Custom role: hand off its combined summary if asked.
+                    let combined = SubagentResult {
+                        task_id: results
+                            .first()
+                            .map(|r| r.task_id.clone())
+                            .unwrap_or_else(|| "(no role)".into()),
+                        summary: combined_summary.clone(),
+                        failed,
+                    };
+                    if copies > 1 {
+                        fan_out_results = results;
+                    }
+                    last_handoff = if role.pass_to_next {
+                        Some(combined.summary.clone())
+                    } else {
+                        None
+                    };
+                }
+            }
+            last_failed = failed;
+            last_role_name = role.name.clone();
+            last_summary = combined_summary.clone();
+        }
 
         PipelineResult {
-            coder_patch: extract_patch(&coder.summary).map(str::to_string),
+            coder_patch,
             scout,
             coder,
             reviewer,
-            // WO 41.4: the pipeline does not run the reducer; a completed
-            // run's verdict is security-only (lint/types/graph emitters are
-            // not ported — same honest disclosure as `plugin_verify`).
-            // Aborted runs reached no verdict.
             verdict_label: if aborted.is_none() {
                 Some("PASS (security-only coverage)".to_string())
             } else {
                 None
             },
             aborted,
+            fan_out_results,
         }
     }
 
@@ -488,6 +655,7 @@ mod tests {
             },
             aborted: None,
             verdict_label: Some("PASS (security-only coverage)".into()),
+            fan_out_results: Vec::new(),
         };
         let s = r.summary();
         assert!(s.contains("Scout") && s.contains("task-1") && s.contains("found 3 files"));
@@ -523,6 +691,7 @@ mod tests {
             },
             aborted: None,
             verdict_label: None,
+            fan_out_results: Vec::new(),
         };
         let s = r.summary();
         assert!(s.contains("Coder patch: 2 lines"), "got: {s}");
@@ -543,6 +712,7 @@ mod tests {
             reviewer: SubagentResult::skipped("pipeline aborted before reviewer"),
             aborted: Some("scout failed: provider down".into()),
             verdict_label: None,
+            fan_out_results: Vec::new(),
         };
         let s = r.summary();
         assert!(s.contains("ABORTED"), "aborted run must say so: {s}");
@@ -1146,6 +1316,7 @@ mod tests {
             },
             aborted: None,
             verdict_label: None,
+            fan_out_results: Vec::new(),
         };
         let summary = result.summary();
         assert!(
@@ -1182,5 +1353,362 @@ mod tests {
         // Parent repo untouched.
         let content = std::fs::read_to_string(repo.path().join("base.txt")).unwrap();
         assert!(content.contains("base"), "conflict must not mutate parent");
+    }
+
+    // ── Configurable pipeline roles + fan-out ──
+
+    // Default config produces the same shape as the classic run_pipeline:
+    // scout → coder → reviewer, in sequence, with the expected handoffs.
+    #[tokio::test]
+    async fn default_config_runs_classic_scout_coder_reviewer_shape() {
+        let probe = PipelineProbe {
+            events: Arc::new(Mutex::new(Vec::new())),
+            prompts: Arc::new(Mutex::new(Vec::new())),
+        };
+        let events = probe.events.clone();
+        let orch = probe.orchestrator();
+
+        let result = orch
+            .run_pipeline_with_config("do the thing", &PipelineConfig::default())
+            .await;
+
+        // Same strict sequence as the classic run_pipeline.
+        assert_eq!(
+            events.lock().unwrap().clone(),
+            vec![
+                "start:scout",
+                "end:scout",
+                "start:coder",
+                "end:coder",
+                "start:reviewer",
+                "end:reviewer"
+            ],
+            "default config must reproduce the classic sequence"
+        );
+        assert!(result.aborted.is_none());
+        assert!(result.fan_out_results.is_empty());
+        assert_eq!(
+            result.scout.summary,
+            "SCOUT-SUMMARY: a.rs and b.rs are relevant"
+        );
+        assert!(result.coder.summary.contains("CODED: edited a.rs"));
+        assert_eq!(result.reviewer.summary, "REVIEW: looks good");
+        assert!(result.coder_patch.is_some());
+        assert_eq!(
+            result.verdict_label.as_deref(),
+            Some("PASS (security-only coverage)")
+        );
+    }
+
+    // Custom config with a different role chain — scout → coder → coder →
+    // reviewer — runs four roles in order, with the second coder receiving
+    // the first coder's handoff.
+    #[tokio::test]
+    async fn custom_config_four_role_chain_runs_in_order() {
+        let probe = PipelineProbe {
+            events: Arc::new(Mutex::new(Vec::new())),
+            prompts: Arc::new(Mutex::new(Vec::new())),
+        };
+        let events = probe.events.clone();
+        let prompts = probe.prompts.clone();
+        let orch = probe.orchestrator();
+
+        let config = PipelineConfig {
+            roles: vec![
+                RoleSpec {
+                    name: "scout".into(),
+                    persona: "explore".into(),
+                    max_turns: 1,
+                    fan_out: None,
+                    pass_to_next: true,
+                },
+                RoleSpec {
+                    name: "coder".into(),
+                    persona: "coder".into(),
+                    max_turns: 1,
+                    fan_out: None,
+                    pass_to_next: true,
+                },
+                RoleSpec {
+                    name: "coder".into(),
+                    persona: "coder".into(),
+                    max_turns: 1,
+                    fan_out: None,
+                    pass_to_next: true,
+                },
+                RoleSpec {
+                    name: "reviewer".into(),
+                    persona: "plan".into(),
+                    max_turns: 1,
+                    fan_out: None,
+                    pass_to_next: false,
+                },
+            ],
+        };
+
+        let result = orch
+            .run_pipeline_with_config("refactor across two files", &config)
+            .await;
+
+        // Four roles run strictly in sequence: scout, coder, coder, reviewer.
+        assert_eq!(
+            events.lock().unwrap().clone(),
+            vec![
+                "start:scout",
+                "end:scout",
+                "start:coder",
+                "end:coder",
+                "start:coder",
+                "end:coder",
+                "start:reviewer",
+                "end:reviewer"
+            ],
+            "four-role chain must run in order, got different sequence"
+        );
+        assert!(result.aborted.is_none());
+        // The reviewer's handoff carries BOTH coders' summaries (the second
+        // coder received the first's handoff, then handed its own on).
+        let reviewer_prompt = prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(p, _)| p == "plan")
+            .map(|(_, prompt)| prompt.clone())
+            .expect("reviewer prompt recorded");
+        assert!(
+            reviewer_prompt.contains("CODED: edited a.rs"),
+            "reviewer must see the coder handoff: {reviewer_prompt}"
+        );
+    }
+
+    // Fan-out: a coder role with `fan_out: Some(2)` spawns two coders in
+    // parallel. Their starts interleave before either ends (concurrent
+    // dispatch), and the reviewer receives both summaries joined by `---`.
+    #[tokio::test]
+    async fn fan_out_two_coders_run_in_parallel_and_combine_summaries() {
+        // A probe that emits distinguishable per-call summaries so the two
+        // parallel coders are told apart by an atomic counter.
+        struct FanOutProbe {
+            events: Arc<Mutex<Vec<String>>>,
+            counter: Arc<std::sync::atomic::AtomicUsize>,
+            prompts: Arc<Mutex<Vec<(String, String)>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl ModelClient for FanOutProbe {
+            async fn execute(&self, brief: &TaskBrief) -> anyhow::Result<Emission> {
+                let persona = brief.persona.clone().unwrap_or_default();
+                let phase = PipelineProbe::phase(&persona);
+                self.events.lock().unwrap().push(format!("start:{phase}"));
+                self.prompts
+                    .lock()
+                    .unwrap()
+                    .push((persona.clone(), brief.description.clone()));
+                // Yield so the second parallel copy gets scheduled before
+                // the first ends — this is what makes fan-out observable
+                // vs. sequential dispatch.
+                tokio::task::yield_now().await;
+                self.events.lock().unwrap().push(format!("end:{phase}"));
+                let n = self
+                    .counter
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let content = match persona.as_str() {
+                    "explore" => "SCOUT-SUMMARY: a.rs and b.rs".to_string(),
+                    "coder" => format!("CODED copy {n}: edited file {n}"),
+                    _ => format!("REVIEW copy {n}"),
+                };
+                Ok(Emission {
+                    agent_id: "fanout-probe".into(),
+                    content,
+                    format: brief.template.clone(),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let probe = FanOutProbe {
+            events: Arc::new(Mutex::new(Vec::new())),
+            counter: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            prompts: Arc::new(Mutex::new(Vec::new())),
+        };
+        let events = probe.events.clone();
+        let prompts = probe.prompts.clone();
+        let orch = PipelineOrchestrator::with_client(Arc::new(probe));
+
+        let config = PipelineConfig {
+            roles: vec![
+                RoleSpec {
+                    name: "scout".into(),
+                    persona: "explore".into(),
+                    max_turns: 1,
+                    fan_out: None,
+                    pass_to_next: true,
+                },
+                RoleSpec {
+                    name: "coder".into(),
+                    persona: "coder".into(),
+                    max_turns: 1,
+                    fan_out: Some(2),
+                    pass_to_next: true,
+                },
+                RoleSpec {
+                    name: "reviewer".into(),
+                    persona: "plan".into(),
+                    max_turns: 1,
+                    fan_out: None,
+                    pass_to_next: false,
+                },
+            ],
+        };
+
+        let result = orch
+            .run_pipeline_with_config("edit two files at once", &config)
+            .await;
+
+        let ev = events.lock().unwrap().clone();
+        // Scout runs alone first.
+        assert_eq!(ev[0], "start:scout");
+        assert_eq!(ev[1], "end:scout");
+        // Two coders start before either ends — fan-out, not sequence.
+        assert_eq!(ev[2], "start:coder");
+        assert_eq!(ev[3], "start:coder", "both coders must start before either ends");
+        assert_eq!(ev[4], "end:coder");
+        assert_eq!(ev[5], "end:coder");
+        // Then the reviewer.
+        assert_eq!(ev[6], "start:reviewer");
+        assert_eq!(ev[7], "end:reviewer");
+
+        assert!(result.aborted.is_none());
+        // Two fan-out copies recorded.
+        assert_eq!(result.fan_out_results.len(), 2);
+        // Coder summary is the two copies joined by `---`.
+        assert!(
+            result.coder.summary.contains("CODED copy 0"),
+            "coder summary must carry copy 0: {}",
+            result.coder.summary
+        );
+        assert!(
+            result.coder.summary.contains("CODED copy 1"),
+            "coder summary must carry copy 1: {}",
+            result.coder.summary
+        );
+        assert!(
+            result.coder.summary.contains("\n---\n"),
+            "copies must be joined by `---`: {}",
+            result.coder.summary
+        );
+        // The reviewer received the combined coder handoff.
+        let reviewer_prompt = prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(p, _)| p == "plan")
+            .map(|(_, prompt)| prompt.clone())
+            .expect("reviewer prompt recorded");
+        assert!(
+            reviewer_prompt.contains("CODED copy 0")
+                && reviewer_prompt.contains("CODED copy 1"),
+            "reviewer must see both coder copies: {reviewer_prompt}"
+        );
+    }
+
+    // Fan-out with a failed copy: the role is marked failed, the pipeline
+    // aborts before the next role, and the abort reason names the role.
+    #[tokio::test]
+    async fn fan_out_copy_failure_aborts_pipeline() {
+        struct FailCopyProbe {
+            events: Arc<Mutex<Vec<String>>>,
+            calls: Arc<std::sync::atomic::AtomicUsize>,
+        }
+
+        #[async_trait::async_trait]
+        impl ModelClient for FailCopyProbe {
+            async fn execute(&self, brief: &TaskBrief) -> anyhow::Result<Emission> {
+                let persona = brief.persona.clone().unwrap_or_default();
+                let phase = PipelineProbe::phase(&persona);
+                self.events.lock().unwrap().push(format!("start:{phase}"));
+                self.events.lock().unwrap().push(format!("end:{phase}"));
+                let n = self
+                    .calls
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                match persona.as_str() {
+                    "explore" => Ok(Emission {
+                        content: "SCOUT ok".into(),
+                        ..Default::default()
+                    }),
+                    "coder" if n % 2 == 0 => Err(anyhow::anyhow!("coder copy 0 exploded")),
+                    "coder" => Ok(Emission {
+                        content: format!("CODED copy {n}"),
+                        ..Default::default()
+                    }),
+                    _ => Ok(Emission {
+                        content: "REVIEW ok".into(),
+                        ..Default::default()
+                    }),
+                }
+            }
+        }
+
+        let probe = FailCopyProbe {
+            events: Arc::new(Mutex::new(Vec::new())),
+            calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        let events = probe.events.clone();
+        let orch = PipelineOrchestrator::with_client(Arc::new(probe));
+
+        let config = PipelineConfig {
+            roles: vec![
+                RoleSpec {
+                    name: "scout".into(),
+                    persona: "explore".into(),
+                    max_turns: 1,
+                    fan_out: None,
+                    pass_to_next: true,
+                },
+                RoleSpec {
+                    name: "coder".into(),
+                    persona: "coder".into(),
+                    max_turns: 1,
+                    fan_out: Some(2),
+                    pass_to_next: true,
+                },
+                RoleSpec {
+                    name: "reviewer".into(),
+                    persona: "plan".into(),
+                    max_turns: 1,
+                    fan_out: None,
+                    pass_to_next: false,
+                },
+            ],
+        };
+
+        let result = orch
+            .run_pipeline_with_config("one coder fails", &config)
+            .await;
+
+        let ev = events.lock().unwrap().clone();
+        // Scout ran, both coders ran, but the reviewer never started.
+        assert!(ev.iter().any(|e| e == "start:scout"));
+        assert_eq!(
+            ev.iter().filter(|e| *e == "start:coder").count(),
+            2,
+            "both coder copies must start"
+        );
+        assert!(
+            !ev.iter().any(|e| e == "start:reviewer"),
+            "reviewer must not start when a coder copy fails"
+        );
+        assert!(result.aborted.is_some(), "pipeline must abort");
+        assert!(
+            result
+                .aborted
+                .as_deref()
+                .is_some_and(|a| a.contains("coder failed")),
+            "abort reason must name the coder, got {:?}",
+            result.aborted
+        );
+        assert!(result.coder.failed, "coder slot must be marked failed");
+        assert!(result.verdict_label.is_none(), "aborted run has no verdict");
+        assert_eq!(result.fan_out_results.len(), 2);
     }
 }

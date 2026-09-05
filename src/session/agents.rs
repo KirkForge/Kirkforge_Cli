@@ -585,8 +585,9 @@ mod tests {
 
     #[test]
     fn parse_agent_hooks_json_object() {
-        let content =
-            agent_md("name: hk\ndescription: hooked\nhooks: {\"PreToolUse\": [{\"command\": \"x\"}]}");
+        let content = agent_md(
+            "name: hk\ndescription: hooked\nhooks: {\"PreToolUse\": [{\"command\": \"x\"}]}",
+        );
         let a = parse_agent(&content).unwrap();
         let h = a.hooks.expect("hooks must parse");
         assert!(h.is_object(), "hooks JSON object must parse as object: {h}");

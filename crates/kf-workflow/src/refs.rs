@@ -108,6 +108,37 @@ const CONDITION_TIMEOUT_SECS: u64 = 30;
 #[cfg(test)]
 const CONDITION_TIMEOUT_SECS: u64 = 2;
 
+/// Character allowlist for condition strings. Rejects shell
+/// metacharacters that enable command injection (semicolon, ampersand,
+/// pipe, dollar, backtick, and newline-as-separator are all outside the
+/// set), so a user-editable workflow JSON cannot smuggle an arbitrary
+/// command past `sh -c`.
+/// ponytail: char allowlist, not a parser — the allowed charset can
+/// still build odd test expressions, but cannot inject commands.
+/// Ceiling: upgrade to a real expression parser if conditions need
+/// richer logic.
+fn is_safe_condition_char(c: char) -> bool {
+    matches!(
+        c,
+        'a'..='z'
+            | 'A'..='Z'
+            | '0'..='9'
+            | ' '
+            | '_'
+            | '-'
+            | '='
+            | '!'
+            | '<'
+            | '>'
+            | '('
+            | ')'
+            | '"'
+            | '\''
+            | '\t'
+            | '\n'
+    )
+}
+
 /// Evaluate a shell condition string with a wall-clock bound and
 /// `kill_on_drop`. Returns `Ok(true)` if the condition exits 0,
 /// `Ok(false)` on timeout (a hung condition skips the step, not the
@@ -124,6 +155,12 @@ pub async fn eval_condition_bounded(
     condition: &str,
     prepare: Option<&(dyn Fn(&mut tokio::process::Command) + Send + Sync)>,
 ) -> Result<bool> {
+    if let Some(bad) = condition.chars().find(|c| !is_safe_condition_char(*c)) {
+        tracing::warn!("rejecting condition with unsafe char {bad:?}: {condition}");
+        return Err(anyhow::anyhow!(
+            "condition contains disallowed character {bad:?}: {condition}"
+        ));
+    }
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c")
         .arg(condition)
@@ -158,4 +195,55 @@ pub async fn eval_condition_bounded(
     // On timeout the `cmd` future (still owned here) is dropped; `kill_on_drop`
     // reaps the spawned `sh` process so a `sleep infinity` condition cannot
     // outlive the bound.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // WO 50.09: a clean condition with only allowlisted chars passes the
+    // guard and reaches the shell (it evaluates true here).
+    #[tokio::test]
+    async fn eval_condition_clean_condition_passes_guard() {
+        assert!(eval_condition_bounded("test 1 -eq 1", None).await.unwrap());
+    }
+
+    // WO 50.09: a command-injection attempt via `;` is rejected before
+    // spawn — `rm -rf /` must never run.
+    #[tokio::test]
+    async fn eval_condition_rejects_semicolon_injection() {
+        let err = eval_condition_bounded("true; rm -rf /", None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("disallowed character"),
+            "expected disallowed-char error, got: {err}"
+        );
+    }
+
+    // WO 50.09: command substitution `$()` is rejected — `$` is outside
+    // the allowlist.
+    #[tokio::test]
+    async fn eval_condition_rejects_command_substitution() {
+        let err = eval_condition_bounded("test $(whoami) = root", None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("disallowed character"),
+            "expected disallowed-char error, got: {err}"
+        );
+    }
+
+    // WO 50.09: backtick command substitution is rejected — backtick is
+    // outside the allowlist.
+    #[tokio::test]
+    async fn eval_condition_rejects_backtick_injection() {
+        let err = eval_condition_bounded("test `whoami` = root", None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("disallowed character"),
+            "expected disallowed-char error, got: {err}"
+        );
+    }
 }

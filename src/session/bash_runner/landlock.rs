@@ -222,7 +222,12 @@ pub(crate) fn apply_landlock(paths: &LandlockPaths) -> Result<(), String> {
         }
     }
 
-    // system dirs: read-only (or full for /dev) — warn on failure, continue
+    // system dirs: read-only (or full for /dev) — skip on failure, continue.
+    // WO 50.12 H1: no `eprintln!` here — we are inside pre_exec (post-fork,
+    // pre-exec) where `eprintln!`/`format!` are async-signal-unsafe (heap
+    // alloc + stderr Mutex can deadlock the child). The parent already logs
+    // landlock setup via `tracing::warn!` before fork; the child has no safe
+    // way to surface a per-dir warning.
     for dir in SYSTEM_READ_DIRS {
         let access = if *dir == c"/dev" {
             ACCESS_FS_ALL
@@ -230,9 +235,7 @@ pub(crate) fn apply_landlock(paths: &LandlockPaths) -> Result<(), String> {
             ACCESS_FS_READ
         };
         unsafe {
-            if !add_path(ruleset_fd, dir, access) {
-                eprintln!("landlock: warning: cannot add system dir {dir:?}");
-            }
+            add_path(ruleset_fd, dir, access);
         }
     }
 
@@ -240,9 +243,7 @@ pub(crate) fn apply_landlock(paths: &LandlockPaths) -> Result<(), String> {
     if let Some(ref home) = paths.home {
         if home != &paths.workspace {
             unsafe {
-                if !add_path(ruleset_fd, home, ACCESS_FS_ALL) {
-                    eprintln!("landlock: warning: cannot add home dir {home:?}");
-                }
+                add_path(ruleset_fd, home, ACCESS_FS_ALL);
             }
         }
     }
@@ -251,9 +252,7 @@ pub(crate) fn apply_landlock(paths: &LandlockPaths) -> Result<(), String> {
     for xdg in &paths.xdg_dirs {
         if xdg != &paths.workspace {
             unsafe {
-                if !add_path(ruleset_fd, xdg, ACCESS_FS_ALL) {
-                    eprintln!("landlock: warning: cannot add XDG dir {xdg:?}");
-                }
+                add_path(ruleset_fd, xdg, ACCESS_FS_ALL);
             }
         }
     }
@@ -263,9 +262,7 @@ pub(crate) fn apply_landlock(paths: &LandlockPaths) -> Result<(), String> {
     for path in &paths.extra {
         if path != &paths.workspace {
             unsafe {
-                if !add_path(ruleset_fd, path, ACCESS_FS_ALL) {
-                    eprintln!("landlock: warning: cannot add extra path {path:?}");
-                }
+                add_path(ruleset_fd, path, ACCESS_FS_ALL);
             }
         }
     }
@@ -280,10 +277,6 @@ pub(crate) fn apply_landlock(paths: &LandlockPaths) -> Result<(), String> {
             let err = std::io::Error::last_os_error();
             libc::close(ruleset_fd);
             if err.raw_os_error() == Some(libc::EPERM) {
-                eprintln!(
-                    "landlock: restrict_self EPERM — no CAP_SYS_ADMIN in this \
-                     environment; continuing WITHOUT filesystem confinement"
-                );
                 return Ok(());
             }
             return Err(format!("landlock: restrict_self failed: {err}"));

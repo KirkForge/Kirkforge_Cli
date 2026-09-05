@@ -172,9 +172,11 @@ pub(crate) fn setup_rlimits(
             // WO 42.4: fail-closed on setrlimit/unshare failures. When
             // `harden` is true the child MUST NOT run without the requested
             // resource limits / network isolation. When `harden` is false
-            // we warn (via stderr — the only async-signal-safe channel in
-            // pre_exec) and proceed, matching the prior non-fail-closed
-            // behaviour for the non-hardened path.
+            // we proceed unconfined. WO 50.12 H1: no `eprintln!` here —
+            // we are inside pre_exec (post-fork, pre-exec) where
+            // `eprintln!`/`format!` are async-signal-unsafe (heap alloc +
+            // stderr Mutex can deadlock the child if another thread held
+            // either at fork time).
             let cpu = libc::rlimit {
                 rlim_cur: cpu_secs,
                 rlim_max: cpu_secs,
@@ -183,10 +185,6 @@ pub(crate) fn setup_rlimits(
                 if harden {
                     return Err(std::io::Error::last_os_error());
                 }
-                eprintln!(
-                    "setrlimit(RLIMIT_CPU) failed; --harden off, \
-                     continuing WITHOUT cpu cap"
-                );
             }
 
             let as_lim = libc::rlimit {
@@ -197,10 +195,6 @@ pub(crate) fn setup_rlimits(
                 if harden {
                     return Err(std::io::Error::last_os_error());
                 }
-                eprintln!(
-                    "setrlimit(RLIMIT_AS) failed; --harden off, \
-                     continuing WITHOUT memory cap"
-                );
             }
 
             let fsize = libc::rlimit {
@@ -211,10 +205,6 @@ pub(crate) fn setup_rlimits(
                 if harden {
                     return Err(std::io::Error::last_os_error());
                 }
-                eprintln!(
-                    "setrlimit(RLIMIT_FSIZE) failed; --harden off, \
-                     continuing WITHOUT filesize cap"
-                );
             }
 
             if no_network {
@@ -241,13 +231,11 @@ pub(crate) fn setup_rlimits(
                 match landlock::apply_landlock(paths) {
                     Ok(()) => {}
                     Err(e) if accept_unsandboxed => {
-                        // Operator explicitly accepted the risk. Log to
-                        // stderr (the only channel in pre_exec) + continue
+                        // Operator explicitly accepted the risk; continue
                         // unconfined. The spawn proceeds without landlock.
-                        eprintln!(
-                            "landlock: {e}; --i-accept-unsandboxed set, \
-                             continuing WITHOUT filesystem confinement"
-                        );
+                        // WO 50.12 H1: no `eprintln!` — pre_exec is
+                        // async-signal-unsafe for heap-allocating calls.
+                        let _ = e;
                     }
                     Err(e) => return Err(std::io::Error::other(e)),
                 }
@@ -263,10 +251,9 @@ pub(crate) fn setup_rlimits(
                 if let Ok(prog) = seccomp_prog.as_ref() {
                     if let Err(e) = seccomp::apply_filter(prog) {
                         if accept_unsandboxed {
-                            eprintln!(
-                                "seccomp: {e}; --i-accept-unsandboxed set, \
-                                 continuing WITHOUT syscall filter"
-                            );
+                            // WO 50.12 H1: no `eprintln!` — pre_exec is
+                            // async-signal-unsafe for heap-allocating calls.
+                            let _ = e;
                         } else {
                             return Err(std::io::Error::other(e));
                         }
@@ -290,8 +277,10 @@ pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig, _landlock_pa
 
     unsafe {
         cmd.as_std_mut().pre_exec(move || {
-            // WO 42.4: fail-closed when harden is true; warn-and-proceed
+            // WO 42.4: fail-closed when harden is true; proceed unconfined
             // otherwise. Mirrors the Linux variant's discipline.
+            // WO 50.12 H1: no `eprintln!` — pre_exec is async-signal-unsafe
+            // for heap-allocating calls (heap alloc + stderr Mutex).
             let cpu = libc::rlimit {
                 rlim_cur: cpu_secs,
                 rlim_max: cpu_secs,
@@ -300,10 +289,6 @@ pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig, _landlock_pa
                 if harden {
                     return Err(std::io::Error::last_os_error());
                 }
-                eprintln!(
-                    "setrlimit(RLIMIT_CPU) failed; --harden off, \
-                     continuing WITHOUT cpu cap"
-                );
             }
 
             let as_lim = libc::rlimit {
@@ -314,10 +299,6 @@ pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig, _landlock_pa
                 if harden {
                     return Err(std::io::Error::last_os_error());
                 }
-                eprintln!(
-                    "setrlimit(RLIMIT_AS) failed; --harden off, \
-                     continuing WITHOUT memory cap"
-                );
             }
 
             let fsize = libc::rlimit {
@@ -328,10 +309,6 @@ pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig, _landlock_pa
                 if harden {
                     return Err(std::io::Error::last_os_error());
                 }
-                eprintln!(
-                    "setrlimit(RLIMIT_FSIZE) failed; --harden off, \
-                     continuing WITHOUT filesize cap"
-                );
             }
 
             if no_network {

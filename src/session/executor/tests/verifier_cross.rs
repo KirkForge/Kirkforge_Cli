@@ -109,7 +109,6 @@ async fn reload_plugins_keeps_every_built_in_verifier() {
 async fn init_default_verifiers_registers_ts_bridge_security_emitter() {
     use super::common::{make_config, make_executor, make_info, MockAdapter};
     use crate::shared::{FinishReason, StreamEvent};
-    use crate::session::verifier::bus::BusVerifier;
 
     let adapter = Box::new(MockAdapter::new(
         vec![StreamEvent::Done {
@@ -124,14 +123,14 @@ async fn init_default_verifiers_registers_ts_bridge_security_emitter() {
         .verifier_bus
         .as_ref()
         .expect("verifier_bus must be set up by init_default_verifiers");
-    let bus = bus_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let mut bus = bus_lock.lock().unwrap_or_else(|e| e.into_inner());
 
     // The bus does not expose its verifier list directly, but
     // `retain_verifiers` drops verifiers by name and `verifier_count`
     // reflects the change. If `ts-bridge` is registered, retaining only
     // `ts-bridge` leaves exactly 1 verifier; if it is NOT registered,
     // retaining only `ts-bridge` leaves 0.
-    let mut probe_bus = std::mem::take(bus);
+    let mut probe_bus = std::mem::take(&mut *bus);
     let before = probe_bus.verifier_count();
     probe_bus.retain_verifiers(|n| n == "ts-bridge");
     let ts_bridge_count = probe_bus.verifier_count();

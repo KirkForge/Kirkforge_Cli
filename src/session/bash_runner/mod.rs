@@ -181,30 +181,24 @@ pub(crate) fn setup_rlimits(
                 rlim_cur: cpu_secs,
                 rlim_max: cpu_secs,
             };
-            if libc::setrlimit(libc::RLIMIT_CPU, &cpu) != 0 {
-                if harden {
-                    return Err(std::io::Error::last_os_error());
-                }
+            if libc::setrlimit(libc::RLIMIT_CPU, &cpu) != 0 && harden {
+                return Err(std::io::Error::last_os_error());
             }
 
             let as_lim = libc::rlimit {
                 rlim_cur: as_bytes,
                 rlim_max: as_bytes,
             };
-            if libc::setrlimit(libc::RLIMIT_AS, &as_lim) != 0 {
-                if harden {
-                    return Err(std::io::Error::last_os_error());
-                }
+            if libc::setrlimit(libc::RLIMIT_AS, &as_lim) != 0 && harden {
+                return Err(std::io::Error::last_os_error());
             }
 
             let fsize = libc::rlimit {
                 rlim_cur: fsize_bytes,
                 rlim_max: fsize_bytes,
             };
-            if libc::setrlimit(libc::RLIMIT_FSIZE, &fsize) != 0 {
-                if harden {
-                    return Err(std::io::Error::last_os_error());
-                }
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &fsize) != 0 && harden {
+                return Err(std::io::Error::last_os_error());
             }
 
             if no_network {
@@ -285,30 +279,24 @@ pub(crate) fn setup_rlimits(cmd: &mut Command, cfg: &SandboxConfig, _landlock_pa
                 rlim_cur: cpu_secs,
                 rlim_max: cpu_secs,
             };
-            if libc::setrlimit(libc::RLIMIT_CPU, &cpu) != 0 {
-                if harden {
-                    return Err(std::io::Error::last_os_error());
-                }
+            if libc::setrlimit(libc::RLIMIT_CPU, &cpu) != 0 && harden {
+                return Err(std::io::Error::last_os_error());
             }
 
             let as_lim = libc::rlimit {
                 rlim_cur: as_bytes,
                 rlim_max: as_bytes,
             };
-            if libc::setrlimit(libc::RLIMIT_AS, &as_lim) != 0 {
-                if harden {
-                    return Err(std::io::Error::last_os_error());
-                }
+            if libc::setrlimit(libc::RLIMIT_AS, &as_lim) != 0 && harden {
+                return Err(std::io::Error::last_os_error());
             }
 
             let fsize = libc::rlimit {
                 rlim_cur: fsize_bytes,
                 rlim_max: fsize_bytes,
             };
-            if libc::setrlimit(libc::RLIMIT_FSIZE, &fsize) != 0 {
-                if harden {
-                    return Err(std::io::Error::last_os_error());
-                }
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &fsize) != 0 && harden {
+                return Err(std::io::Error::last_os_error());
             }
 
             if no_network {

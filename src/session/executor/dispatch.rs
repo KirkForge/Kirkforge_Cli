@@ -85,8 +85,8 @@ impl Executor {
         args: &serde_json::Value,
         _outcome: &ToolOutcome,
         real_exit_code: Option<i32>,
-        real_stdout_len: Option<usize>,
-        real_stderr_len: Option<usize>,
+        _real_stdout_len: Option<usize>,
+        _real_stderr_len: Option<usize>,
         edit_diff: Option<String>,
     ) -> Vec<CorrectionResult> {
         // WO 50.01.3: the old BusEvent-driven path (FileReadEvent,

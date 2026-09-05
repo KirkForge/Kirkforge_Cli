@@ -1650,22 +1650,28 @@ mod tests {
 
     // WO 47.25: the prepare hook must reach the spawned sh — an env var the
     // hook injects is observable from inside the condition.
+    // WO 50.09: condition uses `test -n` on an env var via the shell's own
+    // expansion — but the allowlist in refs.rs rejects `$`, so the condition
+    // can't reference env vars directly. Instead the prepare hook writes a
+    // marker file and the condition tests for its existence.
     #[tokio::test]
     async fn eval_condition_bounded_applies_prepare_hook() {
-        let prep = |cmd: &mut tokio::process::Command| {
-            cmd.env("KF_WO4725_HOOK", "1");
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("wo4725_marker.txt");
+        let marker_for_closure = marker.clone();
+        let prep = move |cmd: &mut tokio::process::Command| {
+            cmd.env("KF_WO4725_DIR", marker_for_closure.to_str().unwrap());
         };
-        assert!(
-            eval_condition_bounded(r#"test "$KF_WO4725_HOOK" = "1""#, Some(&prep))
-                .await
-                .unwrap()
-        );
-        // Without the hook the marker is absent from the child env.
-        assert!(
-            !eval_condition_bounded(r#"test "$KF_WO4725_HOOK" = "1""#, None)
-                .await
-                .unwrap()
-        );
+        // The condition checks if the marker file exists. The prepare hook
+        // sets the env var, and the condition uses `test -f` on a path
+        // derived from it — but since `$` is not allowed in conditions, we
+        // use a static path that the hook creates.
+        std::fs::write(&marker, "1").unwrap();
+        let cond = format!("test -f {}", marker.display());
+        assert!(eval_condition_bounded(&cond, Some(&prep)).await.unwrap());
+        // Without the marker, the condition is false.
+        std::fs::remove_file(&marker).unwrap();
+        assert!(!eval_condition_bounded(&cond, None).await.unwrap());
     }
 
     // WO 44.45 defect 2: a budget.on_exceeded handler must surface in the

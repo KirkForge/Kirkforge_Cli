@@ -328,14 +328,19 @@ impl Tool for EditFile {
                     let diff = render_diff(&content, &new_content);
 
                     // Fuzzy writes pass the same guards as exact-match
-                    // writes (WO 48.27).
+                    // writes (WO 48.27). WO 50.05 M3: feed the normalized
+                    // old_string to review_diff so the deletion-ratio
+                    // heuristic measures the actual replaced span, not the
+                    // original (which may carry trailing whitespace the
+                    // fuzzy path normalized away — a false-positive block
+                    // on a valid whitespace-tolerant edit).
                     if let Some(denied) = write_denied(
                         self.block_edits,
                         ctx,
                         &path,
                         &content,
                         &new_content,
-                        &old,
+                        &old_normalized,
                         &diff,
                     ) {
                         return denied;

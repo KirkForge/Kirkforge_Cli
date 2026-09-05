@@ -180,7 +180,10 @@ mod tests {
         }
         let mgr = manager.lock().unwrap();
         let handle = mgr.get(&id).unwrap();
-        assert_eq!(handle.notes, vec!["halfway done".to_string()]);
+        assert_eq!(
+            handle.notes.lock().unwrap().clone(),
+            vec!["halfway done".to_string()]
+        );
         // Status unchanged.
         assert_eq!(handle.status(), TaskStatus::Running);
     }
@@ -251,7 +254,7 @@ mod tests {
         let handle = mgr.get(&id).unwrap();
         assert_eq!(handle.status(), TaskStatus::Completed("shipped it".into()));
         assert!(
-            handle.notes.is_empty(),
+            handle.notes.lock().unwrap().is_empty(),
             "completed note must not double-append"
         );
     }
@@ -270,7 +273,7 @@ mod tests {
         let mgr = manager.lock().unwrap();
         let handle = mgr.get(&id).unwrap();
         assert_eq!(handle.status(), TaskStatus::Failed("blew up".into()));
-        assert!(handle.notes.is_empty());
+        assert!(handle.notes.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -351,7 +354,7 @@ mod tests {
         // status=Some path; here status=None so it still reports "noted".
         assert!(matches!(outcome, ToolOutcome::Success { .. }));
         let mgr = manager.lock().unwrap();
-        assert!(mgr.get(&id).unwrap().notes.is_empty());
+        assert!(mgr.get(&id).unwrap().notes.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -384,6 +387,9 @@ mod tests {
         let mgr = manager.lock().unwrap();
         let handle = mgr.get(&id).unwrap();
         assert_eq!(handle.status(), TaskStatus::Running);
-        assert_eq!(handle.notes, vec!["still going".to_string()]);
+        assert_eq!(
+            handle.notes.lock().unwrap().clone(),
+            vec!["still going".to_string()]
+        );
     }
 }

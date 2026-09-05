@@ -272,7 +272,9 @@ pub struct TaskHandle {
     pub pending_messages: Arc<Mutex<Vec<String>>>,
     /// Append-only progress notes a subagent records via `update_task`;
     /// surfaced by `list_agents`. Distinct from `result` (terminal summary).
-    pub notes: Vec<String>,
+    /// WO 50.05 M4: `Arc<Mutex<..>>` so the handle stays thread-safe when
+    /// cloned (the worker closure and `update_task` tool both mutate it).
+    pub notes: Arc<Mutex<Vec<String>>>,
 }
 
 impl Default for TaskHandle {
@@ -288,7 +290,7 @@ impl Default for TaskHandle {
             cancel_signal: Arc::new(tokio::sync::Notify::new()),
             cancel_token: CancellationToken::new(),
             pending_messages: Arc::new(Mutex::new(Vec::new())),
-            notes: Vec::new(),
+            notes: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -520,7 +522,8 @@ impl TaskManager {
         let Some(handle) = self.tasks.get_mut(id) else {
             return false;
         };
-        handle.notes.push(note.to_string());
+        let mut guard = handle.notes.lock().unwrap_or_else(|e| e.into_inner());
+        guard.push(note.to_string());
         true
     }
 
@@ -534,10 +537,22 @@ impl TaskManager {
     /// ("pending" / "running" / "cancelled"). "completed" and "failed"
     /// are rejected here — use [`set_completed`] / [`set_failed`] so a
     /// summary/message payload is always supplied.
+    ///
+    /// WO 50.05 M2: transitions out of a terminal state are rejected so a
+    /// `set_status("running")` from a peer's `update_task` can't resurrect
+    /// a task the worker closure has already finalized (matches the
+    /// `send_message` terminal guard at `:505-507`). The only legal
+    /// transitions are Pending → Running, and the explicit `cancelled`
+    /// arm (which is still allowed from non-terminal states only).
     pub fn set_status(&mut self, id: &str, status: &str) -> Result<(), String> {
         let Some(handle) = self.tasks.get_mut(id) else {
             return Err(format!("Unknown task id: {id}"));
         };
+        if handle.is_terminal() {
+            return Err(format!(
+                "Task {id} is already in a terminal state; set_status cannot resurrect it"
+            ));
+        }
         match status.to_lowercase().as_str() {
             "pending" => {
                 handle.result = None;
@@ -577,11 +592,18 @@ impl TaskManager {
     }
 
     /// Mark a task completed with a summary (`update_task` tool,
-    /// `status="completed"`). Returns `false` if the task id is unknown.
+    /// `status="completed"`). Returns `false` if the task id is unknown or
+    /// the task is already terminal (WO 50.05 M1: idempotent — a worker
+    /// closure that has already written `result`/`error` wins, and a
+    /// second `set_completed` from a peer's `update_task` cannot clobber
+    /// it).
     pub fn set_completed(&mut self, id: &str, summary: &str) -> bool {
         let Some(handle) = self.tasks.get_mut(id) else {
             return false;
         };
+        if handle.is_terminal() {
+            return false;
+        }
         handle.result = Some(summary.to_string());
         handle.error = None;
         handle.cancel_requested.store(false, Ordering::SeqCst);
@@ -590,11 +612,16 @@ impl TaskManager {
     }
 
     /// Mark a task failed with a message (`update_task` tool,
-    /// `status="failed"`). Returns `false` if the task id is unknown.
+    /// `status="failed"`). Returns `false` if the task id is unknown or
+    /// the task is already terminal (WO 50.05 M1: idempotent — same
+    /// rationale as [`set_completed`]).
     pub fn set_failed(&mut self, id: &str, message: &str) -> bool {
         let Some(handle) = self.tasks.get_mut(id) else {
             return false;
         };
+        if handle.is_terminal() {
+            return false;
+        }
         handle.error = Some(message.to_string());
         handle.result = None;
         handle.completed.notify_one();

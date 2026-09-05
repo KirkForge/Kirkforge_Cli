@@ -8,6 +8,11 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- Pipeline: configurable roles + fan-out — PipelineConfig struct with
+  RoleSpec (name, persona, max_turns, fan_out, pass_to_next). Fan-out
+  spawns N copies via futures::join_all. Default config unchanged.
+- WO 38.10 P2 CLI polish: --read-stdin-full, JSON error output, real
+  session.id+started_at, Ctrl-C exits 130, `config show`, `models`.
 - WO 47.14: unified verifier architecture — all 14 built-in verifiers
   migrated to BusVerifier; Verifier/VerifierSlots/VerifierHandler
   deleted. One trait, one bus, one correction loop. Net -392 lines.

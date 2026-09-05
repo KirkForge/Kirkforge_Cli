@@ -409,8 +409,9 @@ Two HIGH-priority gaps found and fixed:
 
 MEDIUM-priority gaps (not blocking but limit capability):
 - Model failure: no fallback to cheaper model (error propagates raw)
-- Pipeline: strictly sequential, no parallel pipelines or fan-out
-- Pipeline roles: hardcoded scout→coder→reviewer, not configurable
+- Pipeline: configurable roles FIXED (PipelineConfig + RoleSpec);
+  fan-out FIXED (futures::join_all); strictly sequential FIXED
+  (now supports parallel via fan_out per role)
 - Agent frontmatter: maxTurns FIXED; isolation/background/permissionMode
   FIXED; still missing hooks, mcpServers, memory
 - Inter-subagent messaging: no SendMessage/ListAgents/TaskCreate tools

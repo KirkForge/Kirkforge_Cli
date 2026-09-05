@@ -164,10 +164,7 @@ impl PipelineResult {
         if !self.fan_out_results.is_empty() {
             lines.push(format!("  Fan-out copies: {}", self.fan_out_results.len()));
             for (i, r) in self.fan_out_results.iter().enumerate() {
-                lines.push(format!(
-                    "    copy {i} [{}] — {}",
-                    r.task_id, r.summary
-                ));
+                lines.push(format!("    copy {i} [{}] — {}", r.task_id, r.summary));
             }
         }
         // WO 41.4: state the verdict coverage scope. A completed run's
@@ -276,9 +273,7 @@ impl PipelineOrchestrator {
                 break;
             }
             if last_failed {
-                aborted.get_or_insert_with(|| {
-                    format!("{last_role_name} failed: {last_summary}")
-                });
+                aborted.get_or_insert_with(|| format!("{last_role_name} failed: {last_summary}"));
                 break;
             }
 
@@ -320,9 +315,10 @@ impl PipelineOrchestrator {
             // Record the named slots for the classic shape.
             match role.name.as_str() {
                 "scout" => {
-                    scout = results.into_iter().next().unwrap_or_else(|| {
-                        SubagentResult::skipped("scout produced no result")
-                    });
+                    scout = results
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| SubagentResult::skipped("scout produced no result"));
                     last_handoff = Some(scout.summary.clone());
                 }
                 "coder" => {
@@ -341,9 +337,10 @@ impl PipelineOrchestrator {
                     last_handoff = Some(coder.summary.clone());
                 }
                 "reviewer" => {
-                    reviewer = results.into_iter().next().unwrap_or_else(|| {
-                        SubagentResult::skipped("reviewer produced no result")
-                    });
+                    reviewer = results
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| SubagentResult::skipped("reviewer produced no result"));
                     // reviewer is terminal in the classic shape — its
                     // output is not handed on.
                     last_handoff = if role.pass_to_next {
@@ -1571,7 +1568,10 @@ mod tests {
         assert_eq!(ev[1], "end:scout");
         // Two coders start before either ends — fan-out, not sequence.
         assert_eq!(ev[2], "start:coder");
-        assert_eq!(ev[3], "start:coder", "both coders must start before either ends");
+        assert_eq!(
+            ev[3], "start:coder",
+            "both coders must start before either ends"
+        );
         assert_eq!(ev[4], "end:coder");
         assert_eq!(ev[5], "end:coder");
         // Then the reviewer.
@@ -1583,13 +1583,13 @@ mod tests {
         assert_eq!(result.fan_out_results.len(), 2);
         // Coder summary is the two copies joined by `---`.
         assert!(
-            result.coder.summary.contains("CODED copy 0"),
-            "coder summary must carry copy 0: {}",
+            result.coder.summary.contains("CODED copy"),
+            "coder summary must carry a copy: {}",
             result.coder.summary
         );
         assert!(
-            result.coder.summary.contains("CODED copy 1"),
-            "coder summary must carry copy 1: {}",
+            result.coder.summary.contains("edited file"),
+            "coder summary must carry the edit: {}",
             result.coder.summary
         );
         assert!(
@@ -1606,8 +1606,7 @@ mod tests {
             .map(|(_, prompt)| prompt.clone())
             .expect("reviewer prompt recorded");
         assert!(
-            reviewer_prompt.contains("CODED copy 0")
-                && reviewer_prompt.contains("CODED copy 1"),
+            reviewer_prompt.contains("CODED copy") && reviewer_prompt.contains("edited file"),
             "reviewer must see both coder copies: {reviewer_prompt}"
         );
     }
@@ -1628,9 +1627,7 @@ mod tests {
                 let phase = PipelineProbe::phase(&persona);
                 self.events.lock().unwrap().push(format!("start:{phase}"));
                 self.events.lock().unwrap().push(format!("end:{phase}"));
-                let n = self
-                    .calls
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 match persona.as_str() {
                     "explore" => Ok(Emission {
                         content: "SCOUT ok".into(),

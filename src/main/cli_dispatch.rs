@@ -283,7 +283,10 @@ pub async fn main() {
                 "error": format!("{e:#}"),
                 "exit_code": exit_code,
             });
-            println!("{}", serde_json::to_string(&err_obj).unwrap_or_else(|_| "{}".into()));
+            println!(
+                "{}",
+                serde_json::to_string(&err_obj).unwrap_or_else(|_| "{}".into())
+            );
         }
         eprintln!("kf-code: {e}");
         if let Some(h) = e.hint() {
@@ -318,9 +321,8 @@ async fn handle_models_command() -> anyhow::Result<()> {
 
     match kind {
         kf_code::adapters::AdapterKind::Ollama => {
-            let client = kf_code::shared::build_reqwest_client(Some(std::time::Duration::from_secs(
-                5,
-            )));
+            let client =
+                kf_code::shared::build_reqwest_client(Some(std::time::Duration::from_secs(5)));
             let models = kf_code::tui::commands::fetch_model_list(&client, ollama_host)
                 .await
                 .map_err(|e| anyhow::anyhow!("failed to query {ollama_host}/api/tags: {e}"))?;

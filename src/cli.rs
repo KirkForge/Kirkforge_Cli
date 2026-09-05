@@ -892,12 +892,16 @@ mod tests {
     fn run_read_stdin_full_parses() {
         let cli = Cli::try_parse_from(["kf-code", "run", "--read-stdin-full"]).expect("parse");
         match cli.command {
-            Command::Run { read_stdin_full, .. } => assert!(read_stdin_full),
+            Command::Run {
+                read_stdin_full, ..
+            } => assert!(read_stdin_full),
             _ => panic!("expected Run"),
         }
         let cli = Cli::try_parse_from(["kf-code", "run"]).expect("parse");
         match cli.command {
-            Command::Run { read_stdin_full, .. } => assert!(!read_stdin_full),
+            Command::Run {
+                read_stdin_full, ..
+            } => assert!(!read_stdin_full),
             _ => panic!("expected Run"),
         }
     }

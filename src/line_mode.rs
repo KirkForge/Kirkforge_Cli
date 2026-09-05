@@ -311,6 +311,12 @@ mod tests {
         // was accepted without panic. A real stdin read would block; the
         // integration test in scripts/run-integration-tests.sh covers the
         // end-to-end path.
-        assert!(matches!(reader, LineReader::Plain { read_full: true, .. }));
+        assert!(matches!(
+            reader,
+            LineReader::Plain {
+                read_full: true,
+                ..
+            }
+        ));
     }
 }

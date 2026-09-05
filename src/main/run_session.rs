@@ -41,6 +41,9 @@ pub(crate) struct RunArgs {
     /// multi-paragraph pipe problem for the arg form: a `-p` value is a
     /// single turn regardless of internal blank lines.
     pub(crate) prompt: Option<String>,
+    /// WO 38.10 P2: read all of stdin as one turn (skip the blank-line
+    /// heredoc terminator). Only applies to the plain reader.
+    pub(crate) read_stdin_full: bool,
 }
 
 pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
@@ -68,6 +71,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
         i_accept_unsandboxed,
         no_trace,
         prompt,
+        read_stdin_full,
     } = args;
 
     // Strict config load (WO 38.10): a hard TOML parse failure in an
@@ -944,6 +948,7 @@ pub(super) async fn run_session(args: RunArgs) -> anyhow::Result<()> {
             mcp_manager,
             session_stores,
             prompt,
+            read_stdin_full,
         )
         .await
     };

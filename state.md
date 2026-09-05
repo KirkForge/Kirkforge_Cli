@@ -4,6 +4,15 @@
 
 ## Shipped (closed this session)
 
+- **Inter-subagent messaging (batch4)**: `send_message`, `list_agents`,
+  `update_task` tools. `TaskHandle` gained `pending_messages:
+  Arc<Mutex<Vec<String>>>` (drained by the spawner turn loop before each
+  `run_turn_collecting`) and `notes: Vec<String>` (append-only progress
+  log surfaced by `list_agents`). `TaskRequest` gained
+  `pending_messages: Option<Arc<Mutex<Vec<String>>>>` threaded from the
+  `task` tool's background path. 3 new files in `src/tools/task/`,
+  registered in `all_tools()` alongside `task`/`task_output`.
+
 - **WO 48.48 (2026-08-29, branch `wo48.48`, NOT merged)**: minify VFS cache
   key nanos-granular — `minify_source_impl` (src/shared/minify/mod.rs) keys on
   `duration_since(UNIX_EPOCH).as_nanos()` (u128) instead of `.as_secs()`; a

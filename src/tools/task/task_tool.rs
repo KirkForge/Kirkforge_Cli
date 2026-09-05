@@ -250,6 +250,7 @@ impl Tool for Task {
                 cancel: None,
                 owner: None,
                 subagent_depth: next_depth,
+                pending_messages: None,
             };
             let max_bg = self.max_bg;
             let permit = match self.concurrency_mode {
@@ -293,6 +294,11 @@ impl Tool for Task {
             };
             let started = Arc::clone(&handle.started);
             let cancel = handle.cancel_handles();
+            // Inter-subagent messaging: share the handle's pending_messages
+            // queue with the spawner so send_message appends (via the
+            // TaskManager) are visible to the turn loop, which drains +
+            // clears it before each run_turn_collecting call.
+            let pending_messages = Arc::clone(&handle.pending_messages);
             // WO 38.4: cancel cascade — when this call runs inside a
             // subagent, ctx.token is a live child of that subagent
             // executor's root token, so an outer cancel reaches the
@@ -314,6 +320,7 @@ impl Tool for Task {
             // bash jobs the subagent spawns are attributable — cancel()
             // kills exactly those via cancel_by_owner.
             request.owner = Some(id_for_spawn.clone());
+            request.pending_messages = Some(pending_messages);
             tokio::spawn(async move {
                 started.store(true, Ordering::SeqCst);
                 let start = Instant::now();
@@ -382,6 +389,7 @@ impl Tool for Task {
                 // spawns die with the ancestor's cancel-by-owner kill.
                 owner: ctx.task_owner.clone(),
                 subagent_depth: next_depth,
+                pending_messages: None,
             };
             let result = spawner.run_task(request).await;
             done.notify_waiters();

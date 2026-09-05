@@ -16,9 +16,20 @@ mod task_tool;
 #[cfg(test)]
 mod test_helpers;
 
+// Inter-subagent messaging tools (send_message / list_agents / update_task).
+// Each is a small struct holding the shared TaskManager Arc; they live in
+// sibling files and are re-exported from here so consumers keep using
+// `crate::tools::task::*` unchanged.
+mod list_agents;
+mod send_message;
+mod update_task;
+
 pub(crate) use persist::persist_task_summary;
 pub use persist::{load_persisted_tasks, PersistedTask};
+pub use list_agents::ListAgents;
+pub use send_message::SendMessage;
 pub use task_tool::Task;
+pub use update_task::UpdateTask;
 
 /// Process-global task id counter shared by every TaskManager (WO 37.1):
 /// the task tool, the orchestrator, and each subagent executor each own a
@@ -80,6 +91,13 @@ pub struct TaskRequest {
     /// Set by the `task` tool from `ctx.subagent_depth + 1` so the
     /// spawner can thread it into the subagent executor.
     pub subagent_depth: usize,
+    /// Inter-subagent message queue (WO 49 batch4): an `Arc<Mutex<Vec>>`
+    /// shared with the spawning `TaskHandle` so `send_message` appends are
+    /// visible to the spawner turn loop, which drains + clears it before
+    /// each `run_turn_collecting` call and prepends the joined text to the
+    /// turn input. `None` for callers that never receive messages
+    /// (foreground tasks, workflow steps, orchestrator briefs).
+    pub pending_messages: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 /// The two cooperative-cancel primitives a running subagent observes,
@@ -224,6 +242,16 @@ fn format_duration_ms(ms: u64) -> String {
 /// of completion state to drift. `cancelled_result` (WO 35.3) retains the
 /// partial summary of a cooperatively-cancelled task — including any
 /// worktree patch — without flipping the derived status off `Cancelled`.
+///
+/// `pending_messages` (inter-subagent messaging): messages queued by the
+/// `send_message` tool for the subagent's executor to drain at the start of
+/// its next turn. Held in an `Arc<Mutex<..>>` so the `TaskManager`
+/// (`send_message` appends from any task) and the spawner's turn loop
+/// (drains + clears before each `run_turn_collecting`) share one queue —
+/// the same pattern as the WO 35.3 cancel flag. `notes` (update_task tool)
+/// is an append-only log a subagent can surface to itself or to
+/// `list_agents` — distinct from `result` so a running task can record
+/// progress without flipping terminal state.
 #[derive(Debug, Clone)]
 pub struct TaskHandle {
     pub result: Option<String>,
@@ -238,6 +266,13 @@ pub struct TaskHandle {
     /// Cooperative-cancel token: cancelled together with the flag so
     /// in-flight tool work (bash children) dies promptly (WO 35.3).
     pub(crate) cancel_token: CancellationToken,
+    /// Inter-subagent messages queued by `send_message`; drained + injected
+    /// into the subagent's next turn input by the spawner turn loop. Shared
+    /// via `Arc<Mutex>` with the spawner so concurrent appends are visible.
+    pub pending_messages: Arc<Mutex<Vec<String>>>,
+    /// Append-only progress notes a subagent records via `update_task`;
+    /// surfaced by `list_agents`. Distinct from `result` (terminal summary).
+    pub notes: Vec<String>,
 }
 
 impl Default for TaskHandle {
@@ -252,6 +287,8 @@ impl Default for TaskHandle {
             cancel_requested: Arc::new(AtomicBool::new(false)),
             cancel_signal: Arc::new(tokio::sync::Notify::new()),
             cancel_token: CancellationToken::new(),
+            pending_messages: Arc::new(Mutex::new(Vec::new())),
+            notes: Vec::new(),
         }
     }
 }
@@ -285,6 +322,24 @@ impl TaskHandle {
         self.result.is_some()
             || self.error.is_some()
             || self.cancel_requested.load(Ordering::SeqCst)
+    }
+
+    /// Drain + clear the `pending_messages` queue, returning the messages
+    /// joined with blank-line separators. Called by the spawner turn loop
+    /// before each `run_turn_collecting` so inter-subagent messages land
+    /// as a system-level context addition prepended to the turn input.
+    /// Returns an empty String when no messages are queued.
+    pub fn drain_pending_messages(&self) -> String {
+        let mut guard = self
+            .pending_messages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if guard.is_empty() {
+            return String::new();
+        }
+        let joined = guard.join("\n\n");
+        guard.clear();
+        joined
     }
 }
 
@@ -436,6 +491,114 @@ impl TaskManager {
             .collect();
         entries.sort_by_key(|e| task_id_rank(&e.id));
         entries
+    }
+
+    /// Append a message to a task's `pending_messages` queue (inter-subagent
+    /// messaging). Returns `false` if the task id is unknown or already
+    /// terminal (a done/failed/cancelled task cannot receive messages — the
+    /// spawner will never drain the queue). The spawner turn loop drains
+    /// and clears the queue at the start of each turn.
+    pub fn send_message(&mut self, id: &str, message: &str) -> bool {
+        let Some(handle) = self.tasks.get_mut(id) else {
+            return false;
+        };
+        if handle.is_terminal() {
+            return false;
+        }
+        let mut guard = handle
+            .pending_messages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        guard.push(message.to_string());
+        true
+    }
+
+    /// Append a progress note to a task's `notes` log (`update_task` tool).
+    /// Returns `false` if the task id is unknown. Notes are append-only and
+    /// surface in `list_agents`; they never flip terminal state.
+    pub fn append_note(&mut self, id: &str, note: &str) -> bool {
+        let Some(handle) = self.tasks.get_mut(id) else {
+            return false;
+        };
+        handle.notes.push(note.to_string());
+        true
+    }
+
+    /// Force-set a task's terminal status (`update_task` tool). Returns
+    /// `Err` if the task id is unknown or the status string is not one of
+    /// the accepted labels. This is the one path that writes
+    /// `result`/`error`/`cancel_requested` from outside the worker closure
+    /// — used by a subagent to mark its own task Done/Failed before the
+    /// loop exits, or to flip a Pending task to Running. The accepted
+    /// status strings are the lowercase labels from [`TaskStatus::label`]
+    /// ("pending" / "running" / "cancelled"). "completed" and "failed"
+    /// are rejected here — use [`set_completed`] / [`set_failed`] so a
+    /// summary/message payload is always supplied.
+    pub fn set_status(&mut self, id: &str, status: &str) -> Result<(), String> {
+        let Some(handle) = self.tasks.get_mut(id) else {
+            return Err(format!("Unknown task id: {id}"));
+        };
+        match status.to_lowercase().as_str() {
+            "pending" => {
+                handle.result = None;
+                handle.error = None;
+                handle.cancel_requested.store(false, Ordering::SeqCst);
+                handle.started.store(false, Ordering::SeqCst);
+            }
+            "running" => {
+                handle.result = None;
+                handle.error = None;
+                handle.cancel_requested.store(false, Ordering::SeqCst);
+                handle.started.store(true, Ordering::SeqCst);
+            }
+            "completed" => {
+                return Err(
+                    "use set_completed(id, summary) to mark a task completed with a summary"
+                        .to_string(),
+                );
+            }
+            "failed" => {
+                return Err(
+                    "use set_failed(id, message) to mark a task failed with a message".to_string(),
+                );
+            }
+            "cancelled" => {
+                handle.result = None;
+                handle.error = None;
+                handle.cancel_requested.store(true, Ordering::SeqCst);
+            }
+            other => {
+                return Err(format!(
+                    "unknown status '{other}', expected pending/running/completed/failed/cancelled"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Mark a task completed with a summary (`update_task` tool,
+    /// `status="completed"`). Returns `false` if the task id is unknown.
+    pub fn set_completed(&mut self, id: &str, summary: &str) -> bool {
+        let Some(handle) = self.tasks.get_mut(id) else {
+            return false;
+        };
+        handle.result = Some(summary.to_string());
+        handle.error = None;
+        handle.cancel_requested.store(false, Ordering::SeqCst);
+        handle.completed.notify_one();
+        true
+    }
+
+    /// Mark a task failed with a message (`update_task` tool,
+    /// `status="failed"`). Returns `false` if the task id is unknown.
+    pub fn set_failed(&mut self, id: &str, message: &str) -> bool {
+        let Some(handle) = self.tasks.get_mut(id) else {
+            return false;
+        };
+        handle.error = Some(message.to_string());
+        handle.result = None;
+        handle.completed.notify_one();
+        true
     }
 }
 
@@ -628,6 +791,7 @@ mod tests {
             cancel: None,
             owner: None,
             subagent_depth: 1,
+            pending_messages: None,
         };
         assert_eq!(req.model.as_deref(), Some("opencode/big-pickle"));
     }
@@ -642,6 +806,7 @@ mod tests {
             cancel: None,
             owner: None,
             subagent_depth: 1,
+            pending_messages: None,
         };
         assert!(req.model.is_none());
         assert!(
@@ -735,6 +900,7 @@ mod tests {
             cancel: None,
             owner: None,
             subagent_depth: 0,
+            pending_messages: None,
         };
         let s = format!("{req:?}");
         assert!(s.contains("coder") && s.contains("p") && s.contains("m"));

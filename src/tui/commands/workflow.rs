@@ -426,6 +426,7 @@ impl StepRunner for TuiStepRunner {
                 cancel: None,
                 owner: None,
                 subagent_depth: 0,
+                pending_messages: None,
             })
             .await
             .map_err(|e| anyhow::anyhow!("step {name} failed: {e}"))?;
@@ -478,6 +479,7 @@ impl StepRunner for LineStepRunner {
                 cancel: None,
                 owner: None,
                 subagent_depth: 0,
+                pending_messages: None,
             })
             .await
             .map_err(|e| anyhow::anyhow!("step {name} failed: {e}"))

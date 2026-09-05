@@ -188,7 +188,9 @@ impl BusVerifier for TestVerifier {
         };
         vec![VerdictEntry {
             source: VerifierSource::Test,
-            severity: Severity::Warning,
+            // WO 50.02 P1: a failing test is an error, not a warning —
+            // has_errors() gates the correction loop's Failed promotion.
+            severity: Severity::Error,
             message: fix.description.clone(),
             file: Some(path.clone()),
             line: None,

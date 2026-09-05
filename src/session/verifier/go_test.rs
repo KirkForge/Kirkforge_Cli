@@ -119,7 +119,8 @@ impl BusVerifier for GoTestVerifier {
         };
         vec![VerdictEntry {
             source: VerifierSource::Test,
-            severity: Severity::Warning,
+            // WO 50.02 P1: a failing test is an error, not a warning.
+            severity: Severity::Error,
             message: fix.description.clone(),
             file: Some(path.clone()),
             line: None,

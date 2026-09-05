@@ -48,7 +48,8 @@ async fn write_file_event_is_clean_via_bus() {
 
 // WO 44.29 heritage (reworked for WO 47.14): the built-in verifiers now
 // register on the VerifierBus as BusVerifier impls. This test verifies
-// that all 14 built-ins are registered after init_default_verifiers and
+// that all 15 built-ins (14 language verifiers + ts-bridge security
+// emitter, WO 50.02) are registered after init_default_verifiers and
 // survive a reload_plugins call.
 #[tokio::test]
 async fn reload_plugins_keeps_every_built_in_verifier() {
@@ -87,13 +88,56 @@ async fn reload_plugins_keeps_every_built_in_verifier() {
         })
         .unwrap_or(0);
 
-    // With no plugins, the count should be the same (14 built-ins).
+    // With no plugins, the count should be the same (15 built-ins:
+    // 14 language verifiers + ts-bridge security emitter, WO 50.02).
     assert_eq!(
         after, before,
         "reload_plugins changed verifier count: before={before} after={after}"
     );
     assert!(
-        after >= 14,
-        "expected at least 14 built-in verifiers, got {after}"
+        after >= 15,
+        "expected at least 15 built-in verifiers, got {after}"
+    );
+}
+
+// WO 50.02 P0: the TsOrchestratorBridgeVerifier (14 regex security rules
+// for obfuscated eval/exec/pickle patterns) was defined and tested but
+// never registered in init_default_verifiers. Pin its registration so a
+// future refactor that drops the registration fails this test, not
+// production. The bridge registers under the name "ts-bridge".
+#[tokio::test]
+async fn init_default_verifiers_registers_ts_bridge_security_emitter() {
+    use super::common::{make_config, make_executor, make_info, MockAdapter};
+    use crate::shared::{FinishReason, StreamEvent};
+    use crate::session::verifier::bus::BusVerifier;
+
+    let adapter = Box::new(MockAdapter::new(
+        vec![StreamEvent::Done {
+            finish_reason: FinishReason::Stop,
+            usage: None,
+        }],
+        make_info(),
+    ));
+    let executor = make_executor(adapter, vec![], make_config(false)).expect("build executor");
+
+    let bus_lock = executor
+        .verifier_bus
+        .as_ref()
+        .expect("verifier_bus must be set up by init_default_verifiers");
+    let bus = bus_lock.lock().unwrap_or_else(|e| e.into_inner());
+
+    // The bus does not expose its verifier list directly, but
+    // `retain_verifiers` drops verifiers by name and `verifier_count`
+    // reflects the change. If `ts-bridge` is registered, retaining only
+    // `ts-bridge` leaves exactly 1 verifier; if it is NOT registered,
+    // retaining only `ts-bridge` leaves 0.
+    let mut probe_bus = std::mem::take(bus);
+    let before = probe_bus.verifier_count();
+    probe_bus.retain_verifiers(|n| n == "ts-bridge");
+    let ts_bridge_count = probe_bus.verifier_count();
+    assert!(
+        ts_bridge_count == 1,
+        "ts-bridge must be registered by init_default_verifiers; \
+         before={before} ts_bridge_count={ts_bridge_count}"
     );
 }

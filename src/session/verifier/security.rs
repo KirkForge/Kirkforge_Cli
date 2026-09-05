@@ -409,7 +409,16 @@ impl BusVerifier for SecurityVerifier {
         }
         // 2. High-entropy token detector
         for (name, prefix) in ENTROPY_PREFIXES {
-            if let Some(token) = scan_entropy_token(&content, prefix) {
+            // WO 50.02 P0: check ALL occurrences of each prefix, not just
+            // the first. A low-entropy placeholder before a real secret
+            // (e.g. `sk-placeholder` then `sk-9f8a7d6c5b4e3210ABCDxyzWVUtsrq`)
+            // would otherwise hide the real secret. Returns on the first
+            // high-entropy hit (same semantics as `scan_entropy_prefix`).
+            for (idx, _) in content.match_indices(prefix) {
+                let start = idx + prefix.len();
+                let rest = &content[start..];
+                let end = rest.find(|c: char| !is_token_char(c)).unwrap_or(rest.len());
+                let token = &rest[..end];
                 if token.len() >= MIN_TOKEN_LEN && shannon_entropy(token) > ENTROPY_THRESHOLD {
                     return vec![VerdictEntry {
                         source: VerifierSource::Security,
@@ -445,19 +454,6 @@ impl BusVerifier for SecurityVerifier {
             }
         }
         vec![]
-    }
-}
-
-/// Extract the token immediately following `prefix` inside `content`.
-/// Returns the token string if found, else `None`.
-fn scan_entropy_token<'a>(content: &'a str, prefix: &str) -> Option<&'a str> {
-    if let Some((idx, _)) = content.match_indices(prefix).next() {
-        let start = idx + prefix.len();
-        let rest = &content[start..];
-        let end = rest.find(|c: char| !is_token_char(c)).unwrap_or(rest.len());
-        Some(&rest[..end])
-    } else {
-        None
     }
 }
 
@@ -1171,6 +1167,44 @@ mod tests {
         assert!(
             result.is_none(),
             "made-up binary name must not resolve on PATH"
+        );
+    }
+
+    // ── WO 50.02 P0: bus-path entropy scan must check ALL occurrences ──
+    //
+    // The bus-path `SecurityVerifier::verify` previously checked only the
+    // FIRST occurrence of each secret prefix. A low-entropy placeholder
+    // before a real secret (e.g. `sk-placeholder` on line 1 then
+    // `sk-9f8a7d6c5b4e3210ABCDxyzWVUtsrq` on line 50) hid the real secret.
+    // This test pins the all-occurrences fix.
+
+    #[test]
+    fn bus_security_catches_high_entropy_secret_after_low_entropy_placeholder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.txt");
+        // Low-entropy placeholder first, then a high-entropy real secret.
+        std::fs::write(
+            &path,
+            "fake = sk-aaaaaaaaaaaaaaaa\nreal = sk-9f8a7d6c5b4e3210ABCDxyzWVUtsrq\n",
+        )
+        .unwrap();
+        let ctx = crate::session::verifier::bus::VerifyContext {
+            sandbox_dir: dir.path().to_path_buf(),
+            changed_files: vec![path.clone()],
+            event_kind: None,
+            tool_name: None,
+            content_hash: 0,
+            bash_command: None,
+            bash_exit_code: None,
+            bash_workdir: None,
+        };
+        let v = SecurityVerifier;
+        let entries = v.verify(&ctx);
+        assert!(
+            entries.iter().any(|e| e.severity == Severity::Error
+                && e.message.contains("High-entropy")
+                && e.message.contains("OpenAI API key")),
+            "bus path must catch the real high-entropy secret after the placeholder: {entries:?}"
         );
     }
 }

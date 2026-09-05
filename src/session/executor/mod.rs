@@ -645,9 +645,10 @@ impl Executor {
         use crate::session::verifier::types::SystemCommandRunner;
         use std::sync::Arc;
 
-        // The 14 built-in verifiers register on the VerifierBus as
-        // BusVerifier impls (WO 47.14). The old VerifierSlots/VerifierHandler
-        // path is deleted; the correction loop reads from the bus.
+        // The 14 built-in verifiers plus the TS orchestrator bridge
+        // (WO 50.02 P0) register on the VerifierBus as BusVerifier impls
+        // (WO 47.14). The old VerifierSlots/VerifierHandler path is
+        // deleted; the correction loop reads from the bus.
         let sys_runner: Arc<dyn crate::session::verifier::types::CommandRunner> =
             Arc::new(SystemCommandRunner);
 
@@ -655,9 +656,17 @@ impl Executor {
             Ok(_) => {
                 let mut vbus = super::verifier::VerifierBus::new();
 
-                // Register the 14 built-in verifiers.
+                // Register the 14 built-in verifiers plus the TS orchestrator
+                // bridge (WO 50.02 P0): the bridge runs the Rust regex security
+                // emitter (14 obfuscated eval/exec/pickle rules). Without this
+                // registration those rules were dead in production.
                 vbus.register(Box::new(
                     crate::session::verifier::security::SecurityVerifier,
+                ));
+                vbus.register(Box::new(
+                    crate::session::verifier::bus::TsOrchestratorBridgeVerifier::new(
+                        "ts-bridge".into(),
+                    ),
                 ));
                 vbus.register(Box::new(crate::session::verifier::lint::LintVerifier::new(
                     sys_runner.clone(),
@@ -691,7 +700,7 @@ impl Executor {
                     crate::session::verifier::generic_test::GenericTestVerifier,
                 ));
 
-                let mut count = 14;
+                let mut count = 15;
 
                 // Plugin verifiers register on the bus too (WO 47.14).
                 if let Some(registry) = plugin_registry {
@@ -802,7 +811,8 @@ impl Executor {
 
         // 3. Rebuild plugin verifiers on the unified bus (ADR-028; the
         // sole plugin-verifier path since WO 47.14): drop old plugin
-        // verifiers, keep the 14 built-in bus verifiers, re-add from
+        // verifiers, keep the 15 built-in bus verifiers (14 language
+        // verifiers + ts-bridge security emitter, WO 50.02), re-add from
         // the fresh registry.
         let plugin_verifier_count = self.rebuild_bus_plugin_verifiers(registry);
 
@@ -822,11 +832,13 @@ impl Executor {
     }
 
     /// Re-register plugin verifiers on the `VerifierBus` while keeping the
-    /// 14 built-in bus verifiers intact. WO 47.14: all 14 built-ins now
-    /// register on the bus, so the keep-list must include all of them.
+    /// built-in bus verifiers intact. WO 47.14: all 14 built-ins register on
+    /// the bus, plus the `ts-bridge` security emitter (WO 50.02), so the
+    /// keep-list must include all of them.
     fn rebuild_bus_plugin_verifiers(&mut self, registry: &kf_plugin_host::PluginRegistry) -> usize {
         const BUILTIN_BUS_VERIFIERS: &[&str] = &[
             "security",
+            "ts-bridge",
             "lint",
             "build",
             "git",

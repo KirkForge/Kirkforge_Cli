@@ -831,4 +831,32 @@ mod tests {
             .iter()
             .any(|x| x.kind == SuggestionKind::AssertFreeBody && x.test == "test_noop"));
     }
+
+    // Known false positive (WO 50.09 M3): a test whose asserts live in a
+    // helper callee is flagged as assert-free because the scan is
+    // line-based, not AST. The ponytail: comment at find_assert_free_tests
+    // documents this; this test pins the known FP so it doesn't silently
+    // regress to a false negative (which would hide the heuristic's
+    // limitation from anyone reading the test suite).
+    #[test]
+    fn assert_free_known_false_positive_helper_callee() {
+        let src = "\
+#[test]
+fn test_via_helper() {
+    check_thing();
+}
+
+fn check_thing() {
+    assert_eq!(1, 1);
+}
+";
+        let found = find_assert_free_tests(src);
+        assert!(
+            found.iter().any(|f| f.fn_name == "test_via_helper"),
+            "KNOWN FALSE POSITIVE: the line-based scan flags test_via_helper \
+             as assert-free because the assert lives in check_thing (a \
+             callee). A real parser (syn) would resolve this; see the \
+             ponytail: comment on find_assert_free_tests."
+        );
+    }
 }

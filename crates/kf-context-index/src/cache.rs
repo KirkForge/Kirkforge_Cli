@@ -272,9 +272,24 @@ pub fn current_head(repo_root: &std::path::Path) -> Option<String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
+/// Check whether `s` looks like a valid git commit hash: a hex string
+/// of 7-40 chars (abbreviated or full SHA-1/SHA-256). Rejects anything
+/// else so a tampered cache value can't reach `git diff` (WO 50.09 M2).
+/// ponytail: validates shape only, not that the hash exists — a
+/// well-formed but absent hash still falls through to git's own error
+/// path, which yields an empty diff (cache miss, rebuild).
+fn is_valid_commit_hash(s: &str) -> bool {
+    (7..=40).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Get files changed between `old_head` and current HEAD that are
-/// indexable source files.
+/// indexable source files. A malformed `old_head` (e.g. from a tampered
+/// cache file) is rejected before reaching git, yielding an empty diff
+/// (cache miss → full rebuild).
 fn git_diff_files(old_head: &str, repo_root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    if !is_valid_commit_hash(old_head) {
+        return Vec::new();
+    }
     let output = std::process::Command::new("git")
         .args(["diff", "--name-only", old_head, "HEAD"])
         .current_dir(repo_root)
@@ -295,4 +310,45 @@ fn git_diff_files(old_head: &str, repo_root: &std::path::Path) -> Vec<std::path:
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_commit_hashes_accepted() {
+        assert!(is_valid_commit_hash("abc1234"));
+        assert!(is_valid_commit_hash("0123456789abcdef0123456789abcdef01234567"));
+        assert!(is_valid_commit_hash("ABCDEF0"));
+    }
+
+    #[test]
+    fn invalid_commit_hashes_rejected() {
+        // too short
+        assert!(!is_valid_commit_hash("abc123"));
+        // too long
+        assert!(!is_valid_commit_hash(&"a".repeat(41)));
+        // non-hex
+        assert!(!is_valid_commit_hash("ggggggg"));
+        // shell-injection attempt (WO 50.09 M2)
+        assert!(!is_valid_commit_hash("; rm -rf /"));
+        // empty
+        assert!(!is_valid_commit_hash(""));
+        // whitespace
+        assert!(!is_valid_commit_hash("abc1234 "));
+    }
+
+    #[test]
+    fn git_diff_files_rejects_malformed_old_head() {
+        // A malformed old_head must yield an empty diff (cache miss)
+        // without spawning git with the attacker-controlled value.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let diff = git_diff_files("; rm -rf /", tmp.path());
+        assert!(diff.is_empty(), "malformed old_head should be rejected");
+        let diff = git_diff_files("$(whoami)", tmp.path());
+        assert!(diff.is_empty());
+        let diff = git_diff_files("abc123", tmp.path());
+        assert!(diff.is_empty(), "too-short hash should be rejected");
+    }
 }

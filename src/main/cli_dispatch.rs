@@ -129,6 +129,16 @@ pub async fn main() {
         tracing::info!(otel_endpoint = %endpoint, "OpenTelemetry export enabled");
     }
 
+    // WO 38.10 P2: capture the `--output` format for the error path so a
+    // hard error in `--output json` mode emits `{"error": ...}` to stdout
+    // before exiting (previously it printed nothing to stdout). Only the
+    // `run` subcommand carries an output format; other subcommands print
+    // human-readable text and exit via the same error path.
+    let error_output_format = match &cli.command {
+        Command::Run { output, .. } => Some(*output),
+        _ => None,
+    };
+
     let result: Result<(), KirkForgeError> = match cli.command {
         Command::Run {
             model,
@@ -154,6 +164,7 @@ pub async fn main() {
             i_accept_unsandboxed,
             no_trace,
             prompt,
+            read_stdin_full,
         } => {
             run_session(RunArgs {
                 model,
@@ -179,6 +190,7 @@ pub async fn main() {
                 i_accept_unsandboxed,
                 no_trace,
                 prompt,
+                read_stdin_full,
             })
             .await
         }
@@ -253,16 +265,91 @@ pub async fn main() {
         #[cfg(feature = "devtools")]
         Command::Doctor { command } => handle_doctor_command(command),
         Command::Update { check } => handle_update_command(check).await,
+        Command::Config => handle_config_command(),
+        Command::Models => handle_models_command().await,
     }
     .map_err(KirkForgeError::from);
 
     kf_code::shared::metrics::shutdown_telemetry();
 
     if let Err(e) = result {
+        // WO 38.10 P2: in `--output json` mode, emit a machine-readable
+        // error object to stdout before the human-readable stderr line so
+        // scripted consumers can capture the failure reason. The exit
+        // code is unchanged (the classifier picks it).
+        if let Some(kf_code::cli::OutputFormat::Json) = error_output_format {
+            let exit_code = e.exit_code();
+            let err_obj = serde_json::json!({
+                "error": format!("{e:#}"),
+                "exit_code": exit_code,
+            });
+            println!("{}", serde_json::to_string(&err_obj).unwrap_or_else(|_| "{}".into()));
+        }
         eprintln!("kf-code: {e}");
         if let Some(h) = e.hint() {
             eprintln!("hint: {h}");
         }
         std::process::exit(e.exit_code());
     }
+}
+
+/// `kf-code config` (WO 38.10 P2): print the resolved config as TOML.
+/// The config is loaded via the strict loader so a parse failure exits 5
+/// (same as `run`) instead of silently showing defaults.
+fn handle_config_command() -> anyhow::Result<()> {
+    let config = kf_code::session::config::load_or_create_config_strict()?;
+    let toml = toml::to_string_pretty(&config)
+        .map_err(|e| anyhow::anyhow!("failed to serialize config as TOML: {e}"))?;
+    println!("{toml}");
+    Ok(())
+}
+
+/// `kf-code models` (WO 38.10 P2): list available models. For the
+/// configured `default_model`'s adapter kind, Ollama queries
+/// `{ollama_host}/api/tags`; cloud providers print the built-in pricing
+/// table. Keeps it simple — no per-provider API calls for cloud.
+async fn handle_models_command() -> anyhow::Result<()> {
+    use kf_code::adapters::adapter_kind_for;
+
+    let config = kf_code::session::config::load_or_create_config_strict()?;
+    let model_name = &config.model.default_model;
+    let ollama_host = &config.model.ollama_host;
+    let kind = adapter_kind_for(model_name, None, &config.model.anthropic_provider);
+
+    match kind {
+        kf_code::adapters::AdapterKind::Ollama => {
+            let client = kf_code::shared::build_reqwest_client(Some(std::time::Duration::from_secs(
+                5,
+            )));
+            let models = kf_code::tui::commands::fetch_model_list(&client, ollama_host)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to query {ollama_host}/api/tags: {e}"))?;
+            if models.is_empty() {
+                println!("No models found at {ollama_host}/api/tags.");
+            } else {
+                for m in models {
+                    println!("{m}");
+                }
+            }
+        }
+        _ => {
+            // Cloud providers: list the built-in pricing table model
+            // prefixes (non-empty rows only). This is the static catalogue
+            // — a live cloud list call would need provider auth and is out
+            // of scope for the simple `models` subcommand.
+            println!("Configured provider: {kind} (model: {model_name})");
+            println!();
+            println!("Built-in pricing table models:");
+            for p in kf_code::shared::PRICING_TABLE
+                .iter()
+                .filter(|p| !p.model_prefix.is_empty())
+            {
+                println!(
+                    "  {:<24} in ${:.2}/Mtok  out ${:.2}/Mtok",
+                    p.model_prefix, p.input_per_mtok, p.output_per_mtok
+                );
+            }
+        }
+    }
+    Ok(())
 }

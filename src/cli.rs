@@ -190,6 +190,13 @@ pub enum Command {
         /// for scripting: `kf-code run -p "explain this file" --no-tui`.
         #[arg(short, long)]
         prompt: Option<String>,
+
+        /// WO 38.10 P2: read ALL of stdin as a single turn instead of
+        /// stopping at the first blank line (the heredoc terminator).
+        /// Useful for piping multi-paragraph prompts that contain blank
+        /// lines. Only applies to the plain (non-interactive) reader.
+        #[arg(long)]
+        read_stdin_full: bool,
     },
     /// Print shell completion script and exit.
     /// Example: kf-code completions bash >> ~/.bashrc
@@ -311,6 +318,14 @@ pub enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Show the resolved configuration (defaults + config file + env) as
+    /// TOML. WO 38.10 P2 — useful for debugging "why isn't my config
+    /// taking effect." The config is already merged at load time.
+    Config,
+    /// List available models from the configured provider (WO 38.10 P2).
+    /// For Ollama, queries `{ollama_host}/api/tags`. For cloud providers,
+    /// lists the built-in pricing table models.
+    Models,
 }
 
 /// Subcommands for the `doctor` command (WO 12.4, ADR-0029).
@@ -869,6 +884,34 @@ mod tests {
             Command::Run { prompt, .. } => assert_eq!(prompt.as_deref(), Some("first\n\nsecond")),
             _ => panic!("expected Run"),
         }
+    }
+
+    /// `--read-stdin-full` (WO 38.10 P2) parses into the `read_stdin_full`
+    /// field and defaults to false when omitted.
+    #[test]
+    fn run_read_stdin_full_parses() {
+        let cli = Cli::try_parse_from(["kf-code", "run", "--read-stdin-full"]).expect("parse");
+        match cli.command {
+            Command::Run { read_stdin_full, .. } => assert!(read_stdin_full),
+            _ => panic!("expected Run"),
+        }
+        let cli = Cli::try_parse_from(["kf-code", "run"]).expect("parse");
+        match cli.command {
+            Command::Run { read_stdin_full, .. } => assert!(!read_stdin_full),
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn config_subcommand_parses() {
+        let cli = Cli::try_parse_from(["kf-code", "config"]).expect("parse");
+        assert!(matches!(cli.command, Command::Config));
+    }
+
+    #[test]
+    fn models_subcommand_parses() {
+        let cli = Cli::try_parse_from(["kf-code", "models"]).expect("parse");
+        assert!(matches!(cli.command, Command::Models));
     }
 
     #[test]

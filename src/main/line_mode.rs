@@ -113,6 +113,9 @@ pub(super) async fn run_line_mode(
     // value is a single turn even if it contains blank lines (fixes the
     // multi-paragraph pipe truncation for the arg form).
     prompt: Option<String>,
+    // WO 38.10 P2: read all of stdin as one turn (skip the blank-line
+    // heredoc terminator). Only applies to the plain reader.
+    read_stdin_full: bool,
 ) -> anyhow::Result<()> {
     // If running in non-interactive mode (scripted), deny all approvals.
     // If running in line-mode interactive (no TUI), prompt on stderr and
@@ -221,6 +224,9 @@ pub(super) async fn run_line_mode(
     if let Some(p) = prompt {
         line_reader.prime(p);
     }
+    // WO 38.10 P2: `--read-stdin-full` makes the plain reader consume
+    // all of stdin as one turn (no blank-line heredoc terminator).
+    line_reader.set_read_full(read_stdin_full);
     let mut turn_no: usize = 0;
     let mut total_prompt_tokens: usize = 0;
     let mut total_completion_tokens: usize = 0;
@@ -228,6 +234,14 @@ pub(super) async fn run_line_mode(
     let mut all_tool_records: Vec<kf_code::shared::ToolCallRecord> = Vec::new();
     let mut final_error: Option<String> = None;
     let overall_started = std::time::Instant::now();
+    // WO 38.10 P2: capture the wall-clock start time once as rfc3339 so
+    // the JSON summary's `started_at` is the real session start, not the
+    // end time (the previous `chrono::Local::now()` at summary-build
+    // time reported end time).
+    let started_at_rfc3339 = chrono::Local::now().to_rfc3339();
+    // WO 38.10 P2: track whether the loop exited via Ctrl-C so we exit
+    // 130 (128+SIGINT) instead of 0. Set by the SIGINT shutdown path.
+    let mut exited_via_sigint = false;
 
     loop {
         // Race the blocking stdin read against the SIGINT shutdown notify
@@ -241,6 +255,7 @@ pub(super) async fn run_line_mode(
             },
             _ = shutdown.notified() => {
                 tracing::info!("SIGINT received; signalling graceful line-mode shutdown");
+                exited_via_sigint = true;
                 break;
             }
         };
@@ -479,6 +494,7 @@ pub(super) async fn run_line_mode(
         // cancelled the in-flight work; this catches a notify that raced
         // the turn's own completion.)
         if cancelled.load(Ordering::Acquire) {
+            exited_via_sigint = true;
             break;
         }
     }
@@ -513,14 +529,14 @@ pub(super) async fn run_line_mode(
         let summary = kf_code::shared::SessionSummary {
             version: "1.0".into(),
             session: kf_code::shared::SessionInfo {
-                id: if non_interactive {
-                    "non-interactive".into()
-                } else {
-                    "line-mode".into()
-                },
+                // WO 38.10 P2: use the real session id instead of the
+                // literal "non-interactive"/"line-mode" placeholder.
+                id: session_id.clone(),
                 model: model_name,
                 duration_ms: total_duration_ms,
-                started_at: chrono::Local::now().to_rfc3339(),
+                // WO 38.10 P2: started_at is the real session start
+                // (captured above), not the end time.
+                started_at: started_at_rfc3339,
             },
             messages: recorded_messages,
             tool_calls: all_tool_records,
@@ -533,6 +549,17 @@ pub(super) async fn run_line_mode(
             error: final_error,
         };
         println!("{}", serde_json::to_string_pretty(&summary)?);
+    }
+
+    // WO 38.10 P2: Ctrl-C (SIGINT) should exit 130 (128+SIGINT), not 0.
+    // The graceful-teardown path above already saved carryover and reaped
+    // background jobs; we only need to pick the exit code here.
+    if exited_via_sigint {
+        // Explicit process exit so the caller's `Ok(())` return does not
+        // mask the SIGINT exit code. We return `Ok(())` from this fn for
+        // the normal paths; the dispatcher's error path is not taken, so
+        // we exit directly here.
+        std::process::exit(130);
     }
 
     Ok(())

@@ -82,7 +82,8 @@ pub mod shell;
 pub mod memory;
 
 pub use config::{
-    ArtifactPolicy, Config, DisplayConfig, ModelConfig, SecurityConfig, SessionConfig, ToolConfig,
+    ArtifactPolicy, Config, DisplayConfig, ModelConfig, SecurityConfig, SessionConfig,
+    SubagentProvider, ToolConfig,
 };
 
 /// Thread-safe shared configuration. Used by both the TUI and the executor

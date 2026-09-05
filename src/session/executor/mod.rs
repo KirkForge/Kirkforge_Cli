@@ -926,6 +926,20 @@ impl Executor {
         self.subagent_depth = depth;
     }
 
+    /// Replace the active model adapter at runtime. Used by the
+    /// subagent fallback path in `run_task_detailed`: when the primary
+    /// model fails on the first turn, a fresh adapter for the fallback
+    /// model is built and swapped in here, then the turn is retried.
+    /// Also updates `model_name` and the `adapter_swap` tracker so a
+    /// subsequent `/model` or routing swap sees the fallback as the
+    /// current model.
+    pub fn swap_adapter(&mut self, new_adapter: Box<dyn ModelAdapter>, model_name: &str) {
+        self.model_name = model_name.to_string();
+        self.adapter_swap.current_model_name = model_name.to_string();
+        let _old = std::mem::replace(&mut self.adapter, new_adapter);
+        // _old is dropped here, releasing any in-flight connections
+    }
+
     pub fn set_plan_mode(&mut self, enabled: bool) {
         self.plan_mode = enabled;
     }

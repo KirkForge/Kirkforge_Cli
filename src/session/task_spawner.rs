@@ -120,6 +120,64 @@ fn create_task_temp_dir(tag: &str) -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
+// Build the model adapter for a subagent, using the same provider
+// config (API keys, routing, endpoint overrides) as the primary
+// adapter. Factored out so the fallback path can build a fresh
+// adapter for the fallback model name without duplicating the
+// 20-argument `adapter_for_with_provider` call.
+fn build_subagent_adapter(
+    model: &str,
+    host: &str,
+    cfg: &Config,
+    sub: &crate::shared::SubagentProvider,
+) -> Box<dyn crate::adapters::ModelAdapter> {
+    adapters::caching::maybe_wrap_cached(
+        adapters::adapter_for_with_provider(
+            model,
+            host,
+            None,
+            &cfg.model.anthropic_provider,
+            cfg.model.request_timeout_secs,
+            &cfg.model.opencode_zen_endpoint,
+            cfg.model.opencode_zen_api_key.as_deref(),
+            Some(&cfg.model.adapter_routing),
+            &adapters::ProviderApiKeys {
+                anthropic: sub
+                    .anthropic_api_key
+                    .clone()
+                    .or(cfg.model.anthropic_api_key.clone()),
+                openai: sub
+                    .openai_api_key
+                    .clone()
+                    .or(cfg.model.openai_api_key.clone()),
+                deepseek: sub
+                    .deepseek_api_key
+                    .clone()
+                    .or(cfg.model.deepseek_api_key.clone()),
+                gemini: sub
+                    .gemini_api_key
+                    .clone()
+                    .or(cfg.model.gemini_api_key.clone()),
+                kimi: sub.kimi_api_key.clone().or(cfg.model.kimi_api_key.clone()),
+            },
+            Some(&cfg.model.aws_region),
+            if cfg.model.gcp_project_id.is_empty() {
+                None
+            } else {
+                Some(cfg.model.gcp_project_id.as_str())
+            },
+            if cfg.model.gcp_region.is_empty() {
+                None
+            } else {
+                Some(cfg.model.gcp_region.as_str())
+            },
+            cfg.model.gcp_service_account_path.clone(),
+            &cfg.model.anthropic_api_base,
+        ),
+        cfg,
+    )
+}
+
 /// Spawn a subagent task inside an isolated `Executor` with a temporary
 /// conversation log.
 ///
@@ -295,51 +353,7 @@ impl InProcessTaskSpawner {
             cfg.security.sandbox_dir = Some(wt.path().to_string_lossy().to_string());
         }
 
-        let adapter = adapters::caching::maybe_wrap_cached(
-            adapters::adapter_for_with_provider(
-                effective_model,
-                effective_host,
-                None,
-                &cfg.model.anthropic_provider,
-                cfg.model.request_timeout_secs,
-                &cfg.model.opencode_zen_endpoint,
-                cfg.model.opencode_zen_api_key.as_deref(),
-                Some(&cfg.model.adapter_routing),
-                &adapters::ProviderApiKeys {
-                    anthropic: sub
-                        .anthropic_api_key
-                        .clone()
-                        .or(cfg.model.anthropic_api_key.clone()),
-                    openai: sub
-                        .openai_api_key
-                        .clone()
-                        .or(cfg.model.openai_api_key.clone()),
-                    deepseek: sub
-                        .deepseek_api_key
-                        .clone()
-                        .or(cfg.model.deepseek_api_key.clone()),
-                    gemini: sub
-                        .gemini_api_key
-                        .clone()
-                        .or(cfg.model.gemini_api_key.clone()),
-                    kimi: sub.kimi_api_key.clone().or(cfg.model.kimi_api_key.clone()),
-                },
-                Some(&cfg.model.aws_region),
-                if cfg.model.gcp_project_id.is_empty() {
-                    None
-                } else {
-                    Some(cfg.model.gcp_project_id.as_str())
-                },
-                if cfg.model.gcp_region.is_empty() {
-                    None
-                } else {
-                    Some(cfg.model.gcp_region.as_str())
-                },
-                cfg.model.gcp_service_account_path.clone(),
-                &cfg.model.anthropic_api_base,
-            ),
-            &cfg,
-        );
+        let adapter = build_subagent_adapter(effective_model, effective_host, &cfg, sub);
 
         let (deny_list, path_guard, _read_gate) = crate::shared::access::access_from_config(&cfg);
         let all = crate::tools::all_tools(&crate::tools::ToolContextBuilder {
@@ -569,10 +583,51 @@ impl InProcessTaskSpawner {
                     "[incoming message from another agent]\n{inbox}\n[end incoming message]\n\n{base_input}"
                 )
             };
-            let events = executor
+            let result = executor
                 .run_turn_collecting(&input, &approval_tx, &cancelled)
-                .await
-                .map_err(|e| format!("task turn {turn_num} failed: {e}"))?;
+                .await;
+            let events = match result {
+                Ok(events) => events,
+                Err(e) if turn_num == 0 => {
+                    // First turn failed — try the fallback model if one is
+                    // configured. The per-subagent-provider fallback wins
+                    // over the top-level field. Only the FIRST turn gets a
+                    // fallback: subsequent turns use whatever adapter is
+                    // active, so a mid-task model failure still propagates.
+                    let fallback = sub
+                        .fallback_model
+                        .as_deref()
+                        .filter(|m| !m.is_empty())
+                        .or(cfg
+                            .model
+                            .subagent_fallback_model
+                            .as_deref()
+                            .filter(|m| !m.is_empty()));
+                    if let Some(fallback_model) = fallback {
+                        tracing::warn!(
+                            error = %e,
+                            fallback_model,
+                            primary_model = effective_model,
+                            "subagent model failed on first turn, trying fallback"
+                        );
+                        let fallback_adapter =
+                            build_subagent_adapter(fallback_model, effective_host, &cfg, sub);
+                        executor.swap_adapter(fallback_adapter, fallback_model);
+                        executor
+                            .run_turn_collecting(&input, &approval_tx, &cancelled)
+                            .await
+                            .map_err(|e2| {
+                                format!(
+                                    "task turn 0 failed with both primary ({effective_model}) \
+                                     and fallback ({fallback_model}): {e} → {e2}"
+                                )
+                            })?
+                    } else {
+                        return Err(format!("task turn 0 failed: {e}"));
+                    }
+                }
+                Err(e) => return Err(format!("task turn {turn_num} failed: {e}")),
+            };
             for ev in &events {
                 match ev {
                     TurnEvent::CostStats {
@@ -1223,6 +1278,131 @@ mod tests {
         assert_eq!(
             m, "subagent-model",
             "empty agent model is skipped, not used"
+        );
+    }
+
+    // ── Model fallback: first-turn failure triggers fallback retry ──
+
+    // When subagent_fallback_model is configured and the primary model
+    // fails on turn 0, the fallback path retries with the fallback
+    // model. Both models point at a dead host here, so both fail — but
+    // the error message must mention BOTH model names, proving the
+    // fallback path was taken (not just the primary error).
+    #[tokio::test]
+    async fn run_task_fallback_triggered_on_first_turn_failure() {
+        let _tmp_lock = RUN_TASK_TMP_LOCK.lock().await;
+        let mut cfg = Config::default();
+        cfg.model.request_timeout_secs = 5;
+        cfg.model.subagent_fallback_model = Some("fallback-dead".into());
+        let config: SharedConfig = Arc::new(std::sync::RwLock::new(cfg));
+        let spawner = InProcessTaskSpawner::new(
+            config,
+            "primary-dead".into(),
+            "127.0.0.1:1".into(),
+            None,
+            false,
+        );
+        let request = TaskRequest {
+            prompt: "doomed".into(),
+            persona: "coder".into(),
+            model: None,
+            max_turns: 1,
+            cancel: None,
+            owner: None,
+            subagent_depth: 0,
+        };
+        let result = spawner.run_task(request).await;
+        let err = result.expect_err(
+            "both primary and fallback models point at a dead host — must error"
+        );
+        assert!(
+            err.contains("primary-dead"),
+            "error must mention the primary model; got: {err}"
+        );
+        assert!(
+            err.contains("fallback-dead"),
+            "error must mention the fallback model — fallback path was taken; got: {err}"
+        );
+        let leftover = task_temp_dirs_for_this_pid();
+        assert!(
+            leftover.is_empty(),
+            "temp dir leaked on fallback-exhausted error return: {leftover:?}"
+        );
+    }
+
+    // When NO fallback is configured, the first-turn failure propagates
+    // directly (no fallback model name in the error).
+    #[tokio::test]
+    async fn run_task_no_fallback_propagates_primary_error() {
+        let _tmp_lock = RUN_TASK_TMP_LOCK.lock().await;
+        let mut cfg = Config::default();
+        cfg.model.request_timeout_secs = 5;
+        // subagent_fallback_model left as None (default)
+        let config: SharedConfig = Arc::new(std::sync::RwLock::new(cfg));
+        let spawner = InProcessTaskSpawner::new(
+            config,
+            "primary-dead".into(),
+            "127.0.0.1:1".into(),
+            None,
+            false,
+        );
+        let request = TaskRequest {
+            prompt: "doomed".into(),
+            persona: "coder".into(),
+            model: None,
+            max_turns: 1,
+            cancel: None,
+            owner: None,
+            subagent_depth: 0,
+        };
+        let result = spawner.run_task(request).await;
+        let err = result.expect_err("dead host with no fallback must error");
+        assert!(
+            err.contains("task turn 0 failed"),
+            "error must be the direct turn-0 failure (no fallback attempted); got: {err}"
+        );
+        assert!(
+            !err.contains("fallback"),
+            "no fallback configured — error must not mention fallback; got: {err}"
+        );
+    }
+
+    // The per-subagent-provider fallback_model wins over the top-level
+    // subagent_fallback_model. Both point at dead hosts; the error must
+    // mention the per-provider fallback name, not the top-level one.
+    #[tokio::test]
+    async fn run_task_per_provider_fallback_wins_over_top_level() {
+        let _tmp_lock = RUN_TASK_TMP_LOCK.lock().await;
+        let mut cfg = Config::default();
+        cfg.model.request_timeout_secs = 5;
+        cfg.model.subagent_fallback_model = Some("top-level-fallback".into());
+        cfg.model.subagent_provider.fallback_model = Some("per-provider-fallback".into());
+        let config: SharedConfig = Arc::new(std::sync::RwLock::new(cfg));
+        let spawner = InProcessTaskSpawner::new(
+            config,
+            "primary-dead".into(),
+            "127.0.0.1:1".into(),
+            None,
+            false,
+        );
+        let request = TaskRequest {
+            prompt: "doomed".into(),
+            persona: "coder".into(),
+            model: None,
+            max_turns: 1,
+            cancel: None,
+            owner: None,
+            subagent_depth: 0,
+        };
+        let result = spawner.run_task(request).await;
+        let err = result.expect_err("both models dead — must error");
+        assert!(
+            err.contains("per-provider-fallback"),
+            "per-provider fallback must win over top-level; got: {err}"
+        );
+        assert!(
+            !err.contains("top-level-fallback"),
+            "top-level fallback must NOT be used when per-provider is set; got: {err}"
         );
     }
 }

@@ -68,6 +68,10 @@ pub(super) const KEY_MAP: &[(&str, &str)] = &[
         "KF_CODE_SUBAGENT_KIMI_API_KEY",
         "subagent_provider.kimi_api_key",
     ),
+    (
+        "KF_CODE_SUBAGENT_FALLBACK_MODEL",
+        "subagent_provider.fallback_model",
+    ),
     // Per-provider API keys resolved by `adapters::auth::resolve_api_key`
     // (Series 18): plain `<PROVIDER>_API_KEY`, no KF_CODE_ prefix.
     ("ANTHROPIC_API_KEY", "anthropic_api_key"),

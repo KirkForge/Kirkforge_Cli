@@ -8,9 +8,11 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
-- Inter-subagent messaging: send_message, list_agents, update_task tools
-  for agent teams. Messages queued via TaskHandle.pending_messages are
-  drained + injected into the target subagent's next turn input.
+- Model fallback: subagent model failure on first turn retries with a
+  cheaper/different model before giving up. New config fields
+  `subagent_fallback_model` (top-level) and
+  `subagent_provider.fallback_model` (per-provider). New
+  `Executor::swap_adapter` method for runtime adapter replacement.
 - Pipeline: configurable roles + fan-out — PipelineConfig struct with
   RoleSpec (name, persona, max_turns, fan_out, pass_to_next). Fan-out
   spawns N copies via futures::join_all. Default config unchanged.

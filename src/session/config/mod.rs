@@ -1308,16 +1308,17 @@ mod tests {
         use crate::shared::config::CONFIG_FIELD_COUNT;
 
         // ── 1. Total struct-level fields ──────────────────────────
-        // ModelConfig=34 (33 direct + subagent_provider sub-struct handle),
-        // SecurityConfig=22, ToolConfig=36, SessionConfig=8,
-        // DisplayConfig=8 → 109 total pub fields.
+        // ModelConfig=36 (35 direct + subagent_provider sub-struct handle),
+        // SecurityConfig=22, ToolConfig=37, SessionConfig=8,
+        // DisplayConfig=8 → 111 total pub fields.
         // (WO 45.37: SessionConfig 9 → 8 — worktree_enabled +
         // auto_apply_patch replaced by artifact_policy enum.)
         // (WO 47.13: DisplayConfig 7 → 8 — added extra_commands.)
         // (WO 48.34: ToolConfig 35 → 36 — added max_subagent_turns.)
         // (Subagent audit 2026-09-04: ToolConfig 36 → 37 — added max_subagent_depth.)
+        // (Model fallback: ModelConfig 34 → 35 — added subagent_fallback_model.)
         assert_eq!(
-            CONFIG_FIELD_COUNT, 110,
+            CONFIG_FIELD_COUNT, 111,
             "CONFIG_FIELD_COUNT has drifted — did you add/remove a config field?"
         );
 
@@ -1344,6 +1345,7 @@ mod tests {
             "subagent_provider.deepseek_api_key",
             "subagent_provider.gemini_api_key",
             "subagent_provider.kimi_api_key",
+            "subagent_provider.fallback_model",
             "anthropic_api_key",
             "openai_api_key",
             "deepseek_api_key",

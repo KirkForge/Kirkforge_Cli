@@ -5,7 +5,7 @@ mod session;
 mod tools;
 
 pub use display::DisplayConfig;
-pub use model::ModelConfig;
+pub use model::{ModelConfig, SubagentProvider};
 pub use security::SecurityConfig;
 pub use session::{ArtifactPolicy, SessionConfig};
 pub use tools::{ToolConfig, DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_TURNS};
@@ -24,13 +24,13 @@ use serde::{Deserialize, Serialize};
 /// derived from the field name).
 ///
 /// Breakdown:
-///   ModelConfig    32  (31 direct + subagent_provider sub-struct handle)
+///   ModelConfig    36  (35 direct + subagent_provider sub-struct handle)
 ///   SecurityConfig 22  (19 direct + 3 sub-struct handles)
-///   ToolConfig     33
-///   SessionConfig   7
+///   ToolConfig     37
+///   SessionConfig   8
 ///   DisplayConfig   8
 ///   Note: 1 field (seed) has #[serde(skip_serializing)], so serde
-///   produces 98 keys; ToolConfig.memory_auto_populate and
+///   produces 109 keys; ToolConfig.memory_auto_populate and
 ///   DisplayConfig.memory_auto_populate flatten to the same JSON key,
 ///   dropping 1 more. The drift-guard test accounts for both.
 //
@@ -53,7 +53,8 @@ use serde::{Deserialize, Serialize};
 // WO 47.13: bumped 107 → 108 (added DisplayConfig.extra_commands).
 // WO 48.34: bumped 108 → 109 (added ToolConfig.max_subagent_turns).
 // Subagent audit 2026-09-04: bumped 109 → 110 (added ToolConfig.max_subagent_depth).
-pub const CONFIG_FIELD_COUNT: usize = 110;
+// Model fallback: bumped 110 → 111 (added ModelConfig.subagent_fallback_model).
+pub const CONFIG_FIELD_COUNT: usize = 111;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

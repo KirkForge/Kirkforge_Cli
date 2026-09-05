@@ -600,6 +600,15 @@ keys fall back to the parent when unset. Enables the brain+brawn split: an
 expensive cloud model orchestrates while cheap brawn runs on a different
 provider/account.
 
+**Subagent model fallback**: when the primary subagent model fails on the
+first turn (connection refused, 401, 404, etc.), `run_task_detailed`
+retries with a fallback model before giving up. The fallback is configured
+via `subagent_fallback_model` (top-level) or
+`subagent_provider.fallback_model` (per-provider; wins over top-level).
+`None` = no fallback (propagate the error as before). Only the first turn
+gets a fallback; subsequent turns use whatever adapter is active. The
+executor's `swap_adapter` method replaces the adapter at runtime.
+
 **Dynamic agents (WO 39.3 — Claude compat phase 2)**: `.claude/agents/*.md`
 files load into an `AgentRegistry` (`src/session/agents.rs`) at spawner
 construction. Each file has YAML-like frontmatter (`name`, `description`,

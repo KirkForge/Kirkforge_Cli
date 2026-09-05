@@ -96,8 +96,8 @@ Decision tree:
 - If you've attempted the same fix 3 times and it's still red, STOP. Write "ESCALATE: <root cause unknown>" in `lessons.md` and return. The brain takes over when the brawn is stuck.
 
 ## 7. Codebase patterns
-- The existing `Verifier` trait (`async fn verify(&self, event: &BusEvent) -> Verdict`) and the new `BusVerifier` trait (`fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry>`) coexist. The former is event-driven, the latter is sync and context-based. Don't try to unify them in one pass.
-- `CorrectionResult` is a struct with `{verifier, success, message, fix}` fields — not an enum. There is no `CorrectionResult::Failed`.
+- Only the `BusVerifier` trait (`fn verify(&self, ctx: &VerifyContext) -> Vec<VerdictEntry>`) survives — WO 47.14 unified the old event-driven `Verifier`/`VerifierSlots`/`VerifierHandler` into this single sync, context-based trait. All 14 built-in verifiers implement `BusVerifier`.
+- `CorrectionResult` is a struct with `{verifier, outcome, message, fix, file, line}` fields — not an enum. There is no `CorrectionResult::Failed`. `outcome: VerificationOutcome` (not `success: bool`) distinguishes `Skipped` from `Clean`/`Fixed`/`Suggestion`/`Failed` (WO 45.36). `file: Option<PathBuf>` and `line: Option<u32>` carry the fix location.
 - `tokio::task::block_in_place` panics in single-threaded test runtimes. When wrapping async code in sync adapters, use stubs or find another approach.
 - `.map_or(true, |a| ...)` on `Option` triggers `clippy::unnecessary_map_or`. Use `.is_none_or(|a| ...)` instead (Rust 1.82+).
 - When adding fields to `Config`, update ALL of: `Default` impl, struct definition, test `Config` literals (especially `executor/tests/mod.rs`), `adapter_for_with_provider` call sites, `adapter_for` convenience wrapper, and test calls.

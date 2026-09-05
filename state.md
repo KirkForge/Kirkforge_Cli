@@ -465,10 +465,14 @@ Strengths vs competitors:
 
 ## CI / branch state
 
-- **main == dev == origin/main == origin/dev at `357ac36e`** (2026-08-29).
+- **main == dev == origin/main == origin/dev at `4f948431`** (2026-09-05).
+  The prior pin (`357ac36e`, 2026-08-29) was the WO 48 final wave; the
+  batch4 merges (model-fallback, subagent-messaging, plugin-hardening,
+  agent-frontmatter, CLI polish) landed since.
 - **CI GREEN**: GitHub run `33238035710` (CI (merge), branch main, head
   `357ac36e`, 2026-08-29T06:15:31Z, success) — the WO 48 final-wave merge
-  commit. Full gates (test-full matrix + Windows cross) ran green in CI.
+  commit. The current origin/main head (`4f948431`) has not had its CI run
+  cited in this file; verify via `gh run list --branch main --limit 1`
 - Branch flow (NON-NEGOTIABLE, AGENTS.md task 7): push to dev → watch CI
   green (`gh run watch --exit-status`) → only then main. Never both at
   once; never main first.

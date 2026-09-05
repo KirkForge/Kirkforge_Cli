@@ -480,8 +480,12 @@ impl Executor {
                     }
 
                     // Pin unresolved verifier findings in compaction tail (WO 22.6-R6).
+                    // WO 50.01.1: read from the POST-compaction conversation — the
+                    // outer `history` is the pre-compaction snapshot; extracting from
+                    // it re-injects findings the summarizer/truncation just dropped.
+                    let post_history = self.conversation.all().to_vec();
                     if let Some(findings) =
-                        crate::session::prompt::compaction::extract_unresolved_verifier_findings(&history)
+                        crate::session::prompt::compaction::extract_unresolved_verifier_findings(&post_history)
                     {
                         self.conversation
                             .append_async(Message {

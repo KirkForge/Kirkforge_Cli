@@ -83,96 +83,20 @@ impl Executor {
         _tc: &ToolInvocation,
         tool_name: &str,
         args: &serde_json::Value,
-        outcome: &ToolOutcome,
+        _outcome: &ToolOutcome,
         real_exit_code: Option<i32>,
         real_stdout_len: Option<usize>,
         real_stderr_len: Option<usize>,
         edit_diff: Option<String>,
     ) -> Vec<CorrectionResult> {
-        use crate::session::verifier::types::*;
-
-        let bus_event = match tool_name {
-            "read_file" => {
-                let path = args
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                Some(BusEvent::FileRead(FileReadEvent {
-                    path: std::path::PathBuf::from(&path),
-                    size_bytes: 0,
-                    truncated: false,
-                }))
-            }
-            "write_file" => {
-                let path = args
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                use std::hash::{Hash, Hasher};
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                content.hash(&mut hasher);
-                Some(BusEvent::FileWrite(FileWriteEvent {
-                    path: std::path::PathBuf::from(&path),
-                    content_length: content.len(),
-                    content_hash: hasher.finish(),
-                }))
-            }
-            "edit_file" => {
-                let path = args
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let diff = edit_diff.unwrap_or_else(|| {
-                    args.get("old_string")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string()
-                });
-                Some(BusEvent::Edit(EditEvent {
-                    path: std::path::PathBuf::from(&path),
-                    diff,
-                }))
-            }
-            "bash" => {
-                let command = args
-                    .get("command")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let workdir = args
-                    .get("workdir")
-                    .and_then(|v| v.as_str())
-                    .map(std::path::PathBuf::from);
-                Some(BusEvent::BashExec(BashExecEvent {
-                    command,
-                    exit_code: real_exit_code.unwrap_or(0),
-                    stdout_len: real_stdout_len.unwrap_or(0),
-                    stderr_len: real_stderr_len.unwrap_or(0),
-                    workdir,
-                }))
-            }
-            _ => None,
-        };
-
-        let _ = bus_event;
-
-        let error_event = match outcome {
-            ToolOutcome::Error { message } => Some(BusEvent::ToolError(ToolErrorEvent {
-                tool: tool_name.to_string(),
-                error: message.clone(),
-            })),
-            ToolOutcome::Failure(err) => Some(BusEvent::ToolError(ToolErrorEvent {
-                tool: tool_name.to_string(),
-                error: err.to_user_message(),
-            })),
-            _ => None,
-        };
-        let _ = error_event;
-
+        // WO 50.01.3: the old BusEvent-driven path (FileReadEvent,
+        // FileWriteEvent, EditEvent, BashExecEvent, ToolErrorEvent) was
+        // superseded by VerifyContext in WO 47.14 but never deleted —
+        // ~80 lines of dead construction + `let _ = bus_event;`/`let _ =
+        // error_event;` lived here. `edit_diff` and `outcome` are now
+        // unused but kept in the signature to avoid churning 3 call
+        // sites; VerifyContext rebuilds what it needs from `args`.
+        let _ = edit_diff;
         let mut corrections = Vec::new();
 
         // Run the unified verifier bus after file-modifying tool calls AND

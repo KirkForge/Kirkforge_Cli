@@ -372,3 +372,33 @@ fn timing_safe_accepts_matching_with_role_and_tenant() {
     assert_eq!(a.role, Role::Admin);
     assert_eq!(a.tenant_id, "tenant-1");
 }
+
+#[test]
+fn timing_safe_rejects_token_longer_than_fixed_buffer() {
+    // A token longer than the 256-byte fixed buffer must be rejected even
+    // when its first 256 bytes match the key's first 256 bytes — the
+    // truncation flag forces a mismatch, so a too-long token never matches.
+    let key = "k".repeat(300);
+    let token = key.clone();
+    let err = actor_from_api_key(&token, &key, Role::Operator, "").unwrap_err();
+    assert_eq!(err.code, AuthErrorCode::InvalidToken);
+}
+
+#[test]
+fn timing_safe_rejects_key_longer_than_fixed_buffer() {
+    // Symmetric: a key longer than the buffer also forces mismatch, so no
+    // legitimate token can authenticate against an over-long stored key.
+    let key = "k".repeat(300);
+    let token = "k".repeat(40);
+    let err = actor_from_api_key(&token, &key, Role::Operator, "").unwrap_err();
+    assert_eq!(err.code, AuthErrorCode::InvalidToken);
+}
+
+#[test]
+fn timing_safe_accepts_key_at_fixed_buffer_boundary() {
+    // A key exactly CT_BUF_LEN (256) bytes long is NOT truncated and must
+    // authenticate when the token matches.
+    let secret = "k".repeat(256);
+    let a = actor_from_api_key(&secret, &secret, Role::Operator, "").unwrap();
+    assert_eq!(a.role, Role::Operator);
+}

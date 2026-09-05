@@ -8,6 +8,12 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+
+### Changed
+- WO 19.11 — plugin production hardening: `eval_condition` now returns
+  `Result<bool>` (spawn failures bubble up as workflow errors instead of
+  silently skipping the step); `kf-budget-core` `eprintln!` calls replaced
+  with `tracing::warn!`; plugin lifecycle integration test added.
 - Pipeline: configurable roles + fan-out — PipelineConfig struct with
   RoleSpec (name, persona, max_turns, fan_out, pass_to_next). Fan-out
   spawns N copies via futures::join_all. Default config unchanged.

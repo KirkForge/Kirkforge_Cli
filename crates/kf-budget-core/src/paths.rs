@@ -102,8 +102,8 @@ fn legacy_dir(
     }
     if let Ok(v) = std::env::var(legacy_var) {
         if warned.set(()).is_ok() {
-            eprintln!(
-                "warning: ${legacy_var} is deprecated; use ${new_var} instead. \
+            tracing::warn!(
+                "${legacy_var} is deprecated; use ${new_var} instead. \
                  The {legacy_var} alias will be removed in a future release."
             );
         }
@@ -144,9 +144,10 @@ mod tests {
             || std::env::var("KF_BUDGET_DATA_DIR").is_ok()
             || std::env::var("KF_BUDGET_RUNTIME_DIR").is_ok()
         {
-            eprintln!("skipping: KF_BUDGET_*_DIR already set in this environment");
+            tracing::warn!("skipping: KF_BUDGET_*_DIR already set in this environment");
             return;
         }
+
         let _g_cfg = EnvGuard::set("KF_BUDGET_CONFIG_DIR", "/tmp/cfg");
         let _g_data = EnvGuard::set("KF_BUDGET_DATA_DIR", "/tmp/data");
         let _g_run = EnvGuard::set("KF_BUDGET_RUNTIME_DIR", "/tmp/run");
@@ -181,7 +182,7 @@ mod tests {
             || std::env::var("KF_BUDGET_DATA_DIR").is_ok()
             || std::env::var("KF_BUDGET_RUNTIME_DIR").is_ok()
         {
-            eprintln!("skipping: KF_BUDGET_*_DIR already set in this environment");
+            tracing::warn!("skipping: KF_BUDGET_*_DIR already set in this environment");
             return;
         }
 
@@ -393,7 +394,7 @@ mod tests {
     #[test]
     fn env_guard_restores_prior_value_some_branch() {
         if std::env::var("KF_BUDGET_CONFIG_DIR").is_ok() {
-            eprintln!("skipping: KF_BUDGET_CONFIG_DIR already set in this environment");
+            tracing::warn!("skipping: KF_BUDGET_CONFIG_DIR already set in this environment");
             return;
         }
         // First guard: seed KF_BUDGET_CONFIG_DIR with a known prior
@@ -470,7 +471,7 @@ mod tests {
         if std::env::var("KF_BUDGET_CONFIG_DIR").is_ok()
             || std::env::var("PLUGIN3_CONFIG_DIR").is_ok()
         {
-            eprintln!("skipping: CONFIG_DIR already set in this environment");
+            tracing::warn!("skipping: CONFIG_DIR already set in this environment");
             return;
         }
         let _g_legacy = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/legacy-cfg");
@@ -489,7 +490,7 @@ mod tests {
     fn kf_budget_wins_over_plugin3_legacy_alias() {
         if std::env::var("KF_BUDGET_DATA_DIR").is_ok() || std::env::var("PLUGIN3_DATA_DIR").is_ok()
         {
-            eprintln!("skipping: DATA_DIR already set in this environment");
+            tracing::warn!("skipping: DATA_DIR already set in this environment");
             return;
         }
         let _g_new = EnvGuard::set("KF_BUDGET_DATA_DIR", "/tmp/new-data");
@@ -516,7 +517,7 @@ mod tests {
             || std::env::var("KF_BUDGET_CONFIG_DIR").is_ok()
             || std::env::var("PLUGIN3_CONFIG_DIR").is_ok()
         {
-            eprintln!("skipping: one of the *_DIR vars is already set in this environment");
+            tracing::warn!("skipping: one of the *_DIR vars is already set in this environment");
             return;
         }
         let _g1 = EnvGuard::set("PLUGIN3_CONFIG_DIR", "/tmp/leg-cfg");

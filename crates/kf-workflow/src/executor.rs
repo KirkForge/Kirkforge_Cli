@@ -586,7 +586,7 @@ impl WorkflowExecutor {
                     .find(|s| &s.name == name)
                     .ok_or_else(|| anyhow!("missing step {name}"))?;
                 if let Some(ref cond) = step.condition {
-                    if !runner.eval_condition(cond).await {
+                    if !runner.eval_condition(cond).await? {
                         skipped.insert(name.clone());
                         continue;
                     }

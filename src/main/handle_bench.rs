@@ -34,6 +34,16 @@ pub(super) async fn handle_bench_command(
             summary,
             timeout,
         } => handle_bench_run_models(tasks, models, output, summary, timeout).await,
+        BenchCommand::CrossTool {
+            tasks,
+            tools,
+            model,
+            task,
+            gateway,
+            timeout,
+            summary,
+            output,
+        } => handle_bench_cross_tool(tasks, tools, model, task, gateway, timeout, summary, output),
     }
 }
 
@@ -319,5 +329,116 @@ fn handle_bench_export_tasks(
             "excluded"
         }
     );
+    Ok(())
+}
+
+// `kf-code bench cross-tool` — run one bench task across external coding
+// agents (claude, codex, opencode, kf-code) and print a comparison table.
+// WO 39.1 Phase 3. The LiteLLM gateway flag is stored but not yet wired
+// (Phase 4); the runner uses each tool's native model flag when --model
+// is set. See `kf_bench::external_runner::run_external`.
+#[allow(clippy::too_many_arguments)]
+fn handle_bench_cross_tool(
+    tasks: std::path::PathBuf,
+    tools: Vec<String>,
+    model: Option<String>,
+    task: String,
+    gateway: Option<String>,
+    timeout: u64,
+    summary: Option<std::path::PathBuf>,
+    output: Option<std::path::PathBuf>,
+) -> anyhow::Result<()> {
+    use kf_bench::external_runner::{run_external, ExternalRunConfig, ExternalTool};
+
+    if tools.is_empty() {
+        anyhow::bail!("--tools requires at least one tool name (claude,codex,opencode,kf-code)");
+    }
+
+    // Resolve the tool names into enum variants. The CLI already splits on
+    // commas (`value_delimiter = ','`), so each entry is a single name.
+    // Unknown names bail out before we spawn anything.
+    let tools_resolved: Vec<ExternalTool> = tools
+        .iter()
+        .filter(|t| !t.trim().is_empty())
+        .map(|t| ExternalTool::parse_one(t))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    // Find the named task in the task dir.
+    let bench_tasks = kf_bench::load_tasks(&tasks)?;
+    let bench_task = bench_tasks
+        .iter()
+        .find(|bt| bt.name == task)
+        .ok_or_else(|| anyhow::anyhow!("task `{task}` not found in {}", tasks.display()))?
+        .clone();
+
+    if bench_task.kf_only {
+        eprintln!(
+            "warning: task `{}` is marked kf_only — external tools cannot \
+             invoke kf-code-only tools; running anyway",
+            bench_task.name
+        );
+    }
+
+    // Export the task workspace into a temp dir so each tool runs against
+    // the same starting state. The export writes PROMPT.txt + setup files.
+    let workspace_root = tempfile::tempdir()?;
+    let workspace_path = workspace_root.path().join(&bench_task.name);
+    std::fs::create_dir_all(&workspace_path)?;
+    for (rel_path, content) in &bench_task.setup {
+        let file_path = workspace_path.join(rel_path);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&file_path, content)?;
+    }
+
+    eprintln!(
+        "cross-tool: running {} tool(s) on task `{}` (model: {})",
+        tools_resolved.len(),
+        bench_task.name,
+        model.as_deref().unwrap_or("<tool default>"),
+    );
+    if let Some(g) = &gateway {
+        eprintln!("  gateway: {g} (Phase 4 — stored, not yet wired)");
+    }
+
+    let mut reports = Vec::new();
+    for tool in &tools_resolved {
+        eprintln!("→ {}", tool.as_str());
+        let cfg = ExternalRunConfig {
+            tool: *tool,
+            model: model.clone(),
+            prompt: bench_task.prompt.clone(),
+            workspace_path: workspace_path.clone(),
+            timeout_secs: timeout,
+            max_turns: None,
+            task_name: bench_task.name.clone(),
+        };
+        let report = run_external(&cfg)?;
+        eprintln!(
+            "  success={} tokens={} wall={:.1}s exit={:?}",
+            report.success,
+            report.tokens_total,
+            report.wall_clock_secs,
+            report.exit_code,
+        );
+        reports.push(report);
+    }
+
+    let comparison = kf_bench::compare_cross_tool(&reports);
+    println!("{comparison}");
+
+    if let Some(md_path) = &summary {
+        if let Some(parent) = md_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(md_path, &comparison)?;
+        eprintln!("comparison written to {}", md_path.display());
+    }
+    if let Some(json_path) = &output {
+        let batch = kf_bench::ExternalToolReportBatch { reports };
+        kf_bench::write_external_reports(&batch, json_path)?;
+        eprintln!("reports written to {}", json_path.display());
+    }
     Ok(())
 }

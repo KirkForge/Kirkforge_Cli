@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+pub mod external_runner;
+
 // ── Task format ──
 
 /// Difficulty level for a benchmark task.
@@ -706,25 +708,46 @@ pub struct BudgetChallengeReport {
     pub entries: Vec<BudgetChallengeEntry>,
 }
 
-// ── Cross-tool comparison (WO 32.6) ──
+// ── Cross-tool comparison (WO 32.6 / WO 39.1 Phase 3) ──
 
 /// Result of running a single benchmark task on an external tool
-/// (Codex, Claude Code, etc.) for the cross-tool benchmark. Unlike
-/// `TaskResult` (kf-code internal metrics), this captures only the
-/// fields an external tool's report can reliably expose: the tool
-/// name, the task, the context budget pinned for the run, the total
-/// tokens consumed, the turn count, whether the task succeeded, and
-/// the wall-clock duration. See WO 32.6.
+/// (Claude Code, Codex, opencode, kf-code) for the cross-tool benchmark.
+/// Phase 3 (WO 39.1) replaced the WO 32.6 field set with the richer shape
+/// the generic subprocess runner produces: per-tool token split, cost
+/// when the tool reports it, exit code, and a stdout excerpt for
+/// debugging parse failures. See `external_runner::run_external`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExternalToolReport {
     pub tool_name: String,
     pub task_name: String,
-    /// Context budget pinned for the run, in tokens (e.g. 131072 = 128k).
-    pub context_budget: usize,
-    pub tokens_consumed: u64,
-    pub turns_taken: u32,
+    /// Model the tool was pinned to (empty string when the tool chose its
+    /// own default; the runner passes `--model` through when set).
+    #[serde(default)]
+    pub model: String,
+    /// The prompt handed to the tool. Stored verbatim so a report row is
+    /// self-describing without re-reading the task TOML.
+    #[serde(default)]
+    pub prompt: String,
     pub success: bool,
+    #[serde(default)]
+    pub tokens_prompt: u64,
+    #[serde(default)]
+    pub tokens_completion: u64,
+    #[serde(default)]
+    pub tokens_total: u64,
+    /// Cost in USD when the tool reports it; None when the CLI does not
+    /// emit cost (e.g. Claude Code, Codex).
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
     pub wall_clock_secs: f64,
+    /// Process exit code. `None` when the runner killed the tool on
+    /// timeout before it exited naturally.
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    /// First ~200 chars of the tool's stdout, single-line. For
+    /// debugging "why did the JSON parser return 0 tokens".
+    #[serde(default)]
+    pub stdout_excerpt: Option<String>,
 }
 
 /// A batch of cross-tool reports serialized as a JSON file. This is
@@ -754,39 +777,50 @@ pub fn load_external_reports(path: &Path) -> Result<ExternalToolReportBatch> {
 
 /// Build the cross-tool comparison markdown table. Reports are
 /// grouped by `task_name`; within each task, rows are ordered by
-/// `context_budget` descending then by `tool_name` for a stable layout.
-/// An empty slice yields the literal `"No cross-tool reports to compare"`.
+/// `tool_name` for a stable layout. An empty slice yields the literal
+/// `"No cross-tool reports to compare"`.
 ///
-/// The table columns mirror WO 32.6: tool, task, budget, tokens,
-/// turns, success, wall-clock. This is the raw comparison view; the
-/// thesis-validation writeup lives in `docs/benchmarks/cross-tool-2026-08.md`.
+/// The table columns mirror WO 39.1 Phase 3: tool, task, model,
+/// success, prompt/completion/total tokens, cost (when reported),
+/// wall-clock, exit code. This is the raw comparison view; the
+/// thesis-validation writeup lives in `docs/benchmarks/cross-tool-*`.
 pub fn compare_cross_tool(reports: &[ExternalToolReport]) -> String {
     if reports.is_empty() {
         return "No cross-tool reports to compare".to_string();
     }
 
     let mut sorted: Vec<&ExternalToolReport> = reports.iter().collect();
-    sorted.sort_by(|a, b| {
-        a.task_name
-            .cmp(&b.task_name)
-            .then(b.context_budget.cmp(&a.context_budget))
-            .then(a.tool_name.cmp(&b.tool_name))
-    });
+    sorted.sort_by(|a, b| a.task_name.cmp(&b.task_name).then(a.tool_name.cmp(&b.tool_name)));
 
     let mut md = String::new();
     md.push_str("# Cross-Tool Comparison\n\n");
-    md.push_str("| Tool | Task | Budget | Tokens | Turns | Success | Wall-clock (s) |\n");
-    md.push_str("|------|------|--------|--------|-------|----------|----------------|\n");
+    md.push_str(
+        "| Tool | Task | Model | Success | Prompt | Completion | Total | Cost ($) | Wall (s) | Exit |\n",
+    );
+    md.push_str(
+        "|------|------|-------|---------|--------|------------|-------|----------|----------|------|\n",
+    );
     for r in &sorted {
+        let cost = r
+            .cost_usd
+            .map(|c| format!("{:.4}", c))
+            .unwrap_or_else(|| "-".to_string());
+        let exit = r
+            .exit_code
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "timeout".to_string());
         md.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {:.1} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {:.1} | {} |\n",
             r.tool_name,
             r.task_name,
-            r.context_budget,
-            r.tokens_consumed,
-            r.turns_taken,
+            r.model,
             if r.success { "Yes" } else { "No" },
+            r.tokens_prompt,
+            r.tokens_completion,
+            r.tokens_total,
+            cost,
             r.wall_clock_secs,
+            exit,
         ));
     }
     md
@@ -1420,17 +1454,22 @@ mod tests {
         assert!(!md.contains("| 131072 |"));
     }
 
-    // ── WO 32.6: cross-tool comparison tests ──
+    // ── WO 32.6 / WO 39.1 Phase 3: cross-tool comparison tests ──
 
-    fn ext_report(tool: &str, task: &str, budget: usize, success: bool) -> ExternalToolReport {
+    fn ext_report(tool: &str, task: &str, success: bool) -> ExternalToolReport {
         ExternalToolReport {
             tool_name: tool.to_string(),
             task_name: task.to_string(),
-            context_budget: budget,
-            tokens_consumed: 1000,
-            turns_taken: 3,
+            model: "test-model".to_string(),
+            prompt: "do the thing".to_string(),
             success,
+            tokens_prompt: 700,
+            tokens_completion: 300,
+            tokens_total: 1000,
+            cost_usd: Some(0.012),
             wall_clock_secs: 12.5,
+            exit_code: Some(0),
+            stdout_excerpt: Some("{...}".to_string()),
         }
     }
 
@@ -1440,28 +1479,43 @@ mod tests {
     }
 
     #[test]
-    fn compare_cross_tool_renders_table_sorted_by_task_then_budget_desc() {
+    fn compare_cross_tool_renders_table_sorted_by_task_then_tool() {
         let reports = vec![
-            ext_report("kf-code", "bug-fix", 32_768, true),
-            ext_report("kf-code", "bug-fix", 131_072, true),
-            ext_report("codex", "bug-fix", 131_072, false),
-            ext_report("claude-code", "refactor", 65_536, true),
+            ext_report("kf-code", "bug-fix", true),
+            ext_report("codex", "bug-fix", false),
+            ext_report("claude", "refactor", true),
         ];
         let md = compare_cross_tool(&reports);
         assert!(md.contains("# Cross-Tool Comparison"));
-        assert!(md.contains("| Tool | Task | Budget | Tokens | Turns | Success | Wall-clock (s) |"));
-        // Descending-budget sort: 131072 before 32768 for the same task.
+        assert!(md.contains("| Tool | Task | Model | Success |"));
+        // bug-fix rows come before refactor (task sort), and within
+        // bug-fix, codex before kf-code (tool sort).
         let bug_rows: Vec<&str> = md
             .lines()
             .filter(|l| l.starts_with("| ") && l.contains("bug-fix"))
             .collect();
-        assert_eq!(bug_rows.len(), 3);
-        // First two rows are the 131072 entries (descending), 32768 is last.
-        assert!(bug_rows[0].contains("131072"));
-        assert!(bug_rows[2].contains("32768"));
-        assert!(bug_rows[0].contains("codex") || bug_rows[1].contains("codex"));
-        // Success column renders Yes/No.
-        assert!(md.contains("| codex | bug-fix | 131072 | 1000 | 3 | No | 12.5 |"));
+        assert_eq!(bug_rows.len(), 2);
+        assert!(bug_rows[0].contains("codex"));
+        assert!(bug_rows[1].contains("kf-code"));
+        // Success column renders Yes/No; token split + cost + exit are rendered.
+        assert!(md.contains("| codex | bug-fix | test-model | No | 700 | 300 | 1000 | 0.0120 | 12.5 | 0 |"));
+    }
+
+    #[test]
+    fn compare_cross_tool_renders_dash_when_cost_absent() {
+        let mut r = ext_report("claude", "task-x", true);
+        r.cost_usd = None;
+        let md = compare_cross_tool(&[r]);
+        // Cost column should be `-`, not `0.0000`.
+        assert!(md.contains("| - |"));
+    }
+
+    #[test]
+    fn compare_cross_tool_renders_timeout_when_exit_code_none() {
+        let mut r = ext_report("codex", "task-y", false);
+        r.exit_code = None;
+        let md = compare_cross_tool(&[r]);
+        assert!(md.contains("| timeout |"));
     }
 
     #[test]
@@ -1469,27 +1523,49 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let batch = ExternalToolReportBatch {
             reports: vec![
-                ext_report("kf-code", "feature-add", 131_072, true),
-                ext_report("codex", "feature-add", 131_072, false),
+                ext_report("kf-code", "feature-add", true),
+                ext_report("codex", "feature-add", false),
             ],
         };
         let path = dir.path().join("cross_tool.json");
         write_external_reports(&batch, &path).unwrap();
-        let loaded = load_external_reports(&path).unwrap();
+        let loaded = load_external_reports(path).unwrap();
         assert_eq!(loaded.reports.len(), 2);
         assert_eq!(loaded.reports[0].tool_name, "kf-code");
         assert_eq!(loaded.reports[1].tool_name, "codex");
-        assert_eq!(loaded.reports[0].context_budget, 131_072);
+        assert!(loaded.reports[0].success);
         assert!(!loaded.reports[1].success);
+        // Phase 3 fields round-trip.
+        assert_eq!(loaded.reports[0].tokens_prompt, 700);
+        assert_eq!(loaded.reports[0].tokens_total, 1000);
+        assert_eq!(loaded.reports[0].cost_usd, Some(0.012));
+        assert_eq!(loaded.reports[0].exit_code, Some(0));
+        assert_eq!(loaded.reports[0].model, "test-model");
+    }
+
+    #[test]
+    fn external_tool_report_round_trips_with_optional_fields_absent() {
+        // A JSON payload missing the new #[serde(default)] fields must
+        // still deserialize — the WO 32.6 shape (tool_name, task_name,
+        // success, wall_clock_secs) is a strict subset of the Phase 3
+        // shape, so legacy report files keep parsing.
+        let legacy = r#"{"reports":[
+            {"tool_name":"codex","task_name":"old","success":false,"wall_clock_secs":5.0}
+        ]}"#;
+        let parsed: ExternalToolReportBatch = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.reports.len(), 1);
+        assert_eq!(parsed.reports[0].tokens_total, 0);
+        assert!(parsed.reports[0].cost_usd.is_none());
+        assert!(parsed.reports[0].exit_code.is_none());
     }
 
     #[test]
     fn write_cross_tool_comparison_writes_markdown() {
         let dir = tempfile::tempdir().unwrap();
-        let reports = vec![ext_report("kf-code", "docs", 8_192, true)];
+        let reports = vec![ext_report("kf-code", "docs", true)];
         let path = dir.path().join("cmp.md");
         write_cross_tool_comparison(&reports, &path).unwrap();
         let md = std::fs::read_to_string(&path).unwrap();
-        assert!(md.contains("| kf-code | docs | 8192 |"));
+        assert!(md.contains("| kf-code | docs |"));
     }
 }

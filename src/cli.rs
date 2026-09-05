@@ -523,6 +523,45 @@ pub enum BenchCommand {
         #[arg(long, default_value_t = 300)]
         timeout: u64,
     },
+    /// Run a bench task across external coding agents (claude, codex,
+    /// opencode, kf-code) and print a comparison table. Each tool is
+    /// spawned as a subprocess in an exported workspace; missing tools
+    /// are reported as "tool not found" and skipped. See WO 39.1 Phase 3.
+    CrossTool {
+        /// Directory containing TOML task definitions.
+        #[arg(long, default_value = "benches/tasks")]
+        tasks: PathBuf,
+
+        /// Comma-separated list of tools to run (claude,codex,opencode,kf-code).
+        #[arg(long, value_delimiter = ',')]
+        tools: Vec<String>,
+
+        /// Pin all tools to the same model for a same-model comparison.
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Run only this task (by name). Required so the cross-tool run
+        /// is bounded to one workspace export.
+        #[arg(long)]
+        task: String,
+
+        /// LiteLLM gateway URL for same-model plumbing (Phase 4 — stored
+        /// only, not yet wired to the runner).
+        #[arg(long)]
+        gateway: Option<String>,
+
+        /// Per-tool timeout in seconds.
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+
+        /// Write the cross-tool comparison markdown to this file.
+        #[arg(long)]
+        summary: Option<PathBuf>,
+
+        /// Write the ExternalToolReport batch JSON to this file.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[cfg(test)]
@@ -795,6 +834,65 @@ mod tests {
                 command: BenchCommand::ExportTasks { .. }
             }
         ));
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn bench_cross_tool_parses_with_tools_and_task() {
+        let cli = Cli::try_parse_from([
+            "kf-code",
+            "bench",
+            "cross-tool",
+            "--tools",
+            "claude,codex,opencode",
+            "--task",
+            "fix_failing_test",
+        ])
+        .expect("parse");
+        match cli.command {
+            Command::Bench {
+                command: BenchCommand::CrossTool { tools, task, .. },
+            } => {
+                assert_eq!(tools, vec!["claude", "codex", "opencode"]);
+                assert_eq!(task, "fix_failing_test");
+            }
+            _ => panic!("expected CrossTool"),
+        }
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn bench_cross_tool_accepts_model_and_gateway() {
+        let cli = Cli::try_parse_from([
+            "kf-code",
+            "bench",
+            "cross-tool",
+            "--tools",
+            "claude,kf-code",
+            "--task",
+            "add_doc_comment",
+            "--model",
+            "glm-5.2",
+            "--gateway",
+            "http://localhost:4000",
+        ])
+        .expect("parse");
+        match cli.command {
+            Command::Bench {
+                command:
+                    BenchCommand::CrossTool {
+                        model,
+                        gateway,
+                        tools,
+                        ..
+                    },
+            } => {
+                assert_eq!(model.as_deref(), Some("glm-5.2"));
+                assert_eq!(gateway.as_deref(), Some("http://localhost:4000"));
+                assert_eq!(tools, vec!["claude", "kf-code"]);
+            }
+            _ => panic!("expected CrossTool"),
+        }
     }
 
     #[test]

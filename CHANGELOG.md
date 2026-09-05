@@ -8,13 +8,12 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
-- WO 39.1 Phase 3: generic external runner — `kf_bench::external_runner`
-  spawns `claude -p` / `codex exec` / `opencode run` / `kf-code run` as
-  subprocesses, parses per-tool JSON usage, returns `ExternalToolReport`
-  (tokens split, cost, wall-clock, exit code, stdout excerpt). New
-  `bench cross-tool --tools claude,codex,opencode --task <name>` subcommand
-  runs one bench task across tools and prints a comparison table. Phase 4
-  LiteLLM gateway (`--gateway`) is parsed and stored, not yet wired.
+
+### Changed
+- WO 19.11 — plugin production hardening: `eval_condition` now returns
+  `Result<bool>` (spawn failures bubble up as workflow errors instead of
+  silently skipping the step); `kf-budget-core` `eprintln!` calls replaced
+  with `tracing::warn!`; plugin lifecycle integration test added.
 - Pipeline: configurable roles + fan-out — PipelineConfig struct with
   RoleSpec (name, persona, max_turns, fan_out, pass_to_next). Fan-out
   spawns N copies via futures::join_all. Default config unchanged.

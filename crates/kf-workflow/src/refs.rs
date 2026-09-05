@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::StepOutput;
+use anyhow::Result;
 
 /// Resolve `$(step_name)` and `$(step_name.field.path)` references in a string
 /// using completed step outputs. `$(step_name)` is replaced with the step's
@@ -108,9 +109,10 @@ const CONDITION_TIMEOUT_SECS: u64 = 30;
 const CONDITION_TIMEOUT_SECS: u64 = 2;
 
 /// Evaluate a shell condition string with a wall-clock bound and
-/// `kill_on_drop`. Returns `true` if the condition exits 0, `false`
-/// otherwise — including timeout and spawn failure, so a hung condition
-/// skips the step instead of wedging the workflow.
+/// `kill_on_drop`. Returns `Ok(true)` if the condition exits 0,
+/// `Ok(false)` on timeout (a hung condition skips the step, not the
+/// workflow), and `Err` on spawn failure — the caller surfaces a spawn
+/// failure as a workflow error instead of silently skipping the step.
 ///
 /// `prepare` is an optional pre-spawn hook applied to the `sh -c`
 /// `Command` before spawn (WO 47.25): the bin side passes the same
@@ -121,7 +123,7 @@ const CONDITION_TIMEOUT_SECS: u64 = 2;
 pub async fn eval_condition_bounded(
     condition: &str,
     prepare: Option<&(dyn Fn(&mut tokio::process::Command) + Send + Sync)>,
-) -> bool {
+) -> Result<bool> {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c")
         .arg(condition)
@@ -138,17 +140,19 @@ pub async fn eval_condition_bounded(
     tokio::select! {
         biased;
         result = &mut status_fut => match result {
-            Ok(status) => status.success(),
+            Ok(status) => Ok(status.success()),
             Err(e) => {
                 tracing::warn!("condition eval failed for '{condition}': {e}");
-                false
+                Err(anyhow::anyhow!(
+                    "condition eval failed for '{condition}': {e}"
+                ))
             }
         },
         _ = &mut timeout_fut => {
             tracing::warn!(
                 "condition '{condition}' timed out after {CONDITION_TIMEOUT_SECS}s — skipping step"
             );
-            false
+            Ok(false)
         }
     }
     // On timeout the `cmd` future (still owned here) is dropped; `kill_on_drop`

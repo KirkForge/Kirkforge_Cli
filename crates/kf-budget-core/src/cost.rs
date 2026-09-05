@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn emit_usage_at_writes_appends_and_respects_privacy_gate() {
         if std::env::var("KF_BUDGET_CONFIG_DIR").is_ok() {
-            eprintln!("skipping: KF_BUDGET_CONFIG_DIR already set in this environment");
+            tracing::warn!("skipping: KF_BUDGET_CONFIG_DIR already set in this environment");
             return;
         }
 
@@ -521,7 +521,7 @@ mod tests {
     #[test]
     fn env_guard_restores_prior_value_some_branch() {
         if std::env::var("KF_BUDGET_CONFIG_DIR").is_ok() {
-            eprintln!("skipping: KF_BUDGET_CONFIG_DIR already set in this environment");
+            tracing::warn!("skipping: KF_BUDGET_CONFIG_DIR already set in this environment");
             return;
         }
         // Seed round-trip: prior=None → unset on drop. The contract

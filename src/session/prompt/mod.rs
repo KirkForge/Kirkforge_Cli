@@ -676,7 +676,16 @@ impl PromptBuilder {
         }
 
         // Rung 2: Minify.
+        // Safety guard (WO 50.07 2b): `minify_old_messages` reads indices
+        // from the original `messages` slice but writes into `adjusted`,
+        // which may be shorter after Rung 1 collapse. The `i < adjusted.len()`
+        // guard inside the function prevents out-of-bounds writes, but only
+        // holds when minify does not change the message count. If a future
+        // minifier ever inserts or drops messages, the indices would
+        // misalign — so snapshot the length and skip the rung on any drift.
+        let pre_minify_len = adjusted.len();
         if Self::minify_old_messages(&messages, &mut adjusted)
+            && adjusted.len() == pre_minify_len
             && Self::estimated_tokens(&adjusted) <= budget
         {
             return adjusted;

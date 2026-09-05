@@ -4,7 +4,6 @@
 //! `task_tool.rs` can all `use super::test_helpers::*` (or `use
 //! crate::tools::task::test_helpers::*` from sibling submodules).
 
-use crate::shared::ToolOutcome;
 use crate::tools::task::{TaskCancel, TaskRequest, TaskSpawner};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -110,15 +109,5 @@ impl CooperativeProbe {
             },
             observed_cancel,
         }
-    }
-}
-
-// `ToolOutcome::Success { content }` destructuring helper for tests that
-// just want the content string. Kept here so test bodies stay one line.
-#[allow(dead_code)]
-pub(super) fn unwrap_success_content(outcome: ToolOutcome) -> String {
-    match outcome {
-        ToolOutcome::Success { content } => content,
-        other => panic!("expected Success, got {other:?}"),
     }
 }

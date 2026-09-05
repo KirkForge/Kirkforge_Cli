@@ -266,9 +266,22 @@ impl Tool for Task {
                 }
                 TaskConcurrencyMode::Queue => {
                     let sem = self.bg_semaphore.clone();
-                    sem.acquire_owned()
-                        .await
-                        .unwrap_or_else(|_| panic!("bg_semaphore closed unexpectedly"))
+                    match sem.acquire_owned().await {
+                        Ok(p) => p,
+                        // The bg_semaphore is owned by `self` (the
+                        // long-lived TaskTool) and `close()` is never
+                        // called, so this branch is unreachable today.
+                        // Return a graceful error instead of panicking:
+                        // under `panic = "abort"` a panic kills the whole
+                        // CLI, and the sibling `Reject` arm above already
+                        // handles semaphore closure with a Failure
+                        // return (WO 50.12 M1).
+                        Err(_) => {
+                            return ToolOutcome::Error {
+                                message: "internal: background task semaphore closed".to_string(),
+                            };
+                        }
+                    }
                 }
             };
             // Per-task lifecycle handles: a default handle owns the

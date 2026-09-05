@@ -57,6 +57,17 @@ pub(super) async fn handle_update_command(check: bool) -> Result<()> {
     let expected = parse_sha256sums_line(&sums, &archive).ok_or_else(|| {
         anyhow!("no checksum entry for {archive} in SHA256SUMS.txt — refusing to install")
     })?;
+    // ponytail: ceiling — the archive and SHA256SUMS.txt are fetched from
+    // the same GitHub release origin over HTTPS. A MITM who can tamper with
+    // the archive can also tamper with SHA256SUMS.txt to match, so this
+    // check protects against transport corruption and partial downloads,
+    // NOT against an attacker who controls the release artifact store.
+    // upgrade path: publish a detached minisign signature over
+    // SHA256SUMS.txt from a separate origin (e.g. a signing key held off
+    // the release pipeline) and verify it here. The `minisign` dev-dep is
+    // already in the workspace (`Cargo.toml`), so the verify side is a
+    // code change; the release-pipeline signing side is the infrastructure
+    // that would close this gap.
     verify_sha256(&archive_bytes, &expected)?;
 
     let extracted = extract_binary(&archive_bytes, "kf-code")?;

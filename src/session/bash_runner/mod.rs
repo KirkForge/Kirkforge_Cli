@@ -540,19 +540,24 @@ pub(crate) const SECRET_ENV_SUFFIXES: &[&str] = &[
     "_PRIVATE_KEY",
     "_CREDENTIAL",
     "_PASS",
+    "_PASSPHRASE",
+    "_KEYFILE",
     "_CONN_STRING",
     "_CONNECTION_STRING",
 ];
 
 /// Bare credential names (case-insensitive). An env var whose
 /// uppercased name is exactly one of these is treated as a secret.
-/// Shared with `shared::audit::scrub_free_text` (WO 43.3).
+/// Shared with `shared::audit::scrub_free_text` (WO 43.3). WO 50.05 M4:
+/// `PASSPHRASE` added (bare, e.g. `OPENSSL_PASSPHRASE`-without-underscore
+/// shapes that don't match the suffix list).
 pub(crate) const SECRET_ENV_EXACT: &[&str] = &[
     "API_KEY",
     "TOKEN",
     "SECRET",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_ACCESS_KEY_ID",
+    "PASSPHRASE",
 ];
 
 /// True if an env-var name is credential-shaped (WO 38.1 + WO 42.3):
@@ -912,7 +917,16 @@ mod tests {
         assert!(!is_secret_env_name("CARGO_TARGET_DIR"));
         assert!(!is_secret_env_name("TOKENS"));
         assert!(!is_secret_env_name("PASSWORDS"));
-        assert!(!is_secret_env_name("PASSPHRASE"));
+        // WO 50.05 M4: PASSPHRASE / KEYFILE shapes are now scrubbed.
+        assert!(is_secret_env_name("PASSPHRASE"));
+        assert!(is_secret_env_name("GPG_PASSPHRASE"));
+        assert!(is_secret_env_name("OPENSSL_PASSPHRASE"));
+        assert!(is_secret_env_name("SSH_KEYFILE"));
+        assert!(is_secret_env_name("GPG_KEYFILE"));
+        // Bare KEYFILE (no underscore) is not in the exact list — only the
+        // underscore-prefixed suffix is. This is intentional: bare `KEY` or
+        // `KEYFILE` is too broad (could be a non-secret config key).
+        assert!(!is_secret_env_name("KEYFILE"));
     }
 
     /// WO 38.1: a secret-shaped var set in the parent must NOT be visible

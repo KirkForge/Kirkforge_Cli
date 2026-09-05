@@ -24,9 +24,9 @@ mod list_agents;
 mod send_message;
 mod update_task;
 
+pub use list_agents::ListAgents;
 pub(crate) use persist::persist_task_summary;
 pub use persist::{load_persisted_tasks, PersistedTask};
-pub use list_agents::ListAgents;
 pub use send_message::SendMessage;
 pub use task_tool::Task;
 pub use update_task::UpdateTask;

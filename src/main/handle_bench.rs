@@ -417,10 +417,7 @@ fn handle_bench_cross_tool(
         let report = run_external(&cfg)?;
         eprintln!(
             "  success={} tokens={} wall={:.1}s exit={:?}",
-            report.success,
-            report.tokens_total,
-            report.wall_clock_secs,
-            report.exit_code,
+            report.success, report.tokens_total, report.wall_clock_secs, report.exit_code,
         );
         reports.push(report);
     }

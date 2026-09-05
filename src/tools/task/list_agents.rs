@@ -57,10 +57,7 @@ impl Tool for ListAgents {
                 )));
             }
         }
-        let guard = self
-            .task_manager
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let guard = self.task_manager.lock().unwrap_or_else(|e| e.into_inner());
         let entries = guard.list();
         let filtered: Vec<_> = match filter {
             Some(f) => {
@@ -81,12 +78,13 @@ impl Tool for ListAgents {
 
         let mut lines = Vec::with_capacity(filtered.len());
         for e in &filtered {
-            let notes_count = guard
-                .get(&e.id)
-                .map(|h| h.notes.len())
-                .unwrap_or(0);
+            let notes_count = guard.get(&e.id).map(|h| h.notes.len()).unwrap_or(0);
             let notes_tag = if notes_count > 0 {
-                format!(" ({} note{})", notes_count, if notes_count == 1 { "" } else { "s" })
+                format!(
+                    " ({} note{})",
+                    notes_count,
+                    if notes_count == 1 { "" } else { "s" }
+                )
             } else {
                 String::new()
             };
@@ -151,9 +149,7 @@ mod tests {
     async fn list_agents_returns_all_tasks() {
         let manager = mgr_with_tasks();
         let tool = ListAgents::new(manager);
-        let outcome = tool
-            .run(&ToolContext::new(), serde_json::json!({}))
-            .await;
+        let outcome = tool.run(&ToolContext::new(), serde_json::json!({})).await;
         match outcome {
             ToolOutcome::Success { content } => {
                 assert!(content.contains("coder"), "got: {content}");
@@ -229,10 +225,7 @@ mod tests {
         let manager = mgr_with_tasks();
         let tool = ListAgents::new(manager);
         let outcome = tool
-            .run(
-                &ToolContext::new(),
-                serde_json::json!({"status": "bogus"}),
-            )
+            .run(&ToolContext::new(), serde_json::json!({"status": "bogus"}))
             .await;
         match outcome {
             ToolOutcome::Failure(ToolError::InvalidArgs { message }) => {
@@ -245,7 +238,7 @@ mod tests {
     #[tokio::test]
     async fn list_agents_shows_notes_count_when_present() {
         let manager = Arc::new(Mutex::new(TaskManager::new()));
-        let id = {
+        let _id = {
             let mut mgr = manager.lock().unwrap();
             let id = mgr.insert(TaskHandle {
                 started: Arc::new(AtomicBool::new(true)),

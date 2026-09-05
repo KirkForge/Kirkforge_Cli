@@ -471,9 +471,7 @@ impl crate::adapters::ModelAdapter for FailingAdapter {
 #[tokio::test]
 async fn swap_adapter_replaces_adapter_and_updates_model_name() {
     let mut exe = make_executor(
-        Box::new(FailingAdapter {
-            info: make_info(),
-        }),
+        Box::new(FailingAdapter { info: make_info() }),
         vec![],
         make_config(false),
     )
@@ -523,9 +521,7 @@ async fn swap_adapter_replaces_adapter_and_updates_model_name() {
 #[tokio::test]
 async fn first_turn_failure_then_swap_and_retry_succeeds() {
     let mut exe = make_executor(
-        Box::new(FailingAdapter {
-            info: make_info(),
-        }),
+        Box::new(FailingAdapter { info: make_info() }),
         vec![],
         make_config(false),
     )

@@ -181,6 +181,7 @@ async fn coder_subagent_writes_own_worktree_and_returns_applicable_patch() {
             cancel: None,
             owner: None,
             subagent_depth: 1,
+            pending_messages: None,
         })
         .await
         .expect("run_task should succeed");
@@ -294,6 +295,7 @@ async fn subagent_destructive_write_denied_via_parent_approval() {
             cancel: None,
             owner: None,
             subagent_depth: 1,
+            pending_messages: None,
         })
         .await
         .expect("run_task should succeed");

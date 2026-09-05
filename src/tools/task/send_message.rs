@@ -67,15 +67,10 @@ impl Tool for SendMessage {
             }
         };
         if message.trim().is_empty() {
-            return ToolOutcome::Failure(ToolError::invalid_args(
-                "'message' must not be empty",
-            ));
+            return ToolOutcome::Failure(ToolError::invalid_args("'message' must not be empty"));
         }
 
-        let mut guard = self
-            .task_manager
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.task_manager.lock().unwrap_or_else(|e| e.into_inner());
         if guard.send_message(task_id, message) {
             ToolOutcome::Success {
                 content: format!("Message queued for {task_id}."),

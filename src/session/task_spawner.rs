@@ -743,8 +743,7 @@ mod tests {
 
     #[test]
     fn drain_pending_messages_joins_and_clears() {
-        let q: Arc<Mutex<Vec<String>>> =
-            Arc::new(Mutex::new(vec!["hello".into(), "world".into()]));
+        let q: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec!["hello".into(), "world".into()]));
         let drained = drain_pending_messages(&Some(q.clone()));
         assert_eq!(drained, "hello\n\nworld");
         // Drain clears the queue.
@@ -1310,11 +1309,11 @@ mod tests {
             cancel: None,
             owner: None,
             subagent_depth: 0,
+            pending_messages: None,
         };
         let result = spawner.run_task(request).await;
-        let err = result.expect_err(
-            "both primary and fallback models point at a dead host — must error"
-        );
+        let err =
+            result.expect_err("both primary and fallback models point at a dead host — must error");
         assert!(
             err.contains("primary-dead"),
             "error must mention the primary model; got: {err}"
@@ -1354,6 +1353,7 @@ mod tests {
             cancel: None,
             owner: None,
             subagent_depth: 0,
+            pending_messages: None,
         };
         let result = spawner.run_task(request).await;
         let err = result.expect_err("dead host with no fallback must error");
@@ -1393,6 +1393,7 @@ mod tests {
             cancel: None,
             owner: None,
             subagent_depth: 0,
+            pending_messages: None,
         };
         let result = spawner.run_task(request).await;
         let err = result.expect_err("both models dead — must error");

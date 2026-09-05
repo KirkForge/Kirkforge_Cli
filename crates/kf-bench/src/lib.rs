@@ -790,7 +790,11 @@ pub fn compare_cross_tool(reports: &[ExternalToolReport]) -> String {
     }
 
     let mut sorted: Vec<&ExternalToolReport> = reports.iter().collect();
-    sorted.sort_by(|a, b| a.task_name.cmp(&b.task_name).then(a.tool_name.cmp(&b.tool_name)));
+    sorted.sort_by(|a, b| {
+        a.task_name
+            .cmp(&b.task_name)
+            .then(a.tool_name.cmp(&b.tool_name))
+    });
 
     let mut md = String::new();
     md.push_str("# Cross-Tool Comparison\n\n");
@@ -803,7 +807,7 @@ pub fn compare_cross_tool(reports: &[ExternalToolReport]) -> String {
     for r in &sorted {
         let cost = r
             .cost_usd
-            .map(|c| format!("{:.4}", c))
+            .map(|c| format!("{c:.4}"))
             .unwrap_or_else(|| "-".to_string());
         let exit = r
             .exit_code
@@ -1498,7 +1502,9 @@ mod tests {
         assert!(bug_rows[0].contains("codex"));
         assert!(bug_rows[1].contains("kf-code"));
         // Success column renders Yes/No; token split + cost + exit are rendered.
-        assert!(md.contains("| codex | bug-fix | test-model | No | 700 | 300 | 1000 | 0.0120 | 12.5 | 0 |"));
+        assert!(md.contains(
+            "| codex | bug-fix | test-model | No | 700 | 300 | 1000 | 0.0120 | 12.5 | 0 |"
+        ));
     }
 
     #[test]
@@ -1529,7 +1535,7 @@ mod tests {
         };
         let path = dir.path().join("cross_tool.json");
         write_external_reports(&batch, &path).unwrap();
-        let loaded = load_external_reports(path).unwrap();
+        let loaded = load_external_reports(&path).unwrap();
         assert_eq!(loaded.reports.len(), 2);
         assert_eq!(loaded.reports[0].tool_name, "kf-code");
         assert_eq!(loaded.reports[1].tool_name, "codex");

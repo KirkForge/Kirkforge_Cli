@@ -124,7 +124,7 @@ pub fn run_external(cfg: &ExternalRunConfig) -> Result<ExternalToolReport> {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    let stdout = drain(child.stdout.take());
+                    let _ = drain(child.stdout.take());
                     let wall = start.elapsed().as_secs_f64();
                     return Ok(ExternalToolReport {
                         tool_name: cfg.tool.as_str().to_string(),
@@ -148,8 +148,7 @@ pub fn run_external(cfg: &ExternalRunConfig) -> Result<ExternalToolReport> {
     let wall = start.elapsed().as_secs_f64();
     let success = exit_code == Some(0);
 
-    let (tokens_prompt, tokens_completion, tokens_total, cost_usd) =
-        parse_usage(cfg.tool, &stdout);
+    let (tokens_prompt, tokens_completion, tokens_total, cost_usd) = parse_usage(cfg.tool, &stdout);
 
     Ok(ExternalToolReport {
         tool_name: cfg.tool.as_str().to_string(),
@@ -283,10 +282,7 @@ fn excerpt(s: &str) -> String {
 
 /// Parse token usage (and cost if present) from the tool's JSON output.
 /// Returns `(prompt_tokens, completion_tokens, total_tokens, cost_usd)`.
-pub fn parse_usage(
-    tool: ExternalTool,
-    stdout: &str,
-) -> (u64, u64, u64, Option<f64>) {
+pub fn parse_usage(tool: ExternalTool, stdout: &str) -> (u64, u64, u64, Option<f64>) {
     let v: serde_json::Value = match serde_json::from_str(stdout) {
         Ok(v) => v,
         Err(_) => return (0, 0, 0, None),
@@ -335,7 +331,10 @@ fn parse_codex_usage(v: &serde_json::Value) -> (u64, u64, u64, Option<f64>) {
                 .get("completion_tokens")
                 .and_then(|x| x.as_u64())
                 .unwrap_or(0);
-            let t = u.get("total_tokens").and_then(|x| x.as_u64()).unwrap_or(p + c);
+            let t = u
+                .get("total_tokens")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(p + c);
             return (p, c, t, None);
         }
     }
@@ -401,10 +400,22 @@ mod tests {
 
     #[test]
     fn parse_one_handles_single_name_and_whitespace() {
-        assert_eq!(ExternalTool::parse_one("claude").unwrap(), ExternalTool::Claude);
-        assert_eq!(ExternalTool::parse_one("  codex  ").unwrap(), ExternalTool::Codex);
-        assert_eq!(ExternalTool::parse_one("kf-code").unwrap(), ExternalTool::KfCode);
-        assert_eq!(ExternalTool::parse_one("kfcode").unwrap(), ExternalTool::KfCode);
+        assert_eq!(
+            ExternalTool::parse_one("claude").unwrap(),
+            ExternalTool::Claude
+        );
+        assert_eq!(
+            ExternalTool::parse_one("  codex  ").unwrap(),
+            ExternalTool::Codex
+        );
+        assert_eq!(
+            ExternalTool::parse_one("kf-code").unwrap(),
+            ExternalTool::KfCode
+        );
+        assert_eq!(
+            ExternalTool::parse_one("kfcode").unwrap(),
+            ExternalTool::KfCode
+        );
     }
 
     #[test]
@@ -505,7 +516,8 @@ mod tests {
 
     #[test]
     fn parse_opencode_usage_extracts_tokens_and_cost() {
-        let json = r#"{ "tokens": { "prompt": 300, "completion": 120, "total": 420 }, "cost": 0.015 }"#;
+        let json =
+            r#"{ "tokens": { "prompt": 300, "completion": 120, "total": 420 }, "cost": 0.015 }"#;
         let (p, c, t, cost) = parse_usage(ExternalTool::OpenCode, json);
         assert_eq!((p, c, t), (300, 120, 420));
         assert_eq!(cost, Some(0.015));

@@ -72,10 +72,7 @@ impl Tool for UpdateTask {
             ));
         }
 
-        let mut guard = self
-            .task_manager
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.task_manager.lock().unwrap_or_else(|e| e.into_inner());
 
         // First, the status update (may itself reject completed/failed with
         // an empty payload, or reject an unknown status string).
@@ -125,12 +122,10 @@ impl Tool for UpdateTask {
         // Then the note (separate from a completed/failed status, since
         // those consumed the note above).
         if let Some(note) = note {
-            if !note.trim().is_empty() {
-                if !guard.append_note(task_id, note) {
-                    return ToolOutcome::Failure(ToolError::invalid_args(format!(
-                        "Unknown task id: {task_id}"
-                    )));
-                }
+            if !note.trim().is_empty() && !guard.append_note(task_id, note) {
+                return ToolOutcome::Failure(ToolError::invalid_args(format!(
+                    "Unknown task id: {task_id}"
+                )));
             }
         }
 

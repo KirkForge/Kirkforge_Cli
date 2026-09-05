@@ -177,6 +177,7 @@ pub(crate) fn is_read_only_bash(cmd: &str) -> bool {
             || seg.contains("&&")
             || seg.contains("||")
             || seg.contains("$(")
+            || seg.contains('&')
             || seg.contains('`')
         {
             return false;
@@ -883,6 +884,16 @@ mod tests {
         assert!(!is_read_only_bash("ls || rm file"));
         assert!(!is_read_only_bash("echo $(rm file)"));
         assert!(!is_read_only_bash("echo `rm file`"));
+    }
+
+    #[test]
+    fn is_read_only_bash_rejects_single_ampersand_background_operator() {
+        // WO 50.01.2: a single `&` is the shell background operator —
+        // `cat README.md & rm -rf /tmp/x` runs `cat` in the background
+        // and `rm` in the foreground. `&&` is already blocked; blocking
+        // bare `&` is strictly tighter.
+        assert!(!is_read_only_bash("cat README.md & rm -rf /tmp/x"));
+        assert!(!is_read_only_bash("ls & echo hi"));
     }
 
     #[test]

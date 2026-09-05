@@ -159,7 +159,9 @@ pub(crate) async fn handle_tool_outcome(
                     ),
                     ..Default::default()
                 };
-                conversation.append(recovery_msg)?;
+                // WO 50.01.4: append_async — the sync append does sync_all
+                // on the Tokio worker thread.
+                conversation.append_async(recovery_msg).await?;
             }
         }
         ToolOutcome::Failure(err) => {
@@ -196,7 +198,9 @@ pub(crate) async fn handle_tool_outcome(
                     ),
                     ..Default::default()
                 };
-                conversation.append(recovery_msg)?;
+                // WO 50.01.4: append_async — the sync append does sync_all
+                // on the Tokio worker thread.
+                conversation.append_async(recovery_msg).await?;
             }
         }
         // `read_image` returns an Image outcome. We materialise it as
@@ -277,13 +281,18 @@ pub(crate) async fn emit_correction_results(
                 line: cr.line,
             }
         );
-        conversation.append(Message {
-            role: Role::Tool,
-            content: cr.message.clone(),
-            tool_call_id: Some(tc.id.clone()),
-            tool_name: Some(format!("verifier:{}", cr.verifier)),
-            ..Default::default()
-        })?;
+        // WO 50.01.5: append_async — the sync append does sync_all on the
+        // Tokio worker thread; a verifier returning N findings did N sync
+        // sync_all calls.
+        conversation
+            .append_async(Message {
+                role: Role::Tool,
+                content: cr.message.clone(),
+                tool_call_id: Some(tc.id.clone()),
+                tool_name: Some(format!("verifier:{}", cr.verifier)),
+                ..Default::default()
+            })
+            .await?;
     }
     Ok(())
 }

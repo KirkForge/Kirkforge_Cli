@@ -32,6 +32,11 @@ pub struct ExecutorAdapter {
     ollama_host: String,
     undo_stack: Option<UndoStackRef>,
     supports_images: bool,
+    // WO 50.05 H1: nesting depth threaded into every role's TaskRequest so
+    // the `task` tool's ceiling guard sees the real level. The orchestrator
+    // pipeline is a top-level caller, so production sets this to 1 (roles
+    // are one level below the root session).
+    subagent_depth: usize,
 }
 
 impl ExecutorAdapter {
@@ -41,6 +46,7 @@ impl ExecutorAdapter {
         ollama_host: String,
         undo_stack: Option<UndoStackRef>,
         supports_images: bool,
+        subagent_depth: usize,
     ) -> Self {
         Self {
             config,
@@ -48,6 +54,7 @@ impl ExecutorAdapter {
             ollama_host,
             undo_stack,
             supports_images,
+            subagent_depth,
         }
     }
 }
@@ -122,7 +129,9 @@ impl ModelClient for ExecutorAdapter {
                     token: c.token,
                 }),
                 owner: brief.owner.clone(),
-                subagent_depth: 0,
+                // WO 50.05 H1: thread the adapter's depth so orchestrator
+                // roles don't reset the ceiling to 0.
+                subagent_depth: self.subagent_depth,
                 pending_messages: None,
             })
             .await
@@ -228,6 +237,7 @@ mod tests {
             server.uri(),
             None,
             false,
+            1,
         );
         let brief = TaskBrief {
             template: "hard-prompt".into(),
@@ -285,6 +295,7 @@ mod tests {
                 server.uri(),
                 None,
                 false,
+                1,
             )),
             kf_orchestrator::OrchestratorConfig {
                 provider_key: "local-ollama".into(),

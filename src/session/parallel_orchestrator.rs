@@ -208,6 +208,9 @@ impl PipelineOrchestrator {
             ollama_host,
             undo_stack,
             supports_images,
+            // WO 50.05 H1: the pipeline runs at the top level, so roles
+            // spawn at depth 1 (one level below the root session).
+            1,
         )))
     }
 

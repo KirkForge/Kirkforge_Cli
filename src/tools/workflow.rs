@@ -141,6 +141,9 @@ impl Tool for WorkflowTool {
             sandbox_config: self.sandbox_config.clone(),
             landlock_extra_paths: self.landlock_extra_paths.clone(),
             run_id: ctx.run_id.clone(),
+            // WO 50.05 H1: increment depth so step spawns inherit the
+            // caller's nesting level instead of resetting to 0.
+            subagent_depth: ctx.subagent_depth + 1,
         })
         .await
         {
@@ -171,6 +174,8 @@ struct WorkflowRunArgs<'a> {
     landlock_extra_paths: Vec<PathBuf>,
     // WO 45.1/46.14: canonical session run_id threaded from ToolContext.
     run_id: Option<String>,
+    // WO 50.05 H1: depth to thread into step spawns (`ctx.subagent_depth + 1`).
+    subagent_depth: usize,
 }
 
 async fn run_workflow(args: WorkflowRunArgs<'_>) -> Result<String> {
@@ -187,6 +192,7 @@ async fn run_workflow(args: WorkflowRunArgs<'_>) -> Result<String> {
         sandbox_config,
         landlock_extra_paths,
         run_id,
+        subagent_depth,
     } = args;
     let path = kf_workflow::find_workflow_file(template)
         .with_context(|| format!("workflow template '{template}' not found"))?;
@@ -205,6 +211,7 @@ async fn run_workflow(args: WorkflowRunArgs<'_>) -> Result<String> {
         landlock_extra_paths,
         cancel_token,
         dry_run,
+        subagent_depth,
     };
     let summary = executor.run(std::sync::Arc::new(runner), None).await?;
     Ok(summary_to_json(&summary))
@@ -436,6 +443,11 @@ pub struct TaskSpawnerStepRunner {
     pub landlock_extra_paths: Vec<PathBuf>,
     pub cancel_token: CancellationToken,
     pub dry_run: bool,
+    // WO 50.05 H1: nesting depth to thread into every spawned TaskRequest /
+    // step ToolContext. Set by `run_workflow` from `ctx.subagent_depth + 1`
+    // so a depth-capped subagent can't reset the ceiling by routing through
+    // `workflow_run` → `task`. Mirrors the `task` tool's depth guard.
+    pub subagent_depth: usize,
 }
 
 // WO 48.32: derive the TaskCancel pair for a workflow agent step, cascaded
@@ -471,7 +483,9 @@ impl StepRunner for TaskSpawnerStepRunner {
                 max_turns: 1,
                 cancel: Some(cancel),
                 owner: None,
-                subagent_depth: 0,
+                // WO 50.05 H1: inherit the workflow's nesting depth so the
+                // `task` tool's ceiling guard sees the real level.
+                subagent_depth: self.subagent_depth,
                 pending_messages: None,
             })
             .await
@@ -542,7 +556,9 @@ impl StepRunner for TaskSpawnerStepRunner {
             dry_run: self.dry_run,
             task_spawner: Some(self.spawner.clone()),
             tools: Some(toolset.clone()),
-            subagent_depth: 0,
+            // WO 50.05 H1: tool steps inherit the workflow's depth so any
+            // nested `task` call respects the real ceiling.
+            subagent_depth: self.subagent_depth,
             ..Default::default()
         };
         match tool.run(&ctx, arguments.clone()).await {
@@ -612,6 +628,9 @@ impl StepRunner for TaskSpawnerStepRunner {
             let bash_sandbox_workdir = self.bash_sandbox_workdir;
             let sandbox_config = self.sandbox_config.clone();
             let landlock_extra_paths = self.landlock_extra_paths.clone();
+            // WO 50.05 H1: thread the workflow's depth into parallel spawns
+            // too — the batch arm must not reset the ceiling.
+            let subagent_depth = self.subagent_depth;
             let name = req.name.clone();
             let handle = tokio::spawn(async move {
                 match req.kind {
@@ -628,7 +647,8 @@ impl StepRunner for TaskSpawnerStepRunner {
                                 max_turns: 1,
                                 cancel: Some(cancel),
                                 owner: None,
-                                subagent_depth: 0,
+                                // WO 50.05 H1: inherit the workflow depth.
+                                subagent_depth,
                                 pending_messages: None,
                             })
                             .await
@@ -701,7 +721,8 @@ impl StepRunner for TaskSpawnerStepRunner {
                             dry_run,
                             task_spawner: Some(spawner),
                             tools: Some(toolset.clone()),
-                            subagent_depth: 0,
+                            // WO 50.05 H1: inherit the workflow depth.
+                            subagent_depth,
                             ..Default::default()
                         };
                         match tool.run(&ctx, req.tool_arguments.clone()).await {
@@ -1155,6 +1176,7 @@ mod tests {
             landlock_extra_paths: Vec::new(),
             cancel_token: cancel,
             dry_run: false,
+            subagent_depth: 0,
         };
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -1195,6 +1217,7 @@ mod tests {
             landlock_extra_paths: Vec::new(),
             cancel_token: CancellationToken::new(),
             dry_run: false,
+            subagent_depth: 0,
         };
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(45),
@@ -1232,6 +1255,7 @@ mod tests {
             landlock_extra_paths: Vec::new(),
             cancel_token: CancellationToken::new(),
             dry_run: false,
+            subagent_depth: 0,
         };
         assert!(runner.eval_condition("true").await.unwrap());
     }
@@ -1291,6 +1315,7 @@ mod tests {
             landlock_extra_paths: Vec::new(),
             cancel_token: cancel,
             dry_run: false,
+            subagent_depth: 0,
         };
         let result = tokio::time::timeout(
             Duration::from_secs(10),
@@ -1329,6 +1354,7 @@ mod tests {
             landlock_extra_paths: Vec::new(),
             cancel_token: cancel,
             dry_run: false,
+            subagent_depth: 0,
         };
         let req = kf_workflow::StepRequest {
             name: "s".into(),

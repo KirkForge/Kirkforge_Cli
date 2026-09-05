@@ -63,6 +63,20 @@ pub struct AgentDef {
     /// executor. Other Claude modes (`"default"`, `"auto"`, `"dontAsk"`,
     /// `"bypassPermissions"`) have no kf-code equivalent and are ignored.
     pub permission_mode: Option<String>,
+    // ponytail: parsed-but-not-wired — agent hooks would need to be
+    // registered with the session-global hook runner when the subagent
+    // executor starts. upgrade path: thread through TaskSpawner into
+    // the hook registration path.
+    pub hooks: Option<serde_json::Value>,
+    // ponytail: parsed-but-not-wired — per-agent MCP servers would need
+    // to be merged with project-level servers at subagent start.
+    // upgrade path: thread into the MCP client init in task_spawner.
+    pub mcp_servers: Option<Vec<String>>,
+    // ponytail: parsed-but-not-wired — per-agent memory would need to
+    // be loaded into the `remember` tool / `/memory` command scope for
+    // the subagent session. upgrade path: pass to the subagent's
+    // memory store at executor start.
+    pub memory: Option<String>,
 }
 
 /// Claude → kf-code tool-name alias table.
@@ -289,6 +303,9 @@ pub fn parse_agent(content: &str) -> anyhow::Result<AgentDef> {
     let mut isolation = AgentIsolation::None;
     let mut background = false;
     let mut permission_mode: Option<String> = None;
+    let mut hooks: Option<serde_json::Value> = None;
+    let mut mcp_servers: Option<Vec<String>> = None;
+    let mut memory: Option<String> = None;
 
     for line in frontmatter_str.lines() {
         let line = line.trim();
@@ -333,6 +350,35 @@ pub fn parse_agent(content: &str) -> anyhow::Result<AgentDef> {
             "permissionMode" | "permission_mode" => {
                 permission_mode = Some(value.to_string());
             }
+            "hooks" => {
+                hooks = Some(if value.starts_with('{') || value.starts_with('[') {
+                    match serde_json::from_str::<serde_json::Value>(value) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!(
+                                value = value,
+                                error = %e,
+                                "agent file: unparseable hooks JSON, storing as string"
+                            );
+                            serde_json::Value::String(value.to_string())
+                        }
+                    }
+                } else {
+                    serde_json::Value::String(value.to_string())
+                });
+            }
+            "mcpServers" | "mcp_servers" => {
+                mcp_servers = Some(
+                    value
+                        .split([',', ' '])
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                );
+            }
+            "memory" => {
+                memory = Some(value.to_string());
+            }
             _ => {}
         }
     }
@@ -351,6 +397,9 @@ pub fn parse_agent(content: &str) -> anyhow::Result<AgentDef> {
         isolation,
         background,
         permission_mode,
+        hooks,
+        mcp_servers,
+        memory,
     })
 }
 
@@ -535,6 +584,74 @@ mod tests {
     }
 
     #[test]
+    fn parse_agent_hooks_json_object() {
+        let content =
+            agent_md("name: hk\ndescription: hooked\nhooks: {\"PreToolUse\": [{\"command\": \"x\"}]}");
+        let a = parse_agent(&content).unwrap();
+        let h = a.hooks.expect("hooks must parse");
+        assert!(h.is_object(), "hooks JSON object must parse as object: {h}");
+        assert!(h.get("PreToolUse").is_some());
+    }
+
+    #[test]
+    fn parse_agent_hooks_plain_string_stored_as_string() {
+        let content = agent_md("name: hk\ndescription: hooked\nhooks: not-json");
+        let a = parse_agent(&content).unwrap();
+        let h = a.hooks.expect("hooks must be stored");
+        assert_eq!(h, serde_json::Value::String("not-json".to_string()));
+    }
+
+    #[test]
+    fn parse_agent_hooks_defaults_none() {
+        let content = agent_md("name: hk\ndescription: hooked");
+        let a = parse_agent(&content).unwrap();
+        assert!(a.hooks.is_none());
+    }
+
+    #[test]
+    fn parse_agent_mcp_servers_camel() {
+        let content = agent_md("name: mc\ndescription: multi\nmcpServers: fs, git");
+        let a = parse_agent(&content).unwrap();
+        assert_eq!(a.mcp_servers, Some(vec!["fs".into(), "git".into()]));
+    }
+
+    #[test]
+    fn parse_agent_mcp_servers_snake_key() {
+        let content = agent_md("name: mc\ndescription: multi\nmcp_servers: fs");
+        let a = parse_agent(&content).unwrap();
+        assert_eq!(a.mcp_servers, Some(vec!["fs".into()]));
+    }
+
+    #[test]
+    fn parse_agent_mcp_servers_defaults_none() {
+        let content = agent_md("name: mc\ndescription: multi");
+        let a = parse_agent(&content).unwrap();
+        assert!(a.mcp_servers.is_none());
+    }
+
+    #[test]
+    fn parse_agent_memory_string() {
+        let content = agent_md("name: mem\ndescription: remembers\nmemory: prefers concise output");
+        let a = parse_agent(&content).unwrap();
+        assert_eq!(a.memory.as_deref(), Some("prefers concise output"));
+    }
+
+    #[test]
+    fn parse_agent_memory_defaults_none() {
+        let content = agent_md("name: mem\ndescription: remembers");
+        let a = parse_agent(&content).unwrap();
+        assert!(a.memory.is_none());
+    }
+
+    #[test]
+    fn parse_agent_hooks_invalid_json_falls_back_to_string() {
+        let content = agent_md("name: hk\ndescription: hooked\nhooks: {broken");
+        let a = parse_agent(&content).unwrap();
+        let h = a.hooks.expect("hooks must be stored even if invalid JSON");
+        assert_eq!(h, serde_json::Value::String("{broken".to_string()));
+    }
+
+    #[test]
     fn parse_agent_missing_name_fails() {
         let content = agent_md("description: no name here");
         assert!(parse_agent(&content).is_err());
@@ -616,6 +733,9 @@ mod tests {
             isolation: AgentIsolation::None,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         };
         let p = build_agent_prompt(&a, "review this PR");
         assert!(p.contains("senior reviewer"));
@@ -636,6 +756,9 @@ mod tests {
             isolation: AgentIsolation::None,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         assert!(reg.get("rev").is_some());
         assert!(reg.get("nope").is_none());
@@ -661,6 +784,9 @@ mod tests {
             isolation: AgentIsolation::None,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         reg.register(AgentDef {
             name: "alpha".into(),
@@ -672,6 +798,9 @@ mod tests {
             isolation: AgentIsolation::None,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         let s = reg.description_suffix();
         assert!(s.contains("alpha: alpha agent"));

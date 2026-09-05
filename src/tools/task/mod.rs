@@ -1318,6 +1318,9 @@ mod tests {
             isolation: crate::session::agents::AgentIsolation::None,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         std::sync::Arc::new(reg)
     }

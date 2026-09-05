@@ -785,6 +785,9 @@ mod tests {
             isolation: crate::session::agents::AgentIsolation::Worktree,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         };
         assert!(
             subagent_worktree_wanted(&cfg, "coder", Some(&agent)),
@@ -1133,6 +1136,9 @@ mod tests {
             isolation: crate::session::agents::AgentIsolation::None,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         let reg = Arc::new(reg);
 
@@ -1169,6 +1175,9 @@ mod tests {
             isolation: crate::session::agents::AgentIsolation::None,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         let reg = Arc::new(reg);
         let config: SharedConfig = Arc::new(std::sync::RwLock::new(Config::default()));
@@ -1207,6 +1216,9 @@ mod tests {
             isolation: crate::session::agents::AgentIsolation::None,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         let agent_def_model = agent_def
             .as_ref()

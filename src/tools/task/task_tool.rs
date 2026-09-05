@@ -1109,6 +1109,9 @@ mod tests {
             isolation: crate::session::agents::AgentIsolation::None,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         std::sync::Arc::new(reg)
     }
@@ -1209,6 +1212,9 @@ mod tests {
             isolation: crate::session::agents::AgentIsolation::None,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
@@ -1266,6 +1272,9 @@ mod tests {
             isolation: crate::session::agents::AgentIsolation::None,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
@@ -1332,6 +1341,9 @@ mod tests {
             isolation: crate::session::agents::AgentIsolation::None,
             background: false,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
@@ -1378,6 +1390,9 @@ mod tests {
             isolation: crate::session::agents::AgentIsolation::None,
             background: true,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));
@@ -1435,6 +1450,9 @@ mod tests {
             isolation: crate::session::agents::AgentIsolation::None,
             background: true,
             permission_mode: None,
+            hooks: None,
+            mcp_servers: None,
+            memory: None,
         });
         let manager = Arc::new(Mutex::new(TaskManager::new()));
         let tool = Task::with_agent_registry(manager, 4, TaskConcurrencyMode::Queue, Arc::new(reg));

@@ -284,6 +284,18 @@ impl PathGuard {
             if !check.starts_with(&sb) {
                 return GuardVerdict::Denied(format!("Path outside sandbox: {}", path.display()));
             }
+            // 2b. When we follow symlinks, the original deny-list check at
+            //     step 1 may not have caught the canonical target. Re-check
+            //     the resolved path so a symlink inside the sandbox whose
+            //     name is clean but whose target is denied cannot bypass
+            //     the deny list on the write path (WO 50.08 F3 — mirrors
+            //     `check_traversal` step 3b).
+            if self.follow_symlinks && self.deny_list.is_path_denied(&check) {
+                return GuardVerdict::Denied(format!(
+                    "Resolved path denied by deny list: {}",
+                    check.display()
+                ));
+            }
         }
 
         // 3. Extension deny list

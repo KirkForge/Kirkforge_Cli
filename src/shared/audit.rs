@@ -609,6 +609,45 @@ pub struct FileAuditSink {
     hmac_key: Option<String>,
 }
 
+/// Read an audit file to a string, opening with `O_NOFOLLOW` on Unix so a
+/// pre-planted symlink at the audit path cannot redirect verification reads
+/// (WO 50.08 F2 — mirrors the `AuditLog::new` write-path hardening).
+///
+/// Returns `Ok(content)` for a regular file (or any openable path on non-Unix
+/// where `O_NOFOLLOW` is unavailable); returns `Err` if the open or read fails.
+/// A missing file is `Err`, which callers treat as an empty/valid chain.
+fn read_audit_no_follow(path: &Path) -> std::io::Result<String> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    // ponytail: Windows read path is unprotected against a pre-created
+    // symlink — O_NOFOLLOW is Posix-only; upgrade path is a per-component
+    // openat2(RESOLVE_NO_SYMLINKS) walk.
+    let mut f = opts.open(path)?;
+    let mut s = String::new();
+    std::io::Read::read_to_string(&mut f, &mut s)?;
+    Ok(s)
+}
+
+/// Write `content` to `path` with `O_NOFOLLOW` on Unix so a pre-planted
+/// symlink cannot redirect the truncating resume write (WO 50.08 F2).
+fn write_audit_no_follow(path: &Path, content: &str) -> std::io::Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    // ponytail: same Windows caveat as read_audit_no_follow — Posix-only.
+    let mut f = opts.open(path)?;
+    f.write_all(content.as_bytes())
+}
+
 impl FileAuditSink {
     pub fn new(
         file_path: PathBuf,
@@ -652,7 +691,7 @@ impl FileAuditSink {
     /// write / SIGKILL mid-append) and is skipped — torn tail ≠ tamper
     /// (WO 43.21). A parseable-but-mismatched line anywhere is real tamper.
     pub fn verify_chain(&self) -> bool {
-        let Ok(content) = std::fs::read_to_string(&self.file_path) else {
+        let Ok(content) = read_audit_no_follow(&self.file_path) else {
             return true;
         };
         let key = self.hmac_key.as_deref();
@@ -717,9 +756,17 @@ impl FileAuditSink {
             }
         }
         let content = lines.join("\n") + "\n";
-        let result = std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
+        let mut opts = OpenOptions::new();
+        opts.append(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        // ponytail: Windows append path is unprotected against a
+        // pre-created symlink — O_NOFOLLOW is Posix-only; upgrade path
+        // is a per-component openat2(RESOLVE_NO_SYMLINKS) walk.
+        let result = opts
             .open(&self.file_path)
             .and_then(|mut f| f.write_all(content.as_bytes()));
         if result.is_err() {
@@ -782,7 +829,7 @@ fn rotated_path(base: &Path, n: u32) -> PathBuf {
 /// (genesis). A file whose only non-empty line is unparseable also returns
 /// `None` (no intact event to resume from) and is truncated to empty.
 fn resume_chain(file_path: &Path) -> Option<String> {
-    let Ok(content) = std::fs::read_to_string(file_path) else {
+    let Ok(content) = read_audit_no_follow(file_path) else {
         return None;
     };
     let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
@@ -803,7 +850,7 @@ fn resume_chain(file_path: &Path) -> Option<String> {
             // trailing unparseable lines (torn tail).
             if i < lines.len() - 1 {
                 let kept = lines[..=i].join("\n") + "\n";
-                if std::fs::write(file_path, kept).is_err() {
+                if write_audit_no_follow(file_path, &kept).is_err() {
                     tracing::warn!(
                         path = %file_path.display(),
                         "failed to truncate torn audit tail; chain may resume from genesis"
@@ -817,7 +864,7 @@ fn resume_chain(file_path: &Path) -> Option<String> {
         None => {
             // No parseable line at all. Truncate to empty so the chain
             // starts fresh from genesis instead of keeping garbage.
-            let _ = std::fs::write(file_path, "");
+            let _ = write_audit_no_follow(file_path, "");
             None
         }
     }

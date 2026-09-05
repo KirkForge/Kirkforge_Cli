@@ -575,10 +575,12 @@ fn verify_plugin_signature(
     let manifest_bytes = std::fs::read(&manifest_path)
         .map_err(|e| format!("failed to read manifest {}: {e}", manifest_path.display()))?;
 
-    // `verify` third arg = `allow_legacy`. Minisign's default non-prehashed
-    // signatures verify with `false`; legacy (prehash-off) keys also verify.
+    // `verify` third arg = `allow_legacy`. `false` (WO 50.09 M1) accepts only
+    // modern prehash-on signatures; legacy (prehash-off) keys are rejected
+    // unless an operator explicitly opts in. The `minisign::sign` test helper
+    // produces modern signatures, so tests are unaffected.
     public_key
-        .verify(&manifest_bytes, &signature, true)
+        .verify(&manifest_bytes, &signature, false)
         .map_err(|e| format!("signature verification failed: {e}"))
 }
 

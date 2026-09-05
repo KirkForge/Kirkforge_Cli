@@ -8,6 +8,12 @@ Each entry links to its workorder for full details. WO files live in
 why, and the gate evidence.
 
 ## [Unreleased]
+- WO 39.1 Phase 3: external runner for cross-tool benchmarking (Claude/
+  Codex/OpenCode/KfCode). `bench cross-tool` subcommand. 27 tests.
+- Inter-subagent messaging: send_message, list_agents, update_task
+  tools for agent teams. TaskHandle gained pending_messages + notes.
+- WO 19.11: plugin production hardening — eprintln→tracing in
+  kf-budget-core, eval_condition returns Result<bool>, lifecycle test.
 - Model fallback: subagent model failure on first turn retries with a
   cheaper/different model before giving up. New config fields
   `subagent_fallback_model` (top-level) and

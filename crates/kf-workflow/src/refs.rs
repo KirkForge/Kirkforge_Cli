@@ -139,6 +139,7 @@ fn is_safe_condition_char(c: char) -> bool {
             | '/'
             | '.'
             | ':'
+            | '\\'
     )
 }
 

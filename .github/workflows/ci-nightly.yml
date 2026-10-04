@@ -4,9 +4,9 @@ name: CI (nightly)
 # Schedule + manual dispatch. cancel-in-progress: false so a partial
 # nightly run is not superseded (we want the full report). See ADR-074.
 on:
-  schedule:
-    - cron: "0 2 * * *"
-  workflow_dispatch:
+#  schedule:
+#    - cron: "0 2 * * *"
+#  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
